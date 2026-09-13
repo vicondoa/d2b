@@ -64,14 +64,17 @@ pub const ENVELOPE_REFUSALS: [&str; 6] = [
 pub struct EnvelopeRefusal {
     /// The refused operation.
     pub operation: String,
+    /// The invocation identifier the refusal's audit record carries.
+    pub invocation_id: String,
     /// The closed refusal code.
     pub code: &'static str,
 }
 
 impl EnvelopeRefusal {
-    fn new(operation: &str, code: &'static str) -> Self {
+    fn new(invocation_id: String, operation: &str, code: &'static str) -> Self {
         Self {
             operation: operation.to_owned(),
+            invocation_id,
             code,
         }
     }
@@ -80,6 +83,7 @@ impl EnvelopeRefusal {
     pub fn audit_fields(&self) -> Value {
         serde_json::json!({
             "operation": self.operation,
+            "invocation_id": self.invocation_id,
             "reason": self.code,
         })
     }
@@ -102,11 +106,15 @@ pub enum CallerAuthority {
 impl CallerAuthority {
     /// The authority classes the caller carries, in the vocabulary the
     /// committed grants are written in.
+    ///
+    /// Each class carries exactly the grants its class implies: a launcher
+    /// is not the daemon, so a row granted to `d2bd` alone refuses it rather
+    /// than admitting it through the daemon's class.
     pub fn classes(self) -> BTreeSet<&'static str> {
         match self {
             Self::Daemon => BTreeSet::from(["d2bd"]),
             Self::Admin => BTreeSet::from(["d2bd", "d2b-admin"]),
-            Self::Launcher => BTreeSet::from(["d2bd", "d2b-launcher"]),
+            Self::Launcher => BTreeSet::from(["d2b-launcher"]),
             Self::Unauthorized => BTreeSet::new(),
         }
     }
@@ -139,6 +147,21 @@ pub struct InvocationCtx<'a> {
 pub struct DispatchOutcome {
     /// The canonical result payload.
     pub result: CanonicalJsonObject,
+}
+
+/// One granted invocation as the caller and the audit log see it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Invocation {
+    /// The invocation identifier the audit record carries.
+    pub invocation_id: String,
+    /// The invoked row's declared audit join over the validated payload, as
+    /// the canonical operation identity of the record.
+    ///
+    /// A row that declares no join carries no per-invocation identity, and
+    /// the record falls back to its derived identity.
+    pub audit_join_identity: Option<String>,
+    /// The dispatched result.
+    pub outcome: DispatchOutcome,
 }
 
 /// The handler-table seam of one committed operation.
@@ -202,41 +225,64 @@ impl BrokerEnvelope {
     }
 
     /// Invoke one operation through the envelope.
+    ///
+    /// The invocation is named before it is authorized, so a refusal carries
+    /// the same identifier a success would have carried: an operator can
+    /// follow a denied invocation in the audit log.
     pub fn call(
         &self,
         caller: CallerAuthority,
         operation: &str,
         zone: &str,
         payload: &Value,
-    ) -> Result<(String, DispatchOutcome), EnvelopeRefusal> {
-        let Some(row) = self.rows.iter().find(|row| row.operation == operation) else {
-            return Err(EnvelopeRefusal::new(operation, UNKNOWN_OPERATION));
-        };
-        if !self.committed.contains(row.operation) || !row.admits_profile(self.profile) {
-            return Err(EnvelopeRefusal::new(operation, UNCOMMITTED_OPERATION));
-        }
-        if row.payload_provenance == PayloadProvenance::Wire {
-            return Err(EnvelopeRefusal::new(operation, WIRE_INHERITED_OPERATION));
-        }
-        if !Self::granted(row, caller) {
-            return Err(EnvelopeRefusal::new(operation, UNGRANTED_CALLER));
-        }
-        let payload = Self::validate(row, payload)
-            .map_err(|_| EnvelopeRefusal::new(operation, INVALID_PAYLOAD))?;
+    ) -> Result<Invocation, EnvelopeRefusal> {
         let invocation_id = format!(
             "invocation-{}",
             self.invocations.fetch_add(1, Ordering::AcqRel)
         );
+        let Some(row) = self.rows.iter().find(|row| row.operation == operation) else {
+            return Err(EnvelopeRefusal::new(
+                invocation_id,
+                operation,
+                UNKNOWN_OPERATION,
+            ));
+        };
+        if !self.committed.contains(row.operation) || !row.admits_profile(self.profile) {
+            return Err(EnvelopeRefusal::new(
+                invocation_id,
+                operation,
+                UNCOMMITTED_OPERATION,
+            ));
+        }
+        if row.payload_provenance == PayloadProvenance::Wire {
+            return Err(EnvelopeRefusal::new(
+                invocation_id,
+                operation,
+                WIRE_INHERITED_OPERATION,
+            ));
+        }
+        if !Self::granted(row, caller) {
+            return Err(EnvelopeRefusal::new(
+                invocation_id,
+                operation,
+                UNGRANTED_CALLER,
+            ));
+        }
+        let payload = Self::validate(row, payload)
+            .map_err(|_| EnvelopeRefusal::new(invocation_id.clone(), operation, INVALID_PAYLOAD))?;
         let ctx = InvocationCtx {
             operation: row.operation,
             zone,
             invocation_id: &invocation_id,
         };
-        let outcome = self
-            .dispatcher
-            .dispatch(&ctx, &payload)
-            .map_err(|_| EnvelopeRefusal::new(operation, UNREGISTERED_HANDLER))?;
-        Ok((invocation_id, outcome))
+        let outcome = self.dispatcher.dispatch(&ctx, &payload).map_err(|_| {
+            EnvelopeRefusal::new(invocation_id.clone(), operation, UNREGISTERED_HANDLER)
+        })?;
+        Ok(Invocation {
+            audit_join_identity: row.audit_join_identity(&payload),
+            invocation_id,
+            outcome,
+        })
     }
 
     /// Whether the committed grants of one row cover one caller.
@@ -460,7 +506,7 @@ mod tests {
             w3: false,
             capabilities: false,
             disposition: "promoted-live",
-            stub_wave: None,
+            stub_target: None,
             audit_fields: &[],
             authz: BrokerAuthzFacets {
                 subject: "test",
@@ -474,6 +520,7 @@ mod tests {
             payload_provenance: PayloadProvenance::Request,
             payload_fields: fields,
             payload_required: required,
+            audit_join: None,
         }
     }
 
@@ -613,7 +660,7 @@ mod tests {
     #[test]
     fn a_declared_operation_dispatches_with_an_invocation_id() {
         let envelope = probe_envelope();
-        let (invocation_id, outcome) = envelope
+        let invocation = envelope
             .call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
@@ -621,12 +668,92 @@ mod tests {
                 &serde_json::json!({ "label": "x" }),
             )
             .expect("a declared, granted operation dispatches");
+        let invocation_id = invocation.invocation_id;
         assert!(invocation_id.starts_with("invocation-"));
-        let result = serde_json::to_value(&outcome.result).expect("result serializes");
+        let result = serde_json::to_value(&invocation.outcome.result).expect("result serializes");
         assert_eq!(result["operation"], "ProbeOperation");
         assert_eq!(result["invocation"], invocation_id);
         assert_eq!(result["zone"], "zone-a");
         assert_eq!(result["fields"], 1);
+    }
+
+    #[test]
+    fn a_refusal_carries_the_invocation_identifier_it_denied() {
+        let envelope = probe_envelope();
+        let refusal = envelope
+            .call(
+                CallerAuthority::Unauthorized,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            )
+            .expect_err("an ungranted caller is refused");
+        assert!(refusal.invocation_id.starts_with("invocation-"));
+        let fields = refusal.audit_fields();
+        assert_eq!(fields["invocation_id"], refusal.invocation_id);
+        assert_eq!(fields["operation"], "ProbeOperation");
+        assert_eq!(fields["reason"], UNGRANTED_CALLER);
+        // Two refusals are two named invocations, not one anonymous denial.
+        let other = envelope
+            .call(
+                CallerAuthority::Unauthorized,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            )
+            .expect_err("an ungranted caller is refused");
+        assert_ne!(refusal.invocation_id, other.invocation_id);
+    }
+
+    #[test]
+    fn a_row_join_keys_the_invocation_on_its_declared_fields() {
+        let mut row = declared_row("ProbeOperation", &["label", "kind"], &["label", "kind"], &["d2bd"]);
+        row.audit_join = Some(&["kind", "label"]);
+        let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(echo_table()))
+            .declare(row)
+            .build();
+        let joined = |kind: &str| {
+            envelope
+                .call(
+                    CallerAuthority::Daemon,
+                    "ProbeOperation",
+                    "zone-a",
+                    &serde_json::json!({ "label": "x", "kind": kind }),
+                )
+                .expect("a declared, granted operation dispatches")
+                .audit_join_identity
+                .expect("a row that declares a join carries one")
+        };
+        let first = joined("alpha");
+        assert_ne!(first, joined("beta"), "a different declared key is another identity");
+        assert_eq!(first, joined("alpha"), "the same declared key is one identity");
+        // The key is the digest of the declared fields, never the fields.
+        assert!(first.starts_with("sha256:"));
+        assert!(!first.contains("alpha"));
+        // A row that declares no join carries none.
+        let envelope = probe_envelope();
+        let plain = envelope
+            .call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            )
+            .expect("a declared, granted operation dispatches");
+        assert_eq!(plain.audit_join_identity, None);
+    }
+
+    #[test]
+    fn a_launcher_does_not_carry_the_daemon_grant() {
+        let daemon_only = declared_row("DaemonOperation", &[], &[], &["d2bd"]);
+        assert!(BrokerEnvelope::granted(&daemon_only, CallerAuthority::Daemon));
+        assert!(
+            !BrokerEnvelope::granted(&daemon_only, CallerAuthority::Launcher),
+            "a row granted to the daemon alone must refuse a launcher"
+        );
+        let launcher = declared_row("LauncherOperation", &[], &[], &["d2b-launcher"]);
+        assert!(BrokerEnvelope::granted(&launcher, CallerAuthority::Launcher));
+        assert!(!BrokerEnvelope::granted(&launcher, CallerAuthority::Daemon));
     }
 
     #[test]

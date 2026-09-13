@@ -14,7 +14,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "callable-read-only",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["Hello"],
         authz: BrokerAuthzFacets {
             subject: "handshake",
@@ -28,6 +28,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ExportBrokerAudit",
@@ -39,7 +40,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "callable-read-only",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ExportBrokerAudit"],
         authz: BrokerAuthzFacets {
             subject: "broker-admin",
@@ -53,6 +54,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ValidateBundle",
@@ -64,7 +66,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "callable-read-only",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ValidateBundle"],
         authz: BrokerAuthzFacets {
             subject: "bundle",
@@ -78,6 +80,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "OpenPidfd",
@@ -89,7 +92,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["OpenPidfd"],
         authz: BrokerAuthzFacets {
             subject: "pidfd",
@@ -103,6 +106,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "OpenPeerPidfdFromAcceptedSocket",
@@ -114,7 +118,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "callable-read-only",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["OpenPeerPidfdFromAcceptedSocket"],
         authz: BrokerAuthzFacets {
             subject: "pidfd",
@@ -128,6 +132,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ObserveRunner",
@@ -139,7 +144,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ObserveRunner"],
         authz: BrokerAuthzFacets {
             subject: "runner",
@@ -153,6 +158,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "StartSystemdUnit",
@@ -164,7 +170,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["SystemdUnit"],
         authz: BrokerAuthzFacets {
             subject: "systemd-unit",
@@ -178,6 +184,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "CheckSystemdUserManager",
@@ -189,7 +196,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["SystemdUnit"],
         authz: BrokerAuthzFacets {
             subject: "systemd-user-manager",
@@ -203,6 +210,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ObserveSystemdUnit",
@@ -214,7 +222,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["SystemdUnit"],
         authz: BrokerAuthzFacets {
             subject: "systemd-unit",
@@ -228,6 +236,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "OpenSystemdUnitPidfd",
@@ -239,7 +248,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["SystemdUnit"],
         authz: BrokerAuthzFacets {
             subject: "systemd-unit-pidfd",
@@ -253,6 +262,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "StopSystemdUnit",
@@ -264,7 +274,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["SystemdUnit"],
         authz: BrokerAuthzFacets {
             subject: "systemd-unit",
@@ -278,6 +288,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "PollChildReaped",
@@ -289,7 +300,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "runner",
@@ -303,6 +314,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "PrepareRuntimeDir",
@@ -314,7 +326,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["PrepareRuntimeDir"],
         authz: BrokerAuthzFacets {
             subject: "fs",
@@ -328,6 +340,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "PrepareStateDir",
@@ -339,7 +352,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["PrepareStateDir", "PrepareSwtpmDir"],
         authz: BrokerAuthzFacets {
             subject: "fs",
@@ -353,6 +366,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "SetupMountNamespace",
@@ -364,7 +378,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["SetupMountNamespace"],
         authz: BrokerAuthzFacets {
             subject: "mount/store",
@@ -378,6 +392,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "CgroupKill",
@@ -389,7 +404,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["CgroupKill"],
         authz: BrokerAuthzFacets {
             subject: "cgroup",
@@ -403,6 +418,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "SignalRunner",
@@ -414,7 +430,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["SignalRunner"],
         authz: BrokerAuthzFacets {
             subject: "runner",
@@ -428,6 +444,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "DeregisterRunnerPidfd",
@@ -439,7 +456,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["DeregisterRunnerPidfd"],
         authz: BrokerAuthzFacets {
             subject: "runner",
@@ -453,6 +470,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "SpawnRunner",
@@ -464,7 +482,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["SpawnRunner", "PrepareSwtpmDir"],
         authz: BrokerAuthzFacets {
             subject: "vm-runner",
@@ -478,6 +496,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ApplyHostGenerationHandoff",
@@ -489,7 +508,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ApplyHostGenerationHandoff"],
         authz: BrokerAuthzFacets {
             subject: "host-generation",
@@ -503,6 +522,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ApplyNftables",
@@ -514,7 +534,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ApplyNftables"],
         authz: BrokerAuthzFacets {
             subject: "network-host",
@@ -528,6 +548,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ApplyNftablesProjection",
@@ -539,7 +560,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ApplyNftablesProjection"],
         authz: BrokerAuthzFacets {
             subject: "network-host",
@@ -553,6 +574,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ApplyNmUnmanaged",
@@ -564,7 +586,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ApplyNmUnmanaged"],
         authz: BrokerAuthzFacets {
             subject: "network-host",
@@ -578,6 +600,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ApplyRoute",
@@ -589,7 +612,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ApplyRoute"],
         authz: BrokerAuthzFacets {
             subject: "network-host",
@@ -603,6 +626,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ApplySysctl",
@@ -614,7 +638,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ApplySysctl"],
         authz: BrokerAuthzFacets {
             subject: "network-host",
@@ -628,6 +652,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "BindUnixSocket",
@@ -639,7 +664,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("W5"),
+        stub_target: Some(StubTarget::Reserved),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "socket",
@@ -653,6 +678,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "CreateOrReconcileUsersGroups",
@@ -664,7 +690,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("W3"),
+        stub_target: Some(StubTarget::BootstrapOnly),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "account",
@@ -678,6 +704,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "CreateBridge",
@@ -689,7 +716,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["CreateBridge"],
         authz: BrokerAuthzFacets {
             subject: "network",
@@ -703,6 +730,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "DeleteBridge",
@@ -714,7 +742,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["DeleteBridge"],
         authz: BrokerAuthzFacets {
             subject: "network",
@@ -728,6 +756,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "CreatePersistentTap",
@@ -739,7 +768,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["CreatePersistentTap"],
         authz: BrokerAuthzFacets {
             subject: "network",
@@ -753,6 +782,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "DeletePersistentTap",
@@ -764,7 +794,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["DeletePersistentTap"],
         authz: BrokerAuthzFacets {
             subject: "network",
@@ -778,6 +808,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "CreateTapFd",
@@ -789,7 +820,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["CreateTapFd"],
         authz: BrokerAuthzFacets {
             subject: "network",
@@ -803,6 +834,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "DelegateCgroupV2",
@@ -814,7 +846,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["DelegateCgroupV2"],
         authz: BrokerAuthzFacets {
             subject: "cgroup",
@@ -828,6 +860,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "InjectSecretById",
@@ -839,7 +872,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("W8"),
+        stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "secret/key",
@@ -853,6 +886,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "LaunchMinijailChild",
@@ -864,7 +898,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("W5"),
+        stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "process",
@@ -878,6 +912,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ModprobeIfAllowed",
@@ -889,7 +924,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ModprobeIfAllowed"],
         authz: BrokerAuthzFacets {
             subject: "kernel-module",
@@ -903,6 +938,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "OpenCgroupDir",
@@ -914,7 +950,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["OpenCgroupDir"],
         authz: BrokerAuthzFacets {
             subject: "cgroup",
@@ -928,6 +964,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "OpenDevice",
@@ -939,7 +976,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["OpenDevice"],
         authz: BrokerAuthzFacets {
             subject: "device",
@@ -953,6 +990,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "OpenFuse",
@@ -964,7 +1002,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["OpenFuse"],
         authz: BrokerAuthzFacets {
             subject: "device",
@@ -978,6 +1016,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "OpenHidrawSecurityKey",
@@ -989,7 +1028,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["OpenHidrawSecurityKey"],
         authz: BrokerAuthzFacets {
             subject: "security-key",
@@ -1003,6 +1042,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "OpenKvm",
@@ -1014,7 +1054,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["OpenKvm"],
         authz: BrokerAuthzFacets {
             subject: "device",
@@ -1028,6 +1068,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaEnroll",
@@ -1039,7 +1080,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["QemuMediaEnroll"],
         authz: BrokerAuthzFacets {
             subject: "qemu-media registry",
@@ -1053,6 +1094,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaRefreshRegistry",
@@ -1064,7 +1106,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["QemuMediaRefreshRegistry"],
         authz: BrokerAuthzFacets {
             subject: "qemu-media redacted registry",
@@ -1078,6 +1120,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaBoot",
@@ -1089,7 +1132,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["QemuMediaBoot"],
         authz: BrokerAuthzFacets {
             subject: "qemu-media boot media",
@@ -1103,6 +1146,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaSystemPowerdown",
@@ -1114,7 +1158,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["QemuMediaSystemPowerdown"],
         authz: BrokerAuthzFacets {
             subject: "qemu-media lifecycle",
@@ -1128,6 +1172,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaQueryStatus",
@@ -1139,7 +1184,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "qemu-media lifecycle status",
@@ -1153,6 +1198,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaQuit",
@@ -1164,7 +1210,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["QemuMediaQuit"],
         authz: BrokerAuthzFacets {
             subject: "qemu-media lifecycle",
@@ -1178,6 +1224,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaAttach",
@@ -1189,7 +1236,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["QemuMediaAttach"],
         authz: BrokerAuthzFacets {
             subject: "qemu-media hotplug",
@@ -1203,6 +1250,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaDetach",
@@ -1214,7 +1262,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["QemuMediaDetach"],
         authz: BrokerAuthzFacets {
             subject: "qemu-media hotplug",
@@ -1228,6 +1276,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ConsumeLifecycleLease",
@@ -1238,8 +1287,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "untriaged-in-w2",
-        stub_wave: None,
+        disposition: "untriaged",
+        stub_target: None,
         audit_fields: &["ConsumeLifecycleLease"],
         authz: BrokerAuthzFacets {
             subject: "lifecycle",
@@ -1253,6 +1302,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "PipeWireAudio",
@@ -1264,7 +1314,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["PipeWireAudio"],
         authz: BrokerAuthzFacets {
             subject: "audio",
@@ -1278,6 +1328,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "OpenVhostNet",
@@ -1289,7 +1340,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["OpenVhostNet"],
         authz: BrokerAuthzFacets {
             subject: "device",
@@ -1303,6 +1354,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "PauseBroker",
@@ -1314,7 +1366,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("W4"),
+        stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "broker-admin",
@@ -1328,6 +1380,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "MigrateLegacySwtpmState",
@@ -1339,7 +1392,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["MigrateLegacySwtpmState"],
         authz: BrokerAuthzFacets {
             subject: "fs",
@@ -1353,6 +1406,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ReconcileStorageScope",
@@ -1364,7 +1418,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ReconcileStorageScope"],
         authz: BrokerAuthzFacets {
             subject: "fs",
@@ -1378,6 +1432,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ValidateLockSpec",
@@ -1389,7 +1444,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ValidateLockSpec"],
         authz: BrokerAuthzFacets {
             subject: "lock",
@@ -1403,6 +1458,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "PrepareStoreView",
@@ -1414,7 +1470,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["PrepareStoreView"],
         authz: BrokerAuthzFacets {
             subject: "mount/store",
@@ -1428,6 +1484,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "StoreSync",
@@ -1439,7 +1496,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["StoreSync"],
         authz: BrokerAuthzFacets {
             subject: "store",
@@ -1453,6 +1510,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "StoreVerify",
@@ -1464,7 +1522,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["StoreVerify", "StoreSync"],
         authz: BrokerAuthzFacets {
             subject: "store",
@@ -1478,6 +1536,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ReadSecretById",
@@ -1489,7 +1548,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("W8"),
+        stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "secret/key",
@@ -1503,6 +1562,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ResumeBroker",
@@ -1514,7 +1574,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("W4"),
+        stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "broker-admin",
@@ -1528,6 +1588,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "RotateSecretById",
@@ -1539,7 +1600,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("W8"),
+        stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "secret/key",
@@ -1553,6 +1614,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "RunHostInstall",
@@ -1564,7 +1626,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["RunHostInstall"],
         authz: BrokerAuthzFacets {
             subject: "installer",
@@ -1578,6 +1640,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "RunMigrate",
@@ -1589,7 +1652,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["RunMigrate"],
         authz: BrokerAuthzFacets {
             subject: "installer",
@@ -1603,6 +1666,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "RunActivation",
@@ -1614,7 +1678,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["RunActivation"],
         authz: BrokerAuthzFacets {
             subject: "VM",
@@ -1628,6 +1692,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "RunGc",
@@ -1639,7 +1704,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["RunGc"],
         authz: BrokerAuthzFacets {
             subject: "VM/global",
@@ -1653,6 +1718,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "RunKeysRotate",
@@ -1664,7 +1730,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["RunKeysRotate"],
         authz: BrokerAuthzFacets {
             subject: "key",
@@ -1678,6 +1744,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "RunHostKeyTrust",
@@ -1689,7 +1756,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["RunHostKeyTrust"],
         authz: BrokerAuthzFacets {
             subject: "key/known-host",
@@ -1703,6 +1770,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "RunRotateKnownHost",
@@ -1714,7 +1782,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["RunRotateKnownHost"],
         authz: BrokerAuthzFacets {
             subject: "key/known-host",
@@ -1728,6 +1796,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "SetBridgePortFlags",
@@ -1739,7 +1808,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["SetBridgePortFlags"],
         authz: BrokerAuthzFacets {
             subject: "network",
@@ -1753,6 +1822,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "SetSocketAcl",
@@ -1764,7 +1834,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("W5"),
+        stub_target: Some(StubTarget::Reserved),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "socket",
@@ -1778,6 +1848,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "UpdateHostsFile",
@@ -1789,7 +1860,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["UpdateHostsFile"],
         authz: BrokerAuthzFacets {
             subject: "name-resolution",
@@ -1803,6 +1874,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "UsbipBind",
@@ -1814,7 +1886,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["UsbipBind", "UsbSerialCorrelationKeyRotate"],
         authz: BrokerAuthzFacets {
             subject: "USBIP",
@@ -1828,6 +1900,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "UsbipBindFirewallRule",
@@ -1839,7 +1912,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["UsbipBindFirewallRule"],
         authz: BrokerAuthzFacets {
             subject: "USBIP firewall",
@@ -1853,6 +1926,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "UsbipProxyReconcile",
@@ -1864,7 +1938,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["UsbipProxyReconcile"],
         authz: BrokerAuthzFacets {
             subject: "USBIP",
@@ -1878,6 +1952,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "UsbipUnbind",
@@ -1889,7 +1964,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: true,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["UsbipUnbind"],
         authz: BrokerAuthzFacets {
             subject: "USBIP",
@@ -1903,6 +1978,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "UsbipExplicitBind",
@@ -1914,7 +1990,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["UsbipExplicitBind", "UsbSerialCorrelationKeyRotate"],
         authz: BrokerAuthzFacets {
             subject: "USBIP explicit attach",
@@ -1928,6 +2004,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "UsbipExplicitFirewallRule",
@@ -1939,7 +2016,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["UsbipExplicitFirewallRule"],
         authz: BrokerAuthzFacets {
             subject: "USBIP explicit attach firewall",
@@ -1953,6 +2030,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "ResourceActivationAudit",
@@ -1964,7 +2042,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["ResourceActivationAudit"],
         authz: BrokerAuthzFacets {
             subject: "resource-bundle",
@@ -1978,6 +2056,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "SeedDnsmasqLease",
@@ -1989,7 +2068,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["SeedDnsmasqLease"],
         authz: BrokerAuthzFacets {
             subject: "network",
@@ -2003,6 +2082,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "BindMountFromHardlinkFarm",
@@ -2014,7 +2094,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["BindMountFromHardlinkFarm"],
         authz: BrokerAuthzFacets {
             subject: "mount/store",
@@ -2028,6 +2108,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "OwnershipMatrixCheck",
@@ -2039,7 +2120,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("P2"),
+        stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "host",
@@ -2053,6 +2134,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "SshHostKeyPreflight",
@@ -2064,7 +2146,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("P2"),
+        stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "ssh-host-key",
@@ -2078,6 +2160,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "DiskInit",
@@ -2089,7 +2172,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "promoted-live",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["DiskInit"],
         authz: BrokerAuthzFacets {
             subject: "disk",
@@ -2103,6 +2186,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "SecurityKeyOpenDevice",
@@ -2114,7 +2198,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("security-key-broker"),
+        stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "security-key/hidraw",
@@ -2128,6 +2212,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "SecurityKeyApplyUdevRules",
@@ -2139,7 +2224,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: true,
         capabilities: true,
         disposition: "stubbed-unimplemented",
-        stub_wave: Some("security-key-broker"),
+        stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
             subject: "security-key/udev",
@@ -2153,6 +2238,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "Invoke",
@@ -2163,8 +2249,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "untriaged-in-w2",
-        stub_wave: None,
+        disposition: "untriaged",
+        stub_target: None,
         audit_fields: &["Invoke"],
         authz: BrokerAuthzFacets {
             subject: "operation",
@@ -2178,6 +2264,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Request,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
     BrokerOperationRow {
         operation: "PrepareSwtpmDir",
@@ -2189,7 +2276,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         w3: false,
         capabilities: false,
         disposition: "compile-time-only",
-        stub_wave: None,
+        stub_target: None,
         audit_fields: &["PrepareSwtpmDir"],
         authz: BrokerAuthzFacets {
             subject: "fs",
@@ -2203,6 +2290,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_provenance: PayloadProvenance::Wire,
         payload_fields: &[],
         payload_required: &[],
+        audit_join: None,
     },
 ];
 

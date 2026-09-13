@@ -15,12 +15,17 @@
 //! compared against the same rows by [`audit`], so a row cannot move without
 //! the views moving with it.
 //!
-//! Two bindings are structural rather than checked. [`wire_row`] is an
-//! exhaustive match over the wire enum, so a variant a row does not name does
-//! not compile. [`audit_field_name`] is the same for the typed audit fields,
-//! so an audit shape no row claims does not compile either.
+//! Two bindings are structural rather than checked. The `wire_variants!`
+//! name match is exhaustive over the wire enum, so a variant a name list does
+//! not carry does not compile, and [`WIRE_VARIANTS`] is the view the
+//! completeness gate compares against the rows' `wire_variant` facets.
+//! [`audit_field_name`] is the same for the typed audit fields, so an audit
+//! shape no row claims does not compile either.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts_broker::broker_wire::BrokerRequest;
+use d2b_contracts_resource::v3::{CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes};
 
 use crate::ops::audit_op::OperationFields;
 
@@ -114,8 +119,9 @@ pub struct BrokerOperationRow {
     pub capabilities: bool,
     /// The disposition the operation was triaged under.
     pub disposition: &'static str,
-    /// The wave a still-stubbed operation is reserved for.
-    pub stub_wave: Option<&'static str>,
+    /// The deferral marker a reserved stub carries, when it is one; the
+    /// closed set the generator maps the committed disposition target onto.
+    pub stub_target: Option<StubTarget>,
     /// Every typed audit field the operation's records can carry.
     pub audit_fields: &'static [&'static str],
     /// The committed authorization facet.
@@ -126,6 +132,9 @@ pub struct BrokerOperationRow {
     pub payload_fields: &'static [&'static str],
     /// The payload property names the operation's schema requires.
     pub payload_required: &'static [&'static str],
+    /// The payload property names the operation's audit join is derived
+    /// from, when the operation declares a durable per-invocation identity.
+    pub audit_join: Option<&'static [&'static str]>,
 }
 
 include!("generated/broker_operation_catalog.rs");
@@ -136,6 +145,27 @@ impl BrokerOperationRow {
         BROKER_OPERATION_CATALOG
             .iter()
             .find(|row| row.operation == operation)
+    }
+
+    /// The audit identity one validated payload carries.
+    ///
+    /// The key is canonical JSON over the operation's declared join fields,
+    /// taken from the validated payload: two invocations of one operation
+    /// join under one identity exactly when they carry the same declared
+    /// fields. An operation that declares no join has no per-invocation
+    /// identity, and its record derives its own.
+    pub fn audit_join_identity(&self, payload: &CanonicalJsonObject) -> Option<String> {
+        let fields = self.audit_join?;
+        let mut declared: BTreeMap<&str, &CanonicalJsonValue> = BTreeMap::new();
+        for name in fields {
+            declared.insert(name, payload.get(name)?);
+        }
+        // A payload the envelope validated carries canonical values already,
+        // so the declared key always canonicalizes: the fallback keeps a
+        // malformed payload from panicking the daemon rather than hiding a
+        // reachable path.
+        let bytes = canonical_json_bytes(&declared).ok()?;
+        Some(d2b_audit::operation_identity_of_canonical_json(&bytes))
     }
 
     /// Whether a fixed profile admits the operation.
@@ -149,113 +179,159 @@ impl BrokerOperationRow {
     }
 }
 
-/// The wave a still-stubbed operation is reserved for.
+/// Where a reserved stub's implementation is expected to land.
+///
+/// A still-stubbed operation's refusal carries this marker on the wire and in
+/// its audit record; the generator maps each reserved row's committed
+/// disposition target onto the closed set, so the marker cannot drift into
+/// free prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StubTarget {
+    /// The implementation is still to be written, with no committed home yet.
+    FutureWork,
+    /// The wire shape exists and is reserved; the effect does not.
+    Reserved,
+    /// Only the bootstrap dispatch path realizes the operation.
+    BootstrapOnly,
+}
+
+impl StubTarget {
+    /// The marker the refusal carries on the wire and in its audit record.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FutureWork => "future-work",
+            Self::Reserved => "reserved",
+            Self::BootstrapOnly => "bootstrap-only",
+        }
+    }
+}
+
+/// The deferral marker of a still-stubbed operation, when the operation is one.
 ///
 /// The reserved operations are the committed rows whose disposition is
 /// `stubbed-unimplemented`; the broker serves them with one typed
-/// "not implemented yet" refusal instead of one dispatch arm each.
-pub fn stub_wave(operation: &str) -> Option<&'static str> {
-    BrokerOperationRow::find(operation).and_then(|row| row.stub_wave)
+/// "not implemented yet" refusal instead of one dispatch arm each, and the
+/// refusal names where the implementation is expected to land.
+pub fn stub_target(operation: &str) -> Option<StubTarget> {
+    BrokerOperationRow::find(operation).and_then(|row| row.stub_target)
 }
 
-/// The committed row one wire variant names.
+/// Name every wire variant of `BrokerRequest`, in enum order.
 ///
-/// The match is exhaustive, so a variant no committed row declares does not
-/// compile: the wire enum cannot grow past the committed rows.
-pub fn wire_row(request: &BrokerRequest) -> &'static BrokerOperationRow {
-    fn row(operation: &str) -> &'static BrokerOperationRow {
-        BrokerOperationRow::find(operation)
-            .unwrap_or_else(|| panic!("wire variant {operation} has no committed row"))
-    }
-    match request {
-        BrokerRequest::ApplyHostGenerationHandoff(..) => row("ApplyHostGenerationHandoff"),
-        BrokerRequest::ApplyNftables(..) => row("ApplyNftables"),
-        BrokerRequest::ApplyNftablesProjection(..) => row("ApplyNftablesProjection"),
-        BrokerRequest::ApplyNmUnmanaged(..) => row("ApplyNmUnmanaged"),
-        BrokerRequest::ApplyRoute(..) => row("ApplyRoute"),
-        BrokerRequest::ApplySysctl(..) => row("ApplySysctl"),
-        BrokerRequest::BindUnixSocket(..) => row("BindUnixSocket"),
-        BrokerRequest::CreateOrReconcileUsersGroups(..) => row("CreateOrReconcileUsersGroups"),
-        BrokerRequest::CreateBridge(..) => row("CreateBridge"),
-        BrokerRequest::DeleteBridge(..) => row("DeleteBridge"),
-        BrokerRequest::CreatePersistentTap(..) => row("CreatePersistentTap"),
-        BrokerRequest::DeletePersistentTap(..) => row("DeletePersistentTap"),
-        BrokerRequest::CreateTapFd(..) => row("CreateTapFd"),
-        BrokerRequest::DelegateCgroupV2(..) => row("DelegateCgroupV2"),
-        BrokerRequest::ExportBrokerAudit(..) => row("ExportBrokerAudit"),
-        BrokerRequest::Hello(..) => row("Hello"),
-        BrokerRequest::InjectSecretById(..) => row("InjectSecretById"),
-        BrokerRequest::LaunchMinijailChild(..) => row("LaunchMinijailChild"),
-        BrokerRequest::ModprobeIfAllowed(..) => row("ModprobeIfAllowed"),
-        BrokerRequest::OpenCgroupDir(..) => row("OpenCgroupDir"),
-        BrokerRequest::OpenDevice(..) => row("OpenDevice"),
-        BrokerRequest::OpenFuse(..) => row("OpenFuse"),
-        BrokerRequest::OpenHidrawSecurityKey(..) => row("OpenHidrawSecurityKey"),
-        BrokerRequest::OpenKvm(..) => row("OpenKvm"),
-        BrokerRequest::QemuMediaEnroll(..) => row("QemuMediaEnroll"),
-        BrokerRequest::QemuMediaRefreshRegistry(..) => row("QemuMediaRefreshRegistry"),
-        BrokerRequest::QemuMediaBoot(..) => row("QemuMediaBoot"),
-        BrokerRequest::QemuMediaSystemPowerdown(..) => row("QemuMediaSystemPowerdown"),
-        BrokerRequest::QemuMediaQueryStatus(..) => row("QemuMediaQueryStatus"),
-        BrokerRequest::QemuMediaQuit(..) => row("QemuMediaQuit"),
-        BrokerRequest::QemuMediaAttach(..) => row("QemuMediaAttach"),
-        BrokerRequest::QemuMediaDetach(..) => row("QemuMediaDetach"),
-        BrokerRequest::OpenPidfd(..) => row("OpenPidfd"),
-        BrokerRequest::ConsumeLifecycleLease(..) => row("ConsumeLifecycleLease"),
-        BrokerRequest::OpenPeerPidfdFromAcceptedSocket(..) => row("OpenPeerPidfdFromAcceptedSocket"),
-        BrokerRequest::ObserveRunner(..) => row("ObserveRunner"),
-        BrokerRequest::PipeWireAudio(..) => row("PipeWireAudio"),
-        BrokerRequest::StartSystemdUnit(..) => row("StartSystemdUnit"),
-        BrokerRequest::CheckSystemdUserManager(..) => row("CheckSystemdUserManager"),
-        BrokerRequest::ObserveSystemdUnit(..) => row("ObserveSystemdUnit"),
-        BrokerRequest::OpenSystemdUnitPidfd(..) => row("OpenSystemdUnitPidfd"),
-        BrokerRequest::StopSystemdUnit(..) => row("StopSystemdUnit"),
-        BrokerRequest::OpenVhostNet(..) => row("OpenVhostNet"),
-        BrokerRequest::PauseBroker => row("PauseBroker"),
-        BrokerRequest::PollChildReaped => row("PollChildReaped"),
-        BrokerRequest::PrepareRuntimeDir(..) => row("PrepareRuntimeDir"),
-        BrokerRequest::PrepareStateDir(..) => row("PrepareStateDir"),
-        BrokerRequest::MigrateLegacySwtpmState(..) => row("MigrateLegacySwtpmState"),
-        BrokerRequest::ReconcileStorageScope(..) => row("ReconcileStorageScope"),
-        BrokerRequest::ValidateLockSpec(..) => row("ValidateLockSpec"),
-        BrokerRequest::PrepareStoreView(..) => row("PrepareStoreView"),
-        BrokerRequest::StoreSync(..) => row("StoreSync"),
-        BrokerRequest::StoreVerify(..) => row("StoreVerify"),
-        BrokerRequest::ReadSecretById(..) => row("ReadSecretById"),
-        BrokerRequest::ResumeBroker => row("ResumeBroker"),
-        BrokerRequest::RotateSecretById(..) => row("RotateSecretById"),
-        BrokerRequest::RunHostInstall(..) => row("RunHostInstall"),
-        BrokerRequest::RunMigrate(..) => row("RunMigrate"),
-        BrokerRequest::RunActivation(..) => row("RunActivation"),
-        BrokerRequest::RunGc(..) => row("RunGc"),
-        BrokerRequest::RunKeysRotate(..) => row("RunKeysRotate"),
-        BrokerRequest::RunHostKeyTrust(..) => row("RunHostKeyTrust"),
-        BrokerRequest::RunRotateKnownHost(..) => row("RunRotateKnownHost"),
-        BrokerRequest::SetBridgePortFlags(..) => row("SetBridgePortFlags"),
-        BrokerRequest::SetSocketAcl(..) => row("SetSocketAcl"),
-        BrokerRequest::SetupMountNamespace(..) => row("SetupMountNamespace"),
-        BrokerRequest::CgroupKill(..) => row("CgroupKill"),
-        BrokerRequest::SignalRunner(..) => row("SignalRunner"),
-        BrokerRequest::DeregisterRunnerPidfd(..) => row("DeregisterRunnerPidfd"),
-        BrokerRequest::SpawnRunner(..) => row("SpawnRunner"),
-        BrokerRequest::UpdateHostsFile(..) => row("UpdateHostsFile"),
-        BrokerRequest::UsbipBind(..) => row("UsbipBind"),
-        BrokerRequest::UsbipBindFirewallRule(..) => row("UsbipBindFirewallRule"),
-        BrokerRequest::UsbipProxyReconcile(..) => row("UsbipProxyReconcile"),
-        BrokerRequest::UsbipUnbind(..) => row("UsbipUnbind"),
-        BrokerRequest::UsbipExplicitBind(..) => row("UsbipExplicitBind"),
-        BrokerRequest::UsbipExplicitFirewallRule(..) => row("UsbipExplicitFirewallRule"),
-        BrokerRequest::ResourceActivationAudit(..) => row("ResourceActivationAudit"),
-        BrokerRequest::ValidateBundle => row("ValidateBundle"),
-        BrokerRequest::SeedDnsmasqLease(..) => row("SeedDnsmasqLease"),
-        BrokerRequest::BindMountFromHardlinkFarm(..) => row("BindMountFromHardlinkFarm"),
-        BrokerRequest::OwnershipMatrixCheck(..) => row("OwnershipMatrixCheck"),
-        BrokerRequest::SshHostKeyPreflight(..) => row("SshHostKeyPreflight"),
-        BrokerRequest::DiskInit(..) => row("DiskInit"),
-        BrokerRequest::SecurityKeyOpenDevice(..) => row("SecurityKeyOpenDevice"),
-        BrokerRequest::SecurityKeyApplyUdevRules(..) => row("SecurityKeyApplyUdevRules"),
-        BrokerRequest::Invoke(..) => row("Invoke"),
-    }
+/// One list feeds both artifacts: the exhaustive name match, so a variant no
+/// arm names does not compile, and [`WIRE_VARIANTS`], the view the
+/// completeness gate compares against the committed rows.
+macro_rules! wire_variants {
+    ($($variant:pat => $name:literal),* $(,)?) => {
+        /// The committed name of one wire variant.
+        pub fn wire_variant_name(request: &BrokerRequest) -> &'static str {
+            match request {
+                $($variant => $name,)*
+            }
+        }
+
+        /// Every wire variant name, in the order the wire enum declares them.
+        pub const WIRE_VARIANTS: &[&str] = &[$($name,)*];
+    };
+}
+
+wire_variants! {
+        BrokerRequest::ApplyHostGenerationHandoff(..) => "ApplyHostGenerationHandoff",
+        BrokerRequest::ApplyNftables(..) => "ApplyNftables",
+        BrokerRequest::ApplyNftablesProjection(..) => "ApplyNftablesProjection",
+        BrokerRequest::ApplyNmUnmanaged(..) => "ApplyNmUnmanaged",
+        BrokerRequest::ApplyRoute(..) => "ApplyRoute",
+        BrokerRequest::ApplySysctl(..) => "ApplySysctl",
+        BrokerRequest::BindUnixSocket(..) => "BindUnixSocket",
+        BrokerRequest::CreateOrReconcileUsersGroups(..) => "CreateOrReconcileUsersGroups",
+        BrokerRequest::CreateBridge(..) => "CreateBridge",
+        BrokerRequest::DeleteBridge(..) => "DeleteBridge",
+        BrokerRequest::CreatePersistentTap(..) => "CreatePersistentTap",
+        BrokerRequest::DeletePersistentTap(..) => "DeletePersistentTap",
+        BrokerRequest::CreateTapFd(..) => "CreateTapFd",
+        BrokerRequest::DelegateCgroupV2(..) => "DelegateCgroupV2",
+        BrokerRequest::ExportBrokerAudit(..) => "ExportBrokerAudit",
+        BrokerRequest::Hello(..) => "Hello",
+        BrokerRequest::InjectSecretById(..) => "InjectSecretById",
+        BrokerRequest::LaunchMinijailChild(..) => "LaunchMinijailChild",
+        BrokerRequest::ModprobeIfAllowed(..) => "ModprobeIfAllowed",
+        BrokerRequest::OpenCgroupDir(..) => "OpenCgroupDir",
+        BrokerRequest::OpenDevice(..) => "OpenDevice",
+        BrokerRequest::OpenFuse(..) => "OpenFuse",
+        BrokerRequest::OpenHidrawSecurityKey(..) => "OpenHidrawSecurityKey",
+        BrokerRequest::OpenKvm(..) => "OpenKvm",
+        BrokerRequest::QemuMediaEnroll(..) => "QemuMediaEnroll",
+        BrokerRequest::QemuMediaRefreshRegistry(..) => "QemuMediaRefreshRegistry",
+        BrokerRequest::QemuMediaBoot(..) => "QemuMediaBoot",
+        BrokerRequest::QemuMediaSystemPowerdown(..) => "QemuMediaSystemPowerdown",
+        BrokerRequest::QemuMediaQueryStatus(..) => "QemuMediaQueryStatus",
+        BrokerRequest::QemuMediaQuit(..) => "QemuMediaQuit",
+        BrokerRequest::QemuMediaAttach(..) => "QemuMediaAttach",
+        BrokerRequest::QemuMediaDetach(..) => "QemuMediaDetach",
+        BrokerRequest::OpenPidfd(..) => "OpenPidfd",
+        BrokerRequest::ConsumeLifecycleLease(..) => "ConsumeLifecycleLease",
+        BrokerRequest::OpenPeerPidfdFromAcceptedSocket(..) => "OpenPeerPidfdFromAcceptedSocket",
+        BrokerRequest::ObserveRunner(..) => "ObserveRunner",
+        BrokerRequest::PipeWireAudio(..) => "PipeWireAudio",
+        BrokerRequest::StartSystemdUnit(..) => "StartSystemdUnit",
+        BrokerRequest::CheckSystemdUserManager(..) => "CheckSystemdUserManager",
+        BrokerRequest::ObserveSystemdUnit(..) => "ObserveSystemdUnit",
+        BrokerRequest::OpenSystemdUnitPidfd(..) => "OpenSystemdUnitPidfd",
+        BrokerRequest::StopSystemdUnit(..) => "StopSystemdUnit",
+        BrokerRequest::OpenVhostNet(..) => "OpenVhostNet",
+        BrokerRequest::PauseBroker => "PauseBroker",
+        BrokerRequest::PollChildReaped => "PollChildReaped",
+        BrokerRequest::PrepareRuntimeDir(..) => "PrepareRuntimeDir",
+        BrokerRequest::PrepareStateDir(..) => "PrepareStateDir",
+        BrokerRequest::MigrateLegacySwtpmState(..) => "MigrateLegacySwtpmState",
+        BrokerRequest::ReconcileStorageScope(..) => "ReconcileStorageScope",
+        BrokerRequest::ValidateLockSpec(..) => "ValidateLockSpec",
+        BrokerRequest::PrepareStoreView(..) => "PrepareStoreView",
+        BrokerRequest::StoreSync(..) => "StoreSync",
+        BrokerRequest::StoreVerify(..) => "StoreVerify",
+        BrokerRequest::ReadSecretById(..) => "ReadSecretById",
+        BrokerRequest::ResumeBroker => "ResumeBroker",
+        BrokerRequest::RotateSecretById(..) => "RotateSecretById",
+        BrokerRequest::RunHostInstall(..) => "RunHostInstall",
+        BrokerRequest::RunMigrate(..) => "RunMigrate",
+        BrokerRequest::RunActivation(..) => "RunActivation",
+        BrokerRequest::RunGc(..) => "RunGc",
+        BrokerRequest::RunKeysRotate(..) => "RunKeysRotate",
+        BrokerRequest::RunHostKeyTrust(..) => "RunHostKeyTrust",
+        BrokerRequest::RunRotateKnownHost(..) => "RunRotateKnownHost",
+        BrokerRequest::SetBridgePortFlags(..) => "SetBridgePortFlags",
+        BrokerRequest::SetSocketAcl(..) => "SetSocketAcl",
+        BrokerRequest::SetupMountNamespace(..) => "SetupMountNamespace",
+        BrokerRequest::CgroupKill(..) => "CgroupKill",
+        BrokerRequest::SignalRunner(..) => "SignalRunner",
+        BrokerRequest::DeregisterRunnerPidfd(..) => "DeregisterRunnerPidfd",
+        BrokerRequest::SpawnRunner(..) => "SpawnRunner",
+        BrokerRequest::UpdateHostsFile(..) => "UpdateHostsFile",
+        BrokerRequest::UsbipBind(..) => "UsbipBind",
+        BrokerRequest::UsbipBindFirewallRule(..) => "UsbipBindFirewallRule",
+        BrokerRequest::UsbipProxyReconcile(..) => "UsbipProxyReconcile",
+        BrokerRequest::UsbipUnbind(..) => "UsbipUnbind",
+        BrokerRequest::UsbipExplicitBind(..) => "UsbipExplicitBind",
+        BrokerRequest::UsbipExplicitFirewallRule(..) => "UsbipExplicitFirewallRule",
+        BrokerRequest::ResourceActivationAudit(..) => "ResourceActivationAudit",
+        BrokerRequest::ValidateBundle => "ValidateBundle",
+        BrokerRequest::SeedDnsmasqLease(..) => "SeedDnsmasqLease",
+        BrokerRequest::BindMountFromHardlinkFarm(..) => "BindMountFromHardlinkFarm",
+        BrokerRequest::OwnershipMatrixCheck(..) => "OwnershipMatrixCheck",
+        BrokerRequest::SshHostKeyPreflight(..) => "SshHostKeyPreflight",
+        BrokerRequest::DiskInit(..) => "DiskInit",
+        BrokerRequest::SecurityKeyOpenDevice(..) => "SecurityKeyOpenDevice",
+        BrokerRequest::SecurityKeyApplyUdevRules(..) => "SecurityKeyApplyUdevRules",
+        BrokerRequest::Invoke(..) => "Invoke",
+}
+
+/// The committed row one wire variant names, when a row declares it.
+///
+/// The name match is exhaustive, so a variant no row declares cannot be
+/// reached by naming it: a new variant is a compile error until it is named
+/// here, and [`audit`] refuses a name whose row is missing.
+pub fn wire_row(request: &BrokerRequest) -> Option<&'static BrokerOperationRow> {
+    BrokerOperationRow::find(wire_variant_name(request))
 }
 
 /// Name every typed audit shape the broker records.
@@ -362,6 +438,8 @@ pub struct CatalogMismatch {
 /// The derived views the completeness gate compares against the rows.
 #[derive(Debug, Clone, Default)]
 pub struct CatalogViews {
+    /// Every wire variant name of the request enum.
+    pub wire: Vec<&'static str>,
     /// The closed Host profile catalog.
     pub host: Vec<&'static str>,
     /// The closed Guest profile catalog.
@@ -460,14 +538,12 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
                 format!("{}: not family-owned but names a family", row.operation),
             ));
         }
-        if (row.disposition == "stubbed-unimplemented") != row.stub_wave.is_some() {
+        if row.disposition == "stubbed-unimplemented" && row.stub_target.is_none() {
             mismatches.push(missing(
                 "dispositions",
                 format!(
-                    "{}: a {} row with {} reserved wave",
-                    row.operation,
-                    row.disposition,
-                    if row.stub_wave.is_some() { "a" } else { "no" }
+                    "{}: a reserved stub without a deferral marker",
+                    row.operation
                 ),
             ));
         }
@@ -485,6 +561,25 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
                 ));
             }
         }
+        if let Some(join) = row.audit_join {
+            if join.is_empty() {
+                mismatches.push(missing(
+                    "audit-join",
+                    format!("{}: declares an empty join", row.operation),
+                ));
+            }
+            for field in join {
+                if !row.payload_required.contains(field) {
+                    mismatches.push(missing(
+                        "audit-join",
+                        format!(
+                            "{field}: {} joins on a field its payload does not require",
+                            row.operation
+                        ),
+                    ));
+                }
+            }
+        }
     }
     for operation in operations.iter().copied() {
         if !views.authz.contains(&operation) {
@@ -493,6 +588,23 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
                 format!("{operation}: committed row, no authorization row"),
             ));
         }
+    }
+    // The wire enum and the rows are two independent declarations, so the
+    // gate compares them as sets: a variant no row inherits and a row
+    // inheriting a variant the enum does not declare both fail.
+    let enum_variants: BTreeSet<&str> = views.wire.iter().copied().collect();
+    let row_variants: BTreeSet<&str> = rows.iter().filter_map(|row| row.wire_variant).collect();
+    for name in row_variants.difference(&enum_variants) {
+        mismatches.push(missing(
+            "wire",
+            format!("{name}: a row inherits it, the wire enum does not declare it"),
+        ));
+    }
+    for name in enum_variants.difference(&row_variants) {
+        mismatches.push(missing(
+            "wire",
+            format!("{name}: the wire enum declares it, no committed row declares it"),
+        ));
     }
     sequence_matches(
         "profiles",
@@ -577,6 +689,7 @@ mod tests {
     /// Every view as the running binary carries it.
     fn live_views() -> CatalogViews {
         CatalogViews {
+            wire: WIRE_VARIANTS.to_vec(),
             host: HOST_OPERATION_CATALOG.to_vec(),
             guest: GUEST_OPERATION_CATALOG.to_vec(),
             w3: W3BrokerOperation::all()
@@ -603,7 +716,7 @@ mod tests {
     }
 
     #[test]
-    fn every_reserved_stub_carries_its_wave() {
+    fn every_reserved_stub_names_a_closed_deferral_marker() {
         let stubs = BROKER_OPERATION_CATALOG
             .iter()
             .filter(|row| row.disposition == "stubbed-unimplemented")
@@ -611,28 +724,28 @@ mod tests {
         assert!(stubs > 0, "the triage records reserved operations");
         for row in BROKER_OPERATION_CATALOG {
             assert_eq!(
-                stub_wave(row.operation).is_some(),
+                stub_target(row.operation).is_some(),
                 row.disposition == "stubbed-unimplemented",
-                "{}: the reserved wave and the disposition disagree",
+                "{}: the deferral marker and the disposition disagree",
                 row.operation
             );
         }
     }
 
     #[test]
-    fn a_stub_without_a_wave_fails_the_gate() {
+    fn a_stub_without_a_deferral_marker_fails_the_gate() {
         let mut rows = BROKER_OPERATION_CATALOG.to_vec();
         let stub = rows
             .iter_mut()
             .find(|row| row.disposition == "stubbed-unimplemented")
             .expect("the catalog reserves at least one operation");
-        stub.stub_wave = None;
+        stub.stub_target = None;
         let mismatches = audit(&rows, &live_views());
         assert!(
             mismatches
                 .iter()
                 .any(|mismatch| mismatch.view == "dispositions"),
-            "a stub with no reserved wave must fail: {mismatches:?}"
+            "a stub with no deferral marker must fail: {mismatches:?}"
         );
     }
 
@@ -711,6 +824,91 @@ mod tests {
                 .unwrap_or_else(|| panic!("{name} has no committed row"));
             assert_eq!(row.wire_variant, Some(*name));
         }
+    }
+
+    #[test]
+    fn wire_row_resolves_every_variant_it_names() {
+        for (request, name) in [
+            (d2b_contracts_broker::broker_wire::BrokerRequest::PauseBroker, "PauseBroker"),
+            (d2b_contracts_broker::broker_wire::BrokerRequest::ResumeBroker, "ResumeBroker"),
+            (d2b_contracts_broker::broker_wire::BrokerRequest::PollChildReaped, "PollChildReaped"),
+            (d2b_contracts_broker::broker_wire::BrokerRequest::ValidateBundle, "ValidateBundle"),
+        ] {
+            assert_eq!(wire_variant_name(&request), name);
+            assert_eq!(wire_row(&request).map(|row| row.operation), Some(name));
+        }
+    }
+
+    #[test]
+    fn a_wire_variant_without_a_row_fails_the_gate() {
+        // The wire enum grows and the rows do not: the new variant has no
+        // committed row to resolve, which is the axis the row-derived views
+        // cannot see.
+        let mut views = live_views();
+        views.wire.push("NoSuchVariant");
+        let mismatches = audit(BROKER_OPERATION_CATALOG, &views);
+        assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.view == "wire"
+                    && mismatch.detail.contains("NoSuchVariant")
+                    && mismatch.detail.contains("no committed row")),
+            "a wire variant with no committed row must fail: {mismatches:?}"
+        );
+
+        let rows: Vec<BrokerOperationRow> = BROKER_OPERATION_CATALOG
+            .iter()
+            .copied()
+            .filter(|row| row.operation != "Hello")
+            .collect();
+        let mismatches = audit(&rows, &live_views());
+        assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.view == "wire"
+                    && mismatch.detail.contains("Hello")
+                    && mismatch.detail.contains("no committed row")),
+            "a wire variant with no committed row must fail: {mismatches:?}"
+        );
+    }
+
+    #[test]
+    fn a_row_inheriting_an_undeclared_wire_variant_fails_the_gate() {
+        let mut rows = BROKER_OPERATION_CATALOG.to_vec();
+        let named = rows
+            .iter_mut()
+            .find(|row| row.wire_variant == Some("Hello"))
+            .expect("a committed row inherits the Hello variant");
+        named.wire_variant = Some("NoSuchVariant");
+        let mismatches = audit(&rows, &live_views());
+        assert!(
+            mismatches.iter().any(|mismatch| mismatch.view == "wire"
+                && mismatch.detail.contains("NoSuchVariant")
+                && mismatch.detail.contains("the wire enum does not declare it")),
+            "a row inheriting an undeclared variant must fail: {mismatches:?}"
+        );
+    }
+
+    #[test]
+    fn a_join_over_an_unrequired_field_fails_the_gate() {
+        let mut rows = BROKER_OPERATION_CATALOG.to_vec();
+        rows[0].audit_join = Some(&["absent"]);
+        let mismatches = audit(&rows, &live_views());
+        assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.view == "audit-join" && mismatch.detail.contains("absent")),
+            "a join over a field the payload does not require must fail: {mismatches:?}"
+        );
+        rows[0].audit_join = Some(&[]);
+        let mismatches = audit(&rows, &live_views());
+        assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.view == "audit-join"
+                    && mismatch.detail.contains("empty join")),
+            "an empty join must fail: {mismatches:?}"
+        );
     }
 
     #[test]

@@ -2051,6 +2051,34 @@ impl DispatchAuditContext {
     }
 }
 
+/// The audit context of one row-keyed generic invocation.
+///
+/// The invoked row's declared join replaces the identity this request would
+/// have derived from its operation name: the record keys on the payload
+/// fields the row declares, and the Zone identity is derived from the Zone
+/// the invocation ran in.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn invoked_row_audit_context(
+    context: &DispatchAuditContext,
+    zone: &str,
+    identity: Option<String>,
+) -> Result<DispatchAuditContext, BrokerError> {
+    let Some(operation_identity) = identity else {
+        return Ok(context.clone());
+    };
+    let zone_id = d2b_audit::ZoneId::derive(zone)
+        .map_err(|_| BrokerError::Protocol("audit zone identity invalid".to_owned()))?;
+    Ok(DispatchAuditContext {
+        audit_join: Some(AuditJoinContext {
+            zone_id: CanonicalAuditDigest::parse(zone_id.as_str().to_owned())
+                .map_err(|_| BrokerError::Protocol("audit zone identity invalid".to_owned()))?,
+            operation_identity: CanonicalAuditDigest::parse(operation_identity)
+                .map_err(|_| BrokerError::Protocol("audit operation identity invalid".to_owned()))?,
+        }),
+        ..context.clone()
+    })
+}
+
 fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
     #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaEnroll(req) = request {
@@ -6804,8 +6832,16 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 &req.payload,
             );
             match outcome {
-                Ok((invocation_id, outcome)) => {
-                    write_success_op_record!(
+                Ok(invocation) => {
+                    // The record of a generic invocation keys on the invoked
+                    // row's declared join rather than on this request's
+                    // derived identity, so the arm names its own context.
+                    let invocation_context = invoked_row_audit_context(
+                        audit_context,
+                        req.zone.as_str(),
+                        invocation.audit_join_identity,
+                    )?;
+                    write_success_op_record_impl(
                         audit_log,
                         bundle_metadata,
                         "Invoke",
@@ -6818,17 +6854,18 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                         tracing_span_id_str(req.tracing_span_id.as_ref()),
                         OperationFields::Invoke {
                             operation: req.operation.clone(),
-                            invocation_id: invocation_id.clone(),
+                            invocation_id: invocation.invocation_id.clone(),
                             reason: None,
                         },
+                        &invocation_context,
                     )?;
-                    let result = serde_json::to_value(&outcome.result).map_err(|err| {
+                    let result = serde_json::to_value(&invocation.outcome.result).map_err(|err| {
                         BrokerError::Protocol(format!("serialize invocation result: {err}"))
                     })?;
                     Ok(DispatchResult::no_fds(BrokerResponse::Invoke(
                         d2b_contracts_broker::broker_wire::InvokeResponse {
                             operation: req.operation,
-                            invocation_id,
+                            invocation_id: invocation.invocation_id,
                             result,
                         },
                     )))
@@ -6849,7 +6886,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                         Some(refusal.code),
                         OperationFields::Invoke {
                             operation: refusal.operation.clone(),
-                            invocation_id: String::new(),
+                            invocation_id: refusal.invocation_id.clone(),
                             reason: Some(refusal.code.to_owned()),
                         },
                     )?;
@@ -6862,15 +6899,15 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         }
         // Every remaining variant is a reserved stub. One table arm serves
         // them all, so the arm count follows the committed dispositions rather
-        // than the variant list, and the refusal names the wave the committed
-        // row reserves the operation for. A variant that is neither served nor
-        // reserved is a bug in this match, not a silent success.
+        // than the variant list, and the refusal names the deferral marker the
+        // committed row carries. A variant that is neither served nor reserved
+        // is a bug in this match, not a silent success.
         request => {
             let operation = request.op_name();
-            match crate::catalog::stub_wave(operation) {
-                Some(target_wave) => Err(BrokerError::Unimplemented {
+            match crate::catalog::stub_target(operation) {
+                Some(stub) => Err(BrokerError::Unimplemented {
                     operation,
-                    target_wave,
+                    target_wave: stub.as_str(),
                 }),
                 None => Err(BrokerError::Protocol(format!(
                     "uncommitted dispatch arm for {operation}"
@@ -21447,7 +21484,7 @@ mod tests {
             w3: false,
             capabilities: false,
             disposition: "promoted-live",
-            stub_wave: None,
+            stub_target: None,
             audit_fields: &[],
             authz: crate::catalog::BrokerAuthzFacets {
                 subject: "test",
@@ -21461,6 +21498,7 @@ mod tests {
             payload_provenance: crate::catalog::PayloadProvenance::Request,
             payload_fields: &["label"],
             payload_required: &["label"],
+            audit_join: Some(&["label"]),
         }
     }
 
@@ -21572,6 +21610,82 @@ mod tests {
             record.operation_fields.as_ref().unwrap()["invocation_id"],
             invocation_id
         );
+        // The invoked row declares the join: the record keys on the payload
+        // field the row names, not on the operation name alone.
+        let expected_identity = d2b_audit::operation_identity_of_canonical_json(
+            &d2b_contracts_resource::v3::canonical_json_bytes(&serde_json::json!({
+                "label": "x"
+            }))
+            .expect("the declared join key canonicalizes"),
+        );
+        assert_eq!(record.operation_identity.as_str(), expected_identity);
+        assert_eq!(record.zone_operation_key.operation().as_str(), expected_identity);
+        assert_ne!(
+            record.operation_identity.as_str(),
+            d2b_audit::OperationIdentity::derive("operation")
+                .expect("the derived fallback identity")
+                .as_str(),
+            "the record must not fall back to the operation name"
+        );
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn envelope_keys_one_row_on_its_declared_join_fields() {
+        use d2b_contracts_broker::broker_wire::BrokerCallerRole;
+
+        let root = test_audit_dir("envelope-join");
+        let config = test_server_config(&root, &root.join("manifest.json"));
+        crate::sys::path_safe::ensure_dir(&root, 0o750, None, None).expect("create audit root");
+        crate::sys::path_safe::ensure_dir(&config.audit_dir, 0o750, None, None)
+            .expect("create audit dir");
+        let (log, capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = envelope_test_backend(&["d2bd"]);
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let invoke = |label: &str| {
+            let request = d2b_contracts_broker::broker_wire::BrokerRequest::Invoke(
+                d2b_contracts_broker::broker_wire::InvokeRequest {
+                    operation: "ZoneEchoOperation".to_owned(),
+                    zone: "zone-a".to_owned(),
+                    payload: serde_json::json!({ "label": label }),
+                    tracing_span_id: None,
+                },
+            );
+            let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+                .expect("audit context");
+            let outcome = dispatch_request_with_backend(
+                request,
+                1000,
+                Gid::current().as_raw(),
+                caller_role.clone(),
+                &audit_context,
+                &config,
+                &log,
+                None,
+                &backend,
+            )
+            .expect("dispatch succeeds");
+            outcome.response
+        };
+        // Two invocations of one row join under the keys their payload
+        // declares: distinct labels, distinct identities, one Zone key.
+        let _ = invoke("alpha");
+        let _ = invoke("beta");
+        let records = capture.lock().expect("capture lock");
+        assert_eq!(records.len(), 2, "each invocation writes one record");
+        let identities: Vec<String> = records
+            .iter()
+            .map(|record| record.operation_identity.as_str().to_owned())
+            .collect();
+        assert_ne!(identities[0], identities[1]);
+        assert_eq!(records[0].zone_operation_key.zone(), records[1].zone_operation_key.zone());
+        drop(records);
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -21627,6 +21741,13 @@ mod tests {
         assert_eq!(record.error_kind.as_deref(), Some("ungranted-caller"));
         assert_eq!(record.operation_fields.as_ref().unwrap()["operation"], "ZoneEchoOperation");
         assert_eq!(record.operation_fields.as_ref().unwrap()["reason"], "ungranted-caller");
+        assert!(
+            record.operation_fields.as_ref().unwrap()["invocation_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("invocation-")),
+            "a refusal record carries the invocation identifier it denied: {:?}",
+            record.operation_fields
+        );
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
