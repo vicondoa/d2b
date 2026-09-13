@@ -1031,7 +1031,9 @@ impl ProductionSharedProviderEffects {
             .ok()
             .and_then(|plane| plane.clone())
             .ok_or(SharedProviderEffectError::Unavailable)?;
-        let occupancy = observe_host_network().map_err(|_| SharedProviderEffectError::Unavailable)?;
+        let occupancy = observe_host_network()
+            .await
+            .map_err(|_| SharedProviderEffectError::Unavailable)?;
         plane
             .network_admission_index()
             .lock()

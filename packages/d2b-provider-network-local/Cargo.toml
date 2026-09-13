@@ -24,7 +24,7 @@ serde.workspace = true
 tracing = "0.1"
 serde_json.workspace = true
 sha2.workspace = true
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
 parking_lot = "0.12"

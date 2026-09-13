@@ -6,7 +6,8 @@ use crate::routes::RouteTuple;
 use d2b_contracts_resource::v3::network::Ipv4Cidr;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use std::time::Duration;
 
 /// Current host network occupancy used by root-owned Network admission.
 ///
@@ -251,10 +252,10 @@ impl From<HostNetworkObservationError> for NetworkEffectError {
 }
 
 /// Observe current host links, routes, and IPv4 address occupancy.
-pub fn observe_host_network() -> Result<HostNetworkOccupancy, HostNetworkObservationError> {
-    let links = run_ip(&["-j", "-d", "link", "show"])?;
-    let addresses = run_ip(&["-j", "-4", "addr", "show"])?;
-    let routes = run_ip(&["-j", "-4", "route", "show", "table", "all"])?;
+pub async fn observe_host_network() -> Result<HostNetworkOccupancy, HostNetworkObservationError> {
+    let links = run_ip(&["-j", "-d", "link", "show"]).await?;
+    let addresses = run_ip(&["-j", "-4", "addr", "show"]).await?;
+    let routes = run_ip(&["-j", "-4", "route", "show", "table", "all"]).await?;
     parse_host_network_observation(&links, &addresses, &routes)
 }
 
@@ -398,13 +399,41 @@ fn route_via_to_string(value: &Value) -> Option<String> {
         .or_else(|| value.get("addr").and_then(value_to_string))
 }
 
-fn run_ip(args: &[&str]) -> Result<Vec<u8>, HostNetworkObservationError> {
-    let output = Command::new("/run/current-system/sw/bin/ip")
-        .args(args)
-        .env_remove("NOTIFY_SOCKET")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|_| HostNetworkObservationError::Backend)?;
+/// The host-observation program for root-owned Network admission.
+const IP_PROGRAM: &str = "/run/current-system/sw/bin/ip";
+
+/// Bound on one host-observation command.
+///
+/// The observation runs on the Network admission path, so a hung `ip` must
+/// fail closed within this budget instead of pinning the awaiting caller.
+const IP_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn run_ip(args: &[&str]) -> Result<Vec<u8>, HostNetworkObservationError> {
+    run_ip_command(IP_PROGRAM, args, IP_OBSERVATION_TIMEOUT).await
+}
+
+/// Run one bounded `ip` command through the tokio process interface.
+///
+/// The child is killed on drop so a command that outlives its budget cannot
+/// linger, and the wait is driven by the runtime timer rather than by a
+/// blocking pipe read on the caller's worker.
+async fn run_ip_command(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Vec<u8>, HostNetworkObservationError> {
+    let output = tokio::time::timeout(
+        timeout,
+        tokio::process::Command::new(program)
+            .args(args)
+            .env_remove("NOTIFY_SOCKET")
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| HostNetworkObservationError::Backend)?
+    .map_err(|_| HostNetworkObservationError::Backend)?;
     if output.status.success() {
         Ok(output.stdout)
     } else {
@@ -441,6 +470,22 @@ mod tests {
         assert_eq!(occupancy.routes()[0].via(), Some("192.0.2.1"));
         assert_eq!(occupancy.routes()[0].device(), Some("foreign0"));
         assert_eq!(occupancy.routes()[0].table(), "main");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_host_observation_command_that_hangs_fails_closed_within_its_budget() {
+        // The child spins on shell builtins and does not answer inside the
+        // budget, so the observation must return its closed failure through
+        // the runtime timer instead of waiting for the child.
+        let started = std::time::Instant::now();
+        let result = run_ip_command(
+            "/bin/sh",
+            &["-c", "i=0; while [ $i -lt 2000000 ]; do i=$((i+1)); done"],
+            Duration::from_millis(200),
+        )
+        .await;
+        assert_eq!(result, Err(HostNetworkObservationError::Backend));
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 
     #[test]
