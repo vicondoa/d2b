@@ -42,7 +42,7 @@ pub const PROVIDER_REF: &str = "Provider/credential-secret-service";
 /// Maximum active leases supported by one Provider instance.
 pub const MAX_LOCAL_LEASES: u32 = 256;
 /// Maximum bytes in a Secret Service collection alias.
-pub const MAX_COLLECTION_ALIAS_BYTES: usize = 128;
+const MAX_COLLECTION_ALIAS_BYTES: usize = 128;
 const ABSOLUTE_UNIX_MS_THRESHOLD: u64 = 1_000_000_000_000;
 
 /// Reject ambient SDK credential-chain environment names.
@@ -95,11 +95,6 @@ pub fn run_from_fd10() -> i32 {
         ),
         runtime_provider,
     )
-}
-
-/// Return the supervised controller process status.
-pub fn controller_binary_entrypoint() -> i32 {
-    run_from_fd10()
 }
 
 fn runtime_provider(
@@ -462,7 +457,7 @@ pub(crate) enum SecretServicePollError {
     Deadline,
 }
 
-fn invariant_error() -> CredentialServiceError {
+pub(crate) fn invariant() -> CredentialServiceError {
     CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
 }
 
@@ -489,10 +484,6 @@ pub enum SecretServiceState {
 pub enum SecretServicePortError {
     /// The backing collection is locked.
     Locked,
-    /// The requested secret is absent from the backing collection.
-    Missing,
-    /// Backing policy denied the operation.
-    Denied,
     /// The backing service is unavailable.
     Unavailable,
     /// The lease expired.
@@ -506,8 +497,7 @@ pub enum SecretServicePortError {
 impl fmt::Display for SecretServicePortError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::Locked | Self::Missing | Self::Unavailable => "credential-provider-unavailable",
-            Self::Denied => "credential-operation-denied",
+            Self::Locked | Self::Unavailable => "credential-provider-unavailable",
             Self::LeaseExpired => "credential-lease-expired",
             Self::LeaseRevoked => "credential-lease-revoked",
             Self::CompletionUnknown => "credential-invariant-failure",
@@ -1414,12 +1404,9 @@ impl SecretServiceCredentialProvider {
             "secret-service port operation failed",
         );
         let code = match error {
-            SecretServicePortError::Locked
-            | SecretServicePortError::Missing
-            | SecretServicePortError::Unavailable => {
+            SecretServicePortError::Locked | SecretServicePortError::Unavailable => {
                 CredentialServiceErrorCode::ProviderUnavailable
             }
-            SecretServicePortError::Denied => CredentialServiceErrorCode::OperationDenied,
             SecretServicePortError::LeaseExpired => CredentialServiceErrorCode::LeaseExpired,
             SecretServicePortError::LeaseRevoked => CredentialServiceErrorCode::LeaseRevoked,
             SecretServicePortError::CompletionUnknown => {
@@ -1601,7 +1588,7 @@ impl SecretServiceCredentialProvider {
         Ok(self
             .ambiguous_operations
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .iter()
             .any(|(key, candidate, _, _)| *key == session_key && candidate == credential))
     }
@@ -1610,7 +1597,7 @@ impl SecretServiceCredentialProvider {
         let tracked = self
             .leases
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .values()
             .filter(|record| {
                 matches!(
@@ -1622,7 +1609,7 @@ impl SecretServiceCredentialProvider {
         let pending = self
             .ambiguous_acquires
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .len();
         Ok(tracked.saturating_add(pending))
     }
@@ -1642,7 +1629,7 @@ impl SecretServiceCredentialProvider {
         );
         self.ambiguous_operations
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .insert((
                 session_key,
                 credential.to_owned(),
@@ -1666,7 +1653,7 @@ impl SecretServiceCredentialProvider {
         )?;
         self.ambiguous_acquires
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .insert(
                 (
                     session_key,
@@ -1693,7 +1680,7 @@ impl SecretServiceCredentialProvider {
         )?;
         self.ambiguous_refreshes
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .insert(
                 (
                     session_key,
@@ -1716,7 +1703,7 @@ impl SecretServiceCredentialProvider {
         Ok(self
             .ambiguous_acquires
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .iter()
             .filter(|((key, _, _), _)| *key == session_key)
             .map(|((_, credential, idempotency), request)| {
@@ -1732,7 +1719,7 @@ impl SecretServiceCredentialProvider {
         Ok(self
             .ambiguous_refreshes
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .iter()
             .filter(|((key, _, _), _)| *key == session_key)
             .map(|((_, credential, idempotency), record)| {
@@ -1750,7 +1737,7 @@ impl SecretServiceCredentialProvider {
     ) -> Result<(), CredentialServiceError> {
         self.ambiguous_operations
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .retain(|(key, candidate, candidate_key, candidate_operation)| {
                 *key != session_key
                     || candidate != credential
@@ -1768,7 +1755,7 @@ impl SecretServiceCredentialProvider {
     ) -> Result<(), CredentialServiceError> {
         self.ambiguous_acquires
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .remove(&(
                 session_key,
                 credential.to_owned(),
@@ -1790,7 +1777,7 @@ impl SecretServiceCredentialProvider {
     ) -> Result<(), CredentialServiceError> {
         self.ambiguous_refreshes
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .remove(&(
                 session_key,
                 credential.to_owned(),
@@ -1810,15 +1797,15 @@ impl SecretServiceCredentialProvider {
     ) -> Result<(), CredentialServiceError> {
         self.ambiguous_operations
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .retain(|(key, _, _, _)| *key != session_key);
         self.ambiguous_acquires
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .retain(|(key, _, _), _| *key != session_key);
         self.ambiguous_refreshes
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .retain(|(key, _, _), _| *key != session_key);
         Ok(())
     }
@@ -1830,15 +1817,15 @@ impl SecretServiceCredentialProvider {
     ) -> Result<(), CredentialServiceError> {
         self.ambiguous_operations
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .retain(|(key, candidate, _, _)| *key != session_key || candidate != credential);
         self.ambiguous_acquires
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .retain(|(key, candidate, _), _| *key != session_key || candidate != credential);
         self.ambiguous_refreshes
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .retain(|(key, candidate, _), _| *key != session_key || candidate != credential);
         Ok(())
     }
@@ -1850,7 +1837,7 @@ impl SecretServiceCredentialProvider {
         Ok(self
             .ambiguous_operations
             .lock()
-            .map_err(|_| invariant_error())?
+            .map_err(|_| invariant())?
             .iter()
             .any(|(key, _, _, _)| *key == session_key))
     }

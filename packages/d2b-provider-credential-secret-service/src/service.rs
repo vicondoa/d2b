@@ -12,7 +12,7 @@ use d2b_contracts_resource::v3::ResourceRef;
 use crate::{
     LeaseRecord, OperationKind, SecretServiceCredentialProvider, SecretServiceLeaseRef,
     SecretServiceLeaseRequest, SecretServiceLeaseRevocation, SecretServicePollError,
-    SecretServicePortError, SessionKey,
+    SecretServicePortError, SessionKey, invariant,
 };
 
 #[async_trait::async_trait]
@@ -848,10 +848,6 @@ async fn await_port<T: Send>(
         .await
         .map_err(|_| SecretServicePollError::Deadline)?
         .map_err(SecretServicePollError::Port)
-}
-
-fn invariant() -> CredentialServiceError {
-    CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
 }
 
 fn expired() -> CredentialServiceError {

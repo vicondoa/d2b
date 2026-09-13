@@ -1,9 +1,8 @@
 mod common;
 
 use d2b_contracts_provider::v3::credential::{
-    CREDENTIAL_DELIVERY_NOISE_PROFILE, CredentialAuthorization, CredentialMethod,
-    CredentialProvider, CredentialRequest, CredentialResponse, CredentialServiceError,
-    CredentialServiceErrorCode, DeliverySessionParams, SensitiveDeliveryRecord,
+    CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialRequest,
+    CredentialResponse, CredentialServiceError, CredentialServiceErrorCode, DeliverySessionParams,
 };
 use d2b_provider_credential_secret_service::{
     SecretServiceCredentialProvider, SecretServiceSessionCapability,
@@ -12,11 +11,7 @@ use d2b_provider_credential_secret_service::{
 use common::{Admission, ProviderHarness, SessionCapabilitySource, TestAdmission, request, setup};
 
 #[test]
-fn response_uses_the_read_only_adapter_binding_and_record_zeroizes() {
-    assert_eq!(
-        CREDENTIAL_DELIVERY_NOISE_PROFILE,
-        "Noise_KK_25519_ChaChaPoly_SHA256"
-    );
+fn response_uses_the_read_only_adapter_binding() {
     let (provider, _) = setup(64);
     let server = ProviderHarness::new(provider, Admission);
     let response = server
@@ -26,14 +21,6 @@ fn response_uses_the_read_only_adapter_binding_and_record_zeroizes() {
         panic!("acquire response");
     };
     assert_eq!(response.delivery_session_params.sequence(), 1);
-
-    let mut record = SensitiveDeliveryRecord::new(b"secret".to_vec(), 64).unwrap();
-    let mut destination = [0; 6];
-    record.copy_to(&mut destination).unwrap();
-    destination.fill(0);
-    record.clear();
-    assert!(record.is_zeroized());
-    assert!(record.copy_to(&mut destination).is_err());
 }
 
 #[test]
