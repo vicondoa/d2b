@@ -26,6 +26,7 @@ pub mod host_generation;
 mod host_validate;
 mod provider;
 mod resource;
+mod runtime;
 mod share;
 mod shell;
 mod terminal_client;

@@ -52,7 +52,7 @@ use d2b_core::{
     },
 };
 
-use crate::context::{CliContext, SeqpacketUnixSocket, system_tool_command};
+use crate::context::{CliContext, socket_connectable, system_tool_command};
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 
@@ -188,7 +188,7 @@ pub fn run_doctor(context: &CliContext) -> DoctorReport {
 // ---------------------------------------------------------------
 
 fn check_broker_socket(context: &CliContext, report: &mut DoctorReport) {
-    match SeqpacketUnixSocket::connect(&context.broker_socket) {
+    match socket_connectable(&context.broker_socket) {
         Ok(_) => report.push(
             "broker-ready",
             DoctorStatus::Pass,
@@ -249,7 +249,7 @@ fn unix_socket_path_is_bound(path: &Path) -> bool {
 }
 
 fn check_daemon_socket(context: &CliContext, report: &mut DoctorReport) {
-    match SeqpacketUnixSocket::connect(&context.public_socket) {
+    match socket_connectable(&context.public_socket) {
         Ok(_) => report.push(
             "daemon-ready",
             DoctorStatus::Pass,

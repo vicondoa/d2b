@@ -7,12 +7,12 @@ use std::{
     io::{self, Write as _},
     path::{Path, PathBuf},
     sync::LazyLock,
+    time::Duration,
 };
 
 use crate::context::{
-    CliContext, ErrorFrame, OutputMode, SeqpacketUnixSocket, ZoneContext,
-    cli_failure_from_daemon_error, daemon_hello_frame, decode_daemon_frame, is_daemon_unreachable,
-    output_mode, parse_hello_reply,
+    CliContext, CliSocket, ErrorFrame, OutputMode, ZoneContext, cli_failure_from_daemon_error,
+    daemon_hello_frame, decode_daemon_frame, is_daemon_unreachable, output_mode, parse_hello_reply,
 };
 use crate::{
     CliFailure, activation, complete, debug, endpoint, exec, guest, host, print_json, print_stdout,
@@ -504,40 +504,56 @@ pub(crate) fn render_daemon_audit_lines(
 pub(crate) fn try_audit_via_socket(
     public_socket: &Path,
     json_mode: bool,
+    deadline: crate::context::RequestDeadline,
 ) -> Result<AuditSocketOutcome, CliFailure> {
     if !public_socket.exists() {
         return Ok(AuditSocketOutcome::Unreachable);
     }
-    let mut socket = match SeqpacketUnixSocket::connect(public_socket) {
+    crate::runtime::block_on(audit_via_socket(
+        public_socket,
+        json_mode,
+        deadline.duration(),
+    ))
+}
+
+/// One bounded audit export over the public socket.
+///
+/// Every connect, send, and receive carries the command's deadline, so a
+/// silent or wedged peer becomes a named refusal instead of a hung CLI.
+async fn audit_via_socket(
+    public_socket: &Path,
+    json_mode: bool,
+    budget: Duration,
+) -> Result<AuditSocketOutcome, CliFailure> {
+    let socket = match CliSocket::connect(public_socket, budget).await {
         Ok(socket) => socket,
         Err(error) if is_daemon_unreachable(&error) => {
             return Ok(AuditSocketOutcome::Unreachable);
         }
-        Err(error) => {
-            return Err(CliFailure::new(
-                1,
-                format!("failed to connect to {}: {error}", public_socket.display()),
-            ));
-        }
+        Err(error) => return Err(audit_failure(public_socket, "connect", &error)),
     };
     socket
-        .send_frame(&daemon_hello_frame("hello")?)
-        .map_err(|error| CliFailure::new(1, format!("failed to send hello frame: {error}")))?;
+        .send_frame(&daemon_hello_frame("hello")?, budget)
+        .await
+        .map_err(|error| audit_failure(public_socket, "hello send", &error))?;
     let hello_response = socket
-        .recv_frame()
-        .map_err(|error| CliFailure::new(1, format!("failed to receive hello reply: {error}")))?;
+        .recv_frame(budget)
+        .await
+        .map_err(|error| audit_failure(public_socket, "hello receive", &error))?;
     let _ = parse_hello_reply(&hello_response)?;
 
     let mut cursor = None;
     let mut lines = Vec::new();
     for _ in 0..1024 {
         let request = daemon_audit_frame_with_cursor("audit", json_mode, cursor.clone())?;
-        socket.send_frame(&request).map_err(|error| {
-            CliFailure::new(1, format!("failed to send audit request: {error}"))
-        })?;
-        let response = socket.recv_frame().map_err(|error| {
-            CliFailure::new(1, format!("failed to receive audit reply: {error}"))
-        })?;
+        socket
+            .send_frame(&request, budget)
+            .await
+            .map_err(|error| audit_failure(public_socket, "request send", &error))?;
+        let response = socket
+            .recv_frame(budget)
+            .await
+            .map_err(|error| audit_failure(public_socket, "reply receive", &error))?;
         let (page, next_cursor, complete) = parse_audit_page(&response)?;
         lines.extend(page);
         if complete {
@@ -555,6 +571,25 @@ pub(crate) fn try_audit_via_socket(
         1,
         "audit export exceeded the bounded pagination limit",
     ))
+}
+
+/// Name one audit transport failure, and give the CLI an exit code that
+/// matches the class it prints.
+fn audit_failure(public_socket: &Path, step: &str, error: &io::Error) -> CliFailure {
+    let (class, exit_code) = match error.kind() {
+        io::ErrorKind::TimedOut => ("deadline-exceeded", 1),
+        io::ErrorKind::NotFound
+        | io::ErrorKind::ConnectionRefused
+        | io::ErrorKind::ConnectionReset => ("zone-unavailable", 1),
+        _ => ("exec-transport-error", 69),
+    };
+    CliFailure::new(
+        exit_code,
+        format!(
+            "{class}: audit {step} failed against {}: {error}",
+            public_socket.display()
+        ),
+    )
 }
 
 fn auth_status(
@@ -822,7 +857,7 @@ fn audit(
     context: &ZoneContext,
     args: &GenericAuditArgs,
     mode: OutputMode,
-    _deadline: crate::context::RequestDeadline,
+    deadline: crate::context::RequestDeadline,
 ) -> Result<i32, CliFailure> {
     if args.strict {
         return emit_host_error(
@@ -830,7 +865,7 @@ fn audit(
             mode.is_json(),
         );
     }
-    match try_audit_via_socket(context.public_socket_path(), mode.is_json())? {
+    match try_audit_via_socket(context.public_socket_path(), mode.is_json(), deadline)? {
         AuditSocketOutcome::Lines(lines) => {
             render_daemon_audit_lines(&lines, mode.is_json())?;
             Ok(0)
