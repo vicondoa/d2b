@@ -592,11 +592,6 @@ struct SharedDriverExemption {
 
 const SHARED_DRIVER_EXEMPTIONS: &[SharedDriverExemption] = &[
     SharedDriverExemption {
-        module: "packages/d2bd/src/activation_driver.rs",
-        family: "activation-nixos",
-        retires_with: "the family moves into its own provider crate",
-    },
-    SharedDriverExemption {
         module: "packages/d2bd/src/binding_driver.rs",
         family: "volume-binding",
         retires_with: "the family moves into its own provider crate",
@@ -619,11 +614,6 @@ const SHARED_DRIVER_EXEMPTIONS: &[SharedDriverExemption] = &[
     SharedDriverExemption {
         module: "packages/d2bd/src/interaction_driver.rs",
         family: "interaction",
-        retires_with: "the family moves into its own provider crate",
-    },
-    SharedDriverExemption {
-        module: "packages/d2bd/src/semantic_binding_resource_runtime.rs",
-        family: "telemetry",
         retires_with: "the family moves into its own provider crate",
     },
     SharedDriverExemption {
@@ -995,6 +985,12 @@ fn manifest_declares_driver(manifest: &str) -> bool {
 /// the name alone cannot settle it: a per-type driver crate is named after the
 /// resource type it serves, and that type name may contain a dash, which is
 /// exactly the shape of a packaging Provider identity.
+///
+/// Matrix membership outranks the driver declaration. A crate that hosts its
+/// family's driver *and* publishes a packaging artifact is a packaging
+/// Provider: it keeps its row, its dossier, and the layout obligations that
+/// describe the artifact, and only the crates with no row become driver-only
+/// crates.
 fn provider_name_kind(name: &str, declares_driver: bool) -> ProviderNameKind {
     if NON_PROVIDER_PREFIXED.contains(&name) {
         return ProviderNameKind::NonProvider;
@@ -1005,6 +1001,9 @@ fn provider_name_kind(name: &str, declares_driver: bool) -> ProviderNameKind {
     let segments: Vec<_> = rest.split('-').collect();
     if segments.iter().any(|segment| !valid_name_segment(segment)) {
         return ProviderNameKind::Malformed;
+    }
+    if PROVIDER_MATRIX.iter().any(|row| row.crate_name == name) {
+        return ProviderNameKind::Provider;
     }
     // A driver crate declares one resource type's driver for the plane and
     // ships no packaging artifact of its own, so it carries neither the
@@ -1432,12 +1431,14 @@ mod tests {
                     );
                 }
                 ProviderNameKind::Provider => {
+                    let matrix_row = PROVIDER_MATRIX.iter().any(|row| row.crate_name == name);
                     assert!(
-                        !declares_driver
-                            && name
-                                .strip_prefix(PROVIDER_PREFIX)
-                                .is_some_and(|suffix| suffix.split('-').count() >= 2),
-                        "{name} is not a two-segment Provider identity that declares no driver"
+                        matrix_row
+                            || (!declares_driver
+                                && name
+                                    .strip_prefix(PROVIDER_PREFIX)
+                                    .is_some_and(|suffix| suffix.split('-').count() >= 2)),
+                        "{name} is neither a matrix Provider nor a two-segment Provider identity that declares no driver"
                     );
                 }
                 ProviderNameKind::Malformed => {
@@ -1472,6 +1473,39 @@ mod tests {
         assert!(!manifest_declares_driver(
             "[package]\nname = \"d2b-provider-example\"\ndescription = \"depends on d2b-resource-types\"\n"
         ));
+    }
+
+    /// A matrix row outranks the driver declaration: a crate that hosts its
+    /// family's driver and publishes a packaging artifact keeps its row, its
+    /// dossier, and its layout obligations.
+    #[test]
+    fn a_matrix_provider_that_hosts_its_family_driver_keeps_its_row() {
+        let root = repo_root().expect("resolve repository root");
+        let crate_name = "d2b-provider-activation-nixos";
+        assert!(
+            PROVIDER_MATRIX.iter().any(|row| row.crate_name == crate_name),
+            "{crate_name} must hold a matrix row for this case to mean anything"
+        );
+        let manifest = fs::read_to_string(root.join("packages").join(crate_name).join("Cargo.toml"))
+            .expect("read the crate manifest");
+        assert!(
+            manifest_declares_driver(&manifest),
+            "{crate_name} hosts its family's driver"
+        );
+        assert_eq!(classified_kind(root, crate_name), ProviderNameKind::Provider);
+        assert_eq!(
+            provider_name_kind(crate_name, true),
+            ProviderNameKind::Provider
+        );
+
+        // The row is not reported missing while the crate still declares the
+        // driver.
+        let members = cargo_workspace_members(root).expect("read workspace metadata");
+        assert_eq!(
+            check_closed_matrix(root, &members),
+            Ok(()),
+            "hosting the family driver must not report the row as missing"
+        );
     }
 
     /// A per-type driver crate is named after the resource type it serves, so
@@ -1728,10 +1762,15 @@ mod tests {
         let error = check_shared_driver_placements(&fixture.root)
             .expect_err("an exemption the tree no longer needs is refused");
         assert!(error.contains("stale-shared-driver-exemption"), "{error}");
-        assert!(
-            error.contains("packages/d2bd/src/activation_driver.rs"),
-            "{error}"
-        );
+        // The fixture declares one module and no other, so every remaining
+        // entry is stale and must be named. Asserting on whichever entry the
+        // ratchet still holds keeps this independent of the family that moved
+        // last.
+        let stale = SHARED_DRIVER_EXEMPTIONS
+            .iter()
+            .find(|exemption| exemption.module != "packages/d2bd/src/volume_driver.rs")
+            .expect("the ratchet still holds an entry the fixture does not declare");
+        assert!(error.contains(stale.module), "{error}");
         if error.contains("packages/d2bd/src/volume_driver.rs") {
             panic!("the module that still declares a driver must not be stale: {error}");
         }

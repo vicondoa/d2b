@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 exports_files(
     [
@@ -19,6 +19,8 @@ rust_library(
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, cargo_only = True),
     visibility = ["//visibility:public"],
 )
@@ -31,6 +33,8 @@ rust_library(
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, cargo_only = True),
     crate_name = "d2b_provider_activation_nixos",
     visibility = ["//visibility:public"],
@@ -44,6 +48,8 @@ rust_test(
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -72,6 +78,22 @@ rust_test(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        ":d2b_provider_activation_nixos",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "registration",
+    srcs = [
+        "tests/registration.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
         ":d2b_provider_activation_nixos",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

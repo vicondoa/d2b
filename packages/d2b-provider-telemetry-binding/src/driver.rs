@@ -1,28 +1,27 @@
-//! Telemetry Service/Binding reconciliation on the v3 resource runtime
-//! (U12 conversion; KTD3, KTD4, KTD13).
+//! Telemetry Binding reconciliation on the v3 resource runtime (U12
+//! conversion; KTD3, KTD4, KTD13).
 //!
-//! Provider controllers remain the authority for their Service and Binding
-//! semantics: the telemetry Provider declares UID-free child intents
+//! The Provider controller stays the authority for the Binding's semantics:
+//! the telemetry Provider declares UID-free child intents
 //! (`TelemetryBindingController::child_resources`) and Core materializes them.
 //! This module is the KTD3 conversion of the old `TelemetryResourceReconciler`
-//! plus `telemetry_controller_descriptor` runner lane (spec section 13
-//! mapping):
+//! Binding half plus the `telemetry_controller_descriptor` runner lane (spec
+//! section 13 mapping):
 //!
-//! - `describe` -> [`TelemetryDriverFactory`], registered for
-//!   `telemetry.d2bus.org.TelemetryService` and
+//! - `describe` -> [`TelemetryBindingDriverFactory`], registered for
 //!   `telemetry.d2bus.org.TelemetryBinding` in the plane's provider directory.
 //! - `validate_spec` -> [`ResourceDriver::validate`]: the stored spec envelope
-//!   must decode.
+//!   must decode. A malformed Service/target relationship is fenced in
+//!   reconcile (old `telemetry_binding_owner`), never fatal here.
 //! - `observe` -> [`ResourceDriver::recover`]: adoption of the owned child set
-//!   from the durable rows (R15). A Service realizes nothing on a target, so
-//!   it recovers as adopted.
+//!   from the durable rows (R15).
 //! - `plan` + `reconcile` + `execute_effect` -> [`ResourceDriver::reconcile`]:
 //!   the collector/forwarder Process and Endpoint children are ensured through
 //!   the manager (commit before spawn, F1), owned children the desired set no
-//!   longer derives are retired in the preserved endpoint-first /
-//!   process-last order, and the provider status projection moves into the
-//!   driver's in-memory slot ([`ResourceContext::set_status`], R11: zero
-//!   persistent writes).
+//!   longer derives are retired in the preserved endpoint-first / process-last
+//!   order, and the provider status projection moves into the driver's
+//!   in-memory slot ([`ResourceContext::set_status`], R11: zero persistent
+//!   writes).
 //! - `prepare_finalize` + `execute_finalize` + `finalize` ->
 //!   [`ResourceDriver::delete`]. The old
 //!   `d2b.d2bus.org/binding-children` finalizer is gone by construction: the
@@ -30,29 +29,7 @@
 //!   (`ResourceManagerState::remove_internal` cascades the removal to owned
 //!   children and `pending_retirement` keeps the parent's durable deleting
 //!   mark observable), which is the guarantee that finalizer existed for
-//!   (F3, R9-R10). Nothing else is realized on a target, so teardown is
-//!   complete by the time the driver's delete pass runs.
-//!
-//! KTD13: the telemetry collector and forwarder are Process resources owned by
-//! the Binding, so their launch belongs to the Process controller; this driver
-//! never spawns a child process.
-//!
-//! # Contract flag (KTD3 fit; reported with this unit, not worked around)
-//!
-//! The preserved provider phase reads *another resource's* observed state: the
-//! ingest Endpoints' status for a Service, and the children's status for a
-//! Binding. [`ResourceContext`] offers
-//! `ensure` / `get` / `delete` / `watch` / `set_status` / `requeue_after` /
-//! `children`, and none of them returns a dependency's runtime status:
-//! `get`/`children` return desired rows, and `WatchCondition::Ready`
-//! satisfaction is delivered to the *actor* (which re-reconciles) rather than
-//! to the driver. The readiness term of both phase predicates therefore
-//! evaluates fail-closed (see [`DEPENDENCY_READINESS_PROVEN`]), and a
-//! dependency-proven `Ready` phase is unreachable until the surface carries
-//! observed state. The data already exists manager-side
-//! (`ResourceManagerMsg::Get` returns a `ResourceView` with `status`); only the
-//! driver-facing `ManagerEndpoint` lacks the read.
-#![allow(dead_code)]
+//!   (F3, R9-R10).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -75,43 +52,69 @@ use d2b_resource_runtime::driver::{
 use d2b_resource_runtime::error::{DriverFailure, DriverOp};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::spec_store::{EnsureOutcome, StoredDesiredResource};
+use d2b_resource_types::{
+    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
+};
 
-/// Qualified semantic telemetry Service type (old `TELEMETRY_BINDING.0`).
-pub(crate) const TELEMETRY_SERVICE_TYPE: &str = "telemetry.d2bus.org.TelemetryService";
-
-/// Qualified semantic telemetry Binding type (old `TELEMETRY_BINDING.1`).
-pub(crate) const TELEMETRY_BINDING_TYPE: &str = TELEMETRY_BINDING_RESOURCE_TYPE;
+/// The qualified semantic telemetry Binding type this factory serves.
+pub const TELEMETRY_BINDING_TYPE: &str = TELEMETRY_BINDING_RESOURCE_TYPE;
 
 /// The serving Provider this driver owns (old `TELEMETRY_BINDING.2`).
-const TELEMETRY_PROVIDER_REF: &str = "Provider/observability-otel";
+pub const TELEMETRY_PROVIDER_REF: &str = "Provider/observability-otel";
+
+/// The Process Provider the telemetry Provider declares for its collector and
+/// forwarder children.
+pub const TELEMETRY_BINDING_PROCESS_PROVIDER: &str = "Provider/system-minijail";
 
 /// Preserved resync period (old `ResyncPolicy::new(None, 5_000)`). The actor
 /// owns scheduling now (R13), so the driver re-schedules itself while the
-/// resource is not converged instead of polling from a runner.
-const TELEMETRY_RESYNC: Duration = Duration::from_secs(5);
+/// Binding is not converged instead of polling from a runner.
+pub const TELEMETRY_BINDING_RESYNC: Duration = Duration::from_secs(5);
 
-/// Provider phase spellings the old reconciler published.
-const PHASE_READY: &str = "Ready";
-const PHASE_PENDING: &str = "Pending";
-const PHASE_DEGRADED: &str = "Degraded";
+/// Provider phase spelling for a Binding whose child set is not current.
+pub const PHASE_PENDING: &str = "Pending";
 
-/// The readiness term of the preserved phase predicates.
+/// Provider phase spelling for a Binding whose route or children are not
+/// ready.
+pub const PHASE_DEGRADED: &str = "Degraded";
+
+/// The collector/forwarder creation the Binding declares.
 ///
-/// CONTRACT FLAG: the term reads a dependency's observed status (an ingest
-/// Endpoint's `status.phase` for a Service, a child's phase for a Binding),
-/// which the KTD3 driver surface does not expose. It evaluates fail-closed
-/// until the surface carries observed state, so `Ready` is never claimed
-/// without evidence (see the module header).
-const DEPENDENCY_READINESS_PROVEN: bool = false;
+/// The telemetry Provider's child requests place both worker Processes under
+/// the fixed `Provider/system-minijail` Provider, host-placed, so the
+/// declaration pins exactly that pair.
+pub const TELEMETRY_BINDING_COLLECTOR_CREATION: ChildCreation = ChildCreation {
+    child: WellKnownType::PROCESS,
+    provider_ref: TELEMETRY_BINDING_PROCESS_PROVIDER,
+    custody: ChildCustody::DriverOwned,
+    order: 1,
+};
+
+/// The ingest/forwarder Endpoint creation the Binding declares.
+///
+/// Each Endpoint is produced by one of the declared worker Processes, so it is
+/// created after its producer and retires before it.
+pub const TELEMETRY_BINDING_ENDPOINT_CREATION: ChildCreation = ChildCreation {
+    child: WellKnownType::ENDPOINT,
+    provider_ref: TELEMETRY_PROVIDER_REF,
+    custody: ChildCustody::DriverOwned,
+    order: 2,
+};
+
+/// Every child creation the TelemetryBinding driver declares.
+pub const TELEMETRY_BINDING_CREATIONS: &[ChildCreation] = &[
+    TELEMETRY_BINDING_COLLECTOR_CREATION,
+    TELEMETRY_BINDING_ENDPOINT_CREATION,
+];
 
 // ---------------------------------------------------------------------------
 // Driver error
 // ---------------------------------------------------------------------------
 
-/// Stable failures from the telemetry family (old
+/// Stable failures from the telemetry Binding (old
 /// `SemanticBindingRuntimeError`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TelemetryDriverErrorKind {
+pub enum TelemetryBindingDriverErrorKind {
     /// The stored spec envelope did not decode.
     InvalidResource,
     /// The Binding's Service/target relationship was not admitted, or the
@@ -121,8 +124,9 @@ pub(crate) enum TelemetryDriverErrorKind {
     Reconcile,
 }
 
-impl TelemetryDriverErrorKind {
-    const fn as_str(self) -> &'static str {
+impl TelemetryBindingDriverErrorKind {
+    /// The stable lower-kebab code for this classification.
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidResource => "semantic-binding-resource-invalid",
             Self::InvalidRelationship => "semantic-binding-relationship-invalid",
@@ -134,24 +138,34 @@ impl TelemetryDriverErrorKind {
 /// Typed driver failure; redacted at the erased boundary through
 /// [`ResourceDriver::classify_error`] (R13).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TelemetryDriverError {
-    kind: TelemetryDriverErrorKind,
+pub struct TelemetryBindingDriverError {
+    kind: TelemetryBindingDriverErrorKind,
     op: DriverOp,
 }
 
-impl TelemetryDriverError {
-    const fn new(kind: TelemetryDriverErrorKind, op: DriverOp) -> Self {
+impl TelemetryBindingDriverError {
+    const fn new(kind: TelemetryBindingDriverErrorKind, op: DriverOp) -> Self {
         Self { kind, op }
+    }
+
+    /// The closed failure classification.
+    pub const fn kind(self) -> TelemetryBindingDriverErrorKind {
+        self.kind
+    }
+
+    /// The verb that failed.
+    pub const fn op(self) -> DriverOp {
+        self.op
     }
 }
 
-impl core::fmt::Display for TelemetryDriverError {
+impl core::fmt::Display for TelemetryBindingDriverError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(self.kind.as_str())
     }
 }
 
-impl std::error::Error for TelemetryDriverError {}
+impl std::error::Error for TelemetryBindingDriverError {}
 
 // ---------------------------------------------------------------------------
 // In-memory status (R11)
@@ -160,54 +174,46 @@ impl std::error::Error for TelemetryDriverError {}
 /// The provider projection the old reconciler persisted through the Resource
 /// API, now in-memory only (R11: runtime status is never persisted).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum TelemetryStatus {
-    /// TelemetryService projection (old `telemetry_service_status`).
-    Service {
-        phase: &'static str,
-        /// `{serviceRole, serviceReadiness}`; empty when the spec is degraded.
-        projection: serde_json::Value,
-        /// Declared ingest endpoint refs whose rows exist and are not deleting.
-        present_endpoints: Vec<ResourceRef>,
-    },
-    /// TelemetryBinding projection (old `persist_semantic_binding_status`).
-    Binding {
-        phase: &'static str,
-        /// The relationship is malformed or dangling (`fenced_owner`).
-        fenced: bool,
-        /// The owned child set is current: this pass made no child mutation.
-        converged: bool,
-        desired_children: Vec<ResourceRef>,
-    },
+pub struct TelemetryBindingStatus {
+    /// The projected provider phase spelling.
+    pub phase: &'static str,
+    /// The relationship is malformed or dangling (`fenced_owner`).
+    pub fenced: bool,
+    /// The owned child set is current: this pass made no child mutation.
+    pub converged: bool,
+    /// The child refs the Provider's declaration derives for this row.
+    pub desired_children: Vec<ResourceRef>,
 }
 
 // ---------------------------------------------------------------------------
 // Decoded spec envelope
 // ---------------------------------------------------------------------------
 
-/// The spec-store envelope for one telemetry Service/Binding row (KTD2),
-/// exactly as persisted.
+/// The spec-store envelope for one telemetry Binding row (KTD2), exactly as
+/// persisted.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TelemetrySpecEnvelope {
+pub struct TelemetryBindingSpecEnvelope {
     provider_ref: Option<ResourceRef>,
     base: CanonicalJsonObject,
 }
 
-impl TelemetrySpecEnvelope {
-    pub(crate) fn provider_ref(&self) -> Option<&ResourceRef> {
+impl TelemetryBindingSpecEnvelope {
+    /// The Provider the row names, when the envelope carried one.
+    pub fn provider_ref(&self) -> Option<&ResourceRef> {
         self.provider_ref.as_ref()
     }
 
     /// The type-specific base as a JSON value, as the old reconciler read it.
-    fn value(&self) -> Result<serde_json::Value, TelemetryDriverErrorKind> {
+    fn value(&self) -> Result<serde_json::Value, TelemetryBindingDriverErrorKind> {
         serde_json::from_slice(&self.base.to_canonical_bytes())
-            .map_err(|_| TelemetryDriverErrorKind::InvalidResource)
+            .map_err(|_| TelemetryBindingDriverErrorKind::InvalidResource)
     }
 }
 
-/// The manager-wired decode hook for telemetry Service and Binding rows.
-pub(crate) fn telemetry_spec_decoder() -> Arc<dyn SpecDecoder> {
+/// The manager-wired decode hook for telemetry Binding rows.
+pub fn telemetry_binding_spec_decoder() -> Arc<dyn SpecDecoder> {
     typed_spec_decoder(|bytes| {
-        serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| TelemetrySpecEnvelope {
+        serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| TelemetryBindingSpecEnvelope {
             provider_ref: spec.provider_ref().cloned(),
             base: spec.base().clone(),
         })
@@ -218,31 +224,30 @@ pub(crate) fn telemetry_spec_decoder() -> Arc<dyn SpecDecoder> {
 // Factory
 // ---------------------------------------------------------------------------
 
-/// [`ResourceDriverFactory`] for the telemetry Service and Binding types.
-/// Construction is infallible by contract (R3).
-pub(crate) struct TelemetryDriverFactory {
-    types: [ResourceTypeName; 2],
+/// [`ResourceDriverFactory`] for the telemetry Binding type. Construction is
+/// infallible by contract (R3).
+#[derive(Debug)]
+pub struct TelemetryBindingDriverFactory {
+    types: [ResourceTypeName; 1],
 }
 
-impl TelemetryDriverFactory {
-    pub(crate) fn new() -> Self {
+impl TelemetryBindingDriverFactory {
+    /// Construct the Binding factory.
+    pub fn new() -> Self {
         Self {
-            types: [
-                ResourceTypeName::new(TELEMETRY_BINDING_TYPE),
-                ResourceTypeName::new(TELEMETRY_SERVICE_TYPE),
-            ],
+            types: [ResourceTypeName::new(TELEMETRY_BINDING_TYPE)],
         }
     }
 }
 
 #[async_trait::async_trait]
-impl ResourceDriverFactory for TelemetryDriverFactory {
+impl ResourceDriverFactory for TelemetryBindingDriverFactory {
     fn resource_types(&self) -> &[ResourceTypeName] {
         &self.types
     }
 
     async fn create(&self, key: &ResourceKey) -> Box<dyn DynResourceDriver> {
-        Box::new(TelemetryDriver::new(key))
+        Box::new(TelemetryBindingDriver::new(key))
     }
 }
 
@@ -250,10 +255,9 @@ impl ResourceDriverFactory for TelemetryDriverFactory {
 // Driver
 // ---------------------------------------------------------------------------
 
-/// One telemetry Service or Binding row's driver.
-pub(crate) struct TelemetryDriver {
+/// One telemetry Binding row's driver.
+pub struct TelemetryBindingDriver {
     key: ResourceKey,
-    binding: bool,
     /// Targets this driver already registered an internal watch on (R12).
     /// Runtime-only (R13, R6). `WatchCondition::Ready` is one-shot and the
     /// driver cannot observe satisfaction, so one registration per target
@@ -262,26 +266,29 @@ pub(crate) struct TelemetryDriver {
     watched: Vec<ResourceKey>,
 }
 
-impl TelemetryDriver {
+impl TelemetryBindingDriver {
     fn new(key: &ResourceKey) -> Self {
         Self {
             key: key.clone(),
-            binding: key.type_name == TELEMETRY_BINDING_TYPE,
             watched: Vec::new(),
         }
     }
 
-    const fn error(&self, kind: TelemetryDriverErrorKind, op: DriverOp) -> TelemetryDriverError {
-        TelemetryDriverError::new(kind, op)
+    const fn error(
+        &self,
+        kind: TelemetryBindingDriverErrorKind,
+        op: DriverOp,
+    ) -> TelemetryBindingDriverError {
+        TelemetryBindingDriverError::new(kind, op)
     }
 
     /// This row's canonical reference (the child owner reference and the
     /// Binding argument `TelemetryBindingController::child_resources` needs).
-    fn row_ref(&self, op: DriverOp) -> Result<ResourceRef, TelemetryDriverError> {
+    fn row_ref(&self, op: DriverOp) -> Result<ResourceRef, TelemetryBindingDriverError> {
         let resource_type = ContractResourceTypeName::parse(&self.key.type_name)
-            .map_err(|_| self.error(TelemetryDriverErrorKind::InvalidResource, op))?;
+            .map_err(|_| self.error(TelemetryBindingDriverErrorKind::InvalidResource, op))?;
         let name = ResourceName::parse(&self.key.name)
-            .map_err(|_| self.error(TelemetryDriverErrorKind::InvalidResource, op))?;
+            .map_err(|_| self.error(TelemetryBindingDriverErrorKind::InvalidResource, op))?;
         Ok(ResourceRef::new(resource_type, name))
     }
 
@@ -299,10 +306,10 @@ impl TelemetryDriver {
         &self,
         ctx: &ResourceContext,
         op: DriverOp,
-    ) -> Result<TelemetrySpecEnvelope, TelemetryDriverError> {
-        ctx.spec::<TelemetrySpecEnvelope>()
+    ) -> Result<TelemetryBindingSpecEnvelope, TelemetryBindingDriverError> {
+        ctx.spec::<TelemetryBindingSpecEnvelope>()
             .cloned()
-            .map_err(|_| self.error(TelemetryDriverErrorKind::InvalidResource, op))
+            .map_err(|_| self.error(TelemetryBindingDriverErrorKind::InvalidResource, op))
     }
 
     /// Register one internal dependency watch (R12) exactly once per target.
@@ -326,9 +333,9 @@ impl TelemetryDriver {
     async fn derived_binding_children(
         &mut self,
         ctx: &mut ResourceContext,
-        envelope: &TelemetrySpecEnvelope,
+        envelope: &TelemetryBindingSpecEnvelope,
         op: DriverOp,
-    ) -> Result<Option<BindingChildSet>, TelemetryDriverError> {
+    ) -> Result<Option<BindingChildSet>, TelemetryBindingDriverError> {
         if envelope
             .provider_ref()
             .map(ResourceRef::to_canonical_string)
@@ -337,9 +344,7 @@ impl TelemetryDriver {
         {
             return Ok(None);
         }
-        let spec = envelope
-            .value()
-            .map_err(|kind| self.error(kind, op))?;
+        let spec = envelope.value().map_err(|kind| self.error(kind, op))?;
         let Some((service_ref, target_ref)) = binding_relationship(&spec) else {
             return Ok(None);
         };
@@ -348,13 +353,13 @@ impl TelemetryDriver {
             match ctx.get(&key).await {
                 Ok(Some(row)) if !row.deleting => self.watch_once(ctx, key).await,
                 Ok(_) => return Ok(None),
-                Err(_) => return Err(self.error(TelemetryDriverErrorKind::Reconcile, op)),
+                Err(_) => return Err(self.error(TelemetryBindingDriverErrorKind::Reconcile, op)),
             }
         }
         let owner = self.row_ref(op)?;
         TelemetryBindingController::child_resources(&owner, &service_ref, &target_ref)
             .map(Some)
-            .map_err(|_| self.error(TelemetryDriverErrorKind::InvalidRelationship, op))
+            .map_err(|_| self.error(TelemetryBindingDriverErrorKind::InvalidRelationship, op))
     }
 
     /// One child ensure built from the provider-declared intent (old Core
@@ -366,15 +371,15 @@ impl TelemetryDriver {
         zone: &ZoneId,
         owner: &ResourceRef,
         op: DriverOp,
-    ) -> Result<ChildEnsure, TelemetryDriverError> {
+    ) -> Result<ChildEnsure, TelemetryBindingDriverError> {
         let payload = d2b_core_controller::materialize_child_create_payload(intent, zone)
-            .map_err(|_| self.error(TelemetryDriverErrorKind::InvalidResource, op))?;
+            .map_err(|_| self.error(TelemetryBindingDriverErrorKind::InvalidResource, op))?;
         let value = serde_json::from_slice::<serde_json::Value>(&payload)
-            .map_err(|_| self.error(TelemetryDriverErrorKind::InvalidResource, op))?;
+            .map_err(|_| self.error(TelemetryBindingDriverErrorKind::InvalidResource, op))?;
         let spec = value
             .get("spec")
             .cloned()
-            .ok_or_else(|| self.error(TelemetryDriverErrorKind::InvalidResource, op))?;
+            .ok_or_else(|| self.error(TelemetryBindingDriverErrorKind::InvalidResource, op))?;
         let metadata = serde_json::json!({
             "ownerRef": owner.to_canonical_string(),
             "labels": {},
@@ -384,9 +389,9 @@ impl TelemetryDriver {
             type_name: ResourceTypeName::new(intent.kind().resource_type()),
             name: intent.resource_ref().name().as_str().to_owned(),
             spec: serde_json::to_vec(&spec)
-                .map_err(|_| self.error(TelemetryDriverErrorKind::InvalidResource, op))?,
+                .map_err(|_| self.error(TelemetryBindingDriverErrorKind::InvalidResource, op))?,
             metadata: serde_json::to_vec(&metadata)
-                .map_err(|_| self.error(TelemetryDriverErrorKind::InvalidResource, op))?,
+                .map_err(|_| self.error(TelemetryBindingDriverErrorKind::InvalidResource, op))?,
         })
     }
 
@@ -395,92 +400,29 @@ impl TelemetryDriver {
     /// Degraded, and the preserved resync so the fence clears when the
     /// dependency rows appear.
     fn fence_binding(&mut self, ctx: &mut ResourceContext) -> ReconcileOutcome {
-        ctx.set_status(TelemetryStatus::Binding {
+        ctx.set_status(TelemetryBindingStatus {
             phase: PHASE_DEGRADED,
             fenced: true,
             converged: false,
             desired_children: Vec::new(),
         });
-        ctx.requeue_after(TELEMETRY_RESYNC);
+        ctx.requeue_after(TELEMETRY_BINDING_RESYNC);
         ReconcileOutcome::Satisfied
     }
 
-    async fn reconcile_service(
-        &mut self,
-        ctx: &mut ResourceContext,
-        envelope: &TelemetrySpecEnvelope,
-    ) -> Result<ReconcileOutcome, TelemetryDriverError> {
-        let op = DriverOp::Reconcile;
-        let spec = envelope.value().map_err(|kind| self.error(kind, op))?;
-        let role = spec
-            .get("serviceRole")
-            .and_then(serde_json::Value::as_str)
-            .filter(|role| matches!(*role, "authority" | "projection"));
-        let Some(role) = role else {
-            // Old: a Service whose role is absent or unadmitted reports
-            // Degraded with an empty projection and mutates nothing.
-            ctx.set_status(TelemetryStatus::Service {
-                phase: PHASE_DEGRADED,
-                projection: serde_json::json!({}),
-                present_endpoints: Vec::new(),
-            });
-            return Ok(ReconcileOutcome::Satisfied);
-        };
-        if role == "projection" {
-            // Old: a projection Service is Ready without an ingest route.
-            ctx.set_status(TelemetryStatus::Service {
-                phase: PHASE_READY,
-                projection: serde_json::json!({
-                    "serviceRole": "projection",
-                    "serviceReadiness": PHASE_READY,
-                }),
-                present_endpoints: Vec::new(),
-            });
-            return Ok(ReconcileOutcome::Satisfied);
-        }
-        let endpoint_refs = ingest_endpoint_refs(&spec);
-        let mut present_endpoints = Vec::with_capacity(endpoint_refs.len());
-        let mut all_present = !endpoint_refs.is_empty();
-        for endpoint_ref in &endpoint_refs {
-            let key = self.row_key(endpoint_ref);
-            match ctx.get(&key).await {
-                Ok(Some(row)) if !row.deleting => {
-                    present_endpoints.push(endpoint_ref.clone());
-                    self.watch_once(ctx, key).await;
-                }
-                Ok(_) => all_present = false,
-                Err(_) => return Err(self.error(TelemetryDriverErrorKind::Reconcile, op)),
-            }
-        }
-        let ready = all_present && DEPENDENCY_READINESS_PROVEN;
-        let phase = if ready { PHASE_READY } else { PHASE_PENDING };
-        ctx.set_status(TelemetryStatus::Service {
-            phase,
-            projection: serde_json::json!({
-                "serviceRole": "authority",
-                "serviceReadiness": phase,
-            }),
-            present_endpoints,
-        });
-        if !all_present {
-            // The route is not even materialized yet: re-evaluate on the old
-            // resync cadence until the declared endpoint rows exist.
-            ctx.requeue_after(TELEMETRY_RESYNC);
-        }
-        Ok(ReconcileOutcome::Satisfied)
-    }
-
+    /// One reconcile pass of the Binding (old `plan` + `reconcile` +
+    /// `execute_effect` for the Binding role).
     async fn reconcile_binding(
         &mut self,
         ctx: &mut ResourceContext,
-        envelope: &TelemetrySpecEnvelope,
-    ) -> Result<ReconcileOutcome, TelemetryDriverError> {
+        envelope: &TelemetryBindingSpecEnvelope,
+    ) -> Result<ReconcileOutcome, TelemetryBindingDriverError> {
         let op = DriverOp::Reconcile;
         let Some(desired) = self.derived_binding_children(ctx, envelope, op).await? else {
             return Ok(self.fence_binding(ctx));
         };
         let zone = ZoneId::parse(self.key.zone.clone())
-            .map_err(|_| self.error(TelemetryDriverErrorKind::InvalidResource, op))?;
+            .map_err(|_| self.error(TelemetryBindingDriverErrorKind::InvalidResource, op))?;
         let owner = self.row_ref(op)?;
 
         // Ensure every desired child; the manager commits each row before its
@@ -492,7 +434,7 @@ impl TelemetryDriver {
             match ctx.ensure_child(child).await {
                 Ok(EnsureOutcome::Created(_)) | Ok(EnsureOutcome::Updated(_)) => mutated = true,
                 Ok(EnsureOutcome::Unchanged(_)) => {}
-                Err(_) => return Err(self.error(TelemetryDriverErrorKind::Reconcile, op)),
+                Err(_) => return Err(self.error(TelemetryBindingDriverErrorKind::Reconcile, op)),
             }
         }
 
@@ -501,7 +443,7 @@ impl TelemetryDriver {
         let owned = ctx
             .children()
             .await
-            .map_err(|_| self.error(TelemetryDriverErrorKind::Reconcile, op))?;
+            .map_err(|_| self.error(TelemetryBindingDriverErrorKind::Reconcile, op))?;
         let desired_refs = desired
             .iter()
             .map(|intent| intent.resource_ref().clone())
@@ -516,7 +458,7 @@ impl TelemetryDriver {
         for row in obsolete {
             ctx.delete(&row.key)
                 .await
-                .map_err(|_| self.error(TelemetryDriverErrorKind::Reconcile, op))?;
+                .map_err(|_| self.error(TelemetryBindingDriverErrorKind::Reconcile, op))?;
             mutated = true;
         }
 
@@ -540,24 +482,24 @@ impl TelemetryDriver {
         } else {
             PHASE_PENDING
         };
-        ctx.set_status(TelemetryStatus::Binding {
+        ctx.set_status(TelemetryBindingStatus {
             phase,
             fenced: false,
             converged,
             desired_children: desired_refs,
         });
         if !converged {
-            ctx.requeue_after(TELEMETRY_RESYNC);
+            ctx.requeue_after(TELEMETRY_BINDING_RESYNC);
         }
         Ok(ReconcileOutcome::Satisfied)
     }
 }
 
 #[async_trait::async_trait]
-impl ResourceDriver for TelemetryDriver {
-    type Error = TelemetryDriverError;
+impl ResourceDriver for TelemetryBindingDriver {
+    type Error = TelemetryBindingDriverError;
 
-    fn classify_error(&self, error: &TelemetryDriverError) -> DriverFailure {
+    fn classify_error(&self, error: &TelemetryBindingDriverError) -> DriverFailure {
         // The old reconciler classified every failure retryable; the actor
         // owns retry/backoff from the closed class (R13).
         DriverFailure::retryable(error.op)
@@ -572,22 +514,17 @@ impl ResourceDriver for TelemetryDriver {
     }
 
     /// Discovery and adoption on the realization target (F2, R15-R16): the
-    /// Binding adopts when its durable owned-child rows are already current;
-    /// the Service realizes nothing on a target (its observed state is the
-    /// ingest-endpoint rows reconcile re-reads).
+    /// Binding adopts when its durable owned-child rows are already current.
     async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, Self::Error> {
         let op = DriverOp::Recover;
         let envelope = self.envelope(ctx, op)?;
-        if !self.binding {
-            return Ok(RecoveryOutcome::Adopted);
-        }
         let Some(desired) = self.derived_binding_children(ctx, &envelope, op).await? else {
             return Ok(RecoveryOutcome::Missing);
         };
         let owned = ctx
             .children()
             .await
-            .map_err(|_| self.error(TelemetryDriverErrorKind::Reconcile, op))?;
+            .map_err(|_| self.error(TelemetryBindingDriverErrorKind::Reconcile, op))?;
         let current = desired.iter().all(|intent| {
             owned
                 .iter()
@@ -607,11 +544,7 @@ impl ResourceDriver for TelemetryDriver {
     ) -> Result<ReconcileOutcome, Self::Error> {
         let op = DriverOp::Reconcile;
         let envelope = self.envelope(ctx, op)?;
-        if self.binding {
-            self.reconcile_binding(ctx, &envelope).await
-        } else {
-            self.reconcile_service(ctx, &envelope).await
-        }
+        self.reconcile_binding(ctx, &envelope).await
     }
 
     /// Drain step (R10, F3): every owned child finalizes before this
@@ -622,7 +555,12 @@ impl ResourceDriver for TelemetryDriver {
     async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         ctx.finalize_owned_resources()
             .await
-            .map_err(|_| self.error(TelemetryDriverErrorKind::Reconcile, DriverOp::Delete))?;
+            .map_err(|_| {
+                self.error(
+                    TelemetryBindingDriverErrorKind::Reconcile,
+                    DriverOp::Delete,
+                )
+            })?;
         Ok(())
     }
 
@@ -639,26 +577,9 @@ impl ResourceDriver for TelemetryDriver {
 }
 
 // ---------------------------------------------------------------------------
-// Spec projection helpers (old `telemetry_endpoint_refs`,
-// `binding_relationship`, and the Core owner diff's child matching)
+// Spec projection helpers (old `binding_relationship`, and the Core owner
+// diff's child matching)
 // ---------------------------------------------------------------------------
-
-/// Ingest endpoint refs declared by a Service spec.
-fn ingest_endpoint_refs(spec: &serde_json::Value) -> Vec<ResourceRef> {
-    spec.get("ingestEndpointRefs")
-        .and_then(serde_json::Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| {
-                    value
-                        .as_str()
-                        .and_then(|value| ResourceRef::parse(value).ok())
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
 
 /// The Binding's admitted Service and producer target.
 fn binding_relationship(spec: &serde_json::Value) -> Option<(ResourceRef, ResourceRef)> {
@@ -690,6 +611,78 @@ fn teardown_rank(resource_type: &str) -> u8 {
 }
 
 // ---------------------------------------------------------------------------
+// Registration: the type's driver declaration
+// ---------------------------------------------------------------------------
+
+/// The resource verbs the TelemetryBinding type supports.
+///
+/// Derived from the v3 resource plane's converted-type verb surface: the
+/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
+/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
+/// `Credential` type. Every converted type is served by the same manager
+/// verbs, and Role rules and the typed CLI nouns resolve their gating from
+/// this declaration.
+const TELEMETRY_BINDING_VERBS: &[&str] = &[
+    "get",
+    "list",
+    "watch",
+    "create",
+    "update-spec",
+    "update-status",
+    "update-metadata",
+    "update-finalizers",
+    "delete",
+];
+
+/// The execution domains the TelemetryBinding type can be reconciled in.
+///
+/// Derived from the placement contract: `TelemetryBinding` names no placement
+/// anchor (`PlacementAnchor::canonical_for` resolves none), so a Binding row
+/// never carries the canonical `spec.executionRef` and the plane reconciles it
+/// on its own Host domain. The Provider declares every child host-placed, so
+/// the declared set is realized from that same domain.
+const TELEMETRY_BINDING_EXECUTION_DOMAINS: &[&str] = &["host"];
+
+/// The resource types the Binding realization reads while reconciling.
+///
+/// Derived from the driver's row reads: the relationship reads the declared
+/// `TelemetryService` row and its producer target (`Zone` or `Guest`), and
+/// reconcile re-reads the owned `Process` and `Endpoint` children.
+const TELEMETRY_BINDING_READS: &[WellKnownType] = &[
+    WellKnownType::TELEMETRY_SERVICE,
+    WellKnownType::ZONE,
+    WellKnownType::GUEST,
+    WellKnownType::PROCESS,
+    WellKnownType::ENDPOINT,
+];
+
+/// The TelemetryBinding type's driver declaration.
+///
+/// `TelemetryBinding` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane
+/// cannot serve the Zone's telemetry producers without it, so it must be
+/// registered before the plane opens. The type is not exportable:
+/// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
+/// binding can never be an export subject. The driver serves no broker
+/// operations and declares the two child creations it performs - the
+/// collector/forwarder Process and its Endpoint.
+pub fn telemetry_binding_descriptor() -> DriverDescriptor {
+    DriverDescriptor {
+        resource_type: WellKnownType::TELEMETRY_BINDING,
+        allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+        verbs: TELEMETRY_BINDING_VERBS,
+        execution: TELEMETRY_BINDING_EXECUTION_DOMAINS,
+        exportable: false,
+        reads: TELEMETRY_BINDING_READS,
+        operations: &[],
+        creations: TELEMETRY_BINDING_CREATIONS,
+        startup: &[],
+        services: &[],
+        decoder: telemetry_binding_spec_decoder(),
+        factory: Arc::new(TelemetryBindingDriverFactory::new()),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests: driver-level behavior over a recording manager endpoint (the same
 // shape U7 used) and a requeue recorder. Effects are observed as the manager
 // records them: child ensure order, teardown order, and watch registration.
@@ -698,12 +691,15 @@ fn teardown_rank(resource_type: &str) -> u8 {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use d2b_resource_runtime::context::{
-        ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId, WatchRegistration,
+        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
+        WatchRegistration,
     };
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::ResourceProvenance;
+    use d2b_resource_runtime::spec_store::{EnsureOutcome, StoredDesiredResource};
     use d2b_resource_runtime::target::TargetHandle;
     use tokio::sync::mpsc;
 
@@ -924,7 +920,7 @@ mod tests {
         let ctx = ResourceContext::new(
             row,
             TargetHandle::Host,
-            telemetry_spec_decoder(),
+            telemetry_binding_spec_decoder(),
             Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
             Arc::clone(&requeue) as Arc<dyn RequeueScheduler>,
             effects_tx,
@@ -938,7 +934,9 @@ mod tests {
     }
 
     async fn driver(fixture: &Fixture) -> Box<dyn DynResourceDriver> {
-        TelemetryDriverFactory::new().create(fixture.ctx.key()).await
+        TelemetryBindingDriverFactory::new()
+            .create(fixture.ctx.key())
+            .await
     }
 
     // -- test data -----------------------------------------------------------
@@ -990,18 +988,6 @@ mod tests {
         )
     }
 
-    fn endpoint_row() -> StoredDesiredResource {
-        row(
-            "dev",
-            "Endpoint/ingest",
-            serde_json::json!({
-                "providerRef": TELEMETRY_PROVIDER_REF,
-                "producerRef": "Process/collector",
-                "endpointClass": "service",
-            }),
-        )
-    }
-
     fn target_row() -> StoredDesiredResource {
         row("dev", "Zone/dev", serde_json::json!({}))
     }
@@ -1009,17 +995,17 @@ mod tests {
     // -- factory -------------------------------------------------------------
 
     #[tokio::test]
-    async fn factory_registers_both_telemetry_types() {
-        let factory = TelemetryDriverFactory::new();
+    async fn factory_registers_only_the_binding_type() {
+        let factory = TelemetryBindingDriverFactory::new();
         let types = factory
             .resource_types()
             .iter()
             .map(ResourceTypeName::as_str)
             .collect::<Vec<_>>();
-        assert_eq!(types.len(), 2);
-        assert!(types.contains(&TELEMETRY_SERVICE_TYPE), "{types:?}");
-        assert!(types.contains(&TELEMETRY_BINDING_TYPE), "{types:?}");
+        assert_eq!(types, vec![TELEMETRY_BINDING_TYPE]);
     }
+
+    // -- validate ------------------------------------------------------------
 
     #[tokio::test]
     async fn validate_rejects_a_malformed_spec() {
@@ -1042,7 +1028,7 @@ mod tests {
         driver.validate(&mut fixture.ctx).await.expect("valid spec");
     }
 
-    // -- Binding reconcile ---------------------------------------------------
+    // -- reconcile -----------------------------------------------------------
 
     #[tokio::test]
     async fn binding_reconcile_ensures_provider_declared_children_then_converges() {
@@ -1085,20 +1071,14 @@ mod tests {
         assert_eq!(endpoint_spec["purpose"], "ingest-endpoint");
         assert_eq!(endpoint_spec["lifecyclePolicy"], "recycle-with-producer");
 
-        let Some(TelemetryStatus::Binding {
-            phase,
-            fenced,
-            converged,
-            desired_children,
-        }) = fixture.ctx.status::<TelemetryStatus>()
-        else {
+        let Some(status) = fixture.ctx.status::<TelemetryBindingStatus>() else {
             panic!("binding status");
         };
-        assert_eq!(*phase, PHASE_PENDING, "first pass mutated the child set");
-        assert!(!fenced);
-        assert!(!converged);
-        assert_eq!(desired_children.len(), 2);
-        assert_eq!(fixture.requeue.scheduled(), vec![TELEMETRY_RESYNC]);
+        assert_eq!(status.phase, PHASE_PENDING, "first pass mutated the child set");
+        assert!(!status.fenced);
+        assert!(!status.converged);
+        assert_eq!(status.desired_children.len(), 2);
+        assert_eq!(fixture.requeue.scheduled(), vec![TELEMETRY_BINDING_RESYNC]);
 
         // Second pass: the owned child set is current; every ensure is a
         // no-op and no resync is scheduled.
@@ -1110,19 +1090,16 @@ mod tests {
             log[2].ends_with(":unchanged") && log[3].ends_with(":unchanged"),
             "the second pass mutates nothing: {log:?}"
         );
-        let Some(TelemetryStatus::Binding {
-            phase, converged, ..
-        }) = fixture.ctx.status::<TelemetryStatus>()
-        else {
+        let Some(status) = fixture.ctx.status::<TelemetryBindingStatus>() else {
             panic!("binding status");
         };
-        assert!(converged, "second pass converged");
+        assert!(status.converged, "second pass converged");
         // CONTRACT FLAG: the old `ready ? Ready : Degraded` phase reports the
         // fail-closed projection while readiness is unobservable.
-        assert_eq!(*phase, PHASE_DEGRADED);
+        assert_eq!(status.phase, PHASE_DEGRADED);
         assert_eq!(
             fixture.requeue.scheduled(),
-            vec![TELEMETRY_RESYNC],
+            vec![TELEMETRY_BINDING_RESYNC],
             "converged owners stop rescheduling"
         );
     }
@@ -1138,21 +1115,15 @@ mod tests {
         assert_eq!(outcome, ReconcileOutcome::Satisfied);
         assert!(fixture.manager.log().is_empty(), "fenced owners mutate nothing");
         assert!(fixture.manager.rows_of_type("Process").is_empty());
-        let Some(TelemetryStatus::Binding {
-            phase,
-            fenced,
-            converged,
-            ..
-        }) = fixture.ctx.status::<TelemetryStatus>()
-        else {
+        let Some(status) = fixture.ctx.status::<TelemetryBindingStatus>() else {
             panic!("binding status");
         };
-        assert!(fenced);
-        assert!(!converged);
-        assert_eq!(*phase, PHASE_DEGRADED);
+        assert!(status.fenced);
+        assert!(!status.converged);
+        assert_eq!(status.phase, PHASE_DEGRADED);
         assert_eq!(
             fixture.requeue.scheduled(),
-            vec![TELEMETRY_RESYNC],
+            vec![TELEMETRY_BINDING_RESYNC],
             "the preserved resync re-evaluates the fence"
         );
     }
@@ -1169,10 +1140,12 @@ mod tests {
             fixture.manager.log().is_empty(),
             "a foreign Provider never derives children"
         );
-        assert!(matches!(
-            fixture.ctx.status::<TelemetryStatus>(),
-            Some(TelemetryStatus::Binding { fenced: true, .. })
-        ));
+        assert!(
+            fixture
+                .ctx
+                .status::<TelemetryBindingStatus>()
+                .is_some_and(|status| status.fenced)
+        );
     }
 
     #[tokio::test]
@@ -1231,15 +1204,12 @@ mod tests {
         targets.dedup();
         assert_eq!(registered, targets.len(), "no watch is registered twice");
         assert!(
-            targets.contains(&format!(
-                "{}/{}",
-                TELEMETRY_SERVICE_TYPE, "ingest"
-            )),
+            targets.contains(&format!("{}/{}", "telemetry.d2bus.org.TelemetryService", "ingest")),
             "{targets:?}"
         );
     }
 
-    // -- Binding recover -----------------------------------------------------
+    // -- recover -------------------------------------------------------------
 
     #[tokio::test]
     async fn binding_recover_adopts_only_a_current_owned_child_set() {
@@ -1260,109 +1230,6 @@ mod tests {
             RecoveryOutcome::Adopted,
             "the durable child rows reconstruct the owned child set (R15)"
         );
-    }
-
-    // -- Service reconcile ---------------------------------------------------
-
-    #[tokio::test]
-    async fn service_pending_until_declared_endpoints_exist_then_fail_closed() {
-        let mut fixture = fixture(service_row());
-        let mut driver = driver(&fixture).await;
-
-        let outcome = driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
-        assert_eq!(outcome, ReconcileOutcome::Satisfied);
-        let Some(TelemetryStatus::Service {
-            phase,
-            present_endpoints,
-            ..
-        }) = fixture.ctx.status::<TelemetryStatus>()
-        else {
-            panic!("service status");
-        };
-        assert_eq!(*phase, PHASE_PENDING);
-        assert!(present_endpoints.is_empty());
-        assert_eq!(
-            fixture.requeue.scheduled(),
-            vec![TELEMETRY_RESYNC],
-            "the route is not materialized yet"
-        );
-
-        fixture.manager.seed(endpoint_row());
-        driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
-        let Some(TelemetryStatus::Service {
-            phase,
-            projection,
-            present_endpoints,
-        }) = fixture.ctx.status::<TelemetryStatus>()
-        else {
-            panic!("service status");
-        };
-        assert_eq!(present_endpoints.len(), 1);
-        assert_eq!(projection["serviceRole"], "authority");
-        // CONTRACT FLAG: the old predicate also required the ingest
-        // Endpoint's own `status.phase == "Ready"`, which this surface cannot
-        // read; the phase stays fail-closed Pending while the row exists.
-        assert_eq!(*phase, PHASE_PENDING);
-        assert_eq!(projection["serviceReadiness"], PHASE_PENDING);
-        assert_eq!(
-            fixture.requeue.scheduled(),
-            vec![TELEMETRY_RESYNC],
-            "a present endpoint stops rescheduling; readiness is watch-driven"
-        );
-    }
-
-    #[tokio::test]
-    async fn service_projection_role_reports_ready_without_ingest_evidence() {
-        let mut fixture = fixture(row(
-            "dev",
-            "telemetry.d2bus.org.TelemetryService/aggregate",
-            serde_json::json!({
-                "providerRef": TELEMETRY_PROVIDER_REF,
-                "serviceRole": "projection",
-                "ingestEndpointRefs": [],
-                "signals": ["metrics"],
-                "quota": {},
-                "policy": {},
-            }),
-        ));
-        let mut driver = driver(&fixture).await;
-
-        driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
-        let Some(TelemetryStatus::Service {
-            phase, projection, ..
-        }) = fixture.ctx.status::<TelemetryStatus>()
-        else {
-            panic!("service status");
-        };
-        assert_eq!(*phase, PHASE_READY);
-        assert_eq!(projection["serviceRole"], "projection");
-        assert_eq!(projection["serviceReadiness"], PHASE_READY);
-        assert!(fixture.manager.log().is_empty());
-        assert!(fixture.requeue.scheduled().is_empty());
-    }
-
-    #[tokio::test]
-    async fn service_reconcile_reports_degraded_for_an_unadmitted_role() {
-        let mut fixture = fixture(row(
-            "dev",
-            "telemetry.d2bus.org.TelemetryService/odd",
-            serde_json::json!({
-                "providerRef": TELEMETRY_PROVIDER_REF,
-                "serviceRole": "mirror",
-                "ingestEndpointRefs": [],
-            }),
-        ));
-        let mut driver = driver(&fixture).await;
-
-        let outcome = driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
-        assert_eq!(outcome, ReconcileOutcome::Satisfied);
-        assert!(matches!(
-            fixture.ctx.status::<TelemetryStatus>(),
-            Some(TelemetryStatus::Service {
-                phase: PHASE_DEGRADED,
-                ..
-            })
-        ));
     }
 
     // -- finalize: owned children retire before the telemetry teardown (F3) ---

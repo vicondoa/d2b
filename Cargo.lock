@@ -1140,13 +1140,18 @@ dependencies = [
 name = "d2b-provider-activation-nixos"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts-broker",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
  "ring",
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
  "tracing",
 ]
 
@@ -1540,6 +1545,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-telemetry-binding"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-core-controller",
+ "d2b-provider-observability-otel",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-telemetry-service"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-provider-test-controller"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1876,6 +1909,8 @@ dependencies = [
  "d2b-provider-shell-terminal",
  "d2b-provider-supervisor",
  "d2b-provider-system-core",
+ "d2b-provider-telemetry-binding",
+ "d2b-provider-telemetry-service",
  "d2b-provider-toolkit",
  "d2b-provider-transport-azure-relay",
  "d2b-provider-volume-local",

@@ -66,6 +66,8 @@ members = [
     "packages/d2b-broker",
     "packages/d2b-guest-shell-runner",
     "packages/d2b-provider-endpoint",
+    "packages/d2b-provider-telemetry-service",
+    "packages/d2b-provider-telemetry-binding",
 ]
 
 [workspace.package]

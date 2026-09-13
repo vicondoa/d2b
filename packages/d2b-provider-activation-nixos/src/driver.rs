@@ -1,6 +1,11 @@
-//! NixosGeneration resource driver (U12): the v3 `ResourceDriver`
-//! conversion of the daemon-owned activation path (R3, R4, R30; KTD7,
-//! KTD13).
+//! The NixosGeneration resource driver (U12): the v3 `ResourceDriver`
+//! conversion of the activation path (R3, R4, R30; KTD7, KTD13).
+//!
+//! The driver, its spec decoder, its factory, and the
+//! [`DriverDescriptor`](d2b_resource_types::DriverDescriptor) the plane
+//! registers the type by live in this crate. The production effect
+//! implementation stays in the daemon behind [`ActivationDriverEffects`], so
+//! this crate depends on no daemon runtime.
 //!
 //! The driver keeps the preserved activation behavior and nothing else: the
 //! pure `ActivationController` policy decides whether an activation runner
@@ -44,21 +49,12 @@
 
 use std::sync::Arc;
 
-use d2b_contracts_broker::broker_wire::{
-    ApplyHostGenerationHandoffResponse, BrokerCallerRole, BrokerRequest, BrokerResponse,
-};
 use d2b_contracts_broker::host_generation::{
-    ApplyHostGenerationHandoff, HandoffCallerRole, HandoffState, HostGenerationHandoffIntent,
-    SourceGenerationCompatibilityFloorV1, target_fingerprint,
+    HostGenerationHandoffIntent, SourceGenerationCompatibilityFloorV1, target_fingerprint,
 };
 use d2b_contracts_resource::v3::{
     ActivationDetail, ActivationMode, ActivationOutcomeCode, NIXOS_GENERATION_RESOURCE_TYPE,
     NixosGenerationSpec, ResourcePhase, ResourceRef,
-};
-use d2b_provider_activation_nixos::{
-    ActivationApplicationVerifier, ActivationCaller, ActivationController, CallerRole,
-    GenerationObservation, GenerationPhase, RunnerRequest, activation_runner_ref,
-    activation_runner_spec,
 };
 use d2b_resource_runtime::context::{
     ChildEnsure, ResourceContext, SpecDecoder, WatchCondition, typed_spec_decoder,
@@ -68,17 +64,40 @@ use d2b_resource_runtime::driver::{
 };
 use d2b_resource_runtime::error::{DriverFailure, DriverOp};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_types::{
+    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
+};
 
-use crate::{ServerState, dispatch_broker_request_as};
+use crate::{
+    ActivationApplicationVerifier, ActivationCaller, ActivationController, CallerRole,
+    GenerationObservation, GenerationPhase, RunnerRequest, activation_runner_ref,
+    activation_runner_spec,
+};
 
 /// The one resource type this factory serves (KTD4 Phase A).
-pub(crate) const ACTIVATION_TYPE_NAME: &str = NIXOS_GENERATION_RESOURCE_TYPE;
+pub const ACTIVATION_TYPE_NAME: &str = NIXOS_GENERATION_RESOURCE_TYPE;
 
 /// The activation-runner child resource type (old `create_runner`).
-const RUNNER_TYPE_NAME: &str = "EphemeralProcess";
+pub const RUNNER_TYPE_NAME: &str = "EphemeralProcess";
 
 /// The Process Provider the runner is minted under (old `create_runner`).
-const RUNNER_PROVIDER_REF: &str = "Provider/system-minijail";
+pub const RUNNER_PROVIDER_REF: &str = "Provider/system-minijail";
+
+/// The one child the NixosGeneration family creates (old `create_runner`).
+///
+/// The runner is the owned `EphemeralProcess` the driver mints for the
+/// members this declaration licenses, and the declaration is the family's own
+/// - it travels on the type's [`DriverDescriptor`], so a creation the driver
+/// never declared cannot be reached.
+pub const ACTIVATION_RUNNER_CREATION: ChildCreation = ChildCreation {
+    child: WellKnownType::EPHEMERAL_PROCESS,
+    provider_ref: RUNNER_PROVIDER_REF,
+    custody: ChildCustody::DriverOwned,
+    order: 1,
+};
+
+/// Every child creation the NixosGeneration driver declares.
+pub const ACTIVATION_CREATIONS: &[ChildCreation] = &[ACTIVATION_RUNNER_CREATION];
 
 /// Preserved provider retention window (`d2b.providers.activationNixos.
 /// retainedGenerations` default). The policy object carries it; surplus
@@ -114,7 +133,7 @@ impl core::fmt::Display for ActivationDriverErrorKind {
 /// Typed driver failure; redacted at the erased boundary through
 /// [`ResourceDriver::classify_error`] (R13).
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ActivationDriverError {
+pub struct ActivationDriverError {
     kind: ActivationDriverErrorKind,
     op: DriverOp,
 }
@@ -137,7 +156,7 @@ impl std::error::Error for ActivationDriverError {}
 /// the three closed fields the old durable projection wrote, so no
 /// free-form (or credential-bearing) value can reach it by construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ActivationDriverStatus {
+pub struct ActivationDriverStatus {
     phase: ResourcePhase,
     detail: ActivationDetail,
     outcome: Option<ActivationOutcomeCode>,
@@ -177,17 +196,17 @@ impl ActivationDriverStatus {
     }
 
     /// Universal phase of the last projection.
-    pub(crate) const fn phase(self) -> ResourcePhase {
+    pub const fn phase(self) -> ResourcePhase {
         self.phase
     }
 
     /// Typed activation detail of the last projection.
-    pub(crate) const fn detail(self) -> ActivationDetail {
+    pub const fn detail(self) -> ActivationDetail {
         self.detail
     }
 
     /// Terminal outcome code of the last projection, when one was reached.
-    pub(crate) const fn outcome(self) -> Option<ActivationOutcomeCode> {
+    pub const fn outcome(self) -> Option<ActivationOutcomeCode> {
         self.outcome
     }
 }
@@ -200,7 +219,7 @@ impl ActivationDriverStatus {
 /// contract itself enforces the Provider reference, the Host/Guest
 /// execution target, the artifact identifier, and the prior-generation
 /// type, so a successful decode is the whole validation fence.
-pub(crate) fn activation_spec_decoder() -> Arc<dyn SpecDecoder> {
+pub fn activation_spec_decoder() -> Arc<dyn SpecDecoder> {
     typed_spec_decoder(|bytes| serde_json::from_slice::<NixosGenerationSpec>(bytes))
 }
 
@@ -211,11 +230,13 @@ pub(crate) fn activation_spec_decoder() -> Arc<dyn SpecDecoder> {
 /// The preserved broker response reduced to the fields the outcome mapping
 /// reads (old `host_handoff_outcome`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HostHandoffResult {
+pub enum HostHandoffResult {
     /// The coordinator recorded completion of a strict generation
     /// transition.
     Completed {
+        /// The generation the coordinator transitioned away from.
         source_generation: u64,
+        /// The generation the coordinator transitioned to.
         target_generation: u64,
     },
     /// The request was refused before mutation.
@@ -231,7 +252,7 @@ pub(crate) enum HostHandoffResult {
 /// production implementation dispatches the preserved broker request; test
 /// doubles implement the same seam (R4).
 #[async_trait::async_trait]
-pub(crate) trait ActivationDriverEffects: Send + Sync + 'static {
+pub trait ActivationDriverEffects: Send + Sync + 'static {
     /// Dispatch one `ApplyHostGenerationHandoff` for the authenticated
     /// execution target.
     async fn apply_host_generation_handoff(
@@ -239,66 +260,6 @@ pub(crate) trait ActivationDriverEffects: Send + Sync + 'static {
         target: ResourceRef,
         intent: HostGenerationHandoffIntent,
     ) -> HostHandoffResult;
-}
-
-/// Production effects over the preserved broker boundary (old
-/// `execute_host_handoff` dispatch): caller role `Lifecycle` on the typed
-/// request, admin-uid daemon caller on the dispatch.
-pub(crate) struct ProductionActivationDriverEffects {
-    state: Arc<ServerState>,
-}
-
-impl ProductionActivationDriverEffects {
-    pub(crate) fn new(state: Arc<ServerState>) -> Self {
-        Self { state }
-    }
-}
-
-impl core::fmt::Debug for ProductionActivationDriverEffects {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("ProductionActivationDriverEffects")
-            .finish_non_exhaustive()
-    }
-}
-
-#[async_trait::async_trait]
-impl ActivationDriverEffects for ProductionActivationDriverEffects {
-    async fn apply_host_generation_handoff(
-        &self,
-        target: ResourceRef,
-        intent: HostGenerationHandoffIntent,
-    ) -> HostHandoffResult {
-        let request = BrokerRequest::ApplyHostGenerationHandoff(ApplyHostGenerationHandoff {
-            caller_role: HandoffCallerRole::Lifecycle,
-            target,
-            intent,
-        });
-        match dispatch_broker_request_as(
-            &self.state,
-            request,
-            BrokerCallerRole::AdminUid {
-                uid: self.state.daemon_uid,
-            },
-        ) {
-            Ok(BrokerResponse::ApplyHostGenerationHandoff(response)) => {
-                host_handoff_result(&response)
-            }
-            Ok(BrokerResponse::Error(_)) | Ok(_) | Err(_) => HostHandoffResult::Incomplete,
-        }
-    }
-}
-
-fn host_handoff_result(response: &ApplyHostGenerationHandoffResponse) -> HostHandoffResult {
-    match response.state {
-        HandoffState::Completed => HostHandoffResult::Completed {
-            source_generation: response.source_generation,
-            target_generation: response.target_generation,
-        },
-        HandoffState::Refused => HostHandoffResult::Refused,
-        HandoffState::RolledBack => HostHandoffResult::RolledBack,
-        _ => HostHandoffResult::Incomplete,
-    }
 }
 
 /// Preserved outcome mapping: a recorded completion is success unless the
@@ -376,15 +337,18 @@ fn ordinal_from_name(name: &str) -> Option<u64> {
 /// Everything the composition unit must construct to instantiate the
 /// activation driver factory for one zone. The application verifier is the
 /// preserved fail-closed gate (old `set_verifier`).
-pub(crate) struct ActivationDriverArgs {
-    pub(crate) zone: String,
-    pub(crate) effects: Arc<dyn ActivationDriverEffects>,
-    pub(crate) verifier: Arc<dyn ActivationApplicationVerifier>,
+pub struct ActivationDriverArgs {
+    /// The zone the driver serves.
+    pub zone: String,
+    /// The daemon-realized effect port the driver drives.
+    pub effects: Arc<dyn ActivationDriverEffects>,
+    /// The application verifier the driver gates every effect on.
+    pub verifier: Arc<dyn ActivationApplicationVerifier>,
 }
 
 /// [`ResourceDriverFactory`] for the `NixosGeneration` resource type.
 /// Construction is infallible by contract (R3).
-pub(crate) struct ActivationDriverFactory {
+pub struct ActivationDriverFactory {
     types: [ResourceTypeName; 1],
     args: ActivationDriverArgs,
 }
@@ -418,7 +382,7 @@ impl ResourceDriverFactory for ActivationDriverFactory {
 // ---------------------------------------------------------------------------
 
 /// One `NixosGeneration` resource's driver.
-pub(crate) struct ActivationDriver {
+pub struct ActivationDriver {
     zone: String,
     effects: Arc<dyn ActivationDriverEffects>,
     verifier: Arc<dyn ActivationApplicationVerifier>,
@@ -688,7 +652,7 @@ impl ActivationDriver {
         ctx: &mut ResourceContext,
         spec: &NixosGenerationSpec,
         outcome: ActivationOutcomeCode,
-        result: &d2b_provider_activation_nixos::RunnerResult,
+        result: &crate::RunnerResult,
     ) {
         let detail = activation_detail(spec.activation_mode(), outcome, result.phase());
         ctx.set_status(ActivationDriverStatus::projected(
@@ -867,6 +831,71 @@ impl ResourceDriver for ActivationDriver {
 }
 
 // ---------------------------------------------------------------------------
+// Registration: the type's driver declaration
+// ---------------------------------------------------------------------------
+
+/// The resource verbs the NixosGeneration type supports.
+///
+/// Derived from the v3 resource plane's converted-type verb surface: the
+/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
+/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
+/// `Credential` type. Every converted type is served by the same manager
+/// verbs, and Role rules and the typed CLI nouns resolve their gating from
+/// this declaration.
+const ACTIVATION_VERBS: &[&str] = &[
+    "get",
+    "list",
+    "watch",
+    "create",
+    "update-spec",
+    "update-status",
+    "update-metadata",
+    "update-finalizers",
+    "delete",
+];
+
+/// The execution domains the NixosGeneration type can be reconciled in.
+///
+/// Derived from the placement contract: `NixosGeneration` names the canonical
+/// `spec.executionRef` anchor (`PlacementAnchor::canonical_for` resolves
+/// `ExecutionRef`), and the spec constructor admits a `Host` or a `Guest`
+/// there, so a generation row is driven in either domain.
+const ACTIVATION_EXECUTION_DOMAINS: &[&str] = &["host", "guest"];
+
+/// The resource types the driver reads while reconciling.
+///
+/// Derived from the driver's row reads: the policy consumes the prior
+/// generation row of the same `executionRef` (membership and handoff source
+/// generation).
+const ACTIVATION_READS: &[WellKnownType] = &[WellKnownType::NIXOS_GENERATION];
+
+/// The NixosGeneration type's driver declaration.
+///
+/// `NixosGeneration` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane
+/// cannot serve the activation generations without it, so it must be
+/// registered before the plane opens. The type is not exportable:
+/// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
+/// generation can never be an export subject. The driver serves no broker
+/// operations and declares the one child creation it performs - the owned
+/// activation runner ([`ACTIVATION_RUNNER_CREATION`]).
+pub fn activation_descriptor(args: ActivationDriverArgs) -> DriverDescriptor {
+    DriverDescriptor {
+        resource_type: WellKnownType::NIXOS_GENERATION,
+        allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+        verbs: ACTIVATION_VERBS,
+        execution: ACTIVATION_EXECUTION_DOMAINS,
+        exportable: false,
+        reads: ACTIVATION_READS,
+        operations: &[],
+        creations: ACTIVATION_CREATIONS,
+        startup: &[],
+        services: &[],
+        decoder: activation_spec_decoder(),
+        factory: Arc::new(ActivationDriverFactory::new(args)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests: driver unit tests over a scripted effect port and a recording
 // manager endpoint with one shared ordered log (R4; F1/AE1 observed as the
 // manager records it).
@@ -884,10 +913,6 @@ mod tests {
         ActivationDetail, ActivationMode, ActivationOutcomeCode, ArtifactId, NixosGenerationSpec,
         ResourcePhase, ResourceRef,
     };
-    use d2b_provider_activation_nixos::{
-        ActivationApplicationVerifier, ActivationController, ActivationVerificationError,
-        RunnerRequest, activation_runner_ref,
-    };
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, ResourceContext, WatchCondition, WatchId, WatchRegistration,
     };
@@ -902,9 +927,11 @@ mod tests {
     use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
-        ACTIVATION_TYPE_NAME, ActivationDriverArgs, ActivationDriverFactory,
-        ActivationDriverStatus, HostHandoffResult, activation_spec_decoder, ordinal_from_name,
+        ACTIVATION_TYPE_NAME, ActivationApplicationVerifier, ActivationController,
+        ActivationDriverArgs, ActivationDriverFactory, ActivationDriverStatus, HostHandoffResult,
+        RunnerRequest, activation_runner_ref, activation_spec_decoder, ordinal_from_name,
     };
+    use crate::ActivationVerificationError;
 
     // -- fakes ---------------------------------------------------------------
 
@@ -1380,7 +1407,7 @@ mod tests {
         );
         let mut d = driver(
             effects.clone(),
-            Arc::new(d2b_provider_activation_nixos::FailClosedActivationVerifier),
+            Arc::new(crate::FailClosedActivationVerifier),
         )
         .await;
         d.reconcile(&mut f.ctx).await.expect("reconcile");

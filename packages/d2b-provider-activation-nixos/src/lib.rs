@@ -1,9 +1,17 @@
-//! Activation-NixOS Provider lifecycle and typed effect boundaries.
+//! Activation-NixOS Provider lifecycle, typed effect boundaries, and the
+//! `NixosGeneration` resource driver.
+//!
+//! This crate is the activation family's home: the pure activation policy and
+//! its runner, and the driver for the `NixosGeneration` resource type with
+//! its spec decoder, factory, and declaration. The production effect
+//! implementation stays in the daemon behind the driver's effect port, so the
+//! family owns the seam and the daemon owns the broker dispatch.
 
 #![deny(missing_docs)]
 
 pub mod controller;
 pub mod diagnostics;
+pub mod driver;
 pub mod manifest;
 pub mod runner;
 
@@ -13,6 +21,12 @@ pub use controller::{
     FailClosedActivationVerifier, GenerationObservation, GenerationPhase, RetentionPlan,
     RunnerRequest, RunnerResult, SignedActivationApplicationVerifier, TrustStatus,
     activation_runner_name, activation_runner_ref, activation_runner_spec,
+};
+pub use driver::{
+    ACTIVATION_CREATIONS, ACTIVATION_RUNNER_CREATION, ACTIVATION_TYPE_NAME,
+    ActivationDriver, ActivationDriverArgs, ActivationDriverEffects, ActivationDriverError,
+    ActivationDriverFactory, ActivationDriverStatus, HostHandoffResult, RUNNER_PROVIDER_REF,
+    RUNNER_TYPE_NAME, activation_descriptor, activation_spec_decoder,
 };
 pub use manifest::ActivationManifest;
 pub use runner::{
