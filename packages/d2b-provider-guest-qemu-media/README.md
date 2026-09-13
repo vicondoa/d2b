@@ -58,7 +58,7 @@ Host-global Device ownership is reserved before effects start and held until
 media effects close. Process adoption verifies the complete identity tuple
 before pidfd acquisition; ambiguous candidates are quarantined.
 
-## State
+## State and telemetry
 
 No Provider state Volume is declared. The controller exports bounded
 non-secret recovery state and re-derives everything else from the Zone store,

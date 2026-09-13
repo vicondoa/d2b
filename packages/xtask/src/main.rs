@@ -196,25 +196,53 @@ fn main() -> std::process::ExitCode {
                 }
             }
         }
-        [command] if command == "check-provider-crate-layout" => run_provider_crate_layout(),
+        [command, rest @ ..] if command == "check-provider-crate-layout" => {
+            run_provider_crate_layout(rest)
+        }
         [command] if command == "check-provider-layout" => run_provider_layout(),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-layer-catalogs [--check|--write]|gen-error-codes|gen-provider-packaging|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-layer-catalogs [--check|--write]|gen-error-codes|gen-provider-packaging|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout [--fix]|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
             );
             std::process::ExitCode::FAILURE
         }
     }
 }
 
-fn run_provider_crate_layout() -> std::process::ExitCode {
+fn run_provider_crate_layout(args: &[String]) -> std::process::ExitCode {
+    let fix = match args {
+        [] => false,
+        [flag] if flag == "--fix" => true,
+        _ => {
+            eprintln!("usage: cargo xtask check-provider-crate-layout [--fix]");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
     let result = repo_root()
         .map_err(|error| error.to_string())
-        .and_then(provider_crate_policy::check);
+        .and_then(|root| {
+            if fix {
+                provider_crate_policy::fix(root)
+            } else {
+                provider_crate_policy::check(root).map(|()| Vec::new())
+            }
+        });
     match result {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(paths) => {
+            for path in paths {
+                println!("{}", path.display());
+            }
+            std::process::ExitCode::SUCCESS
+        }
         Err(error) => {
-            eprintln!("check-provider-crate-layout failed: {error}");
+            eprintln!(
+                "{} failed: {error}",
+                if fix {
+                    "check-provider-crate-layout --fix"
+                } else {
+                    "check-provider-crate-layout"
+                }
+            );
             std::process::ExitCode::FAILURE
         }
     }

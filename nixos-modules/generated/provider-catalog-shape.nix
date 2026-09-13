@@ -181,7 +181,7 @@
     {
       provider = "system-core";
       package = "d2b-provider-system-core";
-      source = "packages/d2b-provider-system-core/src/host_reconciler.rs";
+      source = "packages/d2b-provider-system-core/src/host.rs";
       test = "packages/d2b-provider-system-core/tests/host_reconciliation.rs";
       dossier = "docs/specs/providers/ADR-046-provider-system-core.md";
       bazelTarget = "//packages/d2b-provider-system-core:all-tests";

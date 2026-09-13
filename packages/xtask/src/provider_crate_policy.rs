@@ -54,7 +54,7 @@ pub(crate) const PROVIDER_MATRIX: &[ProviderMatrixRow] = &[
     ProviderMatrixRow {
         identity: "system-core",
         crate_name: "d2b-provider-system-core",
-        source_path: "packages/d2b-provider-system-core/src/host_reconciler.rs",
+        source_path: "packages/d2b-provider-system-core/src/host.rs",
         test_path: "packages/d2b-provider-system-core/tests/host_reconciliation.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-system-core.md",
         bazel_target: "//packages/d2b-provider-system-core:all-tests",
@@ -448,8 +448,9 @@ impl Diagnostic {
 }
 
 /// Check the normative layout of every Provider workspace member, ensure every
-/// Provider-shaped crate on disk is represented by Cargo metadata, and fail on
-/// resource knowledge that still lives in a shared crate.
+/// Provider-shaped crate on disk is represented by Cargo metadata, fail on
+/// resource knowledge that still lives in a shared crate, and fail on a
+/// comment citation that points at a module the tree no longer has.
 pub fn check(repo_root: &Path) -> Result<(), String> {
     let repo_root = repo_root
         .canonicalize()
@@ -457,7 +458,8 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
     let members = cargo_workspace_members(&repo_root)?;
     check_members(&repo_root, members.clone())?;
     check_closed_matrix(&repo_root, &members)?;
-    check_shared_driver_placements(&repo_root)
+    check_shared_driver_placements(&repo_root)?;
+    check_dangling_citations(&repo_root)
 }
 
 fn check_closed_matrix(
@@ -534,6 +536,18 @@ fn check_closed_matrix(
                 row.bazel_target,
             ));
         }
+
+        // The row's own citations are part of the identity: a matrix that
+        // names a deleted module validates a file list that is partly
+        // fictional, so a moved module repoints the row in the same change.
+        for (error, path) in [
+            ("provider-matrix-source-missing", row.source_path),
+            ("provider-matrix-test-missing", row.test_path),
+        ] {
+            if !repo_root.join(path).is_file() {
+                violations.push(Diagnostic::matrix_path(error, row.crate_name, path));
+            }
+        }
     }
 
     violations.sort_by(|left, right| {
@@ -560,8 +574,12 @@ fn check_closed_matrix(
 ///
 /// A driver belongs to the per-type crate that declares its resource type.
 /// These roots are the shared platform - the daemon, the broker, the core
-/// contracts, and the controller session library - so a driver declaration
-/// here is resource knowledge living outside the crate that owns it.
+/// contracts, the controller session library, and the resource runtime and
+/// resource types the framework itself lives in - so a driver declaration here
+/// is resource knowledge living outside the crate that owns it. The framework
+/// roots are monitored so the shared declaration-only metadata driver is
+/// policed in place: [`FRAMEWORK_DRIVER_DECLARATIONS`] names the one allowed
+/// case, and a per-resource driver parked in either crate still fails.
 const SHARED_CRATE_SOURCE_ROOTS: &[&str] = &[
     "packages/d2b-broker/src",
     "packages/d2b-contracts-broker/src",
@@ -572,6 +590,8 @@ const SHARED_CRATE_SOURCE_ROOTS: &[&str] = &[
     "packages/d2b-contracts/src",
     "packages/d2b-core-controller/src",
     "packages/d2b-core/src",
+    "packages/d2b-resource-runtime/src",
+    "packages/d2b-resource-types/src",
     "packages/d2bd/src",
 ];
 
@@ -601,13 +621,137 @@ fn shared_source_root(module: &str) -> &str {
     }
 }
 
-/// Whether one module declares a resource driver or a driver factory.
-fn declares_resource_driver(text: &str) -> bool {
-    text.lines().any(|line| {
-        let line = line.trim_start();
-        line.starts_with("impl")
-            && (line.contains("ResourceDriver for ") || line.contains("ResourceDriverFactory for "))
-    })
+/// The framework's own driver declarations, the one allowed implementation
+/// shape under the framework roots.
+///
+/// `d2b-resource-runtime` defines the driver traits and owns the shared
+/// declaration-only metadata driver every declaration-only metadata type
+/// converges through. That driver and its factory are the framework's own:
+/// they carry no resource-type knowledge, they serve every declaration-only
+/// metadata type, and they are why the runtime and resource-type roots are
+/// monitored at all. The check names them exactly instead of skipping the
+/// module, so a per-resource driver parked in either crate still fails.
+struct FrameworkDriverDeclaration {
+    /// Repository-relative module that holds the declaration.
+    module: &'static str,
+    /// The type the declaration implements a driver trait for.
+    implemented: &'static str,
+}
+
+const FRAMEWORK_DRIVER_DECLARATIONS: &[FrameworkDriverDeclaration] = &[
+    FrameworkDriverDeclaration {
+        module: "packages/d2b-resource-runtime/src/metadata.rs",
+        implemented: "MetadataDriver",
+    },
+    FrameworkDriverDeclaration {
+        module: "packages/d2b-resource-runtime/src/metadata.rs",
+        implemented: "MetadataDriverFactory",
+    },
+];
+
+/// Whether one declaration is the framework's own.
+fn framework_driver_allowed(module: &str, implemented: &str) -> bool {
+    FRAMEWORK_DRIVER_DECLARATIONS
+        .iter()
+        .any(|declaration| declaration.module == module && declaration.implemented == implemented)
+}
+
+/// The driver declaration one code line carries, and the type it names.
+///
+/// The prefix of the line is not part of the signal: a declaration can open
+/// with a visibility qualifier, an attribute, or another item on the same
+/// line, so the check matches the trait name and its `for` clause wherever
+/// they appear. It does not match the framework's blanket
+/// `impl<D: ResourceDriver> DynResourceDriver for D` glue, because
+/// `DynResourceDriver` does not share the trait name's word boundary.
+fn driver_declaration(code: &str) -> Option<String> {
+    for trait_name in ["ResourceDriverFactory", "ResourceDriver"] {
+        let mut search = code;
+        while let Some(index) = search.find(trait_name) {
+            let after = &search[index + trait_name.len()..];
+            let boundary = search[..index]
+                .chars()
+                .next_back()
+                .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_');
+            if boundary {
+                if let Some(rest) = after.strip_prefix(" for") {
+                    let rest = rest.trim_start();
+                    let end = rest
+                        .find(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                        .unwrap_or(rest.len());
+                    if end > 0 {
+                        return Some(rest[..end].to_owned());
+                    }
+                }
+            }
+            search = after;
+        }
+    }
+    None
+}
+
+/// The code half of one line: whatever precedes the first `//`.
+fn code_text(line: &str) -> &str {
+    line.split_once("//").map_or(line, |(code, _)| code)
+}
+
+/// The indent of the test-only module one line opens, when it opens one.
+fn opens_test_module(lines: &[&str], index: usize) -> Option<usize> {
+    if lines[index].trim() != "#[cfg(test)]" {
+        return None;
+    }
+    for line in &lines[index + 1..] {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("#[") || trimmed.starts_with("//") {
+            continue;
+        }
+        let is_module = trimmed.starts_with("mod ")
+            || trimmed.starts_with("pub mod ")
+            || trimmed.starts_with("pub(crate) mod ")
+            || trimmed.contains(" mod ");
+        return is_module.then(|| line.len() - line.trim_start().len());
+    }
+    None
+}
+
+/// Whether one line closes a block opened at `indent`.
+///
+/// rustfmt keeps a block's own closing brace at the opener's indent and every
+/// nested close deeper, so the first `}` at or above the opener's indent ends
+/// the module - a nested `#[cfg(test)] mod` therefore stops at its own close,
+/// not at the outer module's.
+fn closes_indented_block(line: &str, indent: usize) -> bool {
+    line.trim() == "}" && line.len() - line.trim_start().len() <= indent
+}
+
+/// The driver declarations in one module, ignoring test-only code.
+///
+/// Rust convention puts a file's test code behind a `#[cfg(test)]` module.
+/// Test code never ships, so a driver-shaped item there is not a placement
+/// decision; skipping the module keeps the check on production declarations
+/// without parsing it. A declaration outside such a module is reported
+/// wherever it appears, which is what makes the line prefix irrelevant.
+fn driver_declarations(text: &str) -> Vec<(usize, String)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut declarations = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        if let Some(indent) = opens_test_module(&lines, index) {
+            index += 1;
+            while index < lines.len() && !closes_indented_block(lines[index], indent) {
+                index += 1;
+            }
+            index += 1;
+            continue;
+        }
+        let code = code_text(lines[index]);
+        let code = code.split_once("/*").map_or(code, |(before, _)| before);
+        if let Some(implemented) = driver_declaration(code) {
+            declarations.push((index + 1, implemented));
+        }
+        index += 1;
+    }
+    declarations
 }
 
 fn collect_shared_drivers(
@@ -632,15 +776,20 @@ fn collect_shared_drivers(
         }
         let text = fs::read_to_string(&path)
             .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
-        if declares_resource_driver(&text) {
-            let relative = path.strip_prefix(repo_root).unwrap_or(&path);
-            declared.insert(relative.to_string_lossy().replace('\\', "/"));
+        let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if driver_declarations(&text)
+            .iter()
+            .any(|(_, implemented)| !framework_driver_allowed(&relative, implemented))
+        {
+            declared.insert(relative);
         }
     }
     Ok(())
 }
 
-/// Every shared-crate module that declares a resource driver today.
+/// Every monitored module that declares a resource driver the check does not
+/// allow, keyed by repository-relative path.
 fn declared_shared_drivers(repo_root: &Path) -> Result<BTreeSet<String>, String> {
     let mut declared = BTreeSet::new();
     for root in SHARED_CRATE_SOURCE_ROOTS {
@@ -682,6 +831,25 @@ fn check_shared_driver_placements(repo_root: &Path) -> Result<(), String> {
             ));
         }
     }
+    for declaration in FRAMEWORK_DRIVER_DECLARATIONS {
+        if !repo_root.join(shared_source_root(declaration.module)).is_dir() {
+            continue;
+        }
+        let present = fs::read_to_string(repo_root.join(declaration.module))
+            .map(|text| {
+                driver_declarations(&text)
+                    .iter()
+                    .any(|(_, implemented)| implemented == declaration.implemented)
+            })
+            .unwrap_or(false);
+        if !present {
+            violations.push(render_shared_driver_violation(
+                "stale-framework-driver-declaration",
+                declaration.module,
+                None,
+            ));
+        }
+    }
 
     violations.sort();
     if violations.is_empty() {
@@ -708,6 +876,799 @@ fn render_shared_driver_violation(error: &str, module: &str, family: Option<&str
         );
     }
     diagnostic.to_string()
+}
+
+/// One comment citation in a monitored root whose target no longer exists.
+///
+/// A citation is a repository path or a crate-qualified module path as a
+/// comment writes it: `packages/<crate>/src/...`, `crate::<module>`, or
+/// `<crate>::<module>`. The check fails on one that does not resolve, because
+/// after a module move the citation that remains is a live pointer to a file
+/// that no longer exists - the class readers kept finding by hand while no
+/// gate looked at comments.
+#[derive(Clone)]
+struct DanglingCitation {
+    /// Repository-relative module that holds the comment.
+    module: String,
+    /// One-based line number inside that module.
+    line: usize,
+    /// The citation exactly as the comment writes it.
+    token: String,
+    /// The comment line, trimmed, for the report.
+    comment: String,
+    /// How the fix pass can repair the line, when the repair is mechanical.
+    rewrite: Option<CitationRewrite>,
+}
+
+/// A mechanical repair of one dangling citation.
+#[derive(Clone, Copy)]
+enum CitationRewrite {
+    /// The comment line holds only the citation: delete the line.
+    DropLine,
+    /// Delete `start..end` (line byte offsets), keeping `keep` in the gap.
+    DropSpan {
+        start: usize,
+        end: usize,
+        keep: Option<char>,
+    },
+}
+
+/// Fail on every comment citation under the monitored roots that no longer
+/// resolves.
+fn check_dangling_citations(repo_root: &Path) -> Result<(), String> {
+    let citations = dangling_citations(repo_root)?;
+    if citations.is_empty() {
+        return Ok(());
+    }
+    Err(citations
+        .iter()
+        .map(render_citation_diagnostic)
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// Remove every mechanically removable dangling citation, leaving the rest.
+///
+/// This is the `--fix` half of the check: it edits comments only, never code,
+/// and it refuses a citation woven into a sentence, so the human fix states
+/// the behavior instead of citing the missing file. Check mode verifies every
+/// rewrite afterwards, and a second run over a fixed tree changes nothing.
+pub fn fix(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
+    let repo_root = repo_root
+        .canonicalize()
+        .map_err(|_| "provider-crate-layout-input-unreadable".to_owned())?;
+    let mut by_module: BTreeMap<String, Vec<DanglingCitation>> = BTreeMap::new();
+    for citation in dangling_citations(&repo_root)? {
+        by_module
+            .entry(citation.module.clone())
+            .or_default()
+            .push(citation);
+    }
+    let mut written = Vec::new();
+    let mut remaining = Vec::new();
+    for (module, citations) in by_module {
+        let path = repo_root.join(&module);
+        let text = fs::read_to_string(&path)
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+        remaining.extend(apply_citation_fixes(&mut lines, &citations));
+        let mut fixed = lines.join("\n");
+        if text.ends_with('\n') {
+            fixed.push('\n');
+        }
+        if fixed != text {
+            fs::write(&path, &fixed)
+                .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+            written.push(path);
+        }
+    }
+    written.sort();
+    if remaining.is_empty() {
+        return Ok(written);
+    }
+    Err(format!(
+        "{} dangling comment citation(s) need a human - state the behavior instead of citing the missing target:\n{}",
+        remaining.len(),
+        remaining
+            .iter()
+            .map(render_citation_diagnostic)
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))
+}
+
+/// Apply the mechanical rewrites in one module, returning the citations that
+/// still need a human.
+fn apply_citation_fixes(
+    lines: &mut Vec<String>,
+    citations: &[DanglingCitation],
+) -> Vec<DanglingCitation> {
+    let mut by_line: BTreeMap<usize, Vec<&DanglingCitation>> = BTreeMap::new();
+    for citation in citations {
+        by_line.entry(citation.line).or_default().push(citation);
+    }
+    let mut remaining = Vec::new();
+    let mut drop_lines = Vec::new();
+    for (line_number, on_line) in by_line {
+        let index = line_number - 1;
+        if index >= lines.len() {
+            remaining.extend(on_line.into_iter().cloned());
+            continue;
+        }
+        if on_line.len() == 1 && matches!(on_line[0].rewrite, Some(CitationRewrite::DropLine)) {
+            drop_lines.push(index);
+            continue;
+        }
+        let mut spans = Vec::new();
+        for citation in &on_line {
+            match citation.rewrite {
+                Some(CitationRewrite::DropSpan { start, end, keep }) => {
+                    spans.push((start, end, keep));
+                }
+                _ => remaining.push((*citation).clone()),
+            }
+        }
+        spans.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
+        let mut line = lines[index].clone();
+        for (start, end, keep) in spans {
+            let replacement: String = keep.map(String::from).unwrap_or_default();
+            line.replace_range(start..end, &replacement);
+        }
+        lines[index] = tidy_comment(&line);
+    }
+    for index in drop_lines.into_iter().rev() {
+        lines.remove(index);
+    }
+    remaining.sort_by(|left, right| {
+        left.line
+            .cmp(&right.line)
+            .then_with(|| left.token.cmp(&right.token))
+    });
+    remaining
+}
+
+/// Collapse the whitespace and orphaned punctuation a removal can leave.
+fn tidy_comment(line: &str) -> String {
+    let Some(comment_start) = comment_start(line) else {
+        return line.to_owned();
+    };
+    let (code, comment) = line.split_at(comment_start);
+    let mut comment = comment.to_owned();
+    while comment.contains("  ") {
+        comment = comment.replace("  ", " ");
+    }
+    for (orphan, tidy) in [(" ,", ","), (" .", "."), (" ;", ";"), (" )", ")")] {
+        comment = comment.replace(orphan, tidy);
+    }
+    format!("{code}{}", comment.trim_end())
+}
+
+/// Render one dangling citation as canonical JSON.
+fn render_citation_diagnostic(citation: &DanglingCitation) -> String {
+    serde_json::json!({
+        "error": "dangling-comment-citation",
+        "module": &citation.module,
+        "line": citation.line,
+        "citation": &citation.token,
+        "comment": &citation.comment,
+    })
+    .to_string()
+}
+
+/// Every dangling comment citation in the monitored roots.
+fn dangling_citations(repo_root: &Path) -> Result<Vec<DanglingCitation>, String> {
+    let crates = workspace_crates(repo_root)?;
+    let mut roots = BTreeMap::new();
+    let mut citations = Vec::new();
+    for root in SHARED_CRATE_SOURCE_ROOTS {
+        let directory = repo_root.join(root);
+        if !directory.is_dir() {
+            continue;
+        }
+        collect_dangling_citations(repo_root, &directory, &crates, &mut roots, &mut citations)?;
+    }
+    citations.sort_by(|left, right| {
+        left.module
+            .cmp(&right.module)
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.token.cmp(&right.token))
+    });
+    Ok(citations)
+}
+
+fn collect_dangling_citations(
+    repo_root: &Path,
+    directory: &Path,
+    crates: &BTreeMap<String, String>,
+    roots: &mut BTreeMap<String, String>,
+    citations: &mut Vec<DanglingCitation>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        if file_type.is_dir() {
+            collect_dangling_citations(repo_root, &path, crates, roots, citations)?;
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        let own_crate = own_crate_of(&relative);
+        let lines: Vec<&str> = text.lines().collect();
+        for (offset, line) in lines.iter().enumerate() {
+            let Some(comment_start) = comment_start(line) else {
+                continue;
+            };
+            let previous = offset.checked_sub(1).map(|index| lines[index]);
+            for token in dangling_comment_citations(
+                repo_root,
+                crates,
+                roots,
+                own_crate.as_deref(),
+                line,
+                comment_start,
+                previous,
+            )? {
+                citations.push(DanglingCitation {
+                    module: relative.clone(),
+                    line: offset + 1,
+                    token: token.text,
+                    comment: line.trim().to_owned(),
+                    rewrite: token.rewrite,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One dangling citation found inside a comment.
+struct CommentCitation {
+    text: String,
+    rewrite: Option<CitationRewrite>,
+}
+
+/// Every citation in one comment line whose target no longer resolves.
+#[allow(clippy::too_many_arguments)]
+fn dangling_comment_citations(
+    repo_root: &Path,
+    crates: &BTreeMap<String, String>,
+    roots: &mut BTreeMap<String, String>,
+    own_crate: Option<&str>,
+    line: &str,
+    comment_start: usize,
+    previous: Option<&str>,
+) -> Result<Vec<CommentCitation>, String> {
+    let comment = &line[comment_start..];
+    let mut citations = Vec::new();
+    for (start, end) in path_token_spans(comment) {
+        let raw = &comment[start..end];
+        if resolve_path_citation(repo_root, raw) {
+            continue;
+        }
+        citations.push(comment_citation(
+            line,
+            comment_start,
+            previous,
+            start,
+            end,
+            raw,
+        ));
+    }
+    for (start, end, qualifier, segment) in module_token_spans(comment) {
+        let raw = &comment[start..end];
+        if resolve_module_citation(repo_root, crates, roots, own_crate, &qualifier, &segment)? {
+            continue;
+        }
+        citations.push(comment_citation(
+            line,
+            comment_start,
+            previous,
+            start,
+            end,
+            raw,
+        ));
+    }
+    Ok(citations)
+}
+
+fn comment_citation(
+    line: &str,
+    comment_start: usize,
+    previous: Option<&str>,
+    start: usize,
+    end: usize,
+    token: &str,
+) -> CommentCitation {
+    CommentCitation {
+        text: token.to_owned(),
+        rewrite: mechanical_rewrite(line, comment_start, previous, start, end),
+    }
+}
+
+/// The byte offset where one line's comment starts, ignoring `//` inside a
+/// string literal.
+fn comment_start(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut index = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+        } else if byte == b'"' {
+            in_string = true;
+        } else if byte == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+/// The `packages/...` runs in one comment, as comment-relative byte spans.
+fn path_token_spans(comment: &str) -> Vec<(usize, usize)> {
+    let bytes = comment.as_bytes();
+    let mut spans = Vec::new();
+    let mut index = 0;
+    while let Some(offset) = comment[index..].find("packages/") {
+        let start = index + offset;
+        let mut end = start;
+        while end < bytes.len()
+            && (bytes[end].is_ascii_alphanumeric()
+                || matches!(bytes[end], b'/' | b'_' | b'-' | b'.'))
+        {
+            end += 1;
+        }
+        spans.push((start, end));
+        index = end.max(start + 1);
+    }
+    spans
+}
+
+/// Whether one `packages/...` citation names something on disk.
+fn resolve_path_citation(repo_root: &Path, raw: &str) -> bool {
+    let Some(candidate) = path_citation_candidate(raw) else {
+        return true;
+    };
+    repo_root.join(candidate).exists()
+}
+
+/// The path part of one citation, without a `::item` suffix or trailing
+/// sentence punctuation.
+fn path_citation_candidate(raw: &str) -> Option<&str> {
+    let mut candidate = raw;
+    if let Some(index) = candidate.find(".rs::") {
+        candidate = &candidate[..index + 3];
+    }
+    candidate = candidate.trim_end_matches(|ch: char| {
+        matches!(ch, '.' | ',' | ';' | ')' | ']' | '}' | '`' | '\'' | '"')
+    });
+    if candidate.contains('*') || candidate.len() <= "packages/".len() {
+        return None;
+    }
+    Some(candidate)
+}
+
+/// The crate-qualified module chains in one comment: byte spans with their
+/// qualifier and first segment.
+fn module_token_spans(comment: &str) -> Vec<(usize, usize, String, String)> {
+    let bytes = comment.as_bytes();
+    let mut spans = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if !byte.is_ascii_alphabetic() && byte != b'_' {
+            index += 1;
+            continue;
+        }
+        let (first, first_end) = identifier_run(comment, index);
+        if !comment[first_end..].starts_with("::") {
+            index = first_end;
+            continue;
+        }
+        let mut chain = vec![first];
+        let mut cursor = first_end;
+        while comment[cursor..].starts_with("::") {
+            let rest = &comment[cursor + 2..];
+            if !rest
+                .as_bytes()
+                .first()
+                .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+            {
+                break;
+            }
+            let (segment, end) = identifier_run(comment, cursor + 2);
+            chain.push(segment);
+            cursor = end;
+        }
+        if chain.len() < 2 {
+            index = cursor.max(index + 1);
+            continue;
+        }
+        spans.push((index, cursor, chain[0].to_owned(), chain[1].to_owned()));
+        index = cursor;
+    }
+    spans
+}
+
+/// One identifier-shaped run: `[A-Za-z_][A-Za-z0-9_-]*`.
+fn identifier_run(text: &str, start: usize) -> (&str, usize) {
+    let bytes = text.as_bytes();
+    let mut end = start;
+    while end < bytes.len()
+        && (bytes[end].is_ascii_alphanumeric() || matches!(bytes[end], b'_' | b'-'))
+    {
+        end += 1;
+    }
+    (&text[start..end], end)
+}
+
+/// Whether one crate-qualified module citation names a module, item, or
+/// re-export of a workspace crate.
+///
+/// Only the first segment after the qualifier is resolved: a citation whose
+/// module still exists stays valid even when a deeper path moved, and a
+/// qualifier that is not a workspace crate is not this check's to resolve.
+fn resolve_module_citation(
+    repo_root: &Path,
+    crates: &BTreeMap<String, String>,
+    roots: &mut BTreeMap<String, String>,
+    own_crate: Option<&str>,
+    qualifier: &str,
+    segment: &str,
+) -> Result<bool, String> {
+    let crate_dir = if qualifier == "crate" {
+        match own_crate {
+            Some(crate_dir) => crate_dir.to_owned(),
+            None => return Ok(true),
+        }
+    } else {
+        match crates.get(&qualifier.replace('-', "_")) {
+            Some(crate_dir) => crate_dir.clone(),
+            None => return Ok(true),
+        }
+    };
+    let src = repo_root.join("packages").join(&crate_dir).join("src");
+    if src.join(format!("{segment}.rs")).is_file() || src.join(segment).join("mod.rs").is_file() {
+        return Ok(true);
+    }
+    if !roots.contains_key(&crate_dir) {
+        roots.insert(crate_dir.clone(), crate_root_text(repo_root, &crate_dir)?);
+    }
+    Ok(root_binds_name(
+        roots.get(&crate_dir).map(String::as_str).unwrap_or_default(),
+        segment,
+    ))
+}
+
+/// The crate a monitored module belongs to, when `crate::` citations can be
+/// resolved against it.
+fn own_crate_of(module: &str) -> Option<String> {
+    let mut segments = module.split('/');
+    if segments.next() != Some("packages") {
+        return None;
+    }
+    let crate_dir = segments.next()?.to_owned();
+    if module.contains("/src/bin/") {
+        return None;
+    }
+    Some(crate_dir)
+}
+
+/// The workspace crates whose underscore names can qualify a comment
+/// citation.
+fn workspace_crates(repo_root: &Path) -> Result<BTreeMap<String, String>, String> {
+    let entries = fs::read_dir(repo_root.join("packages"))
+        .map_err(|_| "provider-crate-layout-packages-unreadable".to_owned())?;
+    let mut crates = BTreeMap::new();
+    for entry in entries {
+        let entry = entry.map_err(|_| "provider-crate-layout-packages-unreadable".to_owned())?;
+        if !entry.path().join("src").is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        crates.insert(name.replace('-', "_"), name);
+    }
+    Ok(crates)
+}
+
+/// The crate-root source text: `lib.rs`, `main.rs`, and the files they
+/// `include!`, which is where a root-level module, item, or re-export binding
+/// can appear.
+fn crate_root_text(repo_root: &Path, crate_dir: &str) -> Result<String, String> {
+    let src = repo_root.join("packages").join(crate_dir).join("src");
+    let mut text = String::new();
+    for root in ["lib.rs", "main.rs"] {
+        let path = src.join(root);
+        if !path.is_file() {
+            continue;
+        }
+        let contents = fs::read_to_string(&path)
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        for included in include_targets(&contents) {
+            let included = src.join(included);
+            if included.is_file() {
+                text.push_str(
+                    &fs::read_to_string(&included)
+                        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?,
+                );
+                text.push('\n');
+            }
+        }
+        text.push_str(&contents);
+        text.push('\n');
+    }
+    Ok(text)
+}
+
+/// The `include!("...")` targets in one source text.
+fn include_targets(text: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    let mut search = text;
+    while let Some(index) = search.find("include!(\"") {
+        let rest = &search[index + "include!(\"".len()..];
+        let Some(end) = rest.find('"') else {
+            break;
+        };
+        targets.push(rest[..end].to_owned());
+        search = &rest[end..];
+    }
+    targets
+}
+
+/// Whether crate-root text binds `name` as a module, item, or import.
+fn root_binds_name(text: &str, name: &str) -> bool {
+    for line in text.lines() {
+        if item_binding(code_text(line), name) {
+            return true;
+        }
+    }
+    use_statements(text)
+        .iter()
+        .any(|statement| use_binding(statement, name))
+}
+
+/// Whether one declaration line binds `name` through an item keyword.
+fn item_binding(line: &str, name: &str) -> bool {
+    for keyword in [
+        "mod", "struct", "enum", "trait", "fn", "const", "static", "type", "union",
+    ] {
+        let mut search = line;
+        while let Some(index) = search.find(keyword) {
+            let after = &search[index + keyword.len()..];
+            let boundary = search[..index]
+                .chars()
+                .next_back()
+                .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_');
+            if boundary && starts_with_whitespace(after) {
+                if let Some(binding) = after.trim_start().strip_prefix(name) {
+                    if ends_identifier(binding) {
+                        return true;
+                    }
+                }
+            }
+            search = after;
+        }
+    }
+    if let Some(index) = line.find("macro_rules!") {
+        if let Some(binding) = line[index + "macro_rules!".len()..]
+            .trim_start()
+            .strip_prefix(name)
+        {
+            if ends_identifier(binding) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn starts_with_whitespace(text: &str) -> bool {
+    text.chars().next().is_some_and(char::is_whitespace)
+}
+
+/// Whether the text after a candidate binding ends the identifier.
+fn ends_identifier(text: &str) -> bool {
+    text.chars()
+        .next()
+        .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_')
+}
+
+/// Every `use` statement in one source text, whitespace-collapsed so a
+/// multi-line statement matches on one string.
+fn use_statements(text: &str) -> Vec<String> {
+    let code = text
+        .lines()
+        .map(code_text)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut statements = Vec::new();
+    let mut index = 0;
+    while let Some(offset) = code[index..].find("use ") {
+        let start = index + offset;
+        let Some(end) = code[start..].find(';') else {
+            break;
+        };
+        statements.push(
+            code[start..start + end]
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        index = start + end + 1;
+    }
+    statements
+}
+
+/// Whether one `use` statement binds `name`.
+fn use_binding(statement: &str, name: &str) -> bool {
+    if let Some((_, group)) = statement.split_once('{') {
+        let group = group.split('}').next().unwrap_or_default();
+        return group.split(',').any(|entry| {
+            entry
+                .trim()
+                .split(" as ")
+                .next()
+                .unwrap_or_default()
+                .trim()
+                == name
+        });
+    }
+    statement
+        .rsplit("::")
+        .next()
+        .is_some_and(|last| last.trim() == name)
+}
+
+/// The mechanical repair for one dangling citation, when removing it cannot
+/// change what the sentence says.
+///
+/// Three shapes qualify: a parenthetical that holds only the citation, a
+/// trailing clause after a comma or dash that is only the citation, and a
+/// comment line that holds only the citation. Everything else - a citation
+/// woven into a sentence, a doc-link definition, a wrapped continuation - is
+/// left for a human who can restate the behavior.
+fn mechanical_rewrite(
+    line: &str,
+    comment_start: usize,
+    previous: Option<&str>,
+    start: usize,
+    end: usize,
+) -> Option<CitationRewrite> {
+    let comment = &line[comment_start..];
+    let token_start = start - comment_start;
+    let token_end = end - comment_start;
+    let token = &comment[token_start..token_end];
+    whole_line_rewrite(comment, previous, token)
+        .or_else(|| parenthetical_rewrite(comment, comment_start, token_start, token_end))
+        .or_else(|| trailing_clause_rewrite(comment, comment_start, token_start, token_end, token))
+}
+
+/// A comment line that holds only the citation can go as a whole, unless the
+/// previous comment line continues into it.
+fn whole_line_rewrite(
+    comment: &str,
+    previous: Option<&str>,
+    token: &str,
+) -> Option<CitationRewrite> {
+    let body = comment.trim_start_matches('/').trim();
+    let bare = body
+        .trim_matches('`')
+        .trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ':'))
+        .trim();
+    if bare != token {
+        return None;
+    }
+    if let Some(previous) = previous {
+        let previous = previous.trim();
+        if previous.starts_with("//") {
+            let previous_body = previous.trim_start_matches('/').trim();
+            let continues = !previous_body.is_empty()
+                && previous_body
+                    .chars()
+                    .last()
+                    .is_some_and(|ch| !matches!(ch, '.' | ':' | ';' | '!' | '?'));
+            if continues {
+                return None;
+            }
+        }
+    }
+    Some(CitationRewrite::DropLine)
+}
+
+/// A parenthetical that holds only the citation can go with it.
+fn parenthetical_rewrite(
+    comment: &str,
+    comment_start: usize,
+    token_start: usize,
+    token_end: usize,
+) -> Option<CitationRewrite> {
+    let open = comment[..token_start].rfind('(')?;
+    let before = comment[open + 1..token_start]
+        .trim()
+        .trim_end_matches('`')
+        .trim();
+    if !before.is_empty() && !is_citation_cue(before) {
+        return None;
+    }
+    let close = comment[token_end..].find(')')?;
+    let after = comment[token_end..token_end + close]
+        .trim()
+        .trim_start_matches('`')
+        .trim();
+    if !after.is_empty() {
+        return None;
+    }
+    Some(CitationRewrite::DropSpan {
+        start: comment_start + open,
+        end: comment_start + token_end + close + 1,
+        keep: None,
+    })
+}
+
+/// A trailing clause after a comma or dash that holds only the citation can
+/// go, keeping the sentence's final punctuation.
+fn trailing_clause_rewrite(
+    comment: &str,
+    comment_start: usize,
+    token_start: usize,
+    token_end: usize,
+    token: &str,
+) -> Option<CitationRewrite> {
+    let before = comment[..token_start].trim_end();
+    let before = before.strip_suffix('`').map_or(before, str::trim_end);
+    let separator_index = before.rfind(|ch: char| matches!(ch, ',' | '-'))?;
+    let separator = comment[separator_index..].chars().next()?;
+    let clause = comment[separator_index + separator.len_utf8()..token_end].replace('`', "");
+    let clause = clause.trim();
+    let clause_matches = clause == token
+        || clause
+            .split_once(' ')
+            .is_some_and(|(cue, cited)| is_citation_cue(cue) && cited.trim() == token);
+    if !clause_matches {
+        return None;
+    }
+    let after = &comment[token_end..];
+    let mut cursor = token_end;
+    if after.starts_with('`') {
+        cursor += 1;
+    }
+    let keep = comment[cursor..]
+        .chars()
+        .next()
+        .filter(|ch| matches!(ch, '.' | ';' | ','));
+    if let Some(ch) = keep {
+        cursor += ch.len_utf8();
+    }
+    if !comment[cursor..].trim().is_empty() {
+        return None;
+    }
+    Some(CitationRewrite::DropSpan {
+        start: comment_start + separator_index,
+        end: comment_start + cursor,
+        keep,
+    })
+}
+
+fn is_citation_cue(text: &str) -> bool {
+    matches!(text, "see" | "cf" | "in" | "from" | "under" | "at" | "per")
 }
 
 fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), String> {
@@ -1357,7 +2318,7 @@ mod tests {
         assert_eq!(
             check_closed_matrix(root, &members),
             Ok(()),
-            "the committed Provider matrix must have one dossier and aggregate target per row"
+            "the committed Provider matrix must have one live source, test, and dossier per row, and an aggregate target"
         );
     }
 
@@ -1695,4 +2656,191 @@ mod tests {
         assert_eq!(check_shared_driver_placements(root), Ok(()));
     }
 
+    /// A matrix row whose module moved fails: the row's own citations are part
+    /// of the identity, so a deleted module cannot stay in the table.
+    #[test]
+    fn a_matrix_row_that_cites_a_deleted_module_fails() {
+        let fixture = Fixture::new("matrix-stale-source");
+        fixture.add_package("d2b-provider-volume-local");
+        fixture.set_members(&[
+            "d2b-core",
+            "d2b-provider-fixture-example",
+            "d2b-provider-volume-local",
+        ]);
+        let members = manifest_workspace_members(&fixture.root).expect("read workspace manifest");
+        let error = check_closed_matrix(&fixture.root, &members)
+            .expect_err("a matrix row citing a missing module is refused");
+        assert!(error.contains("provider-matrix-source-missing"), "{error}");
+    }
+
+    /// The declaration signal is the `ResourceDriver for` shape, not the line
+    /// prefix: a visibility qualifier, an attribute, or another item on the
+    /// line does not hide a driver, a commented-out example is not one, and
+    /// the framework's blanket `DynResourceDriver` glue is not one either.
+    #[test]
+    fn the_driver_signal_reads_the_shape_not_the_line_prefix() {
+        let text = "pub struct Wrapper; impl ResourceDriver for ProcessDriver {}\n\
+                    /// impl ResourceDriver for DocsExample {}\n\
+                    impl<D: ResourceDriver> DynResourceDriver for D {}\n";
+        assert_eq!(
+            driver_declarations(text),
+            vec![(1, "ProcessDriver".to_owned())]
+        );
+    }
+
+    /// Test code never ships, so a driver-shaped item behind `#[cfg(test)]`
+    /// is not a placement decision while the production item after it is.
+    #[test]
+    fn test_module_fixtures_are_not_production_declarations() {
+        let text = "#[cfg(test)]\nmod tests {\n    impl ResourceDriver for StubDriver {}\n}\n\n\
+                    impl ResourceDriver for ProductionDriver {}\n";
+        assert_eq!(
+            driver_declarations(text),
+            vec![(6, "ProductionDriver".to_owned())]
+        );
+    }
+
+    /// A `#[cfg(test)] mod` nested in another module stops at its own closing
+    /// brace, so the enclosing module's production items are still scanned.
+    #[test]
+    fn nested_test_modules_stop_at_their_own_close() {
+        let text = "mod outer {\n    #[cfg(test)]\n    mod tests {\n        impl ResourceDriver for StubDriver {}\n    }\n\n    pub fn kept() {}\n}\n\nimpl ResourceDriver for ProductionDriver {}\n";
+        assert_eq!(
+            driver_declarations(text),
+            vec![(10, "ProductionDriver".to_owned())]
+        );
+    }
+
+    /// The framework's shared declaration-only metadata driver is the one
+    /// allowed case under the framework roots; a per-resource driver parked
+    /// beside it still fails.
+    #[test]
+    fn the_framework_metadata_driver_is_allowed_but_others_are_not() {
+        let fixture = Fixture::new("framework-driver");
+        let runtime = fixture.root.join("packages/d2b-resource-runtime/src");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(
+            runtime.join("metadata.rs"),
+            "#[async_trait::async_trait]\nimpl ResourceDriverFactory for MetadataDriverFactory {}\n\nimpl ResourceDriver for MetadataDriver {}\n",
+        )
+        .unwrap();
+        assert_eq!(check_shared_driver_placements(&fixture.root), Ok(()));
+
+        fs::write(
+            runtime.join("parked.rs"),
+            "impl ResourceDriver for ProcessDriver {}\n",
+        )
+        .unwrap();
+        let error = check_shared_driver_placements(&fixture.root)
+            .expect_err("a per-resource driver parked in the framework crate is refused");
+        assert!(error.contains("shared-crate-driver-placement"), "{error}");
+        assert!(
+            error.contains("packages/d2b-resource-runtime/src/parked.rs"),
+            "{error}"
+        );
+    }
+
+    /// An allowance that names a declaration the tree no longer has fails, so
+    /// the framework list cannot rot into an unmonitored hole.
+    #[test]
+    fn a_missing_framework_driver_declaration_is_a_stale_allowance() {
+        let fixture = Fixture::new("framework-stale");
+        fs::create_dir_all(fixture.root.join("packages/d2b-resource-runtime/src")).unwrap();
+        let error = check_shared_driver_placements(&fixture.root)
+            .expect_err("an allowance that names no declaration is stale");
+        assert!(
+            error.contains("stale-framework-driver-declaration"),
+            "{error}"
+        );
+    }
+
+    /// A comment that cites a module the tree no longer has fails with the
+    /// citation and the sentence, inside a monitored root.
+    #[test]
+    fn a_comment_citing_a_deleted_module_is_refused_with_its_sentence() {
+        let fixture = Fixture::new("dangling-citation");
+        fixture.add_package("d2bd");
+        let broker = fixture.root.join("packages/d2b-broker/src");
+        fs::create_dir_all(&broker).unwrap();
+        fs::write(
+            broker.join("note.rs"),
+            "//! CTAPHID session state lives in `d2bd::security_key`, not here.\n",
+        )
+        .unwrap();
+        let error = check_dangling_citations(&fixture.root)
+            .expect_err("a deleted module citation is refused");
+        assert!(error.contains("dangling-comment-citation"), "{error}");
+        assert!(error.contains("d2bd::security_key"), "{error}");
+        assert!(error.contains("note.rs"), "{error}");
+    }
+
+    /// The mechanical shapes are removed, the rewrite rechecks clean, code is
+    /// untouched, and a second fix run changes nothing.
+    #[test]
+    fn mechanical_citations_are_removed_and_recheck_clean() {
+        let fixture = Fixture::new("mechanical-fix");
+        fixture.add_package("d2bd");
+        let broker = fixture.root.join("packages/d2b-broker/src");
+        fs::create_dir_all(&broker).unwrap();
+        let note = broker.join("note.rs");
+        fs::write(
+            &note,
+            "//! The port refuses (see `d2bd::gone`) before dispatch.\n\
+             //! Open it, see `packages/d2b-gone/src/port.rs`.\n\
+             const NOTE: &str = \"packages/d2b-gone/src/port.rs\";\n",
+        )
+        .unwrap();
+        let written = fix(&fixture.root).expect("mechanical citations are removed");
+        assert_eq!(written, vec![fs::canonicalize(&note).unwrap()]);
+        assert_eq!(
+            fs::read_to_string(&note).unwrap(),
+            "//! The port refuses before dispatch.\n\
+             //! Open it.\n\
+             const NOTE: &str = \"packages/d2b-gone/src/port.rs\";\n"
+        );
+        assert_eq!(check_dangling_citations(&fixture.root), Ok(()));
+        assert_eq!(fix(&fixture.root), Ok(Vec::new()));
+    }
+
+    /// A citation woven into a sentence, and a line whose predecessor
+    /// continues into it, are reported and left for a human.
+    #[test]
+    fn embedded_and_wrapped_citations_are_reported_not_rewritten() {
+        let fixture = Fixture::new("embedded-citation");
+        fixture.add_package("d2bd");
+        let broker = fixture.root.join("packages/d2b-broker/src");
+        fs::create_dir_all(&broker).unwrap();
+        let note = broker.join("note.rs");
+        let original = "//! The port lives in `d2bd::gone`, not here.\n\
+                        //! The envelope documents\n\
+                        //! `packages/d2b-gone/src/port.rs`.\n";
+        fs::write(&note, original).unwrap();
+        let error = fix(&fixture.root).expect_err("embedded citations need a human");
+        assert!(error.contains("dangling-comment-citation"), "{error}");
+        assert!(error.contains("d2bd::gone"), "{error}");
+        assert_eq!(fs::read_to_string(&note).unwrap(), original);
+        assert!(check_dangling_citations(&fixture.root).is_err());
+    }
+
+    /// A wrapped bare-token line is not dropped, and a doc-link definition is
+    /// repointed rather than removed: neither removal is mechanical.
+    #[test]
+    fn wrapped_and_definition_lines_are_not_mechanical() {
+        let wrapped = "/// `packages/d2b-gone/src/port.rs`.";
+        let start = wrapped.find("packages/").unwrap();
+        let end = start + "packages/d2b-gone/src/port.rs".len();
+        assert!(mechanical_rewrite(
+            wrapped,
+            0,
+            Some("/// Open the port and hand off"),
+            start,
+            end
+        )
+        .is_none());
+
+        let definition =
+            "/// [`PrepareStateDir`]: crate::broker_wire::BrokerRequest::PrepareStateDir";
+        let start = definition.find("crate::").unwrap();
+        assert!(mechanical_rewrite(definition, 0, None, start, definition.len()).is_none());
+    }
 }

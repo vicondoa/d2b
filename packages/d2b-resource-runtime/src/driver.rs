@@ -55,14 +55,13 @@ pub enum ReconcileOutcome {
 /// retries, status publication, dependencies, and lifecycle; the driver owns
 /// resource-specific validate/recover/reconcile/delete behavior.
 ///
-/// Error redaction mirrors `HandlerFailure` in
-/// `packages/d2b-controller-toolkit/src/runner.rs:400-437`, extended for issue
-/// #508: `type Error` stays inside the provider and
-/// [`ResourceDriver::classify_error`] maps it onto the structured
-/// [`DriverFailure`] surface (registered kind, verdict, stage, compared
-/// values), which is all the erased boundary ([`DynResourceDriver`], what the
-/// actor holds) reports. Drivers report failures only through that surface,
-/// so the actor owns retry/backoff and retry state stays runtime-only (R13).
+/// Error redaction is the classified [`DriverFailure`] surface, extended for
+/// issue #508: `type Error` stays inside the provider and
+/// [`ResourceDriver::classify_error`] maps it onto that surface (registered
+/// kind, verdict, stage, compared values), which is all the erased boundary
+/// ([`DynResourceDriver`], what the actor holds) reports. Drivers report
+/// failures only through that surface, so the actor owns retry/backoff and
+/// retry state stays runtime-only (R13).
 ///
 /// Conversion template for a current `ResourceReconciler` implementor (spec
 /// section 13):

@@ -239,30 +239,25 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
     Ok(contexts)
 }
 
-/// Write the current context set. The output tree is never pruned.
+/// Write the current context set and prune context directories it no longer
+/// names.
 ///
-/// This function only enumerates the contexts `context_specs` returns, so every
-/// directory under `OUTPUT_ROOT` whose context key is no longer in that set - a
+/// The expected contexts are written first, then every directory under
+/// `OUTPUT_ROOT` whose `system/target/name` key is not in the current set - a
 /// dropped system/target tuple, a renamed context, or a context retired with
-/// the crate that owned it, as `guest-shell-runner-static` was - stays on disk
-/// exactly as it was. `check_outputs` does not see it either: it walks only the
-/// expected contexts, and `reject_extra_files` compares the files inside one
-/// context directory rather than the set of context directories. A retired
-/// context therefore stops being regenerated and validated while its files keep
-/// their protected-owner status; the advisory-policy context keys are compared,
-/// but the directory is not, so the change that retires a context has to delete
-/// its files by hand.
-///
-/// A fix needs both halves, and both must respect the protected review on
-/// `packages/policy-inputs/**`: `--write` would have to enumerate the existing
-/// context directories in deterministic order and delete the ones absent from
-/// the current set (reporting each removal, and never treating the system and
-/// target parents as contexts), and `--check` would have to fail naming any
-/// context directory it did not expect. Detection in `--check` alone is the
-/// smaller half if the deletion should stay with the protected owner.
+/// the crate that owned it, as `guest-shell-runner-static` was - is deleted in
+/// deterministic order and reported on stderr. Pruning is part of the write
+/// path because the stranded directory's files keep their protected-owner
+/// status: a context that stops being regenerated is a context whose drift is
+/// no longer checked, and `check_outputs` fails on it until the tree is
+/// rewritten.
 fn generate_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let contexts = context_specs(root)?;
     let policy = read_advisory_policy(root, false)?;
+    let expected = contexts
+        .iter()
+        .map(ContextSpec::key)
+        .collect::<BTreeSet<_>>();
     let mut written = Vec::new();
     for spec in &contexts {
         let computed = compute_context(root, spec.clone())?;
@@ -271,16 +266,88 @@ fn generate_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
             .map(|context| context.approval.clone());
         write_context(root, &computed, approval, &mut written)?;
     }
+    prune_unexpected_contexts(root, &expected)?;
     if !root.join(ADVISORY_POLICY_PATH).exists() {
         write_advisory_skeleton(root, &contexts, &mut written)?;
     }
     Ok(written)
 }
 
-/// Check the expected context set; a retired context directory is not visible
-/// here. See the `generate_outputs` note above: neither this walk nor
-/// `reject_extra_files` compares the context directories found under
-/// `OUTPUT_ROOT` with the expected keys, so a stranded context passes `--check`.
+/// Delete every context directory the current context set does not name.
+///
+/// Only the third level under `OUTPUT_ROOT` is a context: the system and
+/// target parents are never treated as contexts, and an emptied parent is left
+/// in place. Each removal is reported on stderr; the returned written paths
+/// stay exactly the files the run emitted.
+fn prune_unexpected_contexts(root: &Path, expected: &BTreeSet<String>) -> Result<(), String> {
+    for (key, path) in existing_context_directories(root)? {
+        if expected.contains(&key) {
+            continue;
+        }
+        fs::remove_dir_all(&path)
+            .map_err(|error| format!("remove retired context {}: {error}", path.display()))?;
+        eprintln!("pruned retired context {key}");
+    }
+    Ok(())
+}
+
+/// The context directories under the output root today, with their
+/// `system/target/name` keys, in deterministic order.
+fn existing_context_directories(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+    let output_root = root.join(OUTPUT_ROOT);
+    if !output_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut found = Vec::new();
+    for system in sorted_child_directories(&output_root)? {
+        for target in sorted_child_directories(&system)? {
+            for context in sorted_child_directories(&target)? {
+                let key = format!(
+                    "{}/{}/{}",
+                    directory_name(&system)?,
+                    directory_name(&target)?,
+                    directory_name(&context)?
+                );
+                found.push((key, context));
+            }
+        }
+    }
+    Ok(found)
+}
+
+fn sorted_child_directories(directory: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut children = Vec::new();
+    for entry in fs::read_dir(directory)
+        .map_err(|error| format!("read output directory {}: {error}", directory.display()))?
+    {
+        let entry =
+            entry.map_err(|error| format!("read output entry {}: {error}", directory.display()))?;
+        if entry
+            .file_type()
+            .map_err(|error| format!("read output entry type {}: {error}", directory.display()))?
+            .is_dir()
+        {
+            children.push(entry.path());
+        }
+    }
+    children.sort();
+    Ok(children)
+}
+
+fn directory_name(directory: &Path) -> Result<String, String> {
+    directory
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("output directory has no name: {}", directory.display()))
+}
+
+/// Check the expected context set and reject a context directory the set does
+/// not name.
+///
+/// This is the detection half of the `generate_outputs` prune: a context
+/// retired with its crate stays on disk until the write path deletes it, and
+/// while it stays it is a directory of protected files no longer compared
+/// against anything, so check mode fails naming it instead of passing over it.
 fn check_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let contexts = context_specs(root)?;
     let policy = read_advisory_policy(root, true)?;
@@ -292,6 +359,16 @@ fn check_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
     if actual_keys != expected_keys {
         return Err(format!(
             "advisory policy contexts differ: expected {expected_keys:?}, found {actual_keys:?}"
+        ));
+    }
+    let unexpected = existing_context_directories(root)?
+        .into_iter()
+        .filter(|(key, _)| !expected_keys.contains(key))
+        .map(|(key, _)| key)
+        .collect::<Vec<_>>();
+    if !unexpected.is_empty() {
+        return Err(format!(
+            "unexpected context directories under {OUTPUT_ROOT}: {unexpected:?}; run gen-package-policy-inputs --write to prune"
         ));
     }
 
@@ -1708,5 +1785,67 @@ mod tests {
         let mut selected = BTreeSet::from([0]);
         expand_audit_block_dependencies(&blocks, &mut selected);
         assert_eq!(selected, BTreeSet::from([0, 1]));
+    }
+
+    /// A context directory the current set does not name is pruned in
+    /// deterministic order; expected contexts survive, the emptied parents
+    /// stay, and a loose file at the parent level is never a context.
+    #[test]
+    fn retired_context_directories_are_pruned_and_expected_ones_survive() {
+        let root = std::env::temp_dir().join(format!(
+            "d2b-policy-input-prune-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let live = root
+            .join(OUTPUT_ROOT)
+            .join("x86_64-linux/x86_64-unknown-linux-gnu/live");
+        let retired = root
+            .join(OUTPUT_ROOT)
+            .join("x86_64-linux/x86_64-unknown-linux-gnu/retired");
+        let other = root
+            .join(OUTPUT_ROOT)
+            .join("aarch64-linux/aarch64-unknown-linux-gnu/retired");
+        fs::create_dir_all(live.join("production")).unwrap();
+        fs::write(live.join("production/closure.json"), "{}").unwrap();
+        fs::create_dir_all(retired.join("policy")).unwrap();
+        fs::write(retired.join("policy/closure.json"), "{}").unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let loose = root.join(OUTPUT_ROOT).join("x86_64-linux/loose.txt");
+        fs::write(&loose, "keep").unwrap();
+
+        let expected = BTreeSet::from(["x86_64-linux/x86_64-unknown-linux-gnu/live".to_owned()]);
+        let found = existing_context_directories(&root).unwrap();
+        assert_eq!(
+            found
+                .iter()
+                .map(|(key, _)| key.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "aarch64-linux/aarch64-unknown-linux-gnu/retired",
+                "x86_64-linux/x86_64-unknown-linux-gnu/live",
+                "x86_64-linux/x86_64-unknown-linux-gnu/retired",
+            ]
+        );
+
+        prune_unexpected_contexts(&root, &expected).unwrap();
+        assert!(live.join("production/closure.json").is_file());
+        assert!(!retired.exists());
+        assert!(!other.exists());
+        assert_eq!(fs::read_to_string(&loose).unwrap(), "keep");
+        // The emptied parents are not contexts and stay in place.
+        assert!(root
+            .join(OUTPUT_ROOT)
+            .join("x86_64-linux/x86_64-unknown-linux-gnu")
+            .is_dir());
+        assert_eq!(
+            existing_context_directories(&root).unwrap(),
+            vec![(
+                "x86_64-linux/x86_64-unknown-linux-gnu/live".to_owned(),
+                live.clone()
+            )]
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

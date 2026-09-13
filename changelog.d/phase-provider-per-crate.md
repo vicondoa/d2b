@@ -449,9 +449,50 @@
   and the broker round-trip budget now measures a live read-only operation
   instead of the removed probe.
 
+- Guest enrollment is served. The landed `zone-bootstrap` and `zone-enroll`
+  handlers now have a serving runtime: it reads one accepted transport with a
+  bounded frame and a bounded call allowance, dispatches whichever of the two
+  closed calls decoded rather than trusting a frame position, mints the
+  runtime-issued single-use admission from the allocator's own placement
+  lookup, and answers with the contract's own named refusal - an absent
+  placement, a revoked authority, an expired issuance, a replayed bootstrap,
+  and a frame that is not a call each refuse by name. The daemon binds the
+  endpoint per guest on the host side of the guest's own vsock socket family,
+  but only where the committed facts compose a placement: a committed
+  `ZoneLink` row in the guest's Zone whose transport settings name that Guest,
+  plus the guest identity the host published under the VM state root. A
+  deployment that declares no such guest enrollment binds nothing.
 - Two declarations that nothing referenced are gone: the duplicated
   `ZONE_SERVICE_NAME` in the bus routing module, which the Zone routing
   service's own frozen wire name already defines, and the duplicate
   `PROVIDER_REF` inside the qemu-media Guest type module, whose reader now
   resolves the crate root's public declaration.
 
+### Changed
+
+- `check-provider-crate-layout` now watches `d2b-resource-runtime` and
+  `d2b-resource-types`, so the framework's shared declaration-only metadata
+  driver is policed where it lives instead of sitting outside the monitored
+  roots. The framework driver and its factory are named as the one allowed
+  declaration in those crates; a per-resource driver parked in either crate
+  still fails, and an allowance that stops matching the tree fails with it.
+  The driver signal is the `ResourceDriver for` shape rather than a line
+  prefix, so a declaration behind a visibility qualifier, an attribute, or
+  another item on the line is still seen, commented-out examples are not
+  declarations, and test modules are not production placement.
+- The check now fails on a comment inside a monitored root that cites a
+  repository path or a crate-qualified module path the tree no longer has,
+  and `check-provider-crate-layout --fix` removes the mechanical shapes (a
+  citation-only line, a parenthetical holding only the citation, and a
+  trailing clause after a comma or dash) while reporting the citations woven
+  into a sentence for a human to restate. Every rewrite is comments-only and
+  check mode verifies it afterwards. The three citations in the monitored
+  roots that had drifted now point at the module that holds the behavior, the
+  policy matrix's system-core row cites `src/host.rs` instead of the deleted
+  reconciler module, and the generated provider catalog shape is regenerated
+  from that row.
+- `gen-package-policy-inputs` prunes context directories the current context
+  set does not name: `--write` deletes them in deterministic order and
+  reports each removal, and `--check` fails naming them, so a context retired
+  with its crate cannot strand protected files that nothing regenerates or
+  verifies.
