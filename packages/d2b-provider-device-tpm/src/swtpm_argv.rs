@@ -47,8 +47,7 @@ use serde::{Deserialize, Serialize};
 pub struct SwtpmArgvInput {
     /// Absolute store path to the `swtpm` binary.
     pub swtpm_binary_path: String,
-    /// VM name (used by [`exec_arg0`] and the server-socket filename
-    /// derivation).
+    /// VM name; the Provider refuses an empty one.
     pub vm_name: String,
     /// Absolute path to the per-VM TPM state directory. swtpm writes
     /// `tpm2-00.permall` plus its log/pid in here.
@@ -92,7 +91,7 @@ pub struct SwtpmArgvInput {
 pub struct SwtpmIoctlFlushInput {
     /// Absolute store path to the `swtpm_ioctl` binary.
     pub swtpm_ioctl_binary_path: String,
-    /// VM name (used by [`exec_arg0_flush`] only).
+    /// VM name; the Provider refuses an empty one.
     pub vm_name: String,
     /// Absolute path to the swtpm control socket the flush command
     /// will speak to.
@@ -234,22 +233,6 @@ pub fn generate_swtpm_ioctl_flush_argv(
     ])
 }
 
-/// `arg0` for the long-lived swtpm process: `microvm-swtpm@<vm>`.
-pub fn exec_arg0(input: &SwtpmArgvInput) -> Result<String, SwtpmArgvError> {
-    if input.vm_name.is_empty() {
-        return Err(SwtpmArgvError::EmptyVmName);
-    }
-    Ok(format!("microvm-swtpm@{}", input.vm_name))
-}
-
-/// `arg0` for the pre-start flush: `microvm-swtpm-flush@<vm>`.
-pub fn exec_arg0_flush(input: &SwtpmIoctlFlushInput) -> Result<String, SwtpmArgvError> {
-    if input.vm_name.is_empty() {
-        return Err(SwtpmArgvError::EmptyVmName);
-    }
-    Ok(format!("microvm-swtpm-flush@{}", input.vm_name))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,22 +326,6 @@ mod tests {
                 "--unix".to_owned(),
                 "/var/lib/d2b/vms/corp-vm/tpm/ctrl.sock".to_owned(),
             ]
-        );
-    }
-
-    #[test]
-    fn exec_arg0_for_long_lived() {
-        assert_eq!(
-            exec_arg0(&audit_swtpm_input()).unwrap(),
-            "microvm-swtpm@corp-vm"
-        );
-    }
-
-    #[test]
-    fn exec_arg0_for_flush() {
-        assert_eq!(
-            exec_arg0_flush(&audit_flush_input()).unwrap(),
-            "microvm-swtpm-flush@corp-vm"
         );
     }
 

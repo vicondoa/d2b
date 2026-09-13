@@ -1,15 +1,12 @@
 //! Opaque GPU effect-token and launch boundary.
 
 use core::fmt;
-use d2b_contracts_resource::v3::ResourceUid;
 
 use crate::{
     authority::{
         GpuAuthorityAdmission, GpuAuthorityLease, GpuClosureProof, GpuPlatformToken,
         GpuProcessIdentity, GpuProcessObservation,
     },
-    probe::{GpuDeviceSelector, GpuProbeResult},
-    process::GpuProcessRole,
     workers::{GpuWorkerSpec, VideoWorkerSpec},
 };
 
@@ -141,50 +138,6 @@ impl fmt::Display for GpuEffectError {
 }
 
 impl std::error::Error for GpuEffectError {}
-
-/// Core effect port for GPU worker sets.
-pub trait GpuEffectPort {
-    /// Open the Core-resolved GPU device grants before clone.
-    fn open_devices(
-        &mut self,
-        device_uid: &ResourceUid,
-        tokens: &GpuEffectTokenSet,
-    ) -> Result<GpuLaunchTicket, GpuEffectError>;
-    /// Start one worker role with its opaque LaunchTicket.
-    fn start(
-        &mut self,
-        role: GpuProcessRole,
-        ticket: &GpuLaunchTicket,
-    ) -> Result<(), GpuEffectError>;
-    /// Stop one worker role during finalization.
-    fn stop(&mut self, role: GpuProcessRole) -> Result<(), GpuEffectError>;
-
-    /// Probe a Core-resolved DRM selector.
-    fn probe_drm_device(
-        &mut self,
-        _selector: &GpuDeviceSelector,
-    ) -> Result<GpuProbeResult, GpuEffectError> {
-        Err(GpuEffectError::ProbeUnavailable)
-    }
-
-    /// Observe one worker identity after a daemon restart.
-    fn observe_process(
-        &mut self,
-        _identity: &GpuProcessIdentity,
-    ) -> Result<GpuProcessObservation, GpuEffectError> {
-        Err(GpuEffectError::ProcessObservationUnavailable)
-    }
-
-    /// Close one exact worker and return a broker proof.
-    fn close_process(
-        &mut self,
-        role: GpuProcessRole,
-        identity: &GpuProcessIdentity,
-    ) -> Result<GpuClosureProof, GpuEffectError> {
-        self.stop(role)?;
-        Ok(GpuClosureProof::from_core(identity.clone()))
-    }
-}
 
 /// Extended lifecycle port used by the production Provider path.
 ///
