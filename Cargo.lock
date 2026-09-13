@@ -1301,6 +1301,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-device"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-core-controller",
+ "d2b-provider-device-gpu",
+ "d2b-provider-device-security-key",
+ "d2b-provider-device-tpm",
+ "d2b-provider-device-usbip",
+ "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-provider-device-gpu"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1315,11 +1334,21 @@ dependencies = [
 name = "d2b-provider-device-security-key"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-core-controller",
+ "d2b-provider-process-minijail",
+ "d2b-provider-process-systemd",
+ "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "nix 0.29.0",
+ "parking_lot",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -1338,15 +1367,22 @@ dependencies = [
 name = "d2b-provider-device-usbip"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",
+ "d2b-core-controller",
+ "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
  "libc",
+ "parking_lot",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -1392,15 +1428,23 @@ dependencies = [
 name = "d2b-provider-network-local"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",
+ "d2b-provider-process-minijail",
+ "d2b-provider-runtime-cloud-hypervisor",
+ "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
  "tracing",
 ]
 
@@ -1632,13 +1676,16 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-provider",
+ "d2b-resource-runtime",
  "d2b-resource-types",
  "d2b-session",
  "d2b-session-unix",
+ "parking_lot",
  "schemars",
  "serde",
  "serde_json",
  "sha2",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "ttrpc",
@@ -1995,6 +2042,7 @@ dependencies = [
  "d2b-provider-credential-entra",
  "d2b-provider-credential-managed-identity",
  "d2b-provider-credential-secret-service",
+ "d2b-provider-device",
  "d2b-provider-device-gpu",
  "d2b-provider-device-security-key",
  "d2b-provider-device-tpm",

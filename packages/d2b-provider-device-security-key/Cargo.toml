@@ -9,10 +9,21 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+async-trait = "0.1"
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
+d2b-provider-process-minijail = { path = "../d2b-provider-process-minijail", version = "0.0.0-bootstrap" }
+d2b-provider-process-systemd = { path = "../d2b-provider-process-systemd", version = "0.0.0-bootstrap" }
+d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
+d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
+d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
+nix = { version = "0.29", features = ["socket", "user"] }
+parking_lot = "0.12"
 serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 
 [dev-dependencies]

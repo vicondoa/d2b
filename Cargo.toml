@@ -46,6 +46,7 @@ members = [
     "packages/d2b-provider-credential-managed-identity",
     "packages/d2b-provider-credential",
     "packages/d2b-provider-network-local",
+    "packages/d2b-provider-device",
     "packages/d2b-provider-device-gpu",
     "packages/d2b-provider-device-security-key",
     "packages/d2b-provider-device-tpm",

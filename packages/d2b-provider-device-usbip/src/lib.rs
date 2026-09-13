@@ -11,6 +11,7 @@
 mod arbitration;
 mod busid;
 mod controller;
+mod driver;
 mod firewall;
 mod lifecycle;
 mod process;
@@ -30,6 +31,11 @@ pub use controller::{
     UsbipOperation, UsbipOutcome, UsbipRunnerContract, UsbipServicePhase, usbip_runner_contract,
 };
 pub use d2b_contracts::usbip::validate_bus_id;
+pub use driver::{
+    USBIP_BINDING_CONTROLLER_REF, USBIP_REGISTRATIONS, USBIP_RESYNC, USBIP_SERVICE_CONTROLLER_REF,
+    UsbipComponent, UsbipDriverArgs, UsbipDriverEffects, declared_dependency_refs,
+    usbip_descriptors,
+};
 pub use firewall::{
     FirewallConfirmation, FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence,
     FirewallObservation, FirewallProjectionAction, FirewallProjectionIntent, FirewallToken,

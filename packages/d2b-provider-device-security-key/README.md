@@ -114,6 +114,20 @@ Metrics and diagnostics use fixed Provider, component, operation, outcome, and
 error values. Zone names, resource names, device identity, paths, PIDs, CIDs,
 and session material are excluded from labels and messages.
 
+## Driver declaration
+
+`security_key_descriptors` (`src/driver.rs`) declares the two converted
+security-key ResourceTypes for the plane: the
+`security-key.d2bus.org.SecurityKeyService` and `SecurityKeyBinding` rows
+(`Provider/device-security-key` with the preserved service/binding controller
+references and 30-second resync), the declared relay creation (the Host relay
+Process on the fixed system Process Provider and the relay Endpoint on this
+Provider), and the `SecurityKeyDriverEffects` port the daemon implements. The
+host-side relay service (hidraw handle, per-VM accept loop, peer
+authentication, bounded session table) lives in `src/relay_service.rs`. The
+`Device` row this Provider also serves belongs to the `Device` type's own
+declaration in `d2b-provider-device`.
+
 ## Build and test
 
 ```bash

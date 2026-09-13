@@ -106,6 +106,17 @@ Metrics use only the closed values `provider=device-usbip`,
 resource-derived label value. Errors and `Debug` output are identity-free. Core
 owns post-effect audit records; raw device and firewall data never enter them.
 
+## Driver declaration
+
+`usbip_descriptors` (`src/driver.rs`) declares the two converted USB
+ResourceTypes for the plane: the `usb.d2bus.org.UsbService` and
+`usb.d2bus.org.UsbBinding` rows (`Provider/device-usbip` with the preserved
+service/binding controller references and 30-second resync), the driver that
+materializes the Binding's Provider-declared children, and the
+`UsbipDriverEffects` port the daemon implements. The `Device` row this Provider
+also serves belongs to the `Device` type's own declaration in
+`d2b-provider-device`, since the plane keys one driver per ResourceType.
+
 ## Build and test
 
 ```bash

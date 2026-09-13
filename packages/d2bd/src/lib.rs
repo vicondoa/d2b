@@ -6,7 +6,6 @@ pub(crate) mod credential_effects;
 pub(crate) mod binding_effects;
 pub(crate) mod volume_effects;
 pub mod activation_driver;
-pub(crate) mod shared_provider_driver;
 pub(crate) mod shared_provider_effects;
 pub(crate) mod guest_driver;
 pub(crate) mod guest_effects;

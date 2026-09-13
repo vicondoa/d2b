@@ -18,6 +18,11 @@
 //!   driver behind them.
 //! - [`server`] - the authenticated service loop: frame codec, bounded
 //!   dispatch adapter, readiness handshake, drain.
+//! - [`shared_provider`] - the shared host-provider driver machinery: the
+//!   declaration row shape, the effect request and outcome vocabulary, the
+//!   manager-routed child surface, and the driver every shared family's
+//!   descriptor registers. The families own their rows, children, dependency
+//!   references, and effect ports; the flow they share lives here.
 //! - [`operations`] - the envelope-side types and the envelope that runs a
 //!   declared handler.
 //! - [`plane`] - the zone-plane handle, the child-creation fence, the drain
@@ -62,6 +67,7 @@ pub mod declaration;
 pub mod operations;
 pub mod plane;
 pub mod server;
+pub mod shared_provider;
 pub mod testing;
 
 pub use audit::{
@@ -118,6 +124,16 @@ pub use server::{
     run_authenticated_credential_provider, run_authenticated_provider,
     serve_authenticated_component_session, serve_authenticated_route, validate_attachment_indexes,
     validate_provider_route,
+};
+pub use shared_provider::{
+    ContextChildSurface, HOST_REF, ProviderRow, SharedProviderChildSurface,
+    SharedProviderDeclarationError, SharedProviderDriver, SharedProviderDriverArgs,
+    SharedProviderDriverError, SharedProviderDriverErrorKind, SharedProviderDriverFactory,
+    SharedProviderDriverStatus, SharedProviderEffectError, SharedProviderEffectOutcome,
+    SharedProviderEffectPhase, SharedProviderEffectRequest, SharedProviderFamily,
+    SharedProviderFinalize, SharedProviderSpecDecodeError, SharedProviderSpecEnvelope,
+    VolumeAnchorRefresh, decode_metadata, key_ref, owner_ref, resource_uid,
+    shared_provider_spec_decoder,
 };
 pub use testing::{
     AdmissionRefusal, AdmittedRow, DeterministicClock, FIXTURE_NOW_UNIX_MS, FakeBus,

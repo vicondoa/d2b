@@ -91,6 +91,16 @@ rules or device-owned marker churn. Metric keys and values come from closed
 semantic sets and contain no Zone, Network, resource, VM, caller, address, path,
 or interface identity. This layer owns no durable Provider state.
 
+## Driver declaration
+
+`network_descriptor` (`src/driver.rs`) declares the `Network` type for the
+plane: the family's row (`Provider/network-local`,
+`Process/network-local-controller`, the preserved 30-second resync), the driver
+that derives the config Volume, the net-VM Guest, and the guest-agent Process
+children, and the `NetworkDriverEffects` port the daemon implements. The shared
+shared-provider driver flow (child ensures, owned-child retirement, status
+projection) comes from `d2b-provider-toolkit`.
+
 ## Build and test
 
 The production Nix materialisation modules live under `nix/`; the root

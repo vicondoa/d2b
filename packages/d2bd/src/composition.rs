@@ -410,7 +410,6 @@ pub mod provider_effects;
 pub mod provider_registry;
 pub mod provider_shutdown;
 pub mod resource_runtime;
-pub mod security_key;
 mod security_key_effect_port;
 mod semantic_binding_resource_runtime;
 pub mod tpm_effect_port;
@@ -630,7 +629,7 @@ struct ServerState {
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
     console_sessions: Arc<Mutex<console_session::ConsoleSessionTable>>,
-    security_key_sessions: Arc<parking_lot::Mutex<crate::security_key::SkSessionTable>>,
+    security_key_sessions: Arc<parking_lot::Mutex<d2b_provider_device_security_key::SkSessionTable>>,
     #[allow(dead_code)]
     unsafe_local_helpers: Arc<d2bd_runtime::unsafe_local_helper::HelperRegistry>,
     /// Per-Zone v3 resource planes (U9/U10): the new runtime the Resource
@@ -3605,7 +3604,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         security_key_sessions: Arc::new(parking_lot::Mutex::new(
-            crate::security_key::SkSessionTable::default(),
+            d2b_provider_device_security_key::SkSessionTable::default(),
         )),
         unsafe_local_helpers: Arc::clone(&unsafe_local_helpers),
         v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
@@ -9532,7 +9531,7 @@ mod workload_observability_tests {
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                crate::security_key::SkSessionTable::default(),
+                d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
@@ -23173,7 +23172,7 @@ mod public_status_tests {
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                crate::security_key::SkSessionTable::default(),
+                d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
@@ -25181,7 +25180,7 @@ pub(crate) mod detached_exec_routing_tests {
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                crate::security_key::SkSessionTable::default(),
+                d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
@@ -25277,7 +25276,7 @@ mod accept_loop_concurrency_tests {
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                crate::security_key::SkSessionTable::default(),
+                d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
@@ -26019,7 +26018,7 @@ mod broker_dispatch_tests {
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                crate::security_key::SkSessionTable::default(),
+                d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
@@ -26071,7 +26070,7 @@ mod broker_dispatch_tests {
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                crate::security_key::SkSessionTable::default(),
+                d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
@@ -27589,7 +27588,7 @@ mod broker_dispatch_tests {
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                crate::security_key::SkSessionTable::default(),
+                d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
@@ -27844,7 +27843,7 @@ mod broker_dispatch_tests {
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                crate::security_key::SkSessionTable::default(),
+                d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
@@ -28143,7 +28142,7 @@ mod broker_dispatch_tests {
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                crate::security_key::SkSessionTable::default(),
+                d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
@@ -30070,7 +30069,7 @@ mod broker_dispatch_tests {
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                crate::security_key::SkSessionTable::default(),
+                d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
@@ -31222,7 +31221,7 @@ mod broker_dispatch_tests {
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                crate::security_key::SkSessionTable::default(),
+                d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
@@ -31363,7 +31362,7 @@ mod broker_dispatch_tests {
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                crate::security_key::SkSessionTable::default(),
+                d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
