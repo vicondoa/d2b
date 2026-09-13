@@ -40,6 +40,9 @@ _d2b() {
             d2b,credential)
                 cmd="d2b__subcmd__credential"
                 ;;
+            d2b,debug)
+                cmd="d2b__subcmd__debug"
+                ;;
             d2b,delete)
                 cmd="d2b__subcmd__delete"
                 ;;
@@ -854,7 +857,7 @@ _d2b() {
 
     case "${cmd}" in
         d2b)
-            opts="-h -V --zone --json --human --deadline --no-deadline --help --version get list watch create update-spec delete status upgrade reconcile host guest process exec shell volume network device endpoint export import resource user credential provider zone quota emergency-policy activation audit op auth complete audio clipboard display"
+            opts="-h -V --zone --json --human --deadline --no-deadline --help --version get list watch create update-spec delete status upgrade reconcile debug host guest process exec shell volume network device endpoint export import resource user credential provider zone quota emergency-policy activation audit op auth complete audio clipboard display"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2076,6 +2079,24 @@ _d2b() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__debug)
+            opts="-h --all --json --human --deadline --no-deadline --help <ZONE> [TYPE/NAME]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
                 --deadline)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0

@@ -14,7 +14,7 @@ use crate::context::{
     output_mode, parse_hello_reply,
 };
 use crate::{
-    CliFailure, activation, complete, endpoint, exec, guest, host, print_json, print_stdout,
+    CliFailure, activation, complete, debug, endpoint, exec, guest, host, print_json, print_stdout,
     provider, resource, share, shell, zone,
 };
 use clap::{Args, Parser, Subcommand};
@@ -41,6 +41,7 @@ pub(crate) const BUILTIN_COMMANDS: &[&str] = &[
     "status",
     "upgrade",
     "reconcile",
+    "debug",
     "host",
     "guest",
     "process",
@@ -108,6 +109,7 @@ pub(crate) enum ModernCommand {
     Status(GenericStatusArgs),
     Upgrade(GenericUpgradeArgs),
     Reconcile(GenericReconcileArgs),
+    Debug(debug::DebugArgs),
     Host(host::HostArgs),
     Guest(guest::GuestArgs),
     Process(guest::ProcessArgs),
@@ -782,6 +784,7 @@ pub(crate) fn runtime_dispatch(cli: &ModernCli, context: &ZoneContext) -> Result
         ModernCommand::Status(args) => resource::status(context, args, mode, deadline),
         ModernCommand::Upgrade(args) => resource::upgrade(context, args, mode, deadline),
         ModernCommand::Reconcile(args) => resource::reconcile(context, args, mode, deadline),
+        ModernCommand::Debug(args) => debug::run(context, args, mode, deadline),
         ModernCommand::Host(args) => host::run(context, args, mode, deadline),
         ModernCommand::Guest(args) => guest::run_guest(context, args, mode, deadline),
         ModernCommand::Process(args) => guest::run_process(context, args, mode, deadline),
@@ -1117,7 +1120,7 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), BUILTIN_COMMANDS.len());
-        assert_eq!(BUILTIN_COMMANDS.len(), 32);
+        assert_eq!(BUILTIN_COMMANDS.len(), 33);
         assert!(BUILTIN_COMMANDS.contains(&"endpoint"));
         assert!(BUILTIN_COMMANDS.contains(&"import"));
     }
