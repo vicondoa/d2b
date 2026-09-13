@@ -15,6 +15,7 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_contracts_zone_session::v3::{
     RoleBindingSpec, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec,
+    role_binding::MAX_ROLE_BINDING_RESOURCE_REFS,
 };
 use d2b_core_controller::controller_assignment::{
     AssignmentError, AssignmentIdentity, AssignmentTarget, ScopedResourceMutation,
@@ -529,6 +530,7 @@ pub struct BoundSubject {
 pub struct BindingScope {
     pub zones: BTreeSet<ZoneId>,
     pub resource_names: BTreeSet<ResourceName>,
+    pub resource_refs: BTreeSet<ResourceRef>,
     pub execution_refs: BTreeSet<ResourceRef>,
 }
 
@@ -606,6 +608,7 @@ impl core::fmt::Debug for BindingScope {
         f.debug_struct("BindingScope")
             .field("zone_count", &self.zones.len())
             .field("resource_name_count", &self.resource_names.len())
+            .field("resource_ref_count", &self.resource_refs.len())
             .field("execution_ref_count", &self.execution_refs.len())
             .finish()
     }
@@ -829,6 +832,21 @@ fn role_session_verb(value: RoleSessionVerb) -> SessionVerb {
     }
 }
 
+/// Narrow one compiled scope set by a RoleBinding's stated selector list.
+///
+/// An empty list states no restriction and keeps the compiled set as it is; a
+/// stated list is a restriction, so only the entries both allow survive.
+fn narrow_scope<T: Ord + Clone>(scope: BTreeSet<T>, stated: &[T]) -> BTreeSet<T> {
+    if stated.is_empty() {
+        return scope;
+    }
+    let stated = stated.iter().cloned().collect::<BTreeSet<_>>();
+    if scope.is_empty() {
+        return stated;
+    }
+    scope.intersection(&stated).cloned().collect()
+}
+
 /// Validated evaluator projection of one Role.
 #[derive(Clone, PartialEq, Eq)]
 pub struct CompiledRole {
@@ -914,6 +932,7 @@ impl CompiledRoleBinding {
                 )
             })
             || scope.resource_names.len() > MAX_ROLE_RULE_RESOURCE_NAMES
+            || scope.resource_refs.len() > MAX_ROLE_BINDING_RESOURCE_REFS
             || scope.execution_refs.len() > MAX_ROLE_RULE_EXECUTION_REFS
         {
             return Err(AuthorizationPolicyError::BindingShape);
@@ -941,6 +960,13 @@ impl CompiledRoleBinding {
                     .resource_name
                     .as_ref()
                     .is_some_and(|name| self.scope.resource_names.contains(name)))
+            && (self.scope.resource_refs.is_empty()
+                || target.resource_name.as_ref().is_some_and(|name| {
+                    self.scope.resource_refs.iter().any(|reference| {
+                        reference.resource_type() == &target.resource_type
+                            && reference.name() == name
+                    })
+                }))
             && (self.scope.execution_refs.is_empty()
                 || target
                     .execution_ref
@@ -1026,6 +1052,13 @@ impl CompiledRoleBinding {
                     .extend(rule.execution_refs().iter().cloned());
             }
         }
+        // The binding's own selector lists narrow the granted scope. An empty
+        // list states no restriction; a stated one restricts the scope it is
+        // applied to, so a facet that reads as a restriction can never grant
+        // outside itself.
+        scope.zones = narrow_scope(scope.zones, spec.zone_refs());
+        scope.execution_refs = narrow_scope(scope.execution_refs, spec.execution_refs());
+        scope.resource_refs = spec.resource_refs().iter().cloned().collect();
         let mut binding = Self::new(spec.role_ref().clone(), subjects, scope, relay_authority)?;
         if let Some(narrowing) = spec.scope_narrowing() {
             let rules = narrowing
@@ -3314,6 +3347,7 @@ mod tests {
         let scope = BindingScope {
             zones: BTreeSet::from([ZoneId::parse(ZONE_SENTINEL).unwrap()]),
             resource_names: BTreeSet::from([ResourceName::parse(NAME_SENTINEL).unwrap()]),
+            resource_refs: BTreeSet::new(),
             execution_refs: BTreeSet::from([ResourceRef::parse(&format!(
                 "Process/{REF_SENTINEL}"
             ))
@@ -3396,8 +3430,8 @@ mod tests {
             "BootstrapPhase::Unprovisioned(<redacted>)"
         );
         assert_eq!(format!("{bound_subject:?}"), "BoundSubject(<redacted>)");
-        let scope_debug =
-            "BindingScope { zone_count: 1, resource_name_count: 1, execution_ref_count: 1 }";
+        let scope_debug = "BindingScope { zone_count: 1, resource_name_count: 1, \
+             resource_ref_count: 0, execution_ref_count: 1 }";
         assert_eq!(format!("{scope:?}"), scope_debug);
         assert_eq!(
             format!("{rule:?}"),
@@ -3429,5 +3463,211 @@ mod tests {
         );
         assert_eq!(format!("{grant:?}"), "AuthorizationGrant(<redacted>)");
         assert_eq!(format!("{authorizer:?}"), "NativeAuthorizer(<redacted>)");
+    }
+
+    /// The authenticated subject in one Zone, in the shape the evaluator
+    /// reads. The `Zone` reference is the request's Zone, so a denial below
+    /// comes from the binding scope and never from the Zone check.
+    fn faceted_subject(zone: &str) -> AuthenticatedSubjectContext {
+        AuthenticatedSubjectContext::new(
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceRef::parse(&format!("Zone/{zone}")).unwrap(),
+            EvidenceClass::UnixPeer,
+            SessionPurpose::parse("resource-api").unwrap(),
+            ServiceName::parse(RESOURCE_SERVICE).unwrap(),
+            SessionBinding::new(
+                SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64))).unwrap(),
+                TransportBinding::new(
+                    Locality::Local,
+                    BindingDigest::parse(format!("sha256:{}", "2".repeat(64))).unwrap(),
+                ),
+                ReconnectGeneration::new(1).unwrap(),
+                TranscriptHash::from_bytes([3; 32]),
+            ),
+        )
+    }
+
+    /// One policy whose single role grants `get` on any `Process` or `Volume`
+    /// in either Zone and for any execution reference, bound to `subject`
+    /// with exactly the stated facets. Every restriction the evaluator then
+    /// applies is a facet's.
+    fn facet_policy(
+        subject: &AuthenticatedSubjectContext,
+        resource_refs: Vec<ResourceRef>,
+        zone_refs: Vec<ZoneId>,
+        execution_refs: Vec<ResourceRef>,
+    ) -> PolicySet {
+        let catalog = ApiCatalog::standard();
+        let role_ref = ResourceRef::parse("Role/faceted").unwrap();
+        let rule = PolicyRule::new(
+            &catalog,
+            [
+                ResourceTypeName::parse("Process").unwrap(),
+                ResourceTypeName::parse("Volume").unwrap(),
+            ],
+            [ResourceVerb::Get],
+            [],
+            [],
+            [],
+            [ZoneId::parse("dev").unwrap(), ZoneId::parse("personal").unwrap()],
+            [],
+        )
+        .unwrap();
+        let role = CompiledRole::new(role_ref.clone(), vec![rule]).unwrap();
+        let spec = RoleBindingSpec::with_facets(
+            role_ref,
+            vec![subject.subject_ref().clone()],
+            None,
+            None,
+            resource_refs,
+            zone_refs,
+            execution_refs,
+            None,
+        )
+        .expect("the binding facets are within the contract bounds");
+        let binding = CompiledRoleBinding::from_spec_with_resolved_subjects(
+            &spec,
+            [BoundSubject {
+                subject_ref: subject.subject_ref().clone(),
+                subject_uid: subject.subject_uid().clone(),
+            }],
+            RelayGrantAuthority::None,
+        )
+        .expect("the binding compiles with its facets");
+        PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()
+    }
+
+    fn facet_request(
+        zone: &str,
+        resource_type: &str,
+        name: &str,
+        execution_ref: Option<&str>,
+    ) -> AuthorizationRequest {
+        AuthorizationRequest {
+            method: ApiMethod::Get,
+            zone: ZoneId::parse(zone).unwrap(),
+            targets: vec![AuthorizationTarget {
+                resource_type: ResourceTypeName::parse(resource_type).unwrap(),
+                resource_name: Some(ResourceName::parse(name).unwrap()),
+                verb: ResourceVerb::Get,
+                subresource: None,
+                execution_ref: execution_ref.map(|value| ResourceRef::parse(value).unwrap()),
+            }],
+        }
+    }
+
+    fn faceted_authorizer(policy: PolicySet) -> NativeAuthorizer {
+        NativeAuthorizer::from_issuer(ApiCatalog::standard(), Some(policy), test_issuer()).unwrap()
+    }
+
+    #[test]
+    fn a_binding_resource_facet_grants_only_the_resources_it_names() {
+        let context = faceted_subject("dev");
+        let authorizer = faceted_authorizer(facet_policy(
+            &context,
+            vec![ResourceRef::parse("Process/worker").unwrap()],
+            Vec::new(),
+            Vec::new(),
+        ));
+        assert!(
+            authorizer
+                .authorize(
+                    &context,
+                    &facet_request("dev", "Process", "worker", None),
+                    &state(4),
+                )
+                .is_ok(),
+            "the named resource is granted"
+        );
+        // Another name of the same type is outside the facet.
+        assert_eq!(
+            authorizer
+                .authorize(
+                    &context,
+                    &facet_request("dev", "Process", "other", None),
+                    &state(4),
+                )
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant,
+        );
+        // The facet is typed: the role grants `Volume` too, so the same name
+        // under another type can only be refused by the facet itself.
+        assert_eq!(
+            authorizer
+                .authorize(
+                    &context,
+                    &facet_request("dev", "Volume", "worker", None),
+                    &state(4),
+                )
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant,
+        );
+    }
+
+    #[test]
+    fn a_binding_zone_facet_grants_only_the_zones_it_names() {
+        let context = faceted_subject("dev");
+        let authorizer = faceted_authorizer(facet_policy(
+            &context,
+            Vec::new(),
+            vec![ZoneId::parse("dev").unwrap()],
+            Vec::new(),
+        ));
+        assert!(
+            authorizer
+                .authorize(
+                    &context,
+                    &facet_request("dev", "Process", "worker", None),
+                    &state(4),
+                )
+                .is_ok(),
+            "the named Zone is granted"
+        );
+        // The same subject and the same resource in another Zone: the role
+        // allows both Zones, so the facet is what refuses this.
+        assert_eq!(
+            authorizer
+                .authorize(
+                    &faceted_subject("personal"),
+                    &facet_request("personal", "Process", "worker", None),
+                    &state(4),
+                )
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant,
+        );
+    }
+
+    #[test]
+    fn a_binding_execution_facet_grants_only_the_executions_it_names() {
+        let context = faceted_subject("dev");
+        let authorizer = faceted_authorizer(facet_policy(
+            &context,
+            Vec::new(),
+            Vec::new(),
+            vec![ResourceRef::parse("Host/local").unwrap()],
+        ));
+        assert!(
+            authorizer
+                .authorize(
+                    &context,
+                    &facet_request("dev", "Process", "worker", Some("Host/local")),
+                    &state(4),
+                )
+                .is_ok(),
+            "the named execution is granted"
+        );
+        // The role allows both execution references, so the facet is what
+        // refuses the other one.
+        assert_eq!(
+            authorizer
+                .authorize(
+                    &context,
+                    &facet_request("dev", "Process", "worker", Some("Host/remote")),
+                    &state(4),
+                )
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant,
+        );
     }
 }
