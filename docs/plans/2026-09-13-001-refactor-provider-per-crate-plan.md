@@ -533,7 +533,15 @@ that touches a file another lane holds waits for that lane, or hands the edit to
 - **Test scenarios:** nothing - this unit preserves behavior; existing suites are the check. A deletion that needs a new test to stay correct is not a simplification and is rejected.
 - **Verification:** for each audited family, the applied-improvement list (with the refused findings and why); gates green after every family's pass; the final host-integration pass starts from an audited tree.
 
-### Review gate (applies to every unit in this extension)
+### U30. Serve the broker-forwarding rendezvous and the provider operation surface
+- **Goal:** a broker invocation can actually reach the provider that declares the operation. The broker is the seqpacket listener and has no reverse channel, so the call needs an endpoint the broker can dial; and no production code constructs an operation envelope yet, so a provider needs a service-surface method that runs one.
+- **Requirements:** R17, KTD8.
+- **Files:** `packages/d2bd/src/**` (the forwarding rendezvous beside the broker socket, and the routing of a forwarded call over the live zone bus and provider sessions to the declaring provider's registered handler), `packages/d2b-provider-toolkit/src/**` (the service-surface method that runs the operation envelope), and one pilot provider family's first real operation definition with a handler.
+- **Approach:** the descriptor handler table stays in the daemon's registry; the broker only carries the call. Every family currently declares no operations and nothing in production constructs an envelope, so the pilot is what turns the declared path into a live one - pick the family already on the base and coordinate its crate with whichever lane holds it. The broker-side carrier contract is the broker lane's; agree the seam over `hub` rather than designing it twice.
+- **Test scenarios:** a forwarded call crosses a real socket and reaches a registered handler (the test must fail if the carrier does not actually cross the socket); an undeclared operation is refused by name; the pilot family's operation answers through the generic path with no typed arm involved.
+- **Verification:** gates green; the pilot operation reachable end to end from the broker lane's entry point.
+
+### Review gate (applies to every unit in this extension
 Every unit in this extension - and every unit landed before it - receives independent review in a separate clean context before signoff; findings are fixed or recorded as accepted residuals, and a head-changing fix requires fresh review. Reviews run in a dedicated worktree so they never race implementation work.
 
 ### Definition of Done (extension)
