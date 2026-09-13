@@ -6,12 +6,17 @@ use std::sync::Arc;
 
 use d2b_contracts_resource::v3::{endpoint::EndpointClass, ResourceRef};
 use d2b_provider_endpoint::{
-    ENDPOINT_TYPE_NAME, EndpointDriverArgs, EndpointDriverEffects, EndpointPurposeVocabulary,
-    GuestControlProducer, endpoint_descriptor,
+    EndpointDriverArgs, EndpointDriverEffects, EndpointPurposeVocabulary, GuestControlProducer,
+    endpoint_descriptor,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, WellKnownType};
+
+/// The runtime name of the one type this declaration serves.
+fn endpoint_type() -> ResourceTypeName {
+    WellKnownType::ENDPOINT.to_resource_type_name()
+}
 
 /// The committed purpose vocabulary of the declaring providers: the Cloud
 /// Hypervisor provider's child roles and the Device TPM Provider's worker
@@ -88,10 +93,6 @@ async fn descriptor_declares_and_registers_the_endpoint_type() {
     let descriptor = descriptor();
     assert_eq!(descriptor.resource_type, WellKnownType::ENDPOINT);
     assert_eq!(
-        descriptor.resource_type.to_resource_type_name().as_str(),
-        ENDPOINT_TYPE_NAME
-    );
-    assert_eq!(
         descriptor.allowed_sources,
         AllowedSources::BUILTIN | AllowedSources::STARTUP,
         "the plane cannot serve the converted endpoint shapes without this driver"
@@ -131,21 +132,16 @@ async fn descriptor_declares_and_registers_the_endpoint_type() {
 
     let mut providers = ProviderDirectory::new();
     providers.register_driver(&descriptor).expect("register");
-    assert_eq!(
-        providers.registered_types(),
-        vec![ResourceTypeName::new(ENDPOINT_TYPE_NAME)]
-    );
+    assert_eq!(providers.registered_types(), vec![endpoint_type()]);
     assert!(
-        providers
-            .decoders()
-            .contains_key(&ResourceTypeName::new(ENDPOINT_TYPE_NAME)),
+        providers.decoders().contains_key(&endpoint_type()),
         "the registry serves the type's decoder from the declaration"
     );
     let factory = providers
-        .lookup(&ResourceTypeName::new(ENDPOINT_TYPE_NAME))
+        .lookup(&endpoint_type())
         .expect("the registry serves the declared factory");
     assert_eq!(factory.resource_types().len(), 1);
-    assert_eq!(factory.resource_types()[0].as_str(), ENDPOINT_TYPE_NAME);
+    assert_eq!(factory.resource_types()[0], endpoint_type());
     factory
         .create(&ResourceKey::new("work", "Endpoint", "endpoint"))
         .await;
@@ -165,7 +161,7 @@ async fn a_second_registration_of_the_type_is_refused() {
     assert!(matches!(
         &error,
         ProviderDirectoryError::DuplicateType(type_name)
-            if type_name.as_str() == ENDPOINT_TYPE_NAME
+            if type_name == &endpoint_type()
     ));
 }
 
@@ -181,6 +177,6 @@ async fn the_declaration_cannot_be_registered_after_the_plane_opens() {
     assert!(matches!(
         &error,
         ProviderDirectoryError::RequiredBeforeOpen { type_name }
-            if type_name.as_str() == ENDPOINT_TYPE_NAME
+            if type_name == &endpoint_type()
     ));
 }

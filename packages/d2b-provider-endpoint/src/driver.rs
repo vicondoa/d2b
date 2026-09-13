@@ -46,7 +46,7 @@ use d2b_contracts_resource::v3::{
         EndpointClass, EndpointLifecyclePolicy, EndpointLocality, EndpointSpec, EndpointTransport,
         EndpointVisibility,
     },
-    ResourceRef, ResourceSpec,
+    CanonicalJsonObject, ResourceRef, ResourceSpec,
 };
 use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
 use d2b_resource_runtime::driver::{
@@ -58,9 +58,6 @@ use d2b_resource_runtime::error::{
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
-
-/// The one resource type this factory serves.
-pub const ENDPOINT_TYPE_NAME: &str = "Endpoint";
 
 /// The frozen purpose of the binding-owned virtiofsd socket.
 const VIRTIOFSD_PURPOSE: &str = "virtiofsd";
@@ -206,13 +203,6 @@ enum EndpointDriverErrorKind {
 }
 
 impl EndpointDriverErrorKind {
-    const fn class(self) -> FailureClass {
-        match self {
-            Self::SocketEffect | Self::DrainPending => FailureClass::Retryable,
-            Self::SpecInvalid | Self::ShapeUnsupported => FailureClass::Terminal,
-        }
-    }
-
     /// The registered failure kind this classification reports.
     const fn failure_kind(self) -> FailureKind {
         match self {
@@ -270,22 +260,12 @@ pub enum EndpointDriverStatus {
 // Decoded spec envelope
 // ---------------------------------------------------------------------------
 
-/// The spec-store envelope for one Endpoint row, exactly as persisted.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct EndpointSpecEnvelope {
-    raw: Vec<u8>,
-    base: d2b_contracts_resource::v3::CanonicalJsonObject,
-}
-
 /// The manager-wired decode hook for Endpoint rows. The Endpoint base
 /// carries `providerRef` inside its typed contract, so the decoder
 /// reconstructs the complete typed object.
 pub fn endpoint_spec_decoder() -> Arc<dyn SpecDecoder> {
     typed_spec_decoder(|bytes| {
-        serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| EndpointSpecEnvelope {
-            raw: bytes.to_vec(),
-            base: spec.base_with_provider_ref(),
-        })
+        serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| spec.base_with_provider_ref())
     })
 }
 
@@ -335,7 +315,7 @@ impl EndpointDriverFactory {
     /// Build the factory over the zone's effect port.
     pub fn new(args: EndpointDriverArgs) -> Self {
         Self {
-            types: [ResourceTypeName::new(ENDPOINT_TYPE_NAME)],
+            types: [WellKnownType::ENDPOINT.to_resource_type_name()],
             args,
         }
     }
@@ -361,7 +341,6 @@ impl ResourceDriverFactory for EndpointDriverFactory {
 
 /// One Endpoint resource's driver. It drives the resource through the
 /// zone's effect port; the zone travels on [`EndpointDriverArgs`].
-#[derive(Clone)]
 pub struct EndpointDriver {
     effects: Arc<dyn EndpointDriverEffects>,
 }
@@ -374,21 +353,17 @@ impl EndpointDriver {
         }
     }
 
-    fn error(&self, kind: EndpointDriverErrorKind, op: DriverOp) -> EndpointDriverError {
-        EndpointDriverError::new(kind, op)
-    }
-
-    /// Decode the stored envelope into the strict typed Endpoint contract.
+    /// Decode the stored spec into the strict typed Endpoint contract.
     fn decoded_spec(
         &self,
         ctx: &ResourceContext,
         op: DriverOp,
     ) -> Result<EndpointSpec, EndpointDriverError> {
-        let envelope = ctx
-            .spec::<EndpointSpecEnvelope>()
-            .map_err(|_| self.error(EndpointDriverErrorKind::SpecInvalid, op))?;
-        serde_json::from_slice::<EndpointSpec>(&envelope.base.to_canonical_bytes())
-            .map_err(|_| self.error(EndpointDriverErrorKind::SpecInvalid, op))
+        let base = ctx
+            .spec::<CanonicalJsonObject>()
+            .map_err(|_| EndpointDriverError::new(EndpointDriverErrorKind::SpecInvalid, op))?;
+        serde_json::from_slice::<EndpointSpec>(&base.to_canonical_bytes())
+            .map_err(|_| EndpointDriverError::new(EndpointDriverErrorKind::SpecInvalid, op))
     }
 
     /// The closed set of Endpoint shapes the v3 plane realizes: the
@@ -397,8 +372,7 @@ impl EndpointDriver {
     /// the old reconciler until its conversion unit.
     fn check_shape(&self, spec: &EndpointSpec, op: DriverOp) -> Result<(), EndpointDriverError> {
         if endpoint_realization(spec, &*self.effects).is_none() {
-            return Err(self
-                .error(EndpointDriverErrorKind::ShapeUnsupported, op)
+            return Err(EndpointDriverError::new(EndpointDriverErrorKind::ShapeUnsupported, op)
                 .with_detail(
                     FailureDetail::at("shape")
                         .comparison(FailureComparison::new(
@@ -432,7 +406,7 @@ impl ResourceDriver for EndpointDriver {
             EndpointDriverErrorKind::SocketEffect => DriverFailure::error(
                 error.op,
                 error.kind.failure_kind(),
-                error.kind.class(),
+                FailureClass::Retryable,
             ),
             EndpointDriverErrorKind::DrainPending => {
                 DriverFailure::not_yet(error.op, error.kind.failure_kind())
@@ -519,7 +493,9 @@ impl ResourceDriver for EndpointDriver {
     async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         ctx.finalize_owned_resources()
             .await
-            .map_err(|_| self.error(EndpointDriverErrorKind::DrainPending, DriverOp::Delete))?;
+            .map_err(|_| {
+                EndpointDriverError::new(EndpointDriverErrorKind::DrainPending, DriverOp::Delete)
+            })?;
         Ok(())
     }
 
@@ -538,7 +514,7 @@ impl ResourceDriver for EndpointDriver {
             .remove_socket(spec.producer_ref(), spec.purpose().as_str())
             .await;
         result.map_err(|error| {
-            self.error(EndpointDriverErrorKind::SocketEffect, DriverOp::Delete)
+            EndpointDriverError::new(EndpointDriverErrorKind::SocketEffect, DriverOp::Delete)
                 .with_detail(
                     FailureDetail::at("delete/socket")
                         .comparison(FailureComparison::new(
@@ -635,9 +611,9 @@ mod tests {
 
     use d2b_contracts_resource::v3::{
         endpoint::{
-            EndpointClass, EndpointConsumerPolicy,
-            EndpointLifecyclePolicy, EndpointLocality, EndpointSpec, EndpointTransport,
-            EndpointVisibility,
+            EndpointAttachmentPolicy, EndpointClass, EndpointConsumerPolicy,
+            EndpointLifecyclePolicy, EndpointLocality, EndpointOperation, EndpointSpec,
+            EndpointTransport, EndpointVisibility,
         },
         execution_policy::BoundedToken,
         ResourceRef,
@@ -864,19 +840,53 @@ mod tests {
             .await
     }
 
-    // -- factory -------------------------------------------------------------
+    // -- endpoint spec fixtures ------------------------------------------------
 
-    #[tokio::test]
-    async fn factory_registers_only_the_endpoint_resource_type() {
-        let factory = EndpointDriverFactory::new(EndpointDriverArgs {
-            zone: "work".to_owned(),
-            effects: FakeSocketEffects::new(),
-        });
-        assert_eq!(factory.resource_types().len(), 1);
-        assert_eq!(factory.resource_types()[0].as_str(), "Endpoint");
-        factory
-            .create(&ResourceKey::new("work", "Endpoint", "endpoint"))
-            .await;
+    /// The shape fields the admission rules read for one Endpoint fixture.
+    struct Shape<'a> {
+        provider: &'a str,
+        producer: &'a str,
+        class: EndpointClass,
+        transport: EndpointTransport,
+        purpose: &'a str,
+        locality: EndpointLocality,
+        visibility: EndpointVisibility,
+    }
+
+    /// One Endpoint fixture from its shape, its attachment posture, and the
+    /// consumer surface the declaring provider commits.
+    fn endpoint_spec(
+        shape: Shape<'_>,
+        attachments: (bool, u16),
+        subjects: &[&str],
+        components: &[&str],
+        operations: &[EndpointOperation],
+    ) -> EndpointSpec {
+        EndpointSpec::new(
+            ResourceRef::parse(shape.provider).expect("provider"),
+            ResourceRef::parse(shape.producer).expect("producer"),
+            shape.class,
+            shape.transport,
+            BoundedToken::parse(shape.purpose).expect("purpose"),
+            None,
+            shape.locality,
+            shape.visibility,
+            EndpointAttachmentPolicy::new(attachments.0, attachments.1).expect("attachment policy"),
+            EndpointConsumerPolicy::new(
+                subjects
+                    .iter()
+                    .map(|subject| ResourceRef::parse(subject).expect("subject"))
+                    .collect(),
+                components
+                    .iter()
+                    .map(|component| BoundedToken::parse(*component).expect("component"))
+                    .collect(),
+                operations.to_vec(),
+            )
+            .expect("consumer policy"),
+            EndpointLifecyclePolicy::RecycleWithProducer,
+        )
+        .expect("endpoint spec")
     }
 
     // -- realize happy path ----------------------------------------------------
@@ -917,30 +927,21 @@ mod tests {
     }
 
     fn virtiofsd_endpoint_spec() -> EndpointSpec {
-        let producer = ResourceRef::parse("Process/vol-worker").expect("producer");
-        EndpointSpec::new(
-            ResourceRef::parse("Provider/volume-virtiofs").expect("provider"),
-            producer,
-            EndpointClass::Service,
-            EndpointTransport::Unix,
-            BoundedToken::parse("virtiofsd").expect("purpose"),
-            None,
-            EndpointLocality::HostLocal,
-            EndpointVisibility::Provider,
-            d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(false, 0)
-                .expect("attachment policy"),
-            EndpointConsumerPolicy::new(
-                vec![ResourceRef::parse("Provider/volume-virtiofs").expect("subject")],
-                vec![],
-                vec![
-                    d2b_contracts_resource::v3::endpoint::EndpointOperation::Resolve,
-                    d2b_contracts_resource::v3::endpoint::EndpointOperation::Observe,
-                ],
-            )
-            .expect("consumer policy"),
-            EndpointLifecyclePolicy::RecycleWithProducer,
+        endpoint_spec(
+            Shape {
+                provider: "Provider/volume-virtiofs",
+                producer: "Process/vol-worker",
+                class: EndpointClass::Service,
+                transport: EndpointTransport::Unix,
+                purpose: "virtiofsd",
+                locality: EndpointLocality::HostLocal,
+                visibility: EndpointVisibility::Provider,
+            },
+            (false, 0),
+            &["Provider/volume-virtiofs"],
+            &[],
+            &[EndpointOperation::Resolve, EndpointOperation::Observe],
         )
-        .expect("endpoint spec")
     }
 
     // -- recover: adopt a realized socket ----------------------------------------
@@ -1020,28 +1021,22 @@ mod tests {
 
     #[tokio::test]
     async fn non_virtiofsd_shapes_are_rejected_at_validate() {
-        let spec = virtiofsd_endpoint_spec();
-        let replacement = EndpointSpec::new(
-            ResourceRef::parse("Provider/volume-virtiofs").expect("provider"),
-            ResourceRef::parse("Process/vol-worker").expect("producer"),
-            EndpointClass::Service,
-            EndpointTransport::Tcp,
-            BoundedToken::parse("virtiofsd").expect("purpose"),
-            None,
-            EndpointLocality::HostLocal,
-            EndpointVisibility::Provider,
-            d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(false, 0)
-                .expect("attachment policy"),
-            EndpointConsumerPolicy::new(
-                vec![ResourceRef::parse("Provider/volume-virtiofs").expect("subject")],
-                vec![],
-                vec![d2b_contracts_resource::v3::endpoint::EndpointOperation::Resolve],
-            )
-            .expect("consumer policy"),
-            EndpointLifecyclePolicy::RecycleWithProducer,
-        )
-        .expect("endpoint spec");
-        let _ = spec;
+        // The virtiofsd endpoint on a transport the family does not realize.
+        let replacement = endpoint_spec(
+            Shape {
+                provider: "Provider/volume-virtiofs",
+                producer: "Process/vol-worker",
+                class: EndpointClass::Service,
+                transport: EndpointTransport::Tcp,
+                purpose: "virtiofsd",
+                locality: EndpointLocality::HostLocal,
+                visibility: EndpointVisibility::Provider,
+            },
+            (false, 0),
+            &["Provider/volume-virtiofs"],
+            &[],
+            &[EndpointOperation::Resolve],
+        );
         let mut ctx = fixture(test_row(&replacement));
         let mut d = driver(FakeSocketEffects::new()).await;
         let failure = d.validate(&mut ctx).await.expect_err("terminal");
@@ -1067,51 +1062,40 @@ mod tests {
     /// created on the guest's VMM Process and materialized host-local (the
     /// Cloud Hypervisor API socket lives on the host beside the VMM),
     /// `guest-control` on the Guest and materialized cross-domain.
-    fn provider_control_shape(purpose: &str) -> (ResourceRef, EndpointLocality) {
+    fn guest_control_shape(purpose: &str) -> (&'static str, EndpointLocality) {
         match purpose {
-            "ch-api" => (
-                ResourceRef::parse("Process/acceptance-guest-vmm").expect("VMM child"),
-                EndpointLocality::HostLocal,
-            ),
-            "guest-control" => (
-                ResourceRef::parse("Guest/acceptance-guest").expect("guest"),
-                EndpointLocality::CrossDomain,
-            ),
+            "ch-api" => ("Process/acceptance-guest-vmm", EndpointLocality::HostLocal),
+            "guest-control" => ("Guest/acceptance-guest", EndpointLocality::CrossDomain),
             other => panic!("no committed control shape for {other:?}"),
         }
     }
 
     /// One control endpoint exactly as the provider commits it for `purpose`.
     fn guest_control_endpoint_spec(purpose: &str) -> EndpointSpec {
-        let (producer, locality) = provider_control_shape(purpose);
+        let (producer, locality) = guest_control_shape(purpose);
         control_endpoint_spec(purpose, producer, locality)
     }
 
     fn control_endpoint_spec(
         purpose: &str,
-        producer: ResourceRef,
+        producer: &str,
         locality: EndpointLocality,
     ) -> EndpointSpec {
-        EndpointSpec::new(
-            ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("provider"),
-            producer,
-            EndpointClass::Control,
-            EndpointTransport::OpaqueCarriage,
-            BoundedToken::parse(purpose).expect("purpose"),
-            None,
-            locality,
-            EndpointVisibility::Provider,
-            d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(true, 1)
-                .expect("attachment policy"),
-            EndpointConsumerPolicy::new(
-                vec![],
-                vec![],
-                vec![d2b_contracts_resource::v3::endpoint::EndpointOperation::Resolve],
-            )
-            .expect("consumer policy"),
-            EndpointLifecyclePolicy::RecycleWithProducer,
+        endpoint_spec(
+            Shape {
+                provider: "Provider/runtime-cloud-hypervisor",
+                producer,
+                class: EndpointClass::Control,
+                transport: EndpointTransport::OpaqueCarriage,
+                purpose,
+                locality,
+                visibility: EndpointVisibility::Provider,
+            },
+            (true, 1),
+            &[],
+            &[],
+            &[EndpointOperation::Resolve],
         )
-        .expect("endpoint spec")
     }
 
     /// Regression (vmCheck guest preflight): the provider commits `ch-api` on
@@ -1132,13 +1116,33 @@ mod tests {
                 "{purpose} is one of the provider's fixed child-role endpoints",
             );
         }
-        // The family is derived from the port's vocabulary: the admitted
-        // purposes are exactly the control purposes the port answers for.
-        for purpose in ["ch-api", "guest-control"] {
-            assert!(vocabulary.guest_control_producer(purpose).is_some());
-        }
-        assert!(vocabulary.guest_control_producer("virtiofsd").is_none());
-        assert!(vocabulary.guest_control_producer("aca-sandbox-agent").is_none());
+    }
+
+    /// One device-worker endpoint from the posture the Device TPM Provider's
+    /// projection declares: the swtpm worker Process is the producer, the
+    /// carriage is opaque, and the purpose names the class.
+    fn device_worker_endpoint_spec_with(
+        purpose: &str,
+        class: EndpointClass,
+        producer: &str,
+        locality: EndpointLocality,
+        visibility: EndpointVisibility,
+    ) -> EndpointSpec {
+        endpoint_spec(
+            Shape {
+                provider: "Provider/device-tpm",
+                producer,
+                class,
+                transport: EndpointTransport::OpaqueCarriage,
+                purpose,
+                locality,
+                visibility,
+            },
+            (true, 1),
+            &[],
+            &["runtime-cloud-hypervisor"],
+            &[EndpointOperation::Resolve],
+        )
     }
 
     /// One device-worker endpoint exactly as the Device TPM Provider's
@@ -1148,26 +1152,13 @@ mod tests {
         let class = FakeSocketEffects::new()
             .device_worker_endpoint_class(purpose)
             .expect("declared device-worker purpose");
-        EndpointSpec::new(
-            ResourceRef::parse("Provider/device-tpm").expect("provider"),
-            ResourceRef::parse("Process/swtpm-tpm").expect("producer"),
+        device_worker_endpoint_spec_with(
+            purpose,
             class,
-            EndpointTransport::OpaqueCarriage,
-            BoundedToken::parse(purpose).expect("purpose"),
-            None,
+            "Process/swtpm-tpm",
             EndpointLocality::HostLocal,
             EndpointVisibility::Owner,
-            d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(true, 1)
-                .expect("attachment policy"),
-            EndpointConsumerPolicy::new(
-                vec![],
-                vec![BoundedToken::parse("runtime-cloud-hypervisor").expect("component")],
-                vec![d2b_contracts_resource::v3::endpoint::EndpointOperation::Resolve],
-            )
-            .expect("consumer policy"),
-            EndpointLifecyclePolicy::RecycleWithProducer,
         )
-        .expect("device worker endpoint spec")
     }
 
     /// The Device TPM Provider's declared worker-socket rows are admitted: the
@@ -1183,10 +1174,7 @@ mod tests {
                 Some(super::EndpointRealization::DeviceWorkerSocket),
                 "{purpose} is one of the Device TPM Provider's worker sockets",
             );
-            assert!(vocabulary.device_worker_endpoint_class(purpose).is_some());
         }
-        assert!(vocabulary.device_worker_endpoint_class("virtiofsd").is_none());
-        assert!(vocabulary.device_worker_endpoint_class("ch-api").is_none());
     }
 
     /// A device-worker look-alike stays refused at validate: the purpose must
@@ -1198,26 +1186,7 @@ mod tests {
     async fn device_worker_look_alikes_stay_refused() {
         let server = "swtpm-tpm-socket";
         let with = |class, producer: &str, locality, visibility| {
-            EndpointSpec::new(
-                ResourceRef::parse("Provider/device-tpm").expect("provider"),
-                ResourceRef::parse(producer).expect("producer"),
-                class,
-                EndpointTransport::OpaqueCarriage,
-                BoundedToken::parse(server).expect("purpose"),
-                None,
-                locality,
-                visibility,
-                d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(true, 1)
-                    .expect("attachment policy"),
-                EndpointConsumerPolicy::new(
-                    vec![],
-                    vec![],
-                    vec![d2b_contracts_resource::v3::endpoint::EndpointOperation::Resolve],
-                )
-                .expect("consumer policy"),
-                EndpointLifecyclePolicy::RecycleWithProducer,
-            )
-            .expect("endpoint spec")
+            device_worker_endpoint_spec_with(server, class, producer, locality, visibility)
         };
         for spec in [
             // The declared purpose on the other declared class.
@@ -1262,31 +1231,31 @@ mod tests {
     /// role's producer.
     #[tokio::test]
     async fn look_alike_control_endpoints_stay_refused() {
-        let guest = ResourceRef::parse("Guest/acceptance-guest").expect("guest");
-        let vmm = ResourceRef::parse("Process/acceptance-guest-vmm").expect("vmm");
-        let with_transport = |purpose: &str, producer: ResourceRef, locality, transport| {
-            EndpointSpec::new(
-                ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("provider"),
-                producer,
-                EndpointClass::Control,
-                transport,
-                BoundedToken::parse(purpose).expect("purpose"),
-                None,
-                locality,
-                EndpointVisibility::Provider,
-                d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(false, 0)
-                    .expect("attachment policy"),
-                EndpointConsumerPolicy::new(vec![], vec![], vec![]).expect("consumer policy"),
-                EndpointLifecyclePolicy::RecycleWithProducer,
+        let guest = "Guest/acceptance-guest";
+        let vmm = "Process/acceptance-guest-vmm";
+        let with_transport = |purpose: &str, producer: &str, locality, transport| {
+            endpoint_spec(
+                Shape {
+                    provider: "Provider/runtime-cloud-hypervisor",
+                    producer,
+                    class: EndpointClass::Control,
+                    transport,
+                    purpose,
+                    locality,
+                    visibility: EndpointVisibility::Provider,
+                },
+                (false, 0),
+                &[],
+                &[],
+                &[],
             )
-            .expect("endpoint spec")
         };
         let cases = [
             (
                 "an undeclared purpose",
                 with_transport(
                     "aca-sandbox-agent",
-                    guest.clone(),
+                    guest,
                     EndpointLocality::CrossDomain,
                     EndpointTransport::OpaqueCarriage,
                 ),
@@ -1295,22 +1264,22 @@ mod tests {
                 "a non-carriage transport",
                 with_transport(
                     "guest-control",
-                    guest.clone(),
+                    guest,
                     EndpointLocality::CrossDomain,
                     EndpointTransport::Unix,
                 ),
             ),
             (
                 "guest-control on the VMM Process producer",
-                control_endpoint_spec("guest-control", vmm.clone(), EndpointLocality::CrossDomain),
+                control_endpoint_spec("guest-control", vmm, EndpointLocality::CrossDomain),
             ),
             (
                 "ch-api on the Guest producer",
-                control_endpoint_spec("ch-api", guest.clone(), EndpointLocality::HostLocal),
+                control_endpoint_spec("ch-api", guest, EndpointLocality::HostLocal),
             ),
             (
                 "ch-api materialized cross-domain",
-                control_endpoint_spec("ch-api", vmm.clone(), EndpointLocality::CrossDomain),
+                control_endpoint_spec("ch-api", vmm, EndpointLocality::CrossDomain),
             ),
             (
                 "guest-control materialized host-local",

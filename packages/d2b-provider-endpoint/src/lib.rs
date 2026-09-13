@@ -21,8 +21,7 @@
 mod driver;
 
 pub use driver::{
-    ENDPOINT_TYPE_NAME, EndpointDriver, EndpointDriverArgs, EndpointDriverEffects,
-    EndpointDriverError, EndpointDriverFactory, EndpointDriverStatus, EndpointPurposeVocabulary,
-    EndpointRealization, GuestControlProducer, endpoint_descriptor, endpoint_realization,
-    endpoint_spec_decoder,
+    EndpointDriver, EndpointDriverArgs, EndpointDriverEffects, EndpointDriverError,
+    EndpointDriverFactory, EndpointDriverStatus, EndpointPurposeVocabulary, EndpointRealization,
+    GuestControlProducer, endpoint_descriptor, endpoint_realization, endpoint_spec_decoder,
 };
