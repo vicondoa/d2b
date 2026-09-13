@@ -6611,4 +6611,37 @@ mod tests {
         );
     }
 
+    /// One pending refresh per socket. A second caller while a refresh is
+    /// waiting joins it rather than starting another, and the claim is
+    /// released when the waiter ends - a leaked claim would leave that socket
+    /// without an ACL refresh for the process's life.
+    #[test]
+    fn one_pending_obs_vsock_refresh_serves_every_caller() {
+        let socket = PathBuf::from("/run/d2b/obs-single-flight.sock");
+        let uid = 4242;
+        assert!(
+            claim_obs_vsock_acl_retry(uid, &socket),
+            "the first caller claims the socket"
+        );
+        assert!(
+            !claim_obs_vsock_acl_retry(uid, &socket),
+            "a second caller joins the pending refresh"
+        );
+        assert!(
+            claim_obs_vsock_acl_retry(uid + 1, &socket),
+            "another principal is another grant, so it is its own claim"
+        );
+        for uid in [uid, uid + 1] {
+            drop(PendingObsVsockAclRetry {
+                uid,
+                socket: socket.clone(),
+            });
+        }
+        assert!(
+            claim_obs_vsock_acl_retry(uid, &socket),
+            "the claim is released when the refresh ends"
+        );
+        drop(PendingObsVsockAclRetry { uid, socket });
+    }
+
 }
