@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{OwnedFd, RawFd};
 #[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -49,10 +49,6 @@ use d2b_contracts_broker::broker_wire::{
     SignalRunnerRequest,
     StoreVerifyRequest as BrokerStoreVerifyRequest,
 };
-#[cfg(test)]
-use d2b_contracts_broker::broker_wire::{
-    ReconcileStorageScopeRequest as BrokerReconcileStorageScopeRequest,
-};
 use d2b_contracts_control::public_wire::{
     self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability,
 };
@@ -69,13 +65,6 @@ use d2b_contracts_resource::v3::{
     process::ProcessSpec,
 };
 use d2b_contracts_resource::v3::ResourceBundleGenerationId;
-#[cfg(test)]
-use d2b_contracts_resource::v3::ResourceErrorKind;
-#[cfg(test)]
-use d2b_contracts_resource::v3::{
-    guest::GuestSpec,
-    volume::{VolumeAttachment, VolumeSpec},
-};
 use d2b_contracts_resource::v3::{ResourceName, activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE};
 use d2b_contracts_zone_session::v3::ZoneLinkSpec;
 use d2b_contracts_zone_session::v3::component_session::{OperationClass, OperationId};
@@ -101,8 +90,6 @@ use d2b_core::host::{HostJson, QemuMediaSourceIntent};
 use d2b_core::host_check;
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
-#[cfg(test)]
-use d2b_contracts_resource::v3::network::NetworkSpec;
 use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
 use d2b_provider_zone_link::zone_links::{
     BootstrapPsk, SealedEnrollment, ZoneLinkEffect, ZoneLinkError, ZoneLinkEvent,
@@ -115,16 +102,6 @@ use d2b_provider_network_local::controller::NetworkAdmissionProof;
 use d2b_provider_network_local::{
     broker::NetworkEffectContext,
     ifname::derive_network_child_name,
-};
-#[cfg(test)]
-use d2b_provider_network_local::{
-    artifact::{ArtifactCatalogEntry, ArtifactKind},
-    controller::{
-        CONFIG_VOLUME_MAX_BYTES, NetworkAdmissionIntent, NetworkAdmissionKey, NetworkConfigContent,
-        NetworkEffectError, NetworkReconciler, NetworkResourcePort, ReconcileInput,
-        ReconcileProgress,
-    },
-    observe::observe_host_network,
 };
 use d2b_provider_shell_terminal::{
     DEFAULT_OUTPUT_RING_CAPACITY, ExecutionTarget, PoolSpec, ShellAuthorityLedger,
@@ -6382,11 +6359,6 @@ fn dispatch_resource_request(
             return Ok(resource_runtime_error_frame(error));
         }
     };
-    if request.value().get("method").and_then(Value::as_str) == Some("Reconcile") {
-        return Ok(resource_runtime_error_frame(
-            resource_runtime::ResourceRuntimeError::CapabilityUnavailable,
-        ));
-    }
     if typed_shell {
         return Ok(
             dispatch_typed_shell_resource_request(state, peer, &request.value())
@@ -7175,64 +7147,6 @@ fn dispatch_device_usb_resource_request(
     }
 }
 
-#[cfg(test)]
-#[allow(dead_code)]
-fn resolve_volume_storage_ref(
-    resource: &Value,
-    resolver: &BundleResolver,
-) -> Result<BundleOpId, resource_runtime::ResourceRuntimeError> {
-    let spec = resource
-        .get("spec")
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let provider_ref = spec
-        .get("providerRef")
-        .and_then(Value::as_str)
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let source = spec
-        .get("source")
-        .and_then(Value::as_object)
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let settings = source
-        .get("settings")
-        .and_then(Value::as_object)
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let source_kind = settings
-        .get("kind")
-        .and_then(Value::as_str)
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let source_policy = settings
-        .get("sourcePolicyId")
-        .and_then(Value::as_str)
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let storage_id = match (provider_ref, source_kind, source_policy) {
-        ("Provider/volume-local", "local-path", "state-root" | "default-state") => {
-            "path:state-root"
-        }
-        _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
-    };
-    if resolver.find_storage_path_spec(storage_id).is_none() {
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-    }
-    Ok(BundleOpId::new(storage_id))
-}
-
-#[cfg(test)]
-fn parse_committed_network_spec(
-    resource: &Value,
-) -> Result<NetworkSpec, resource_runtime::ResourceRuntimeError> {
-    let mut spec = resource
-        .get("spec")
-        .cloned()
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let object = spec
-        .as_object_mut()
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    for field in ["providerRef", "updatePolicy", "provider"] {
-        object.remove(field);
-    }
-    serde_json::from_value(spec).map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)
-}
-
 pub(crate) fn resolve_network_effect_context(
     resource: &Value,
     resolver: &BundleResolver,
@@ -7370,544 +7284,6 @@ pub(crate) fn resolve_network_effect_context(
     .with_additional_bridge_intent(BundleOpId::new(uplink_bridge_id)))
 }
 
-#[derive(Clone)]
-// This compatibility boundary records the completion of the child mutations
-// it invokes. It is not the readiness authority: each pass commits a typed
-// projection and the next pass reads that projection back from Resource API.
-#[cfg(test)]
-#[allow(dead_code)]
-struct PublicNetworkResourceBoundary {
-    state: Arc<Mutex<PublicNetworkResourceState>>,
-}
-
-#[cfg(test)]
-impl Default for PublicNetworkResourceBoundary {
-    fn default() -> Self {
-        Self {
-            state: Arc::new(Mutex::new(PublicNetworkResourceState::default())),
-        }
-    }
-}
-
-#[derive(Default)]
-#[cfg(test)]
-struct PublicNetworkResourceState {
-    volume_upserted: bool,
-    volume_written: bool,
-    guest_upserted: bool,
-    volume_attached: bool,
-    #[allow(dead_code)]
-    agent_upserted: bool,
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-const MAX_NETWORK_CHILD_READINESS_PASSES: usize = 4;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
-struct PublicNetworkChildReadiness {
-    volume_ready: bool,
-    guest_ready: bool,
-    volume_attachment_ready: bool,
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-impl PublicNetworkChildReadiness {
-    const fn pending() -> Self {
-        Self {
-            volume_ready: false,
-            guest_ready: false,
-            volume_attachment_ready: false,
-        }
-    }
-
-    const fn from_state(state: &PublicNetworkResourceState) -> Self {
-        Self {
-            volume_ready: state.volume_upserted && state.volume_written,
-            guest_ready: state.guest_upserted,
-            volume_attachment_ready: state.volume_attached,
-        }
-    }
-
-    #[cfg(test)]
-    const fn ready() -> Self {
-        Self {
-            volume_ready: true,
-            guest_ready: true,
-            volume_attachment_ready: true,
-        }
-    }
-
-    const fn is_ready(self) -> bool {
-        self.volume_ready && self.guest_ready && self.volume_attachment_ready
-    }
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-impl PublicNetworkResourceBoundary {
-    fn completed_child_readiness(&self) -> Result<PublicNetworkChildReadiness, NetworkEffectError> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| NetworkEffectError::ConfigVolume)?;
-        Ok(PublicNetworkChildReadiness::from_state(&state))
-    }
-}
-
-#[cfg(test)]
-fn network_child_readiness_projection(readiness: PublicNetworkChildReadiness) -> Value {
-    let phase = |ready| {
-        json!({
-            "phase": if ready { "Ready" } else { "Pending" },
-        })
-    };
-    json!({
-        "configVolume": phase(readiness.volume_ready),
-        "netVm": phase(readiness.guest_ready),
-        "volumeAttachment": phase(readiness.volume_attachment_ready),
-    })
-}
-
-#[cfg(test)]
-fn network_child_readiness_projection_for_resource(
-    resource: &Value,
-    readiness: PublicNetworkChildReadiness,
-) -> Value {
-    let mut projection = resource
-        .get("status")
-        .and_then(|status| status.get("resource"))
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let Value::Object(children) = network_child_readiness_projection(readiness) else {
-        unreachable!("Network child readiness projection is an object");
-    };
-    projection.extend(children);
-    Value::Object(projection)
-}
-
-#[cfg(test)]
-fn network_child_readiness_from_resource(resource: &Value) -> PublicNetworkChildReadiness {
-    let Some(projection) = resource
-        .get("status")
-        .and_then(|status| status.get("resource"))
-        .and_then(Value::as_object)
-    else {
-        return PublicNetworkChildReadiness::pending();
-    };
-    let phase_ready = |name: &str| {
-        projection
-            .get(name)
-            .and_then(|child| child.get("phase"))
-            .and_then(Value::as_str)
-            == Some("Ready")
-    };
-    PublicNetworkChildReadiness {
-        volume_ready: phase_ready("configVolume"),
-        guest_ready: phase_ready("netVm"),
-        volume_attachment_ready: phase_ready("volumeAttachment"),
-    }
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn fetch_public_resource(
-    runtime: &resource_runtime::ZoneResourceRuntime,
-    peer: &PeerIdentity,
-    resource_ref: &ResourceRef,
-) -> Result<Value, resource_runtime::ResourceRuntimeError> {
-    let request = json!({
-        "method": "Get",
-        "service": "d2b.resource.v3",
-        "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
-        "resourceRef": resource_ref.to_canonical_string(),
-    });
-    let resource = block_on_future(runtime.dispatch_public_cli_request(&request, peer.uid))?;
-    if let Some(error) = public_resource_get_error(&resource) {
-        return Err(error);
-    }
-    Ok(resource)
-}
-
-#[cfg(test)]
-mod public_network_child_readiness_tests {
-    use super::*;
-
-    #[test]
-    fn readiness_is_false_until_each_child_mutation_has_completed() {
-        let mut state = PublicNetworkResourceState::default();
-        assert_eq!(
-            PublicNetworkChildReadiness::from_state(&state),
-            PublicNetworkChildReadiness::pending()
-        );
-
-        state.volume_upserted = true;
-        assert!(!PublicNetworkChildReadiness::from_state(&state).volume_ready);
-        state.volume_written = true;
-        assert!(PublicNetworkChildReadiness::from_state(&state).volume_ready);
-
-        state.guest_upserted = true;
-        assert!(PublicNetworkChildReadiness::from_state(&state).guest_ready);
-        assert!(!PublicNetworkChildReadiness::from_state(&state).volume_attachment_ready);
-
-        state.volume_attached = true;
-        assert!(PublicNetworkChildReadiness::from_state(&state).volume_attachment_ready);
-    }
-
-    #[test]
-    fn durable_projection_is_the_only_readiness_observation() {
-        let resource = json!({
-            "status": {
-                "phase": "Ready",
-                "observedGeneration": 3,
-                "resource": {
-                    "netVmRef": "Guest/net-work-net",
-                    "lanBridge": {"phase": "Ready"},
-                    "uplinkBridge": {"phase": "Ready"},
-                    "externalAttachment": null,
-                    "attachments": [],
-                },
-            }
-        });
-        let resource = json!({
-            "status": {
-                "phase": "Ready",
-                "observedGeneration": 3,
-                "resource": network_child_readiness_projection_for_resource(
-                    &resource,
-                    PublicNetworkChildReadiness::ready()
-                ),
-            }
-        });
-        assert_eq!(
-            network_child_readiness_from_resource(&resource),
-            PublicNetworkChildReadiness::ready()
-        );
-        assert_eq!(
-            resource["status"]["resource"]["netVmRef"],
-            "Guest/net-work-net"
-        );
-        assert_eq!(
-            network_child_readiness_from_resource(&json!({
-                "status": {
-                    "phase": "Ready",
-                    "observedGeneration": 3,
-                    "resource": {}
-                }
-            })),
-            PublicNetworkChildReadiness::pending()
-        );
-    }
-}
-
-#[cfg(test)]
-impl NetworkResourcePort for PublicNetworkResourceBoundary {
-    async fn upsert_volume_backing(&self, _spec: &VolumeSpec) -> Result<(), NetworkEffectError> {
-        self.state
-            .lock()
-            .map_err(|_| NetworkEffectError::ConfigVolume)?
-            .volume_upserted = true;
-        Ok(())
-    }
-
-    async fn upsert_volume_content(
-        &self,
-        content: &NetworkConfigContent,
-    ) -> Result<(), NetworkEffectError> {
-        if content.provenance().is_none() {
-            return Err(NetworkEffectError::NetworkAdmissionMismatch);
-        }
-        let bytes = content
-            .dnsmasq
-            .len()
-            .saturating_add(content.nftables.len())
-            .saturating_add(content.routing.len())
-            .saturating_add(content.attachments.len());
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| NetworkEffectError::ConfigVolume)?;
-        if !state.volume_upserted || bytes > CONFIG_VOLUME_MAX_BYTES as usize {
-            return Err(NetworkEffectError::ConfigVolume);
-        }
-        state.volume_written = true;
-        Ok(())
-    }
-
-    async fn upsert_guest(&self, _spec: &GuestSpec) -> Result<(), NetworkEffectError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| NetworkEffectError::ConfigVolume)?;
-        if !state.volume_written {
-            return Err(NetworkEffectError::ConfigVolume);
-        }
-        state.guest_upserted = true;
-        Ok(())
-    }
-
-    async fn attach_volume(
-        &self,
-        _attachment: &VolumeAttachment,
-    ) -> Result<(), NetworkEffectError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| NetworkEffectError::ConfigVolume)?;
-        if !state.guest_upserted {
-            return Err(NetworkEffectError::ConfigVolume);
-        }
-        state.volume_attached = true;
-        Ok(())
-    }
-
-    async fn upsert_agent(&self, _spec: &ProcessSpec) -> Result<(), NetworkEffectError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| NetworkEffectError::ConfigVolume)?;
-        if !state.volume_attached {
-            return Err(NetworkEffectError::ConfigVolume);
-        }
-        state.agent_upserted = true;
-        Ok(())
-    }
-
-    async fn reconcile_mdns(&self, _enabled: bool) -> Result<(), NetworkEffectError> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| NetworkEffectError::ConfigVolume)?;
-        if !state.agent_upserted {
-            return Err(NetworkEffectError::ConfigVolume);
-        }
-        Ok(())
-    }
-
-    async fn delete_processes(&self) -> Result<(), NetworkEffectError> {
-        Ok(())
-    }
-
-    async fn detach_volume(&self) -> Result<(), NetworkEffectError> {
-        Ok(())
-    }
-
-    async fn delete_guest(&self) -> Result<(), NetworkEffectError> {
-        Ok(())
-    }
-
-    async fn delete_volume(&self) -> Result<(), NetworkEffectError> {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn dispatch_wave6_resource_reconcile(
-    state: &ServerState,
-    peer: &PeerIdentity,
-    runtime: &resource_runtime::ZoneResourceRuntime,
-    request: &Value,
-) -> Result<Value, resource_runtime::ResourceRuntimeError> {
-    let resource_ref = request
-        .get("resourceRef")
-        .and_then(Value::as_str)
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let resource_ref = ResourceRef::parse(resource_ref)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let resource_type = resource_ref.resource_type().as_str();
-    if !matches!(resource_type, "Volume" | "Network" | "Device" | "Guest") {
-        return Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable);
-    }
-    let get_request = json!({
-        "method": "Get",
-        "service": "d2b.resource.v3",
-        "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
-        "resourceRef": resource_ref.to_canonical_string(),
-    });
-    let resource = block_on_future(runtime.dispatch_public_cli_request(&get_request, peer.uid))?;
-    if let Some(error) = public_resource_get_error(&resource) {
-        return Err(error);
-    }
-    let provider_ref = resource
-        .get("spec")
-        .and_then(|spec| spec.get("providerRef"))
-        .and_then(Value::as_str)
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    if resource_type == "Guest"
-        && !d2b_provider_guest::GUEST_REGISTRATIONS
-            .iter()
-            .any(|registration| registration.provider_ref == provider_ref)
-    {
-        tracing::warn!(
-            operation = "guest-provider-binding",
-            "Guest reconcile refused an unregistered runtime Provider",
-        );
-        return Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable);
-    }
-    let uid = resource
-        .get("metadata")
-        .and_then(|metadata| metadata.get("uid"))
-        .and_then(Value::as_str)
-        .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let operation_id = request
-        .get("operationId")
-        .and_then(Value::as_str)
-        .unwrap_or("wave6-public-reconcile");
-    if resource_type == "Network" && network_deletion_completed(&resource) {
-        release_completed_network_admission(state, runtime, peer, &resource)?;
-        return Ok(json!({
-            "authenticated": true,
-            "effect": "network-admission-released",
-            "operationId": operation_id,
-            "providerRef": provider_ref,
-            "ready": true,
-            "resourceRef": resource_ref.to_canonical_string(),
-            "resources": [resource],
-        }));
-    }
-    let mut ready = true;
-    let effect = match resource_type {
-        "Volume" => {
-            let resolver = load_bundle_resolver(state)
-                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-            let storage_ref = resolve_volume_storage_ref(&resource, &resolver)?;
-            let response = dispatch_broker_request_as(
-                state,
-                BrokerRequest::ReconcileStorageScope(BrokerReconcileStorageScopeRequest {
-                    storage_ref,
-                    apply: true,
-                    tracing_span_id: None,
-                }),
-                broker_caller_role_for_peer(peer),
-            )
-            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-            match response {
-                BrokerResponse::ReconcileStorageScope(response)
-                    if response.applied
-                        && !matches!(
-                            response.status,
-                            d2b_contracts_broker::broker_wire::StorageReconcileStatus::Refused
-                        ) =>
-                {
-                    "storage-scope-reconciled"
-                }
-                BrokerResponse::Error(_) => {
-                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-                }
-                _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
-            }
-        }
-        "Network" => {
-            let resolver = load_bundle_resolver(state)
-                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-            // U14: the "Pending" status write this used to make went to the
-            // durable store; the plane's status projection is the manager's
-            // now, and this simulation only drives the effect.
-            ready = reconcile_wave6_network_effect(Wave6NetworkEffectRequest {
-                state,
-                peer,
-                runtime,
-                resolver: &resolver,
-                resource_ref: &resource_ref,
-                uid: &uid,
-                resource: &resource,
-                operation_id,
-                ensure_host_base: true,
-            })?;
-            "network-bridge-reconciled"
-        }
-        "Device" => {
-            if provider_ref != d2b_provider_device_tpm::PROVIDER_REF {
-                return Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable);
-            }
-            let owner_ref = resource
-                .get("metadata")
-                .and_then(|metadata| metadata.get("ownerRef"))
-                .and_then(Value::as_str)
-                .and_then(|value| value.strip_prefix("Guest/"))
-                .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-            let device_request = json!({
-                "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
-                "resourceType": "Device",
-                "providerRef": provider_ref,
-                "method": "Reconcile",
-                "deviceRef": resource_ref.to_canonical_string(),
-                "resourceUid": uid.as_str(),
-                "vmId": owner_ref,
-                "operationId": operation_id,
-                "logLevel": 20,
-            });
-            dispatch_device_tpm_reconcile_inner(state, peer, &device_request)?;
-            "device-tpm-reconciled"
-        }
-        "Guest" => {
-            if provider_ref == d2b_provider_guest_cloud_hypervisor::PROVIDER_REF {
-                block_on_future(runtime.reconcile_cloud_hypervisor_guests(Arc::new(state.clone())))?;
-                ready = resource
-                    .get("status")
-                    .and_then(|status| status.get("phase"))
-                    .and_then(Value::as_str)
-                    == Some("Ready")
-                    && resource
-                        .get("status")
-                        .and_then(|status| status.get("observedGeneration"))
-                        .and_then(Value::as_u64)
-                        == resource
-                            .get("metadata")
-                            .and_then(|metadata| metadata.get("generation"))
-                            .and_then(Value::as_u64);
-            }
-            "controller-managed"
-        }
-        _ => unreachable!(),
-    };
-
-    Ok(json!({
-        "authenticated": true,
-        "effect": effect,
-        "operationId": operation_id,
-        "providerRef": provider_ref,
-        "ready": ready,
-        "resourceRef": resource_ref.to_canonical_string(),
-        "resources": [resource],
-    }))
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn public_resource_get_error(resource: &Value) -> Option<resource_runtime::ResourceRuntimeError> {
-    let kind = resource
-        .get("error")
-        .and_then(|error| error.get("kind"))
-        .and_then(Value::as_str)
-        .and_then(|value| {
-            serde_json::from_value::<ResourceErrorKind>(Value::String(value.to_owned())).ok()
-        })
-        .unwrap_or(ResourceErrorKind::InternalIntegrityFailure);
-    resource.get("error").is_some().then_some(
-        resource_runtime::ResourceRuntimeError::ResourceGetFailed(kind),
-    )
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-struct Wave6NetworkEffectRequest<'a> {
-    state: &'a ServerState,
-    peer: &'a PeerIdentity,
-    runtime: &'a resource_runtime::ZoneResourceRuntime,
-    resolver: &'a BundleResolver,
-    resource_ref: &'a ResourceRef,
-    uid: &'a ResourceUid,
-    resource: &'a Value,
-    operation_id: &'a str,
-    ensure_host_base: bool,
-}
-
 fn committed_resource_uid(
     resource: &Value,
 ) -> Result<ResourceUid, resource_runtime::ResourceRuntimeError> {
@@ -8033,498 +7409,6 @@ fn network_deletion_completed(resource: &Value) -> bool {
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
-fn release_completed_network_admission(
-    state: &ServerState,
-    runtime: &resource_runtime::ZoneResourceRuntime,
-    peer: &PeerIdentity,
-    resource: &Value,
-) -> Result<(), resource_runtime::ResourceRuntimeError> {
-    let network_uid = committed_resource_uid(resource)?;
-    let zone_ref = ResourceRef::parse(&format!("Zone/{}", runtime.zone().as_str()))
-        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let zone = fetch_public_resource(runtime, peer, &zone_ref)?;
-    let zone_uid = committed_resource_uid(&zone)?;
-    let plane = state
-        .resource_plane
-        .lock()
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?
-        .clone()
-        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let index = plane.network_admission_index();
-    block_on_future(async move {
-        index
-            .lock()
-            .await
-            .release_owner_after_finalizer(&zone_uid, &network_uid, true);
-    });
-    Ok(())
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn resolve_network_admission(
-    state: &ServerState,
-    runtime: &resource_runtime::ZoneResourceRuntime,
-    peer: &PeerIdentity,
-    resource: &Value,
-    resolver: &BundleResolver,
-    network_uid: &ResourceUid,
-    network_generation: ResourceGeneration,
-) -> Result<NetworkAdmissionProof, resource_runtime::ResourceRuntimeError> {
-    let spec = parse_committed_network_spec(resource)?;
-    let zone_ref_text = format!("Zone/{}", runtime.zone().as_str());
-    let zone_ref = ResourceRef::parse(&zone_ref_text)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let zone = fetch_public_resource(runtime, peer, &zone_ref)?;
-    let zone_uid = committed_resource_uid(&zone)?;
-    let network_ref_text = format!(
-        "Network/{}",
-        resource
-            .get("metadata")
-            .and_then(|metadata| metadata.get("name"))
-            .and_then(Value::as_str)
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?
-    );
-    let network_ref = ResourceRef::parse(&network_ref_text)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let network_ref_string = network_ref.to_canonical_string();
-
-    let mut guest_uids = Vec::new();
-    let mut attachment_generation = network_generation.get();
-    for attachment in spec.attachments() {
-        let attached = fetch_public_resource(runtime, peer, attachment.execution_ref())?;
-        let attached_zone = attached
-            .get("metadata")
-            .and_then(|metadata| metadata.get("zone"))
-            .and_then(Value::as_str);
-        if attached_zone != Some(runtime.zone().as_str()) {
-            return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
-        }
-        let attached_uid = committed_resource_uid(&attached)?;
-        attachment_generation =
-            attachment_generation.max(committed_resource_generation(&attached)?.get());
-        if attachment.execution_ref().resource_type().as_str() == "Guest" {
-            guest_uids.push(attached_uid);
-        }
-        let reciprocal = attached
-            .get("spec")
-            .and_then(|value| value.get("networkAttachments"))
-            .and_then(Value::as_array)
-            .is_some_and(|attachments| {
-                attachments.iter().any(|candidate| {
-                    candidate.get("networkRef").and_then(Value::as_str)
-                        == Some(network_ref_string.as_str())
-                })
-            });
-        if !reciprocal {
-            return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
-        }
-    }
-    let committed_guests = block_on_future(runtime.committed_resources_of_type("Guest"))?;
-    for guest in committed_guests {
-        let attached = guest
-            .get("spec")
-            .and_then(|value| value.get("networkAttachments"))
-            .and_then(Value::as_array)
-            .is_some_and(|attachments| {
-                attachments.iter().any(|candidate| {
-                    candidate.get("networkRef").and_then(Value::as_str)
-                        == Some(network_ref_string.as_str())
-                })
-            });
-        if !attached {
-            continue;
-        }
-        let guest_zone = guest
-            .get("metadata")
-            .and_then(|metadata| metadata.get("zone"))
-            .and_then(Value::as_str);
-        if guest_zone != Some(runtime.zone().as_str()) {
-            return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
-        }
-        guest_uids.push(committed_resource_uid(&guest)?);
-        attachment_generation =
-            attachment_generation.max(committed_resource_generation(&guest)?.get());
-    }
-    let attachment_generation = ResourceGeneration::new(attachment_generation)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let installed_generation = resolver
-        .installed_generation_identity()
-        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    if committed_resource_uid(resource)? != *network_uid {
-        return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
-    }
-    let key = NetworkAdmissionKey::new(
-        zone_uid,
-        network_uid.clone(),
-        network_generation,
-        attachment_generation,
-        installed_generation,
-    );
-    NetworkAdmissionIntent::new(key, spec, guest_uids)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
-        .and_then(|intent| {
-            let plane = state
-                .resource_plane
-                .lock()
-                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?
-                .clone()
-                .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-            let index = plane.network_admission_index();
-            block_on_future(async move {
-                let occupancy = observe_host_network()
-                    .await
-                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-                index
-                    .lock()
-                    .await
-                    .admit(intent, &occupancy)
-                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
-            })
-        })
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn reconcile_wave6_network_effect(
-    request: Wave6NetworkEffectRequest<'_>,
-) -> Result<bool, resource_runtime::ResourceRuntimeError> {
-    let Wave6NetworkEffectRequest {
-        state,
-        peer,
-        runtime,
-        resolver,
-        resource_ref: _,
-        uid,
-        resource,
-        operation_id: _,
-        ensure_host_base,
-    } = request;
-    let caller_role = broker_caller_role_for_peer(peer);
-    let spec = parse_committed_network_spec(resource).map_err(|_| {
-        tracing::warn!(
-            stage = "parse-network-spec",
-            "Network Provider spec is not a valid NetworkSpec"
-        );
-        resource_runtime::ResourceRuntimeError::RequestInvalid
-    })?;
-    if spec.isolation().allow_east_west && !resolver.host.site.allow_unsafe_east_west {
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-    }
-    let generation = resource
-        .get("metadata")
-        .and_then(|metadata| metadata.get("generation"))
-        .and_then(Value::as_u64)
-        .and_then(|value| ResourceGeneration::new(value).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let installed_generation = resolver
-        .installed_generation_identity()
-        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let admission =
-        resolve_network_admission(state, runtime, peer, resource, resolver, uid, generation)?;
-    let context =
-        resolve_network_effect_context(resource, resolver, &admission).inspect_err(|error| {
-            tracing::warn!(
-                stage = "resolve-network-effect-context",
-                error = error.code(),
-                "Network Provider path resolution failed"
-            );
-        })?;
-    let attachment_generation = admission.key().attachment_generation();
-    if ensure_host_base {
-        let base_response = dispatch_broker_request_as(
-            state,
-            BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
-                bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
-                scope_id: ScopeId::new("host"),
-                desired_hash: None,
-                destroy: false,
-                tracing_span_id: None,
-            }),
-            caller_role.clone(),
-        )
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-        match base_response {
-            BrokerResponse::Ack(_) => {}
-            BrokerResponse::Error(error) => {
-                tracing::warn!(
-                    broker_kind = %error.kind,
-                    broker_operation = %error.operation,
-                    "Network Provider host firewall base was refused"
-                );
-                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-            }
-            _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
-        }
-    }
-    let mdns_enabled = resource
-        .get("spec")
-        .and_then(|value| value.get("mdns"))
-        .and_then(|value| value.get("enable"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let resources = PublicNetworkResourceBoundary::default();
-    let observer = resources.clone();
-    let mut input = ReconcileInput {
-        spec: spec.clone(),
-        mdns_enabled,
-        network_uid: uid.clone(),
-        network_generation: generation,
-        attachment_generation,
-        installed_generation,
-        admission,
-        artifact_catalog: vec![ArtifactCatalogEntry::new(
-            spec.net_vm_system_artifact_id().clone(),
-            ArtifactKind::NixosSystem,
-        )],
-        user_ready: true,
-        host_memory_budget_available: CONFIG_VOLUME_MAX_BYTES * 2,
-        volume_ready: false,
-        guest_ready: false,
-        volume_attachment_ready: false,
-        workload_fds_closed: true,
-        agent_deleted: true,
-        mdns_deleted: true,
-        volume_attachment_removed: true,
-        guest_deleted: true,
-        volume_deleted: true,
-        attachments: Vec::new(),
-    };
-    let effects = network_effect_port::production_port(
-        state,
-        caller_role,
-        context.with_host_global_nic_admission(),
-    );
-    let reconciler = NetworkReconciler::new(effects, resources);
-    let mut durable_resource = resource.clone();
-    for _pass in 0..MAX_NETWORK_CHILD_READINESS_PASSES {
-        let observed_before = network_child_readiness_from_resource(&durable_resource);
-        input.volume_ready = observed_before.volume_ready;
-        input.guest_ready = observed_before.guest_ready;
-        input.volume_attachment_ready = observed_before.volume_attachment_ready;
-        match block_on_future(reconciler.reconcile(&input)) {
-            Ok(ReconcileProgress::Ready) => {
-                let completed = observer
-                    .completed_child_readiness()
-                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-                if !completed.is_ready() {
-                    tracing::warn!(
-                        stage = "network-reconciler",
-                        "Network Provider reported Ready without completing child mutations"
-                    );
-                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-                }
-                // U14: the Provider's status commit is the manager's status
-                // projection now, so the simulated durable re-read that used
-                // to verify it here retired with the store; the completed
-                // child readiness is the evidence.
-                return Ok(true);
-            }
-            Ok(ReconcileProgress::Pending(_)) => {
-                let observed_after = observer
-                    .completed_child_readiness()
-                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-                if observed_after == observed_before {
-                    tracing::warn!(
-                        stage = "network-reconciler",
-                        "Network Provider child readiness made no progress"
-                    );
-                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-                }
-                // U14: the status write goes to the manager's in-memory
-                // status projection, so this simulation carries the observed
-                // progress in its local row view instead of re-reading a
-                // durable row that no longer exists.
-                let projection = network_child_readiness_projection_for_resource(
-                    &durable_resource,
-                    observed_after,
-                );
-                durable_resource["status"]["resource"] = projection;
-            }
-            Ok(progress) => {
-                tracing::warn!(
-                    stage = "network-reconciler",
-                    progress = ?progress,
-                    "Network Provider reconcile did not reach Ready"
-                );
-                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-            }
-            Err(error) => {
-                tracing::warn!(
-                    stage = "network-reconciler",
-                    error = error.code(),
-                    "Network Provider reconcile effect failed"
-                );
-                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-            }
-        }
-    }
-    tracing::warn!(
-        stage = "network-reconciler",
-        "Network Provider child readiness did not converge"
-    );
-    Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn is_device_tpm_reconcile_request(request: &Value) -> bool {
-    request.get("method").and_then(Value::as_str) == Some("Reconcile")
-        && request.get("resourceType").and_then(Value::as_str) == Some("Device")
-        && request.get("providerRef").and_then(Value::as_str)
-            == Some(d2b_provider_device_tpm::PROVIDER_REF)
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn dispatch_device_tpm_reconcile(
-    state: &ServerState,
-    peer: &PeerIdentity,
-    request: &Value,
-) -> Result<Value, resource_runtime::ResourceRuntimeError> {
-    dispatch_device_tpm_reconcile_inner(state, peer, request)
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn dispatch_device_tpm_reconcile_inner(
-    state: &ServerState,
-    peer: &PeerIdentity,
-    request: &Value,
-) -> Result<Value, resource_runtime::ResourceRuntimeError> {
-    if !matches!(peer.role, PeerRole::Admin) {
-        return Err(resource_runtime::ResourceRuntimeError::AuthenticationUnavailable);
-    }
-    let zone = request
-        .get("zoneRef")
-        .and_then(Value::as_str)
-        .and_then(|value| value.strip_prefix("Zone/"))
-        .and_then(|value| ZoneId::parse(value.to_owned()).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::RouteMismatch)?;
-    let vm_id = request
-        .get("vmId")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty() && value.len() <= 64)
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let device_uid = request
-        .get("resourceUid")
-        .and_then(Value::as_str)
-        .and_then(|value| ResourceUid::parse(value).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let device_ref = request
-        .get("deviceRef")
-        .and_then(Value::as_str)
-        .and_then(|value| ResourceRef::parse(value).ok())
-        .filter(|reference| reference.resource_type().as_str() == "Device")
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let operation_id = request
-        .get("operationId")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty() && value.len() <= 128)
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let log_level = request
-        .get("logLevel")
-        .and_then(Value::as_u64)
-        .map(|value| {
-            u8::try_from(value).map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)
-        })
-        .transpose()?
-        .unwrap_or(20);
-    if !(1..=20).contains(&log_level) {
-        return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
-    }
-    let plane = state
-        .resource_plane
-        .lock()
-        .ok()
-        .and_then(|plane| plane.clone())
-        .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
-    let runtime = plane.zone(&zone).inspect_err(|error| {
-        tracing::warn!(?error, zone = %zone.as_str(), "Device TPM reconcile Zone lookup failed");
-    })?;
-    let migration_intent = format!("legacy-swtpm:vm:{vm_id}");
-    let inventory = dispatch_broker_legacy_tpm_inventory(
-        state,
-        VmId::new(vm_id),
-        BundleOpId::new(migration_intent.clone()),
-    )
-    .map_err(|error| {
-        tracing::warn!(?error, vm_id, "Device TPM legacy inventory unavailable");
-        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-    })?;
-    tracing::warn!(
-        vm_id,
-        outcome = inventory.as_str(),
-        "Device TPM legacy inventory classified"
-    );
-    let legacy_intent_anchor =
-        trusted_tpm_migration_anchor(&migration_intent, inventory).map_err(|error| {
-            tracing::warn!(?error, vm_id, "Device TPM migration anchor rejected");
-            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-        })?;
-    let decision = block_on_future(runtime.tpm_device_is_admitted(
-        &device_uid,
-        &device_ref,
-        vm_id,
-        operation_id,
-        legacy_intent_anchor,
-    ))?;
-    let guest_ref = ResourceRef::parse(&format!("Guest/{vm_id}"))
-        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let lifecycle_operation_id =
-        provider_registry::next_lifecycle_operation_id("tpm-start", vm_id, operation_id);
-    let lifecycle_admission = block_on_future(runtime.admit_guest_lifecycle(
-        peer.uid,
-        guest_ref.clone(),
-        &lifecycle_operation_id,
-    ))?;
-    let lifecycle_authorization = provider_effects::LifecycleAuthorization::from_lease(
-        lifecycle_admission.lease,
-        guest_ref,
-        lifecycle_admission.guest_uid,
-        lifecycle_admission.guest_generation,
-        lifecycle_admission.provider_assignment_generation,
-    )
-    .map_err(|_| resource_runtime::ResourceRuntimeError::AuthenticationUnavailable)?;
-    let execution_ref = ResourceRef::parse("Host/host-system")
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let mut controller = d2b_provider_device_tpm::TpmResourceController::new(
-        device_uid.clone(),
-        device_ref.clone(),
-        execution_ref.clone(),
-    )
-    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let outcome = tpm_effect_port::reconcile_device_tpm_controller(
-        state,
-        VmId::new(vm_id),
-        BundleOpId::new(migration_intent),
-        decision,
-        tpm_effect_port::AdmittedTpmDevice::new(
-            device_uid,
-            device_ref,
-            zone.as_str(),
-            execution_ref,
-            lifecycle_authorization,
-        ),
-        broker_caller_role_for_peer(peer),
-        &tpm_effect_port::NoManagerChildSurface,
-        &mut controller,
-    )
-    .map_err(|error| {
-        tracing::warn!(?error, vm_id, "Device TPM production reconcile failed");
-        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-    })?;
-    Ok(json!({
-        "resourceType": "Device",
-        "provider": d2b_provider_device_tpm::PROVIDER_REF,
-        "outcome": outcome.code()
-    }))
-}
-
-#[cfg(test)]
 fn trusted_tpm_migration_anchor(
     intent: &str,
     inventory: LegacySwtpmMigrationOutcome,
@@ -8539,38 +7423,6 @@ fn trusted_tpm_migration_anchor(
         | LegacySwtpmMigrationOutcome::Migrated
         | LegacySwtpmMigrationOutcome::NotApplicable => Err(()),
     }
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn tpm_opaque_bytes(domain: &str, value: &str) -> [u8; 32] {
-    let digest = Sha256::digest(format!("{domain}:{value}").as_bytes());
-    let mut bytes = [0; 32];
-    bytes.copy_from_slice(&digest);
-    bytes
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn tpm_state_intent(
-    device_uid: &ResourceUid,
-    vm_id: &str,
-) -> d2b_provider_device_tpm::StateDirIntent {
-    d2b_provider_device_tpm::StateDirIntent::new(
-        d2b_provider_device_tpm::StateDirectoryToken::from_core(tpm_opaque_bytes(
-            "d2b:tpm-state/v1",
-            vm_id,
-        )),
-        d2b_provider_device_tpm::TamperMarkerToken::from_core(tpm_opaque_bytes(
-            "d2b:tpm-marker/v1",
-            device_uid.as_str(),
-        )),
-        d2b_provider_device_tpm::StateOwnerToken::from_core(
-            tpm_opaque_bytes("d2b:tpm-owner/v1", vm_id)[..16]
-                .try_into()
-                .expect("fixed owner token length"),
-        ),
-    )
 }
 
 fn resolve_resource_runtime(
@@ -14930,59 +13782,6 @@ pub(crate) fn dispatch_broker_legacy_tpm_migration(
     }
 }
 
-/// Probe the broker-owned legacy swtpm inventory before Core seals the
-/// migration decision. The Provider never receives this response directly.
-#[allow(dead_code)]
-pub(crate) fn dispatch_broker_legacy_tpm_inventory(
-    state: &ServerState,
-    vm_id: VmId,
-    intent_ref: BundleOpId,
-) -> Result<LegacySwtpmMigrationOutcome, TypedError> {
-    let caller_role = BrokerCallerRole::AdminUid {
-        uid: state.daemon_uid,
-    };
-    match dispatch_broker_request_as(
-        state,
-        BrokerRequest::Hello(HelloRequest {
-            client_version: d2b_contracts_broker::PROTOCOL_VERSION.to_string(),
-            supported_features: vec!["MigrateLegacySwtpmState".to_owned()],
-        }),
-        caller_role.clone(),
-    )? {
-        BrokerResponse::Hello(response)
-            if response
-                .capabilities
-                .iter()
-                .any(|capability| capability == "MigrateLegacySwtpmState") => {}
-        _ => {
-            return Err(TypedError::InternalBrokerUnavailable {
-                path: broker_socket_path(state),
-                detail: "broker did not advertise legacy TPM inventory".to_owned(),
-            });
-        }
-    }
-    match dispatch_broker_request_as(
-        state,
-        BrokerRequest::MigrateLegacySwtpmState(MigrateLegacySwtpmStateRequest {
-            bundle_legacy_swtpm_intent_ref: intent_ref,
-            vm_id,
-            probe_only: true,
-            tracing_span_id: None,
-        }),
-        caller_role,
-    )? {
-        BrokerResponse::MigrateLegacySwtpmState(response) => Ok(response.outcome),
-        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
-            path: broker_socket_path(state),
-            detail: error.message,
-        }),
-        _ => Err(TypedError::InternalBrokerUnavailable {
-            path: broker_socket_path(state),
-            detail: "legacy TPM inventory response mismatch".to_owned(),
-        }),
-    }
-}
-
 fn dispatch_broker_request(
     state: &ServerState,
     request: BrokerRequest,
@@ -15101,81 +13900,6 @@ fn dispatch_broker_request_with_fds_timeout_as(
     timeout: Duration,
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     dispatch_broker_request_with_optional_request_fds(state, request, caller_role, &[], timeout)
-}
-
-/// Ask the broker for the peer pidfd bound to one accepted local socket.
-///
-/// The accepted socket remains daemon-owned; this performs one SCM_RIGHTS
-/// request handoff and transfers ownership only of the broker's returned
-/// pidfd.  The broker never accepts a numeric PID or caller-supplied
-/// credential claim for this operation.
-#[allow(dead_code)]
-pub(crate) fn open_accepted_socket_peer_pidfd(
-    state: &ServerState,
-    accepted_socket: &OwnedFd,
-    timeout: Duration,
-) -> Result<OwnedFd, TypedError> {
-    let socket_path = broker_socket_path(state);
-    let (response, received_fds) = dispatch_broker_request_with_request_fd_timeout_as(
-        state,
-        BrokerRequest::OpenPeerPidfdFromAcceptedSocket(
-            d2b_contracts_broker::broker_wire::OpenPeerPidfdFromAcceptedSocketRequest {},
-        ),
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-        accepted_socket,
-        timeout,
-    )?;
-
-    let result = match response {
-        BrokerResponse::OpenPeerPidfdFromAcceptedSocket(response)
-            if response.pidfd_index == 0 && received_fds.len() == 1 =>
-        {
-            duplicate_received_fd(
-                &received_fds,
-                response.pidfd_index,
-                "duplicate accepted-peer pidfd",
-            )
-        }
-        BrokerResponse::OpenPeerPidfdFromAcceptedSocket(_) => {
-            Err(TypedError::InternalBrokerUnavailable {
-                path: socket_path,
-                detail: "accepted-peer pidfd response did not return exactly one descriptor"
-                    .to_owned(),
-            })
-        }
-        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
-            path: socket_path,
-            detail: format!("accepted-peer pidfd refused: {}", error.kind),
-        }),
-        other => Err(TypedError::InternalBrokerUnavailable {
-            path: socket_path,
-            detail: format!(
-                "accepted-peer pidfd returned unexpected response: {}",
-                broker_response_kind(&other)
-            ),
-        }),
-    };
-    close_received_fds(&received_fds);
-    result
-}
-
-#[allow(dead_code)]
-fn dispatch_broker_request_with_request_fd_timeout_as(
-    state: &ServerState,
-    request: BrokerRequest,
-    caller_role: BrokerCallerRole,
-    request_fd: &OwnedFd,
-    timeout: Duration,
-) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
-    dispatch_broker_request_with_optional_request_fds(
-        state,
-        request,
-        caller_role,
-        &[request_fd.as_raw_fd()],
-        timeout,
-    )
 }
 
 fn dispatch_broker_request_with_optional_request_fds(
@@ -20781,20 +19505,6 @@ fn dispatch_broker_vm_restart_as(
     ))
 }
 
-#[allow(dead_code)]
-fn dispatch_broker_host_prepare(
-    state: &ServerState,
-    request: public_wire::HostPrepareRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_host_prepare_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-    )
-}
-
 fn dispatch_broker_host_prepare_as(
     state: &ServerState,
     request: public_wire::HostPrepareRequest,
@@ -20863,20 +19573,6 @@ fn dispatch_broker_host_prepare_as(
     ))
 }
 
-#[allow(dead_code)]
-fn dispatch_broker_host_destroy(
-    state: &ServerState,
-    request: public_wire::HostDestroyRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_host_destroy_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-    )
-}
-
 fn dispatch_broker_host_destroy_as(
     state: &ServerState,
     request: public_wire::HostDestroyRequest,
@@ -20934,20 +19630,6 @@ fn dispatch_broker_host_destroy_as(
 /// are scoped to full `host prepare`. On success the persistent
 /// preflight history is reset so the next daemon startup begins with
 /// clean diagnostic evidence.
-#[allow(dead_code)]
-fn dispatch_broker_host_reconcile(
-    state: &ServerState,
-    request: public_wire::HostReconcileRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_host_reconcile_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-    )
-}
-
 fn dispatch_broker_host_reconcile_as(
     state: &ServerState,
     request: public_wire::HostReconcileRequest,
@@ -20990,20 +19672,6 @@ fn dispatch_broker_host_reconcile_as(
             "host reconcile --network: applied host-owned firewall projection; Network resources own per-Network effects"
         ),
     ))
-}
-
-#[allow(dead_code)]
-fn dispatch_broker_run_host_install(
-    state: &ServerState,
-    request: public_wire::HostInstallRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_run_host_install_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-    )
 }
 
 fn dispatch_broker_run_host_install_as(
@@ -21085,20 +19753,6 @@ fn dispatch_broker_run_host_install_as(
             Ok(broker_failure_response(VERB, summary, remediation, None))
         }
     }
-}
-
-#[allow(dead_code)]
-fn dispatch_broker_run_migrate(
-    state: &ServerState,
-    request: public_wire::MigrateRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_run_migrate_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-    )
 }
 
 fn dispatch_broker_run_migrate_as(
@@ -21813,14 +20467,6 @@ fn dispatch_broker_activation_metadata_only(
     ))
 }
 
-#[allow(dead_code)]
-fn dispatch_broker_switch(
-    state: &ServerState,
-    request: public_wire::ActivationRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_switch_as(state, BrokerCallerRole::NotAuthorized, request)
-}
-
 fn dispatch_broker_switch_as(
     state: &ServerState,
     caller_role: BrokerCallerRole,
@@ -21833,14 +20479,6 @@ fn dispatch_broker_switch_as(
         BrokerActivationMode::Switch,
         caller_role,
     )
-}
-
-#[allow(dead_code)]
-fn dispatch_broker_boot(
-    state: &ServerState,
-    request: public_wire::ActivationRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_boot_as(state, BrokerCallerRole::NotAuthorized, request)
 }
 
 fn dispatch_broker_boot_as(
@@ -21857,14 +20495,6 @@ fn dispatch_broker_boot_as(
     )
 }
 
-#[allow(dead_code)]
-fn dispatch_broker_test(
-    state: &ServerState,
-    request: public_wire::ActivationRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_test_as(state, BrokerCallerRole::NotAuthorized, request)
-}
-
 fn dispatch_broker_test_as(
     state: &ServerState,
     caller_role: BrokerCallerRole,
@@ -21879,14 +20509,6 @@ fn dispatch_broker_test_as(
     )
 }
 
-#[allow(dead_code)]
-fn dispatch_broker_rollback(
-    state: &ServerState,
-    request: public_wire::ActivationRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_rollback_as(state, BrokerCallerRole::NotAuthorized, request)
-}
-
 fn dispatch_broker_rollback_as(
     state: &ServerState,
     caller_role: BrokerCallerRole,
@@ -21898,20 +20520,6 @@ fn dispatch_broker_rollback_as(
         "rollback",
         BrokerActivationMode::Rollback,
         caller_role,
-    )
-}
-
-#[allow(dead_code)]
-fn dispatch_broker_gc(
-    state: &ServerState,
-    request: public_wire::GcRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_gc_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
     )
 }
 
@@ -21983,20 +20591,6 @@ fn dispatch_broker_gc_as(
     }
 }
 
-#[allow(dead_code)]
-fn dispatch_broker_store_verify(
-    state: &ServerState,
-    request: public_wire::StoreVerifyRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_store_verify_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-    )
-}
-
 fn dispatch_broker_store_verify_as(
     state: &ServerState,
     request: public_wire::StoreVerifyRequest,
@@ -22061,20 +20655,6 @@ fn dispatch_broker_store_verify_as(
         },
     };
     Ok(d2bd_runtime::wire::store_verify_response(response))
-}
-
-#[allow(dead_code)]
-fn dispatch_broker_keys_rotate(
-    state: &ServerState,
-    request: public_wire::KeysRotateRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_keys_rotate_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-    )
 }
 
 fn dispatch_broker_keys_rotate_as(
@@ -22147,20 +20727,6 @@ fn dispatch_broker_keys_rotate_as(
     }
 }
 
-#[allow(dead_code)]
-fn dispatch_broker_trust(
-    state: &ServerState,
-    request: public_wire::TrustRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_trust_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-    )
-}
-
 fn dispatch_broker_trust_as(
     state: &ServerState,
     request: public_wire::TrustRequest,
@@ -22229,20 +20795,6 @@ fn dispatch_broker_trust_as(
             Ok(broker_failure_response(VERB, summary, remediation, None))
         }
     }
-}
-
-#[allow(dead_code)]
-fn dispatch_broker_rotate_known_host(
-    state: &ServerState,
-    request: public_wire::RotateKnownHostRequest,
-) -> Result<Value, TypedError> {
-    dispatch_broker_rotate_known_host_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-    )
 }
 
 fn dispatch_broker_rotate_known_host_as(
@@ -22512,14 +21064,6 @@ fn build_public_list(
             .collect::<Vec<_>>()
     });
     Ok(d2bd_runtime::wire::list_response(vms))
-}
-
-#[allow(dead_code)]
-fn dispatch_status(
-    state: &ServerState,
-    request: public_wire::StatusRequest,
-) -> Result<Value, TypedError> {
-    dispatch_status_as(state, BrokerCallerRole::NotAuthorized, request)
 }
 
 fn dispatch_status_as(
@@ -23859,8 +22403,9 @@ mod public_status_tests {
             )
             .expect("register virtiofsd");
 
-        let frame = dispatch_status(
+        let frame = dispatch_status_as(
             &state,
+            BrokerCallerRole::NotAuthorized,
             public_wire::StatusRequest {
                 check_bridges: false,
                 vm: Some("vm-a".to_owned()),
@@ -23928,7 +22473,7 @@ mod public_status_tests {
             vm: None,
         };
 
-        let first = dispatch_status(&state, request.clone()).expect("first status dispatch");
+        let first = dispatch_status_as(&state, BrokerCallerRole::NotAuthorized, request.clone()).expect("first status dispatch");
         let first_generation = first
             .pointer("/status/readModel/generation")
             .and_then(Value::as_u64)
@@ -23940,7 +22485,7 @@ mod public_status_tests {
             Some("Stopped")
         );
 
-        let second = dispatch_status(&state, request.clone()).expect("cached status dispatch");
+        let second = dispatch_status_as(&state, BrokerCallerRole::NotAuthorized, request.clone()).expect("cached status dispatch");
         assert_eq!(
             second
                 .pointer("/status/readModel/generation")
@@ -23957,7 +22502,7 @@ mod public_status_tests {
                 current_process_entry(),
             )
             .expect("register ch runner");
-        let refreshed = dispatch_status(&state, request).expect("refreshed status dispatch");
+        let refreshed = dispatch_status_as(&state, BrokerCallerRole::NotAuthorized, request).expect("refreshed status dispatch");
         assert!(
             refreshed
                 .pointer("/status/readModel/generation")
@@ -24071,8 +22616,9 @@ mod public_status_tests {
             Some("Running")
         );
 
-        let status = dispatch_status(
+        let status = dispatch_status_as(
             &state,
+            BrokerCallerRole::NotAuthorized,
             public_wire::StatusRequest {
                 check_bridges: false,
                 vm: None,
@@ -24154,8 +22700,9 @@ mod public_status_tests {
             ..DaemonConfig::default()
         });
 
-        let stopped = dispatch_status(
+        let stopped = dispatch_status_as(
             &state,
+            BrokerCallerRole::NotAuthorized,
             public_wire::StatusRequest {
                 check_bridges: false,
                 vm: Some("vm-a".to_owned()),
@@ -24184,8 +22731,9 @@ mod public_status_tests {
                 current_process_entry(),
             )
             .expect("register running ch");
-        let running = dispatch_status(
+        let running = dispatch_status_as(
             &state,
+            BrokerCallerRole::NotAuthorized,
             public_wire::StatusRequest {
                 check_bridges: false,
                 vm: Some("vm-a".to_owned()),
@@ -25721,10 +24269,10 @@ mod broker_dispatch_tests {
         ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ProviderGracefulInputs,
         QemuBrokerShutdownProvider, ServerState, VM_RUNNER_ROLE_ID,
         VmShutdownOutcome, VmStartNodeMode, adopt_orphaned_runners_on_startup_with,
-        block_on_future, dispatch_broker_gc,
-        dispatch_broker_host_destroy, dispatch_broker_host_prepare, dispatch_broker_keys_rotate,
-        dispatch_broker_rotate_known_host,         dispatch_broker_run_host_install,
-        dispatch_broker_run_migrate, dispatch_broker_trust, dispatch_broker_vm_restart,
+        block_on_future, dispatch_broker_gc_as, dispatch_broker_host_destroy_as,
+        dispatch_broker_host_prepare_as, dispatch_broker_keys_rotate_as,
+        dispatch_broker_rotate_known_host_as, dispatch_broker_run_host_install_as,
+        dispatch_broker_run_migrate_as, dispatch_broker_trust_as, dispatch_broker_vm_restart,
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
         dispatch_request, force_shutdown_generation, note_force_shutdown_request,
         prove_role_cgroup_empty_or_escalate, provider_shutdown, reconcile_display_before_vm_start,
@@ -27160,10 +25708,11 @@ mod broker_dispatch_tests {
 
     #[test]
     fn host_install_broker_unreachable_returns_broker_error() {
-        let response = dispatch_broker_run_host_install(
-            &test_state_with_broker_socket(unreachable_broker_socket_path(
-                "host-install-unreachable",
-            )),
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "host-install-unreachable",
+        ));
+        let response = dispatch_broker_run_host_install_as(
+            &state,
             HostInstallRequest {
                 flags: MutationFlags {
                     apply: true,
@@ -27173,6 +25722,7 @@ mod broker_dispatch_tests {
                 no_start: true,
                 ..HostInstallRequest::default()
             },
+            BrokerCallerRole::AdminUid { uid: state.daemon_uid },
         )
         .expect("host install response");
         assert_unreachable_broker_response(response, "host install", "RunHostInstall");
@@ -27180,14 +25730,17 @@ mod broker_dispatch_tests {
 
     #[test]
     fn migrate_broker_unreachable_returns_broker_error() {
-        let response = dispatch_broker_run_migrate(
-            &test_state_with_broker_socket(unreachable_broker_socket_path("migrate-unreachable")),
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("migrate-unreachable"));
+        let response = dispatch_broker_run_migrate_as(
+            &state,
             MigrateRequest {
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
                 },
             },
+            BrokerCallerRole::AdminUid { uid: state.daemon_uid },
         )
         .expect("migrate response");
         assert_unreachable_broker_response(response, "migrate", "RunMigrate");
@@ -27195,8 +25748,10 @@ mod broker_dispatch_tests {
 
     #[test]
     fn gc_broker_unreachable_returns_broker_error() {
-        let response = dispatch_broker_gc(
-            &test_state_with_broker_socket(unreachable_broker_socket_path("gc-unreachable")),
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("gc-unreachable"));
+        let response = dispatch_broker_gc_as(
+            &state,
             GcRequest {
                 flags: MutationFlags {
                     apply: true,
@@ -27204,6 +25759,7 @@ mod broker_dispatch_tests {
                 },
                 keep_generations: Some(2),
             },
+            BrokerCallerRole::AdminUid { uid: state.daemon_uid },
         )
         .expect("gc response");
         assert_unreachable_broker_response(response, "gc", "RunGc");
@@ -27211,10 +25767,11 @@ mod broker_dispatch_tests {
 
     #[test]
     fn keys_rotate_broker_unreachable_returns_broker_error() {
-        let response = dispatch_broker_keys_rotate(
-            &test_state_with_broker_socket(unreachable_broker_socket_path(
-                "keys-rotate-unreachable",
-            )),
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "keys-rotate-unreachable",
+        ));
+        let response = dispatch_broker_keys_rotate_as(
+            &state,
             KeysRotateRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
@@ -27222,6 +25779,7 @@ mod broker_dispatch_tests {
                     ..MutationFlags::default()
                 },
             },
+            BrokerCallerRole::AdminUid { uid: state.daemon_uid },
         )
         .expect("keys rotate response");
         assert_unreachable_broker_response(response, "keys rotate", "RunKeysRotate");
@@ -27229,8 +25787,10 @@ mod broker_dispatch_tests {
 
     #[test]
     fn trust_broker_unreachable_returns_broker_error() {
-        let response = dispatch_broker_trust(
-            &test_state_with_broker_socket(unreachable_broker_socket_path("trust-unreachable")),
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("trust-unreachable"));
+        let response = dispatch_broker_trust_as(
+            &state,
             TrustRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
@@ -27238,6 +25798,7 @@ mod broker_dispatch_tests {
                     ..MutationFlags::default()
                 },
             },
+            BrokerCallerRole::AdminUid { uid: state.daemon_uid },
         )
         .expect("trust response");
         assert_unreachable_broker_response(response, "trust", "RunHostKeyTrust");
@@ -27245,10 +25806,11 @@ mod broker_dispatch_tests {
 
     #[test]
     fn rotate_known_host_broker_unreachable_returns_broker_error() {
-        let response = dispatch_broker_rotate_known_host(
-            &test_state_with_broker_socket(unreachable_broker_socket_path(
-                "rotate-known-host-unreachable",
-            )),
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "rotate-known-host-unreachable",
+        ));
+        let response = dispatch_broker_rotate_known_host_as(
+            &state,
             RotateKnownHostRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
@@ -27256,6 +25818,7 @@ mod broker_dispatch_tests {
                     ..MutationFlags::default()
                 },
             },
+            BrokerCallerRole::AdminUid { uid: state.daemon_uid },
         )
         .expect("rotate-known-host response");
         assert_unreachable_broker_response(response, "rotate-known-host", "RunRotateKnownHost");
@@ -29644,17 +28207,19 @@ mod broker_dispatch_tests {
 
     #[test]
     fn host_prepare_broker_unreachable_returns_broker_error() {
-        let response = dispatch_broker_host_prepare(
-            &test_state_with_broker_socket_and_host(
-                unreachable_broker_socket_path("host-prepare-unreachable"),
-                host_fixture_path(),
-            ),
+        let state = test_state_with_broker_socket_and_host(
+            unreachable_broker_socket_path("host-prepare-unreachable"),
+            host_fixture_path(),
+        );
+        let response = dispatch_broker_host_prepare_as(
+            &state,
             HostPrepareRequest {
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
                 },
             },
+            BrokerCallerRole::AdminUid { uid: state.daemon_uid },
         )
         .expect("host prepare response");
         let (_expected_summary, expected_remediation) =
@@ -29771,14 +28336,17 @@ mod broker_dispatch_tests {
             operations
         });
 
-        let response = dispatch_broker_host_destroy(
-            &test_state_with_broker_socket_and_host(socket_path.clone(), host_fixture_path()),
+        let state =
+            test_state_with_broker_socket_and_host(socket_path.clone(), host_fixture_path());
+        let response = dispatch_broker_host_destroy_as(
+            &state,
             HostDestroyRequest {
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
                 },
             },
+            BrokerCallerRole::AdminUid { uid: state.daemon_uid },
         )
         .expect("host destroy response");
 
@@ -29810,17 +28378,19 @@ mod broker_dispatch_tests {
 
     #[test]
     fn host_destroy_broker_unreachable_returns_broker_error() {
-        let response = dispatch_broker_host_destroy(
-            &test_state_with_broker_socket_and_host(
-                unreachable_broker_socket_path("host-destroy-unreachable"),
-                host_fixture_path(),
-            ),
+        let state = test_state_with_broker_socket_and_host(
+            unreachable_broker_socket_path("host-destroy-unreachable"),
+            host_fixture_path(),
+        );
+        let response = dispatch_broker_host_destroy_as(
+            &state,
             HostDestroyRequest {
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
                 },
             },
+            BrokerCallerRole::AdminUid { uid: state.daemon_uid },
         )
         .expect("host destroy response");
         let (_expected_summary, expected_remediation) =

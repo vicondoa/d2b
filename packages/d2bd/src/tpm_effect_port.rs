@@ -546,25 +546,6 @@ pub(crate) struct AdmittedTpmDevice {
 }
 
 impl AdmittedTpmDevice {
-    /// One Device admitted from an already issued Guest lifecycle lease (the
-    /// public peer path, retained by the legacy dispatch simulation).
-    #[cfg(test)]
-    pub(crate) fn new(
-        device_uid: ResourceUid,
-        device_ref: ResourceRef,
-        zone: impl Into<String>,
-        execution_ref: ResourceRef,
-        lifecycle_authorization: LifecycleAuthorization,
-    ) -> Self {
-        Self {
-            device_uid,
-            device_ref,
-            zone: zone.into(),
-            execution_ref,
-            lifecycle_admission: TpmLifecycleAdmission::Issued(lifecycle_authorization),
-        }
-    }
-
     /// One Device reconciled from its own row: the owning Guest's lifecycle
     /// admission is resolved when the pass reaches the launchable row.
     pub(crate) fn from_row(
@@ -658,39 +639,6 @@ pub(crate) fn finalize_device_tpm_controller(
         children,
     );
     crate::block_on_future(controller.finalize(&resource_effect))
-}
-
-/// Fail-closed child surface for callers that hold no manager context.
-///
-/// The retained legacy dispatch simulation
-/// (`composition::dispatch_device_tpm_reconcile`) runs outside a driver and
-/// cannot realize Device-owned rows; it refuses instead of re-introducing a
-/// spawn. The v3 path is the SharedProvider driver's `reconcile_tpm` effect,
-/// which passes its own [`SharedProviderChildSurface`].
-#[cfg(test)]
-pub(crate) struct NoManagerChildSurface;
-
-#[cfg(test)]
-#[async_trait::async_trait]
-impl SharedProviderChildSurface for NoManagerChildSurface {
-    async fn ensure(
-        &self,
-        _child: ChildEnsure,
-    ) -> Result<d2b_resource_runtime::spec_store::EnsureOutcome, d2b_provider_toolkit::SharedProviderEffectError>
-    {
-        Err(d2b_provider_toolkit::SharedProviderEffectError::Unavailable)
-    }
-
-    async fn delete(&self, _key: &ResourceKey) -> Result<(), d2b_provider_toolkit::SharedProviderEffectError> {
-        Err(d2b_provider_toolkit::SharedProviderEffectError::Unavailable)
-    }
-
-    async fn view(
-        &self,
-        _key: &ResourceKey,
-    ) -> Result<Option<ResourceView>, d2b_provider_toolkit::SharedProviderEffectError> {
-        Err(d2b_provider_toolkit::SharedProviderEffectError::Unavailable)
-    }
 }
 
 #[cfg(test)]

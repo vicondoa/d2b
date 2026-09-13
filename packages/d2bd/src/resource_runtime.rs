@@ -8919,6 +8919,12 @@ impl ZoneResourceRuntime {
     /// Load and validate the committed Device record before a security-key
     /// provider constructs its one-use admission. Request fields select a
     /// candidate only; the returned values all originate from the manager row.
+    ///
+    /// Retained with the security-key effect port the composition audit keeps:
+    /// the legacy Device-Reconcile dispatch that was this admission's only
+    /// caller is deleted, and the v3 family path that owns the same trusted
+    /// resolution is rebuilt by the security-key migration.
+    #[allow(dead_code)]
     pub(crate) async fn security_key_device_is_admitted(
         &self,
         request: SecurityKeyDeviceAdmissionRequest<'_>,

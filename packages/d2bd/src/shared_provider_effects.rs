@@ -51,7 +51,6 @@ use sha2::{Digest, Sha256};
 use crate::ServerState;
 use crate::resource_plane_v3::ResourcePlaneV3;
 use crate::resource_runtime::{ASSIGNMENT_EPOCH, ZoneResourceRuntime};
-use crate::usbip_production::UsbipChildResourcePort;
 use d2b_provider_device::{DeviceComponent, DeviceResourceState};
 use d2b_provider_device_security_key::SecurityKeyComponent;
 use d2b_provider_device_usbip::UsbipComponent;
@@ -1130,68 +1129,8 @@ impl ProductionSharedProviderEffects {
 
 /// The production USBIP port over the zone-wide authority ledger (old
 /// `SharedRunnerUsbipPort`).
-type SharedRunnerUsbipPort<'a> = d2b_provider_device_usbip::ProductionPort<
-    crate::usbip_production::DaemonUsbipDispatcher<'a, SharedRunnerUsbipChildren>,
->;
-
-/// Fail-closed child port for the USBIP dispatcher.
-///
-/// The only production path that builds this dispatcher is the USBIP Service
-/// reconcile (`usbip_service_port` below), which drives
-/// `ServiceLifecycle::activate` and never calls the attach seams below. Those
-/// seams belong to `BindingLifecycle`, and no production path constructs a
-/// `BindingLifecycle`: it exists only in `d2b-provider-device-usbip`'s own
-/// tests. The v3 Binding realizes its attach through the declared child
-/// resources instead - `d2b_provider_device_usbip::binding_child_resources`
-/// yields the Guest `Process/...guest-proxy` and its `Endpoint`, which the
-/// shared provider driver commits as owner-scoped child rows of the Binding
-/// and the Process controller launches and owns.
-///
-/// So these legacy attach seams have no live consumer (U17 site 5) and stay
-/// fail-closed rather than pretending to realize a child: the attach Process
-/// row is the Binding-owned `Process/...guest-proxy` child above, never a
-/// spawn from this port.
-struct SharedRunnerUsbipChildren;
-
-impl UsbipChildResourcePort for SharedRunnerUsbipChildren {
-    fn ensure_attach_process(
-        &mut self,
-        _binding: &d2b_provider_device_usbip::BindingIdentity,
-        _proxy: &d2b_provider_device_usbip::BindingProxyLease,
-    ) -> Result<
-        d2b_provider_device_usbip::AttachProcessIdentity,
-        d2b_provider_device_usbip::BindingLifecycleError,
-    > {
-        Err(d2b_provider_device_usbip::BindingLifecycleError::Transient)
-    }
-
-    fn observe_attach_process(
-        &mut self,
-        _binding: &d2b_provider_device_usbip::BindingIdentity,
-        _identity: &d2b_provider_device_usbip::AttachProcessIdentity,
-    ) -> Result<
-        d2b_provider_device_usbip::AttachmentObservation,
-        d2b_provider_device_usbip::BindingLifecycleError,
-    > {
-        Err(d2b_provider_device_usbip::BindingLifecycleError::Transient)
-    }
-
-    fn delete_guest_endpoint(
-        &mut self,
-        _binding: &d2b_provider_device_usbip::BindingIdentity,
-        _proxy: &d2b_provider_device_usbip::BindingProxyLease,
-    ) -> Result<(), d2b_provider_device_usbip::BindingLifecycleError> {
-        Err(d2b_provider_device_usbip::BindingLifecycleError::Transient)
-    }
-
-    fn delete_attach_process(
-        &mut self,
-        _binding: &d2b_provider_device_usbip::BindingIdentity,
-        _identity: &d2b_provider_device_usbip::AttachProcessIdentity,
-    ) -> Result<(), d2b_provider_device_usbip::BindingLifecycleError> {
-        Err(d2b_provider_device_usbip::BindingLifecycleError::Transient)
-    }
-}
+type SharedRunnerUsbipPort<'a> =
+    d2b_provider_device_usbip::ProductionPort<crate::usbip_production::DaemonUsbipDispatcher<'a>>;
 
 impl ProductionSharedProviderEffects {
     /// Old `usbip_service_port`: the broker-backed dispatcher for one USBIP
@@ -1253,7 +1192,6 @@ impl ProductionSharedProviderEffects {
             &self.state,
             binding_context,
             Arc::clone(&self.usbip_ledger),
-            SharedRunnerUsbipChildren,
         )
         .into_port();
         let opted_in = request.spec.pointer("/mode").and_then(Value::as_str) == Some("authority");

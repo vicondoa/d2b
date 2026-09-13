@@ -122,49 +122,11 @@ pub(crate) fn new_authority_ledger() -> Arc<Mutex<AuthorityLedger>> {
     Arc::new(Mutex::new(AuthorityLedger::default()))
 }
 
-/// Core-owned child-resource seam for USBIP Binding realization.
-///
-/// The daemon dispatcher supplies authority and broker effects, while this
-/// seam is responsible for creating, adopting, observing, and deleting the
-/// Binding's Endpoint and EphemeralProcess resources.  Keeping the seam
-/// explicit prevents a feature controller from falling back to a direct
-/// broker runner or pidfd lifecycle ownership.
-pub trait UsbipChildResourcePort {
-    /// Ensure or adopt the Guest attach EphemeralProcess child.
-    fn ensure_attach_process(
-        &mut self,
-        binding: &BindingIdentity,
-        proxy: &BindingProxyLease,
-    ) -> Result<AttachProcessIdentity, BindingLifecycleError>;
-
-    /// Observe the exact child identity after restart or reconnect.
-    fn observe_attach_process(
-        &mut self,
-        binding: &BindingIdentity,
-        identity: &AttachProcessIdentity,
-    ) -> Result<AttachmentObservation, BindingLifecycleError>;
-
-    /// Delete the Binding-owned Guest Endpoint.
-    fn delete_guest_endpoint(
-        &mut self,
-        binding: &BindingIdentity,
-        proxy: &BindingProxyLease,
-    ) -> Result<(), BindingLifecycleError>;
-
-    /// Delete the attach child after its Endpoint has drained.
-    fn delete_attach_process(
-        &mut self,
-        binding: &BindingIdentity,
-        identity: &AttachProcessIdentity,
-    ) -> Result<(), BindingLifecycleError>;
-}
-
 /// Daemon/broker-backed implementation of the Provider dispatcher.
-pub struct DaemonUsbipDispatcher<'a, C> {
+pub struct DaemonUsbipDispatcher<'a> {
     state: &'a ServerState,
     context: UsbipBindingContext,
     ledger: Arc<Mutex<AuthorityLedger>>,
-    child_resources: C,
     attach_identity: Option<AttachProcessIdentity>,
     attach_slot: Option<BindingSlotLease>,
     attach_proxy: Option<BindingProxyLease>,
@@ -174,19 +136,17 @@ pub struct DaemonUsbipDispatcher<'a, C> {
 }
 
 #[allow(dead_code)]
-impl<'a, C> DaemonUsbipDispatcher<'a, C> {
-    /// Construct one dispatcher over the daemon's broker and Core child port.
+impl<'a> DaemonUsbipDispatcher<'a> {
+    /// Construct one dispatcher over the daemon's broker and authority ledger.
     pub(crate) fn new(
         state: &'a ServerState,
         context: UsbipBindingContext,
         ledger: Arc<Mutex<AuthorityLedger>>,
-        child_resources: C,
     ) -> Self {
         Self {
             state,
             context,
             ledger,
-            child_resources,
             attach_identity: None,
             attach_slot: None,
             attach_proxy: None,
@@ -220,7 +180,7 @@ impl<'a, C> DaemonUsbipDispatcher<'a, C> {
     }
 }
 
-impl<'a, C: UsbipChildResourcePort> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a, C> {
+impl<'a> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a> {
     fn reserve_physical(
         &mut self,
         service_uid: &ResourceUid,
@@ -378,45 +338,44 @@ impl<'a, C: UsbipChildResourcePort> UsbipBrokerDispatcher for DaemonUsbipDispatc
         Ok(proxy)
     }
 
+    // The legacy attach seams below have no live consumer (U17 site 5): the v3
+    // Binding realizes its attach through the declared
+    // `Process/...guest-proxy` child rows, not from this port. They stay
+    // fail-closed rather than pretending to realize a child.
     fn ensure_attach_process(
         &mut self,
-        binding: &BindingIdentity,
-        proxy: &BindingProxyLease,
+        _binding: &BindingIdentity,
+        _proxy: &BindingProxyLease,
     ) -> Result<AttachProcessIdentity, BindingLifecycleError> {
-        let identity = self.child_resources.ensure_attach_process(binding, proxy)?;
-        self.attach_identity = Some(identity.clone());
-        Ok(identity)
+        Err(BindingLifecycleError::Transient)
     }
 
     fn observe_attach_process(
         &mut self,
-        binding: &BindingIdentity,
-        identity: &AttachProcessIdentity,
+        _binding: &BindingIdentity,
+        _identity: &AttachProcessIdentity,
     ) -> Result<AttachmentObservation, BindingLifecycleError> {
-        self.child_resources
-            .observe_attach_process(binding, identity)
+        Err(BindingLifecycleError::Transient)
     }
 
     fn delete_guest_endpoint(
         &mut self,
-        binding: &BindingIdentity,
-        proxy: &BindingProxyLease,
+        _binding: &BindingIdentity,
+        _proxy: &BindingProxyLease,
     ) -> Result<(), BindingLifecycleError> {
-        self.child_resources.delete_guest_endpoint(binding, proxy)
+        Err(BindingLifecycleError::Transient)
     }
 
     fn delete_attach_process(
         &mut self,
-        binding: &BindingIdentity,
+        _binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
     ) -> Result<(), BindingLifecycleError> {
         if self.attach_identity.as_ref() != Some(identity) {
             return Err(BindingLifecycleError::ForeignIdentity);
         }
-        self.child_resources
-            .delete_attach_process(binding, identity)?;
         self.attach_identity = None;
-        Ok(())
+        Err(BindingLifecycleError::Transient)
     }
 
     fn close_proxy(
@@ -459,13 +418,12 @@ impl<'a, C: UsbipChildResourcePort> UsbipBrokerDispatcher for DaemonUsbipDispatc
 
 /// Construct a production Provider port from a daemon state and Core context.
 #[allow(dead_code)]
-pub(crate) fn production_port<'a, C: UsbipChildResourcePort>(
+pub(crate) fn production_port<'a>(
     state: &'a ServerState,
     context: UsbipBindingContext,
     ledger: Arc<Mutex<AuthorityLedger>>,
-    child_resources: C,
-) -> ProductionPort<DaemonUsbipDispatcher<'a, C>> {
-    DaemonUsbipDispatcher::new(state, context, ledger, child_resources).into_port()
+) -> ProductionPort<DaemonUsbipDispatcher<'a>> {
+    DaemonUsbipDispatcher::new(state, context, ledger).into_port()
 }
 
 #[cfg(test)]
