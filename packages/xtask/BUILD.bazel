@@ -166,9 +166,7 @@ generated_artifact_check(
 # The policy-inputs bundle is projected from the locked Cargo metadata, so its
 # drift target needs the lock, the workspace sources, the protected ownership
 # declaration the advisory policy is validated against, and the bundle it
-# rewrites. `//:packages_workspace_sources` still misses `d2b-resource-runtime`
-# and the test-controller manifest, so both are named here beside it until the
-# aggregate carries them.
+# rewrites.
 #
 # The generator shells out to `cargo metadata --locked --offline`, so the run
 # also needs the invoking environment: cargo on `PATH`, and the caller's
@@ -185,8 +183,6 @@ generated_artifact_check(
         "//:Cargo.lock",
         "//:packages_workspace_sources",
         "//:policy_inputs_workspace_sources",
-        "//packages/d2b-provider-test-controller:Cargo.toml",
-        "//packages/d2b-resource-runtime:cargo_workspace_sources",
     ],
     env_inherit = ["HOME", "CARGO_HOME", "RUSTUP_HOME", "PATH"],
 )
