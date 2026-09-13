@@ -1256,6 +1256,11 @@ impl ZoneContext {
                 "Zone request retry budget was exhausted",
                 1,
             ),
+            ClientError::RetryBackoffUnavailable => (
+                "zone-unavailable",
+                "Zone request retry backoff was unavailable",
+                1,
+            ),
             ClientError::Remote { kind, .. } => resource_error_surface(kind),
         };
         let mut failure = self.failure(class, message, mode, exit_code);

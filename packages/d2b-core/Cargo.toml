@@ -28,6 +28,10 @@ semver = "1"
 rustix = { workspace = true }
 # P0: SHA-256 self-hash verification of bundle.json.
 sha2 = { workspace = true }
+# The bounded loader worker hands each job's outcome back to an awaiting
+# caller; `sync::oneshot` is a waker channel with no runtime or reactor
+# requirement, so the worker stays usable from any executor.
+tokio = { workspace = true, features = ["sync"] }
 bolero = { version = "0.10", optional = true }
 
 [dev-dependencies]

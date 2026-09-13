@@ -36,6 +36,10 @@ pub enum ClientError {
     IdempotencyRequired,
     /// The retry policy was exhausted without a terminal answer.
     RetryLimitExceeded,
+    /// A retry backoff could not be scheduled: the client drives retry delays
+    /// through the caller's executor and refuses, rather than panicking on a
+    /// runtime it does not own, when the caller supplied none.
+    RetryBackoffUnavailable,
     /// The caller cancelled the call.
     Cancelled,
     /// The underlying session was lost.
@@ -72,6 +76,7 @@ impl ClientError {
             Self::DeadlineExpired => "client-deadline-expired",
             Self::IdempotencyRequired => "client-idempotency-required",
             Self::RetryLimitExceeded => "client-retry-limit-exceeded",
+            Self::RetryBackoffUnavailable => "client-retry-backoff-unavailable",
             Self::Cancelled => "client-cancelled",
             Self::SessionLost => "client-session-lost",
             Self::TransportFailed => "client-transport-failed",
@@ -104,6 +109,7 @@ mod tests {
         ClientError::DeadlineExpired,
         ClientError::IdempotencyRequired,
         ClientError::RetryLimitExceeded,
+        ClientError::RetryBackoffUnavailable,
         ClientError::Cancelled,
         ClientError::SessionLost,
         ClientError::TransportFailed,

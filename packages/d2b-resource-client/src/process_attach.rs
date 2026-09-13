@@ -10,7 +10,6 @@ use core::future::Future;
 use std::{
     fmt,
     sync::atomic::{AtomicU8, Ordering},
-    time::Duration,
 };
 
 use d2b_contracts_control::public_wire::{
@@ -703,12 +702,13 @@ where
                 Err(error) => match classify_attach_error(&driver, error) {
                     AttemptDisposition::RetryNow => continue,
                     AttemptDisposition::RetryAfterMs(delay) => {
-                        let sleep = tokio::time::sleep(Duration::from_millis(u64::from(delay)));
-                        if let Err(ClientError::Cancelled) =
-                            await_with_cancellation(sleep, cancellation).await
-                        {
-                            let _ = connection.session().cancel(request_id).await;
-                            return Err(ClientError::Cancelled);
+                        match crate::call::retry_backoff(delay, cancellation).await {
+                            Ok(()) => {}
+                            Err(ClientError::Cancelled) => {
+                                let _ = connection.session().cancel(request_id).await;
+                                return Err(ClientError::Cancelled);
+                            }
+                            Err(error) => return Err(error),
                         }
                     }
                     AttemptDisposition::Fail(error) => return Err(error),

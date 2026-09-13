@@ -1208,6 +1208,14 @@ fn empty_zone_native_host() -> HostJson {
     }
 }
 
+/// Map a bounded-worker refusal onto the loader error type.
+fn loader_refusal_error(refusal: crate::loader_worker::LoaderRefusal) -> Error {
+    Error::internal_io(match refusal {
+        crate::loader_worker::LoaderRefusal::Busy => "bundle-loader-busy",
+        crate::loader_worker::LoaderRefusal::Unavailable => "bundle-loader-unavailable",
+    })
+}
+
 impl BundleResolver {
     /// Load the bundle.json at `bundle_path`, verify ownership, mode,
     /// and SHA-256 self-hash, then parse sibling artifacts.
@@ -1258,6 +1266,35 @@ impl BundleResolver {
             bundle_root,
             policy,
         )
+    }
+
+    /// Load the bundle on the bounded loader worker
+    /// ([`crate::loader_worker`]).
+    ///
+    /// This is the async seat for callers that must not park their executor
+    /// on the file reads, ownership checks, and SHA-256 verification
+    /// [`Self::load`] performs. The production policy is resolved inside the
+    /// job, so its `/etc/group` lookup does not land on the caller's thread
+    /// either.
+    pub async fn load_on_loader_worker(bundle_path: &Path) -> Result<Self, Error> {
+        let bundle_path = bundle_path.to_path_buf();
+        crate::loader_worker::run(move || {
+            Self::load_with_policy(&bundle_path, &BundleVerifyPolicy::production())
+        })
+        .await
+        .map_err(loader_refusal_error)?
+    }
+
+    /// Like [`Self::load_on_loader_worker`] but with an explicit
+    /// [`BundleVerifyPolicy`], for the daemon's test-policy paths.
+    pub async fn load_with_policy_on_loader_worker(
+        bundle_path: &Path,
+        policy: BundleVerifyPolicy,
+    ) -> Result<Self, Error> {
+        let bundle_path = bundle_path.to_path_buf();
+        crate::loader_worker::run(move || Self::load_with_policy(&bundle_path, &policy))
+            .await
+            .map_err(loader_refusal_error)?
     }
 
     fn load_zone_native_bundle(
