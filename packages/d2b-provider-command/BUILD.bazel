@@ -7,7 +7,7 @@ exports_files(
 )
 
 rust_library(
-    name = d2b_provider_command,
+    name = "d2b_provider_command",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     deps = [
@@ -53,7 +53,7 @@ filegroup(
 )
 
 rust_doc_test(
-    name = d2b_provider_command_doc_test,
+    name = "d2b_provider_command_doc_test",
     crate = "//packages/d2b-provider-command:d2b_provider_command",
 )
 

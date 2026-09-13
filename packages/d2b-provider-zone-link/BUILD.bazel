@@ -7,7 +7,7 @@ exports_files(
 )
 
 rust_library(
-    name = d2b_provider_zone_link,
+    name = "d2b_provider_zone_link",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     deps = [
@@ -54,7 +54,7 @@ filegroup(
 )
 
 rust_doc_test(
-    name = d2b_provider_zone_link_doc_test,
+    name = "d2b_provider_zone_link_doc_test",
     crate = "//packages/d2b-provider-zone-link:d2b_provider_zone_link",
 )
 
