@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod export;
+pub mod generated;
 pub mod hash_chain;
 pub mod operation;
 pub mod rate_limit;

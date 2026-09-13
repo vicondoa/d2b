@@ -1035,28 +1035,7 @@ fn valid_code(value: Option<&str>) -> bool {
 
 fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
     let valid_resource_type = |value: &str| {
-        ([
-            "Zone",
-            "ZoneLink",
-            "Provider",
-            "Role",
-            "RoleBinding",
-            "Quota",
-            "Host",
-            "Guest",
-            "Process",
-            "EphemeralProcess",
-            "Volume",
-            "Network",
-            "Device",
-            "User",
-            "Credential",
-            "Endpoint",
-            "ResourceExport",
-            "ResourceImport",
-            "vendor",
-        ]
-        .contains(&value)
+        (crate::generated::audit_catalog::admits_resource_type(value)
             || value.contains(".d2bus.org."))
             && value.len() <= 256
             && value
@@ -1085,16 +1064,7 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
         AuditRecordFields::ResourceMutation(fields) => {
             if !closed(
                 &fields.verb,
-                &[
-                    "create",
-                    "update-spec",
-                    "update-status",
-                    "update-metadata",
-                    "update-finalizers",
-                    "delete",
-                    "use-credential",
-                    "admin-credential",
-                ],
+                &crate::generated::audit_catalog::MUTATION_VERBS,
             ) || !valid_resource_type(&fields.resource_type)
                 || !closed(
                     &fields.outcome,
@@ -1239,7 +1209,7 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
             if !closed(&fields.event, &["launch", "stop", "adopt", "quarantine"])
                 || !closed(
                     &fields.provider,
-                    &["minijail", "systemd", "system-core-user"],
+                    &crate::generated::audit_catalog::PROCESS_PROVIDERS,
                 )
                 || !closed(&fields.domain, &["system", "user"])
                 || !closed(&fields.outcome, &["ok", "error"])
@@ -1318,6 +1288,92 @@ mod tests {
         assert!(value.get("workload_id").is_none());
         assert!(value.get("process_effect_fields").is_some());
         record.verify(record.previous_hash()).unwrap();
+    }
+
+    /// The record vocabulary is the generated registry, so a type the
+    /// registry carries is admissible even when a hand list once missed it.
+    #[test]
+    fn the_generated_registry_admits_every_converted_type() {
+        for resource_type in crate::generated::audit_catalog::RESOURCE_TYPES {
+            let record = AuditRecord::new(
+                1,
+                "work",
+                "operation-digest",
+                "correlation-digest",
+                None,
+                "zone-runtime",
+                genesis_hash(),
+                AuditRecordFields::ResourceMutation(ResourceMutationFields {
+                    verb: "create".to_owned(),
+                    resource_type: (*resource_type).to_owned(),
+                    resource_uid: "uid-digest".to_owned(),
+                    generation: 1,
+                    expected_revision: 0,
+                    resulting_revision: 1,
+                    subject_digest:
+                        "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                            .to_owned(),
+                    policy_revision: 1,
+                    outcome: "ok".to_owned(),
+                    error_code: None,
+                    mutation_id: None,
+                    mutation_ordinal: None,
+                }),
+            );
+            assert!(record.is_ok(), "{resource_type}");
+        }
+    }
+
+    /// A resource type outside the registry and outside the qualified
+    /// namespace stays refused.
+    #[test]
+    fn the_generated_registry_still_refuses_unknown_types() {
+        let record = AuditRecord::new(
+            1,
+            "work",
+            "operation-digest",
+            "correlation-digest",
+            None,
+            "zone-runtime",
+            genesis_hash(),
+            AuditRecordFields::ResourceMutation(ResourceMutationFields {
+                verb: "create".to_owned(),
+                resource_type: "NotAType".to_owned(),
+                resource_uid: "uid-digest".to_owned(),
+                generation: 1,
+                expected_revision: 0,
+                resulting_revision: 1,
+                subject_digest:
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                        .to_owned(),
+                policy_revision: 1,
+                outcome: "ok".to_owned(),
+                error_code: None,
+                mutation_id: None,
+                mutation_ordinal: None,
+            }),
+        );
+        assert_eq!(
+            record.unwrap_err(),
+            AuditRecordError::FieldInvalid,
+            "an unregistered type is not a record subject"
+        );
+    }
+
+    /// The per-class domains key to the generated catalog: a class vocabulary
+    /// only ever narrows the shared vocabulary.
+    #[test]
+    fn per_class_domains_key_to_the_generated_catalog() {
+        use crate::generated::audit_catalog::{MUTATION_VERBS, PROCESS_PROVIDERS, admits_resource_type};
+        for verb in ["create", "update-spec", "delete"] {
+            assert!(MUTATION_VERBS.contains(&verb), "{verb}");
+        }
+        for provider in PROCESS_PROVIDERS {
+            assert!(!provider.is_empty());
+        }
+        for resource_type in ["Role", "RoleBinding"] {
+            assert!(admits_resource_type(resource_type), "{resource_type}");
+        }
     }
 
     #[test]
