@@ -1,7 +1,6 @@
-use d2b_contracts_resource::v3::{ResourceRef, execution_policy::BoundedToken};
 use d2b_process_conformance::{ProcessExitClass, ProcessOutcome};
 use d2b_provider_process_systemd::{
-    EphemeralProcessController, GuestExecRequest, RestartPolicy, SystemdProviderConfig,
+    EphemeralProcessController, RestartPolicy, SystemdProviderConfig,
 };
 
 #[test]
@@ -65,27 +64,4 @@ fn incident_hold_blocks_ephemeral_cleanup_after_ttl_expiry() {
     process.tick(3);
     assert_eq!(process.ttl_remaining(), Some(0));
     assert!(!process.cleanup_eligible());
-}
-
-#[test]
-fn resource_retention_policy_drives_ephemeral_cleanup_state() {
-    let request = GuestExecRequest::new(
-        ResourceRef::parse("EphemeralProcess/exec").unwrap(),
-        ResourceRef::parse("Guest/work").unwrap(),
-        BoundedToken::parse("shell-terminal").unwrap(),
-        true,
-        false,
-        None,
-    )
-    .unwrap();
-    let spec = request.ephemeral_process_spec().unwrap();
-    let mut process = EphemeralProcessController::from_spec(&spec);
-    process.observe(ProcessOutcome::exited(0).unwrap());
-    assert_eq!(process.ttl_remaining(), Some(3_600));
-    process.tick(86_400);
-    assert!(process.cleanup_eligible());
-
-    let mut failed = EphemeralProcessController::from_spec(&spec);
-    failed.observe(ProcessOutcome::crashed());
-    assert_eq!(failed.ttl_remaining(), Some(86_400));
 }

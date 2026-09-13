@@ -23,6 +23,9 @@
 //!   manager-routed child surface, and the driver every shared family's
 //!   descriptor registers. The families own their rows, children, dependency
 //!   references, and effect ports; the flow they share lives here.
+//! - [`credential`] - the Credential realization the three Credential
+//!   Provider binaries share: the one audit record, the one telemetry frame,
+//!   and the one dispatch seam, keyed on the shared Provider kind.
 //! - [`operations`] - the envelope-side types and the envelope that runs a
 //!   declared handler.
 //! - [`plane`] - the zone-plane handle, the child-creation fence, the drain
@@ -63,6 +66,7 @@
 
 pub mod audit;
 pub mod base;
+pub mod credential;
 pub mod declaration;
 pub mod operations;
 pub mod plane;

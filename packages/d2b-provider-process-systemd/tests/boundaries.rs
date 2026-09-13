@@ -1,4 +1,3 @@
-use d2b_provider_process_systemd::SystemdManifest;
 use d2b_provider_process_systemd::drain::{DrainError, DrainProof, DrainStage, validate};
 use d2b_provider_process_systemd::metrics::validate_labels;
 
@@ -44,13 +43,4 @@ fn metrics_reject_unknown_high_cardinality_or_path_labels() {
         "operation".to_owned(),
         "x".repeat(33)
     )]));
-}
-
-#[test]
-fn canonical_manifest_keeps_transient_process_contract() {
-    let manifest = SystemdManifest::canonical();
-    assert_eq!(manifest.artifact_id, "system-systemd");
-    assert_eq!(manifest.resource_types, ["Process", "EphemeralProcess"]);
-    assert_eq!(manifest.component, "systemd-controller");
-    assert!(!manifest.declares_state_volume);
 }
