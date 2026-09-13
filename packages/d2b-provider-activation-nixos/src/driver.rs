@@ -31,11 +31,11 @@
 //!
 //! Three preserved behaviors do not map onto one resource's context and are
 //! reported rather than invented:
-//! 1. Generation retention (`ActivationController::retention_plan`) needs
-//!    the sibling generations of one `executionRef`; the new
-//!    `ResourceContext` exposes only this resource and its owned children
-//!    (no zone-wide list), so surplus pruning stays a desired-state concern
-//!    (the bundle-ingest `remove` path) rather than a driver effect.
+//! 1. Generation retention needs the sibling generations of one
+//!    `executionRef`; the new `ResourceContext` exposes only this resource
+//!    and its owned children (no zone-wide list), so surplus pruning stays
+//!    a desired-state concern (the bundle-ingest `remove` path) rather than
+//!    a driver effect.
 //! 2. A runner child's terminal phase and outcome code are actor-local
 //!    (R11): a parent cannot read another actor's status, so the driver
 //!    rejoins an in-flight runner and waits (`WatchCondition::Ready`
@@ -98,12 +98,6 @@ pub const ACTIVATION_RUNNER_CREATION: ChildCreation = ChildCreation {
 
 /// Every child creation the NixosGeneration driver declares.
 pub const ACTIVATION_CREATIONS: &[ChildCreation] = &[ACTIVATION_RUNNER_CREATION];
-
-/// Preserved provider retention window (`d2b.providers.activationNixos.
-/// retainedGenerations` default). The policy object carries it; surplus
-/// pruning itself is a desired-state concern in the new plane (see the
-/// module note).
-const RETAINED_GENERATIONS: usize = 3;
 
 // ---------------------------------------------------------------------------
 // Driver error and status
@@ -398,7 +392,7 @@ impl ActivationDriver {
             zone: args.zone,
             effects: args.effects,
             verifier: args.verifier,
-            controller: ActivationController::new(RETAINED_GENERATIONS),
+            controller: ActivationController::new(),
             watched_runner: std::sync::Mutex::new(None),
         }
     }

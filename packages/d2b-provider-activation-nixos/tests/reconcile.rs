@@ -39,7 +39,7 @@ fn caller() -> ActivationCaller {
 
 #[test]
 fn compatible_generation_starts_one_typed_runner() {
-    let controller = ActivationController::new(3);
+    let controller = ActivationController::new();
     let result = controller
         .reconcile(
             &spec(),
@@ -83,7 +83,7 @@ fn activation_runner_reference_is_stable_and_target_local() {
 fn activation_runner_spec_is_closed_and_bounded() {
     let generation =
         ResourceRef::parse("activation-nixos.d2bus.org.NixosGeneration/gen-7").unwrap();
-    let controller = ActivationController::new(3);
+    let controller = ActivationController::new();
     let planned = controller
         .reconcile(
             &spec(),
@@ -125,7 +125,7 @@ fn activation_runner_spec_is_closed_and_bounded() {
 
 #[test]
 fn unauthorized_or_foreign_callers_refuse_before_runner_creation() {
-    let controller = ActivationController::new(3);
+    let controller = ActivationController::new();
     let foreign = ActivationCaller::new(
         CallerRole::User,
         ResourceRef::parse("Guest/dev-vm").unwrap(),
@@ -141,7 +141,7 @@ fn unauthorized_or_foreign_callers_refuse_before_runner_creation() {
 
 #[test]
 fn runner_failure_preserves_the_source_generation_and_audits_one_code() {
-    let controller = ActivationController::new(3);
+    let controller = ActivationController::new();
     let failed = controller
         .apply_runner_result(
             &spec(),
@@ -155,7 +155,7 @@ fn runner_failure_preserves_the_source_generation_and_audits_one_code() {
 
 #[test]
 fn adopted_outcome_is_rejected_for_switch_mode() {
-    let controller = ActivationController::new(3);
+    let controller = ActivationController::new();
     let result = controller.apply_runner_result(
         &spec(),
         ActivationOutcomeCode::Adopted,
@@ -169,7 +169,7 @@ fn adopted_outcome_is_rejected_for_switch_mode() {
 
 #[test]
 fn adopt_mode_accepts_adoption_without_starting_a_runner() {
-    let controller = ActivationController::new(3);
+    let controller = ActivationController::new();
     let adopt = spec_with_mode(ActivationMode::Adopt);
     let pending = controller
         .reconcile(
@@ -194,7 +194,7 @@ fn adopt_mode_accepts_adoption_without_starting_a_runner() {
 
 #[test]
 fn test_mode_succeeds_without_preserving_the_source_generation() {
-    let controller = ActivationController::new(3);
+    let controller = ActivationController::new();
     let result = controller
         .apply_runner_result(
             &spec_with_mode(ActivationMode::Test),
@@ -208,7 +208,7 @@ fn test_mode_succeeds_without_preserving_the_source_generation() {
 
 #[test]
 fn successful_switch_reports_ready_and_replaces_the_source_generation() {
-    let controller = ActivationController::new(3);
+    let controller = ActivationController::new();
     let result = controller
         .apply_runner_result(
             &spec(),
@@ -222,7 +222,7 @@ fn successful_switch_reports_ready_and_replaces_the_source_generation() {
 
 #[test]
 fn deleted_generation_is_not_restarted() {
-    let controller = ActivationController::new(3);
+    let controller = ActivationController::new();
     let result = controller.reconcile(
         &spec(),
         &caller(),
@@ -237,7 +237,7 @@ fn deleted_generation_is_not_restarted() {
 
 #[test]
 fn malformed_generation_observation_cannot_start_a_zero_generation_runner() {
-    let controller = ActivationController::new(3);
+    let controller = ActivationController::new();
     let result = controller.reconcile(
         &spec(),
         &caller(),
@@ -253,7 +253,7 @@ fn malformed_generation_observation_cannot_start_a_zero_generation_runner() {
 
 #[test]
 fn stale_deleted_source_cannot_project_a_successful_activation() {
-    let controller = ActivationController::new(3);
+    let controller = ActivationController::new();
     let result = controller.apply_runner_result(
         &spec(),
         ActivationOutcomeCode::Succeeded,
@@ -276,7 +276,7 @@ fn prior_generation_reference_must_be_present_in_observations() {
         Some(ResourceRef::parse("activation-nixos.d2bus.org.NixosGeneration/gen-6").unwrap()),
     )
     .unwrap();
-    let controller = ActivationController::new(3);
+    let controller = ActivationController::new();
     let result = controller.reconcile(
         &spec,
         &caller(),
@@ -296,19 +296,6 @@ fn prior_generation_reference_must_be_present_in_observations() {
         )
         .unwrap();
     assert_eq!(result.runner_requests().len(), 1);
-}
-
-#[test]
-fn retention_prunes_only_old_terminal_generations_without_ttl() {
-    let controller = ActivationController::new(2);
-    let observations = vec![
-        GenerationObservation::terminal("gen-1", GenerationPhase::Succeeded, 1),
-        GenerationObservation::terminal("gen-2", GenerationPhase::Failed, 2),
-        GenerationObservation::terminal("gen-3", GenerationPhase::Ready, 3),
-    ];
-    let plan = controller.retention_plan(&observations);
-    assert_eq!(plan.delete_names(), &["gen-1".to_owned()]);
-    assert!(!plan.uses_ttl());
 }
 
 fn trust_fixture() -> (ActivationTrust, ActivationTrustExpectation, Vec<u8>, String) {
@@ -345,7 +332,7 @@ fn trust_fixture() -> (ActivationTrust, ActivationTrustExpectation, Vec<u8>, Str
 #[test]
 fn activation_verification_requires_all_trust_and_digest_fences() {
     let (trust, expected, artifact, catalog_digest) = trust_fixture();
-    ActivationController::new(3)
+    ActivationController::new()
         .verify_application(&trust, &expected, &artifact, &catalog_digest)
         .expect("trusted activation verifies");
 
@@ -476,12 +463,12 @@ fn signed_activation_verifier_binds_verification_to_the_exact_runner_request() {
         catalog_digest,
     );
     verifier
-        .verify_application(&ActivationController::new(3), &request)
+        .verify_application(&ActivationController::new(), &request)
         .expect("exact request verifies");
     let mut changed = request;
     changed.target_generation = 2;
     assert_eq!(
-        verifier.verify_application(&ActivationController::new(3), &changed),
+        verifier.verify_application(&ActivationController::new(), &changed),
         Err(d2b_provider_activation_nixos::ActivationVerificationError::InvalidEvidence)
     );
 }
