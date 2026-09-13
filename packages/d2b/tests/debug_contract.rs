@@ -90,18 +90,37 @@ fn an_unreachable_zone_refuses_without_rendering_a_report() {
 #[test]
 fn an_explicit_zone_that_disagrees_with_the_positional_zone_is_refused() {
     // R22 and AE9: the disagreement is refused before any connection, so this
-    // holds even with no daemon at all.
+    // holds even with no daemon at all. Both flag positions parse.
     let socket = socket_path("mismatch");
-    let (code, stdout) = run_debug(&socket, &["--zone", "dev", "debug", "prod"]);
+    for args in [
+        ["--zone", "dev", "debug", "prod"],
+        ["debug", "--zone", "dev", "prod"],
+    ] {
+        let (code, stdout) = run_debug(&socket, &args);
+        assert_eq!(
+            code, 2,
+            "a zone disagreement is a usage error for {args:?}: {stdout}"
+        );
+        assert!(
+            stdout.contains("ref-invalid"),
+            "the refusal names the class for {args:?}: {stdout}"
+        );
+        assert!(
+            !stdout.contains("\"roots\""),
+            "no tree is printed for {args:?}: {stdout}"
+        );
+    }
+}
 
-    assert_eq!(code, 2, "a zone disagreement is a usage error: {stdout}");
-    assert!(
-        stdout.contains("ref-invalid"),
-        "the refusal names the class: {stdout}"
-    );
-    assert!(
-        !stdout.contains("\"roots\""),
-        "no tree is printed: {stdout}"
+#[test]
+fn the_global_zone_flag_is_still_accepted_inside_the_subcommand() {
+    // The positional must not shadow the global flag: a shared argument id
+    // would make this shape fail to parse while every other command takes it.
+    let socket = socket_path("flagposition");
+    let (code, _stdout) = run_debug(&socket, &["debug", "dev", "--zone", "dev"]);
+    assert_ne!(
+        code, 2,
+        "an agreeing global zone is accepted inside the subcommand"
     );
 }
 

@@ -40,8 +40,14 @@ const PAGE_SIZE: u32 = 200;
 /// Arguments for `d2b debug`.
 #[derive(Debug, clap::Args, Clone)]
 pub(crate) struct DebugArgs {
-    /// Zone to explain, which must match the routed zone.
-    pub(crate) zone: String,
+    /// Zone to explain.
+    ///
+    /// The argument id is deliberately not `zone`: a positional sharing the
+    /// global flag's id makes clap drop `--zone` inside this subcommand, so
+    /// `d2b debug --zone dev work` would fail to parse while every other
+    /// command accepts it.
+    #[arg(value_name = "ZONE")]
+    pub(crate) zone_ref: String,
     /// Resource to explain, as `<ResourceType>/<name>`. Absent renders the zone.
     #[arg(value_name = "TYPE/NAME")]
     pub(crate) resource_ref: Option<String>,
@@ -76,8 +82,6 @@ pub(crate) struct FailureSummary {
     pub(crate) stage: Option<String>,
     pub(crate) outcome: Option<String>,
     pub(crate) retryable: Option<bool>,
-    /// Why the row shows no failure detail, when it shows none.
-    pub(crate) absent_reason: Option<String>,
 }
 
 /// A type read the report could not complete.
@@ -226,11 +230,11 @@ fn render_node(node: &DebugNode, out: &mut String, indent: usize, expand_all: bo
 
     let expanded = expand_all || expands(node);
     if !expanded && subtree_settled(node) {
-        if !node.children.is_empty() {
-            out.push_str(&format!(
-                "{pad}  ({} rows Ready)\n",
-                DebugReport::subtree_rows(node) - 1
-            ));
+        // A cycle marker repeats a row counted above it, so it contributes
+        // nothing here and a subtree of nothing but markers has no rollup.
+        let hidden = DebugReport::subtree_rows(node).saturating_sub(1);
+        if hidden > 0 {
+            out.push_str(&format!("{pad}  ({hidden} rows Ready)\n"));
         }
         return;
     }
@@ -250,12 +254,7 @@ fn render_node(node: &DebugNode, out: &mut String, indent: usize, expand_all: bo
             out.push_str(&format!("{pad}  means: {}\n", kind.means()));
             out.push_str(&format!("{pad}  likely cause: {}\n", kind.likely_cause()));
         }
-    } else if let Some(reason) = row
-        .failure
-        .as_ref()
-        .and_then(|failure| failure.absent_reason.clone())
-        .or_else(|| absent_reason(row))
-    {
+    } else if let Some(reason) = absent_reason(row) {
         out.push_str(&format!("{pad}  {reason}\n"));
     }
     for child in &node.children {
@@ -344,7 +343,6 @@ pub(crate) fn report_json(report: &DebugReport) -> Value {
                 "stage": failure.stage,
                 "outcome": failure.outcome,
                 "retryable": failure.retryable,
-                "absentReason": failure.absent_reason,
             })).unwrap_or(Value::Null),
         })
     }
@@ -418,7 +416,6 @@ fn observed_row(value: &Value) -> Result<ObservedRow, String> {
                 .and_then(Value::as_str)
                 .map(str::to_owned),
             retryable: failure.get("retryable").and_then(Value::as_bool),
-            absent_reason: None,
         });
     Ok(ObservedRow {
         reference: reference.to_owned(),
@@ -498,7 +495,7 @@ fn read_type(
                 return Err(DebugReadError {
                     class: "debug-read-exhausted",
                     message: format!(
-                        "row budget of {ROW_BUDGET} exhausted reading {resource_type}; narrow the request with a resource reference"
+                        "read budget of {ROW_BUDGET} rows exhausted at {resource_type}"
                     ),
                     exit_code: 1,
                 });
@@ -725,7 +722,7 @@ pub(crate) fn run(
     // The positional zone is the route's authority, so `d2b debug prod`
     // connects to `prod`. An explicitly selected global zone that disagrees
     // with it is a usage error, refused before any request.
-    if context.has_explicit_zone() && context.zone_name() != args.zone {
+    if context.has_explicit_zone() && context.zone_name() != args.zone_ref {
         return Err(context.failure(
             "ref-invalid",
             "debug zone disagrees with the selected Zone",
@@ -749,6 +746,17 @@ pub(crate) fn run(
     if let Some(reference) = &selected
         && !observed.rows.iter().any(|row| &row.reference == reference)
     {
+        // A type whose read did not complete cannot answer for the named row:
+        // reporting not-found would present a refused read as an absent row.
+        let selected_type = reference.split_once('/').map(|(resource_type, _)| resource_type);
+        if let Some(degraded) = selected_type.and_then(|resource_type| {
+            observed
+                .degraded
+                .iter()
+                .find(|degraded| degraded.resource_type == resource_type)
+        }) {
+            return Err(context.failure("debug-read-refused", &degraded.detail, mode, 1));
+        }
         return Err(context.failure(
             "resource-not-found",
             "resource was not found",
@@ -809,7 +817,6 @@ mod tests {
             stage: Some("validate".to_owned()),
             outcome: Some("refused".to_owned()),
             retryable: Some(false),
-            absent_reason: None,
         });
         let observed = zone(vec![
             row("Guest/sandbox", "uid-1", None, "Ready", 1, Some(1)),

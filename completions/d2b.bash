@@ -2091,12 +2091,16 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__debug)
-            opts="-h --all --json --human --deadline --no-deadline --help <ZONE> [TYPE/NAME]"
+            opts="-h --all --zone --json --human --deadline --no-deadline --help <ZONE> [TYPE/NAME]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --deadline)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0

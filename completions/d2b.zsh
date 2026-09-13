@@ -170,14 +170,15 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (debug)
 _arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
 '--all[Expand subtrees whose rows are all Ready]' \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':zone -- Zone to explain, which must match the routed zone:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':zone_ref -- Zone to explain:_default' \
 '::resource_ref -- Resource to explain, as `<ResourceType>/<name>`. Absent renders the zone:_default' \
 && ret=0
 ;;

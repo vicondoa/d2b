@@ -932,30 +932,20 @@ fn provider_projection(
 /// `d2b debug` names its zone twice over: the global `--zone`/`D2B_ZONE`
 /// route, and the positional argument that says which zone to explain. The
 /// positional argument is the route's authority when it is given, so
-/// `d2b debug prod` connects to `prod` instead of failing against whichever
-/// zone the ambient environment happened to select.
+/// `d2b debug prod` connects to `prod`; `run` refuses an explicit global zone
+/// that disagrees with it.
 fn routed_zone<'a>(cli: &'a ModernCli) -> Option<&'a str> {
     match &cli.command {
-        ModernCommand::Debug(args) => Some(args.zone.as_str()),
+        ModernCommand::Debug(args) => Some(args.zone_ref.as_str()),
         _ => cli.zone.as_deref(),
     }
 }
 
-/// The zone named by an explicit `--zone` or `D2B_ZONE`, read from the raw
-/// arguments because clap hides it behind a positional argument.
-fn explicit_zone_argument(raw_args: &[OsString]) -> Option<String> {
-    let mut seen_zone_flag = false;
-    for argument in raw_args.iter().skip(1) {
-        let text = argument.to_string_lossy();
-        if let Some(value) = text.strip_prefix("--zone=") {
-            return Some(value.to_owned());
-        }
-        if seen_zone_flag {
-            return Some(text.into_owned());
-        }
-        seen_zone_flag = text == "--zone";
-    }
-    std::env::var("D2B_ZONE").ok().filter(|zone| !zone.is_empty())
+/// The zone named by an explicit `--zone` or `D2B_ZONE`, if either was given.
+fn explicit_zone_argument(cli_zone: Option<&str>) -> Option<String> {
+    cli_zone
+        .map(str::to_owned)
+        .or_else(|| std::env::var("D2B_ZONE").ok().filter(|zone| !zone.is_empty()))
 }
 
 pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
@@ -995,13 +985,12 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
                 | host::HostCommand::Doctor(_)
         })
     ) || matches!(&cli.command, ModernCommand::Auth(_));
-    // `d2b debug` names its zone twice over. Clap binds the positional into
-    // the global `--zone` for this command, so an explicit `--zone` is not
-    // recoverable from the parsed struct; read it from the arguments, and
-    // refuse a disagreement before any connection.
+    // `d2b debug` names its zone twice over, and an explicitly selected zone
+    // that disagrees with the positional one is a usage error refused before
+    // any connection.
     if let ModernCommand::Debug(args) = &cli.command
-        && let Some(explicit) = explicit_zone_argument(&raw_args)
-        && explicit != args.zone
+        && let Some(explicit) = explicit_zone_argument(cli.zone.as_deref())
+        && explicit != args.zone_ref
     {
         let mode = output_mode(cli.json, cli.human).unwrap_or(OutputMode::Json);
         return report_dispatch_failure(

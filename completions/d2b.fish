@@ -148,12 +148,13 @@ complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -l json -d 'Emit the 
 complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -l human -d 'Force human-readable terminal output'
 complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand debug" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand debug" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand debug" -l all -d 'Expand subtrees whose rows are all Ready'
 complete -c d2b -n "__fish_d2b_using_subcommand debug" -l json -d 'Emit the stable JSON envelope'
 complete -c d2b -n "__fish_d2b_using_subcommand debug" -l human -d 'Force human-readable terminal output'
 complete -c d2b -n "__fish_d2b_using_subcommand debug" -l no-deadline -d 'Suppress the command default deadline'
-complete -c d2b -n "__fish_d2b_using_subcommand debug" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand debug" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l json -d 'Emit the stable JSON envelope'
