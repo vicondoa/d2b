@@ -18,9 +18,9 @@ One factory serves every runtime Provider row of the family:
 
 A stored `Guest` spec selects its Provider row by `spec.providerRef`; that
 selection picks the kind, and the kind fixes the effect keying, the child set,
-the resync cadence, and the teardown order the driver preserves. The Provider,
-controller, and child-Provider references are the realizer crates' own
-constants, so the table cannot drift from the Providers it names.
+the resync cadence, and the teardown order the driver preserves. The Provider
+and child-Provider references are the realizer crates' own constants, so the
+table cannot drift from the Providers it names.
 
 ## Declarations
 

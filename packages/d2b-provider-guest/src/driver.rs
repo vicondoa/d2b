@@ -33,8 +33,6 @@
 //! stay in the daemon behind the effect port, so this module holds no host
 //! state.
 
-#![allow(dead_code)]
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -62,9 +60,6 @@ use serde_json::{Value, json};
 /// The one ResourceType this factory serves.
 pub const GUEST_TYPE_NAME: &str = "Guest";
 
-/// Canonical Host execution target (the old shared Runner's Host ref).
-pub const HOST_REF: &str = "Host/host-system";
-
 /// Preserved reconcile self-resync for Guests whose Provider is not
 /// converged (old shared Runner repair interval).
 pub const GUEST_RESYNC: Duration = Duration::from_secs(30);
@@ -79,8 +74,6 @@ pub const GUEST_RESYNC: Duration = Duration::from_secs(30);
 pub struct GuestRegistration {
     /// The runtime-Provider kind this row serves.
     pub kind: GuestKind,
-    /// The controller Process reference the Provider contract declares.
-    pub controller_ref: &'static str,
     /// The Provider reference a stored spec selects this row by.
     pub provider_ref: &'static str,
     /// Preserved resync cadence (old shared Runner repair interval).
@@ -94,25 +87,21 @@ pub struct GuestRegistration {
 pub const GUEST_REGISTRATIONS: [GuestRegistration; 4] = [
     GuestRegistration {
         kind: GuestKind::CloudHypervisor,
-        controller_ref: d2b_provider_guest_cloud_hypervisor::CONTROLLER_ROLE_REF,
         provider_ref: d2b_provider_guest_cloud_hypervisor::PROVIDER_REF,
         resync: GUEST_RESYNC,
     },
     GuestRegistration {
         kind: GuestKind::QemuMedia,
-        controller_ref: "Process/runtime-qemu-media-controller",
         provider_ref: d2b_provider_guest_qemu_media::PROVIDER_REF,
         resync: GUEST_RESYNC,
     },
     GuestRegistration {
         kind: GuestKind::AzureContainerApps,
-        controller_ref: "Process/aca-controller",
         provider_ref: d2b_provider_guest_azure_container_apps::PROVIDER_REF,
         resync: GUEST_RESYNC,
     },
     GuestRegistration {
         kind: GuestKind::AzureVirtualMachine,
-        controller_ref: "Process/azure-vm-controller-process",
         provider_ref: d2b_provider_guest_azure_virtual_machine::PROVIDER_REF,
         resync: GUEST_RESYNC,
     },
@@ -186,11 +175,6 @@ impl GuestKind {
         self.registration().provider_ref
     }
 
-    /// The controller Process reference this kind binds.
-    pub const fn controller_ref(self) -> &'static str {
-        self.registration().controller_ref
-    }
-
     /// The preserved resync cadence of this kind.
     pub const fn resync(self) -> Duration {
         self.registration().resync
@@ -235,14 +219,6 @@ impl GuestEffectOutcome {
         Self {
             phase,
             resource_projection: None,
-        }
-    }
-
-    /// An outcome carrying the phase and the Provider's status projection.
-    pub fn projection(phase: GuestEffectPhase, resource_projection: Value) -> Self {
-        Self {
-            phase,
-            resource_projection: Some(resource_projection),
         }
     }
 }
@@ -369,16 +345,6 @@ pub struct GuestDriverStatus {
     pub resource: Option<Value>,
 }
 
-impl GuestDriverStatus {
-    /// The wire phase label this status publishes.
-    pub const fn phase(&self) -> &'static str {
-        match self.phase {
-            GuestEffectPhase::Ready => "Ready",
-            GuestEffectPhase::Pending => "Pending",
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Spec decode (manager-wired)
 // ---------------------------------------------------------------------------
@@ -387,8 +353,6 @@ impl GuestDriverStatus {
 /// spec document the family's Provider handlers read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestSpecEnvelope {
-    /// The exact stored spec bytes; never rewritten by this driver.
-    raw: Vec<u8>,
     value: Value,
 }
 
@@ -396,11 +360,6 @@ impl GuestSpecEnvelope {
     /// The decoded spec document the Provider handlers read.
     pub fn value(&self) -> &Value {
         &self.value
-    }
-
-    /// The exact stored spec bytes, never rewritten by this driver.
-    pub fn raw(&self) -> &[u8] {
-        &self.raw
     }
 
     /// The spec's Provider reference (the family row selector).
@@ -422,10 +381,7 @@ pub fn guest_spec_decoder() -> Arc<dyn SpecDecoder> {
         if !value.is_object() {
             return Err(GuestSpecDecodeError);
         }
-        Ok(GuestSpecEnvelope {
-            raw: bytes.to_vec(),
-            value,
-        })
+        Ok(GuestSpecEnvelope { value })
     })
 }
 
@@ -462,8 +418,6 @@ pub fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, GuestEffectError> {
 pub struct GuestChildObservation {
     /// The child row key.
     pub key: ResourceKey,
-    /// Whether the row is already deleting.
-    pub deleting: bool,
     /// Live phase from the manager view (`None` = nothing published yet).
     pub phase: Option<&'static str>,
 }
@@ -525,11 +479,7 @@ impl GuestChildSurface for ContextChildSurface<'_> {
                     return Err(GuestEffectError::Unavailable)
                 }
             };
-            observations.push(GuestChildObservation {
-                key: child.key,
-                deleting: child.deleting,
-                phase,
-            });
+            observations.push(GuestChildObservation { key: child.key, phase });
         }
         Ok(observations)
     }
@@ -629,29 +579,6 @@ pub trait GuestDriverEffects: Send + Sync + 'static {
         kind: GuestKind,
         request: &GuestEffectRequest<'_>,
     ) -> Result<GuestFinalizeStage, GuestEffectError>;
-}
-
-/// Explicit unavailable adapter used only before production composition
-/// supplies the daemon-owned typed effect boundary.
-pub struct UnavailableGuestDriverEffects;
-
-#[async_trait]
-impl GuestDriverEffects for UnavailableGuestDriverEffects {
-    async fn reconcile(
-        &self,
-        _kind: GuestKind,
-        _request: &GuestEffectRequest<'_>,
-    ) -> Result<GuestEffectOutcome, GuestEffectError> {
-        Err(GuestEffectError::Unavailable)
-    }
-
-    async fn finalize(
-        &self,
-        _kind: GuestKind,
-        _request: &GuestEffectRequest<'_>,
-    ) -> Result<GuestFinalizeStage, GuestEffectError> {
-        Err(GuestEffectError::Unavailable)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -855,11 +782,6 @@ impl GuestDriver {
             effects: args.effects,
             watched: Vec::new(),
         }
-    }
-
-    /// The controller generation every effect call binds (KTD7).
-    pub fn controller_generation(&self) -> ControllerGeneration {
-        self.controller_generation
     }
 
     fn error(&self, kind: GuestDriverErrorKind, op: DriverOp) -> GuestDriverError {
@@ -1082,24 +1004,6 @@ impl GuestDriver {
             .reconcile(kind, request)
             .await
             .map_err(|error| self.effect_error(error, DriverOp::Reconcile))
-    }
-}
-
-impl core::fmt::Debug for GuestDriver {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("GuestDriver")
-            .field("zone", &self.zone)
-            .finish_non_exhaustive()
-    }
-}
-
-impl core::fmt::Debug for GuestDriverFactory {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("GuestDriverFactory")
-            .field("types", &self.types)
-            .finish_non_exhaustive()
     }
 }
 
@@ -1662,10 +1566,6 @@ mod tests {
             self.calls.lock().push(entry);
         }
 
-        fn set_phase(&self, phase: GuestEffectPhase) {
-            *self.phase.lock() = phase;
-        }
-
         fn set_projection(&self, projection: Option<serde_json::Value>) {
             *self.projection.lock() = projection;
         }
@@ -1963,10 +1863,6 @@ mod tests {
                 scheduled: parking_lot::Mutex::new(Vec::new()),
             })
         }
-
-        fn count(&self) -> usize {
-            self.scheduled.lock().len()
-        }
     }
 
     impl RequeueScheduler for RecordingRequeue {
@@ -2108,7 +2004,7 @@ mod tests {
         let factory = GuestDriverFactory::new(GuestDriverArgs {
             zone: "work".to_owned(),
             controller_generation: ControllerGeneration::new(1).expect("generation"),
-            effects: Arc::new(super::UnavailableGuestDriverEffects),
+            effects: ScriptedEffects::new(),
         });
         assert_eq!(factory.resource_types().len(), 1);
         assert_eq!(factory.resource_types()[0].as_str(), GUEST_TYPE_NAME);
@@ -2120,14 +2016,11 @@ mod tests {
     fn registrations_are_closed_and_provider_scoped() {
         assert_eq!(GUEST_REGISTRATIONS.len(), 4);
         let mut providers = std::collections::BTreeSet::new();
-        let mut controllers = std::collections::BTreeSet::new();
         for (index, registration) in GUEST_REGISTRATIONS.iter().enumerate() {
             assert_eq!(registration.kind.index(), index);
             assert_eq!(registration.kind.registration(), *registration);
             assert_eq!(registration.kind.provider_ref(), registration.provider_ref);
-            assert_eq!(registration.kind.controller_ref(), registration.controller_ref);
             assert!(providers.insert(registration.provider_ref));
-            assert!(controllers.insert(registration.controller_ref));
             assert_eq!(
                 GuestKind::from_type_and_provider(GUEST_TYPE_NAME, Some(registration.provider_ref)),
                 Ok(registration.kind),
