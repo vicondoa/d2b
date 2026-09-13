@@ -417,3 +417,79 @@ Adding or changing one resource type today requires edits in four to six places 
 - Every provider runs on the toolkit `ProviderBase` - no hand-rolled bootstrap/service-loop/test infrastructure remains (R22).
 - Milestone reviews recorded for §8 phases 2, 4, and 6.
 - The guest target ships with `ZoneBootstrap`/`ZoneEnroll` handlers landed and guest agents on the base (R24).
+
+## Plan Extension: Control-Plane Completion (added during execution)
+
+*Added after the family moves and policy rows landed, when research into the remaining
+control-plane surfaces showed the plan's done-state was not yet honest: the broker's generic
+envelope refused every committed row, no provider was instantiated through the framework it
+declares, and several broker operations had no owner. `Invoke` is retired with the rows below
+because nothing calls it and the envelope entry point needs no committed row of its own.*
+
+**Scope:** the control plane only. Device data paths, guest-runtime helpers, provider-ref
+literals, doc drift, and cosmetic duplication are out of scope for this extension.
+
+### U21. Instantiate the provider lifecycle
+- **Goal:** providers run through the framework they declare.
+- **Requirements:** R22, R14.
+- **Files:** `packages/d2bd/src/**` (production `ZonePlanePort`, provider start-up), `packages/d2b-provider-toolkit/src/{base,plane}/`, provider entry points.
+- **Approach:** implement the daemon-side `ZonePlanePort` (claim storage root, deploy adapters, publish services) and start each provider through `ProviderBase`/`run()` instead of the daemon's own composition, preserving the committed startup and drain order.
+- **Test scenarios:** a provider starts and drains through the base with the production plane port; the startup order matches the golden order; an unsatisfied declaration refuses named.
+- **Verification:** gates green; no provider starts outside the base.
+
+### U22. Broker dispatch forwards to providers
+- **Goal:** a committed operation executes in its declaring crate's process.
+- **Requirements:** R16, R17.
+- **Files:** `packages/d2b-broker/src/**`, `packages/d2b-bus/**`, provider handler serving.
+- **Approach:** wire the forwarding dispatcher to the bus so a validated, authorized call reaches the declaring provider process and its `OperationDef.handler`; the refusal stays as the fail-closed state for unregistered handlers; every wire variant becomes a generated view of the committed rows.
+- **Test scenarios:** an operation round-trips broker to provider; an ungranted caller and an uncommitted row still refuse; a row whose handler is absent refuses rather than succeeding.
+- **Verification:** gates green; the forwarding dispatcher serves at least one family end to end.
+
+### U23. Retire the typed dispatch arms
+- **Goal:** the broker's dispatch match contains zero family arms.
+- **Requirements:** R16. **Dependencies:** U22.
+- **Files:** `packages/d2b-broker/src/runtime.rs`, `packages/d2b-contracts-broker/src/broker_wire.rs`.
+- **Approach:** family-by-family retirement with the gate green at each step, ordered by blast radius, spawn/runner path last; a retired arm's wire variant either becomes a generated view or retires with its row.
+- **Test scenarios:** the arm's behavior is covered by the envelope path before deletion; the completeness gate fails if a variant loses both an arm and a row.
+- **Verification:** gates green; the dispatch match names no family.
+
+### U24. Serve guest enrollment
+- **Goal:** the bootstrap/enroll handlers have a production serving runtime.
+- **Requirements:** R24. **Dependencies:** U21.
+- **Files:** `packages/d2b-zone-routing/src/**`, the daemon serving side, guest enrollment paths.
+- **Approach:** stand up the zone service server for `ZoneBootstrap`/`ZoneEnroll` and admit enrollment through the runtime-issued single-use admission the handlers already consume.
+- **Test scenarios:** a guest enrolls end to end; absent/consumed/expired admission and a revoked authority refuse named; a refused bootstrap leaves no tracked link.
+- **Verification:** gates green; no guest-side hand-rolled enrollment remains.
+
+### U25. Unsafe-local shell onto the terminal family
+- **Goal:** one shell implementation for every posture.
+- **Requirements:** R1, R12. **Dependencies:** U21, U22.
+- **Files:** `packages/d2b-unsafe-local-helper/src/shell_*`, `packages/d2b-contracts-control/src/{unsafe_local_wire,public_wire}.rs`, `packages/d2bd-runtime/src/shell_backend.rs`, `packages/d2bd/src/composition.rs`.
+- **Approach:** prove the `shell-terminal` family covers the unsafe-local posture, move that route onto it, then delete the helper shell supervisor, the helper wire's shell shapes, the legacy backend, and the daemon's `HelperShellRequest` path in the same change; the orphaned `public_wire` shell shapes move to the generated catalog in the same cut.
+- **Test scenarios:** the posture's shell operations behave identically through the terminal family; the deleted path has no caller; the CLI golden behavior is unchanged.
+- **Verification:** gates green; no legacy shell route remains.
+
+### U26. Broker-owned rows and dead control-plane surfaces
+- **Goal:** every committed row is provider-owned or explicitly broker/transport-owned; dead surfaces are gone.
+- **Requirements:** R7, R25.
+- **Files:** `docs/reference/policy/broker-operations.json` and its generated views, `packages/d2b-broker/src/**`, `packages/d2b-contracts/src/identity.rs`, `packages/d2b-realm-core/`.
+- **Approach:** move `ApplyHostGenerationHandoff` to the activation family and `PrepareSwtpmDir` to a declared device preparation step; keep `ExportBrokerAudit` as broker self-audit and `Hello` as transport, each with a recorded justification; retire `ValidateBundle`, `ResourceActivationAudit`, `Invoke`, `PauseBroker`, `ResumeBroker`, `BindUnixSocket`, and `SetSocketAcl` (rows, arms, and wire variants together); delete the orphaned `d2b-realm-core` directory; generate `V3_CONVERTED_RESOURCE_TYPES` from the driver registry, keeping the const-shaped hash-pinned artifact.
+- **Test scenarios:** the completeness gate fails on any row without an owner or a recorded transport justification; the retired variants are gone from the wire; the plane fence still refuses an unconverted type.
+- **Verification:** gates green; the non-provider row set is exactly the justified broker/transport rows.
+
+### U27. Close the layer-adoption leftovers
+- **Goal:** no hand table remains that a declaration could carry.
+- **Requirements:** R18, R20, R21.
+- **Files:** `packages/d2b-resource-compiler/src/**`, `packages/d2b/src/**`, `packages/d2b-telemetry/**`.
+- **Approach:** thread the declared bootstrap provider names into the static-controller projection and delete the last literal; move the secret-shape policy onto the declared `writeOnly` shape once that shape exists; replace the per-family owner literals in the worker projections with declared rows; give `BUILTIN_COMMANDS` and the projection top-level literals a declared authority or record why they have none; extend completion discovery to driver declarations once the daemon serves them; resolve the telemetry `op` domain against the committed rows.
+- **Test scenarios:** each deleted table's behavior is pinned by a test that fails if the declaration drifts; completion and the audit export keep golden output.
+- **Verification:** gates green; the U19 allowlist can shrink to empty without a documented exception.
+
+### Review gate (applies to every unit in this extension)
+Every unit in this extension - and every unit landed before it - receives independent review in a separate clean context before signoff; findings are fixed or recorded as accepted residuals, and a head-changing fix requires fresh review. Reviews run in a dedicated worktree so they never race implementation work.
+
+### Definition of Done (extension)
+- No committed broker row lacks an owner or a recorded broker/transport justification.
+- No provider starts outside the declared framework, and no family name appears in broker dispatch.
+- Guest enrollment is served; one shell implementation serves every posture.
+- U19's allowlist is empty and every unit carries review signoff.
