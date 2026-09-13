@@ -68,4 +68,12 @@ fn panicked_job_refuses_with_named_unavailable_refusal() {
         Err(LoaderRefusal::Unavailable),
         "a dead worker must refuse with the named Unavailable refusal"
     );
+
+    // The load seat's death must not take the probe seat with it: the host
+    // check keeps running while the bundle-load seat is gone.
+    assert_eq!(
+        block_on(loader_worker::run_probe(|| 9usize)),
+        Ok(9),
+        "the probe seat must keep serving after the load seat dies"
+    );
 }

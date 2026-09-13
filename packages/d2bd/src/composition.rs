@@ -23016,9 +23016,11 @@ fn dispatch_host_check(
     let bundle_path = state.config.artifacts.bundle_path.clone();
     let strict = request.request.strict;
     // The reads and the `nft`/`systemctl` probes park for seconds: run the
-    // whole unit on the bounded loader worker so this handler thread only
-    // waits on the outcome.
-    let report = match block_on_future(d2b_core::loader_worker::run(move || {
+    // whole unit on the bounded loader worker's probe seat so this handler
+    // thread only waits on the outcome, and so a probe that hangs occupies
+    // only the probe seat instead of the worker every bundle load queues
+    // behind.
+    let report = match block_on_future(d2b_core::loader_worker::run_probe(move || {
         run_host_check(&bundle_path, strict)
     })) {
         Ok(Ok(report)) => report,
@@ -29978,5 +29980,246 @@ mod g5_provider_identity_seed_tests {
         assert_eq!(calls, 1, "a complete snapshot must not wait");
         assert!(unresolved.is_empty());
         assert_eq!(resolved.len(), 1);
+    }
+}
+
+/// The daemon's mapping of the bounded loader worker's refusals onto the
+/// operator-visible error kinds, exercised through the same functions the
+/// request path uses.
+///
+/// The seats are process-wide, so the saturated tests fill a seat through the
+/// public worker API and the death tests re-enter this test binary as child
+/// processes (the pattern `session_seam_tests` uses): a child kills the seat,
+/// asserts what the daemon surfaces, and exits, so the death costs the child
+/// process and never the suite. The children are inert unless the parent sets
+/// [`SEAT_DEATH_CHILD_ENV`].
+#[cfg(test)]
+mod loader_worker_refusal_tests {
+    use super::*;
+    use d2b_core::loader_worker::{self, LoaderRefusal, MAX_LOADER_QUEUE_DEPTH};
+    use d2bd_runtime::runtime_util::block_on_future;
+    use std::{
+        pin::Pin,
+        process::Command,
+        sync::mpsc,
+        task::{Context, Poll, Waker},
+    };
+
+    /// Set by the parent so a spawned test binary runs the seat-death child.
+    const SEAT_DEATH_CHILD_ENV: &str = "D2B_LOADER_SEAT_DEATH_CHILD";
+
+    /// Longest a refusal may take before the test declares the caller parked.
+    const REFUSAL_DEADLINE: Duration = Duration::from_secs(10);
+
+    /// The seats are process-wide: the saturated tests serialize on this lock
+    /// so one test's full queue cannot refuse another test's admission.
+    static SEAT_LOCK: Mutex<()> = Mutex::new(());
+
+    fn seat_lock() -> std::sync::MutexGuard<'static, ()> {
+        SEAT_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// One daemon state for the two refusal paths: neither load reaches the
+    /// bundle file because the seat refuses first.
+    fn refusal_state() -> ServerState {
+        detached_exec_routing_tests::test_state(exec_session::ExecSessionCaps::default())
+    }
+
+    fn host_check_request() -> d2bd_runtime::wire::HostCheckRequestExt {
+        d2bd_runtime::wire::HostCheckRequestExt {
+            request: public_wire::HostCheckRequest {
+                read_only: true,
+                strict: false,
+            },
+            if_name: None,
+        }
+    }
+
+    type SeatJob = Pin<Box<dyn Future<Output = Result<String, LoaderRefusal>> + Send>>;
+
+    #[derive(Clone, Copy)]
+    enum Seat {
+        Load,
+        Probe,
+    }
+
+    fn admit(seat: Seat, job: impl FnOnce() -> String + Send + 'static) -> SeatJob {
+        match seat {
+            Seat::Load => Box::pin(loader_worker::run(job)),
+            Seat::Probe => Box::pin(loader_worker::run_probe(job)),
+        }
+    }
+
+    /// Poll a seat future once: a job is admitted on the first poll, which is
+    /// how a queue is filled without awaiting the queued jobs.
+    fn poll_noop<F: Future + ?Sized>(future: Pin<&mut F>) -> Poll<F::Output> {
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        future.poll(&mut context)
+    }
+
+    /// Drive a future with no executor, reactor, or timer.
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        let mut future = std::pin::pin!(future);
+        loop {
+            match future.as_mut().poll(&mut context) {
+                Poll::Ready(value) => return value,
+                Poll::Pending => std::thread::yield_now(),
+            }
+        }
+    }
+
+    /// Releases the parked job even when an assertion unwinds first, so a
+    /// failing test cannot leave a seat parked for the next one.
+    struct ReleaseOnDrop(mpsc::Sender<()>);
+
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
+    /// Park `seat` inside one job and fill its queue to the bound, so the next
+    /// admission is refused `Busy`. The parked job resumes when the returned
+    /// guard drops.
+    fn saturate(seat: Seat) -> (ReleaseOnDrop, SeatJob, Vec<SeatJob>) {
+        let (started_sender, started) = mpsc::channel();
+        let (release_sender, release) = mpsc::channel();
+        let mut parked = admit(seat, move || {
+            started_sender.send(()).expect("signal the parked job");
+            release.recv().expect("await the release signal");
+            "parked".to_owned()
+        });
+        assert!(
+            poll_noop(parked.as_mut()).is_pending(),
+            "the parked job must be admitted and left waiting for the worker"
+        );
+        started
+            .recv_timeout(REFUSAL_DEADLINE)
+            .expect("the seat must start the parked job");
+
+        let mut queued = Vec::with_capacity(MAX_LOADER_QUEUE_DEPTH);
+        for depth in 0..MAX_LOADER_QUEUE_DEPTH {
+            let mut job = admit(seat, move || depth.to_string());
+            assert!(
+                poll_noop(job.as_mut()).is_pending(),
+                "the seat queue admits exactly MAX_LOADER_QUEUE_DEPTH jobs"
+            );
+            queued.push(job);
+        }
+        (ReleaseOnDrop(release_sender), parked, queued)
+    }
+
+    fn assert_bundle_loader_refusal(error: TypedError, name: &str) {
+        match error {
+            TypedError::InternalIo { context, detail } => {
+                assert_eq!(context, "load bundle resolver");
+                assert!(
+                    detail.contains(name),
+                    "the operator-visible detail must name {name}: {detail}"
+                );
+            }
+            other => panic!("expected the bundle loader's internal-io refusal, got {other:?}"),
+        }
+    }
+
+    fn assert_host_check_refusal(error: TypedError, name: &str) {
+        match error {
+            TypedError::InternalIo { context, detail } => {
+                assert_eq!(context, "host check");
+                assert_eq!(detail, name);
+            }
+            other => panic!("expected the host check's internal-io refusal, got {other:?}"),
+        }
+    }
+
+    /// A saturated load seat refuses the daemon's own bundle load, and the
+    /// operator sees the worker's named `bundle-loader-busy` refusal.
+    #[test]
+    fn busy_load_seat_surfaces_bundle_loader_busy_to_the_daemon() {
+        let _lock = seat_lock();
+        let state = refusal_state();
+        let (_release, _parked, _queued) = saturate(Seat::Load);
+        let error = block_on_future(load_bundle_resolver_on_worker(&state))
+            .expect_err("a saturated load seat must refuse the daemon's bundle load");
+        assert_bundle_loader_refusal(error, "bundle-loader-busy");
+    }
+
+    /// A saturated probe seat refuses the daemon's host check, and the
+    /// operator sees the named `host-check-loader-busy` refusal.
+    #[test]
+    fn busy_probe_seat_surfaces_host_check_loader_busy_to_the_daemon() {
+        let _lock = seat_lock();
+        let state = refusal_state();
+        let (_release, _parked, _queued) = saturate(Seat::Probe);
+        let error = dispatch_host_check(&state, host_check_request())
+            .expect_err("a saturated probe seat must refuse the daemon's host check");
+        assert_host_check_refusal(error, "host-check-loader-busy");
+    }
+
+    /// Child body: kill the load seat, then the daemon's bundle load must
+    /// surface the named `bundle-loader-unavailable`. The kill lands in this
+    /// process on purpose - the seat is process-wide - and is inert unless
+    /// the parent spawned this binary for it.
+    #[test]
+    fn seat_death_child_load() {
+        if std::env::var_os(SEAT_DEATH_CHILD_ENV).is_none() {
+            return;
+        }
+        let state = refusal_state();
+        assert_eq!(
+            block_on(loader_worker::run(|| -> usize {
+                panic!("kill the load seat under test");
+            })),
+            Err(LoaderRefusal::Unavailable),
+            "a panicked job must refuse its waiter instead of hanging it"
+        );
+        let error = block_on_future(load_bundle_resolver_on_worker(&state))
+            .expect_err("a dead load seat must refuse the daemon's bundle load");
+        assert_bundle_loader_refusal(error, "bundle-loader-unavailable");
+    }
+
+    /// Child body: kill the probe seat, then the daemon's host check must
+    /// surface the named `host-check-loader-unavailable`.
+    #[test]
+    fn seat_death_child_probe() {
+        if std::env::var_os(SEAT_DEATH_CHILD_ENV).is_none() {
+            return;
+        }
+        let state = refusal_state();
+        assert_eq!(
+            block_on(loader_worker::run_probe(|| -> usize {
+                panic!("kill the probe seat under test");
+            })),
+            Err(LoaderRefusal::Unavailable),
+            "a panicked probe must refuse its waiter instead of hanging it"
+        );
+        let error = dispatch_host_check(&state, host_check_request())
+            .expect_err("a dead probe seat must refuse the daemon's host check");
+        assert_host_check_refusal(error, "host-check-loader-unavailable");
+    }
+
+    /// Both seat deaths run out of process so a killed seat costs the child,
+    /// and this parent proves the daemon names both `Unavailable` refusals.
+    #[test]
+    fn seat_death_surfaces_both_loader_unavailable_refusals_to_the_daemon() {
+        for child in ["seat_death_child_load", "seat_death_child_probe"] {
+            let exact = format!("loader_worker_refusal_tests::{child}");
+            let output = Command::new(std::env::current_exe().expect("test binary path"))
+                .args(["--exact", exact.as_str(), "--nocapture"])
+                .env(SEAT_DEATH_CHILD_ENV, "1")
+                .output()
+                .expect("spawn the seat-death child");
+            assert!(
+                output.status.success(),
+                "the {child} child must pass:\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
     }
 }

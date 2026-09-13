@@ -1788,7 +1788,8 @@ impl ProductionSharedProviderEffects {
             ));
         }
         let spec = self.network_spec(request)?;
-        let resolver = crate::load_bundle_resolver(&self.state)
+        let resolver = crate::load_bundle_resolver_on_worker(&self.state)
+            .await
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let runtime = self.runtime()?;
         let admission = self
@@ -2599,7 +2600,8 @@ impl ProductionSharedProviderEffects {
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         let spec = self.network_spec(request)?;
-        let resolver = crate::load_bundle_resolver(&self.state)
+        let resolver = crate::load_bundle_resolver_on_worker(&self.state)
+            .await
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let runtime = self.runtime()?;
         let admission = self

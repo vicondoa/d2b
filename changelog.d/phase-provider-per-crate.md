@@ -586,18 +586,24 @@
   interaction accept loops park in the kernel on their listener instead of
   sleeping per iteration, and the synchronous seat that drives async work
   reuses one process-wide runtime instead of building one per call.
-- The daemon's async paths await the core loaders' bounded worker seat
+- The daemon's async paths await the core loaders' bounded worker seats
   instead of resolving the bundle and running the host check inline: `serve`
-  (both startup loads), `run_startup_autostart`, and the two Guest
-  component-session connects await `load_bundle_resolver_on_worker`,
-  `serve_guest` awaits `BundleResolver::load_on_loader_worker`, and
-  `dispatch_host_check` runs its bundle, host, and closure reads plus the
-  check as one job on the worker. A saturated queue or a dead worker
-  surfaces as the loader's named refusal rather than parking an executor
-  worker for the seconds the reads, hash verification, and
-  `nft`/`systemctl` probes take. The remaining `load_bundle_resolver`
-  callers are synchronous dispatch handlers on the connection thread and
-  are unchanged.
+  (both startup loads), `run_startup_autostart`, the two Guest
+  component-session connects, the shared provider driver's Network
+  reconcile and finalize passes, and both Cloud Hypervisor reconcile paths
+  await `load_bundle_resolver_on_worker`, `serve_guest` awaits
+  `BundleResolver::load_on_loader_worker`, and `dispatch_host_check` runs
+  its bundle, host, and closure reads plus the check as one job on the
+  probe seat. A saturated queue or a dead worker surfaces as the loader's
+  named refusal rather than parking an executor worker for the seconds the
+  reads, hash verification, and `nft`/`systemctl` probes take. The load
+  seat and the probe seat are separate bounded workers, so a probe that
+  never returns blocks only later probe jobs and cannot starve bundle
+  loads; the daemon maps each seat's refusals onto the operator-visible
+  `bundle-loader-busy`/`bundle-loader-unavailable` and
+  `host-check-loader-busy`/`host-check-loader-unavailable` errors under
+  test. The remaining `load_bundle_resolver` callers are synchronous
+  dispatch handlers on the connection thread and are unchanged.
 
 - The broker serves requests concurrently. Its accept loop is an async loop on
   the tokio reactor that hands each accepted connection to its own task behind

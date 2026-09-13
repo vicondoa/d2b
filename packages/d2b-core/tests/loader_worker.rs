@@ -7,8 +7,8 @@
 //! not pass here, and one that needed a reactor or timer to wake its waiter
 //! would never complete.
 //!
-//! The worker is a process-wide singleton and its queue is shared by every
-//! caller, so a test that parks the worker or fills the queue holds
+//! The workers are process-wide singletons and each seat's queue is shared by
+//! every caller, so a test that parks a worker or fills a queue holds
 //! [`worker_lock`] for as long as it occupies queue space.
 
 use std::{
@@ -25,8 +25,8 @@ use d2b_core::loader_worker::{self, LoaderRefusal, MAX_LOADER_QUEUE_DEPTH};
 /// Longest a refusal may take before the test declares the caller parked.
 const REFUSAL_DEADLINE: Duration = Duration::from_secs(10);
 
-/// The queue is process-wide: without this lock a test that parks the worker or
-/// fills the queue would make a concurrent test's job be refused as `Busy`.
+/// The queue is process-wide: without this lock a test that parks a worker or
+/// fills a queue would make a concurrent test's job be refused as `Busy`.
 static WORKER_LOCK: Mutex<()> = Mutex::new(());
 
 fn worker_lock() -> MutexGuard<'static, ()> {
@@ -119,6 +119,87 @@ fn jobs_run_on_one_dedicated_worker_thread() {
         (first_thread, first_name),
         (second_thread, second_name),
         "both jobs must run on the same named worker thread, not one thread per call"
+    );
+}
+
+/// A probe job parked in `nft`/`systemctl` - or on a wedged filesystem - holds
+/// only the probe seat: a bundle load admitted after it still runs, and the
+/// probe seat's own queue refuses probes past its bound instead of letting a
+/// hung probe starve the load path.
+#[test]
+fn hung_probe_job_does_not_starve_bundle_loads() {
+    let _lock = worker_lock();
+
+    // Park the probe seat inside one job: this is the hung `nft`/`systemctl`
+    // probe. On one shared seat the load queue would sit behind it forever.
+    let (started_sender, started) = mpsc::channel();
+    let (release_sender, release) = mpsc::channel();
+    let release_guard = ReleaseOnDrop(release_sender);
+    let mut parked = Box::pin(loader_worker::run_probe(move || {
+        started_sender
+            .send((
+                thread::current().id(),
+                thread::current().name().map(str::to_owned),
+            ))
+            .expect("signal the parked probe");
+        release.recv().expect("await the release signal");
+        "parked probe"
+    }));
+    assert!(
+        poll_noop(parked.as_mut()).is_pending(),
+        "the probe job must be admitted and left waiting for the probe worker"
+    );
+    let (probe_thread, probe_name) = started
+        .recv_timeout(REFUSAL_DEADLINE)
+        .expect("the probe worker must start the parked probe job");
+
+    // The probe is still hung: the load seat must admit and complete a job
+    // anyway, on its own dedicated thread.
+    let (load_thread, load_name) = await_with_deadline(loader_worker::run(|| {
+        (
+            thread::current().id(),
+            thread::current().name().map(str::to_owned),
+        )
+    }))
+    .expect("a bundle load must be admitted while the probe seat is hung");
+    assert_ne!(
+        (probe_thread, probe_name),
+        (load_thread, load_name),
+        "the probe and the bundle load must run on different seats, not one shared worker"
+    );
+
+    // The probe seat refuses past its own bound rather than growing: one hung
+    // probe starves later probe jobs at worst, never the bundle loads.
+    let mut queued = Vec::with_capacity(MAX_LOADER_QUEUE_DEPTH);
+    for depth in 0..MAX_LOADER_QUEUE_DEPTH {
+        let mut job = Box::pin(loader_worker::run_probe(move || depth));
+        assert!(
+            poll_noop(job.as_mut()).is_pending(),
+            "the probe queue admits exactly MAX_LOADER_QUEUE_DEPTH jobs"
+        );
+        queued.push(job);
+    }
+    assert_eq!(
+        await_with_deadline(loader_worker::run_probe(|| MAX_LOADER_QUEUE_DEPTH)),
+        Err(LoaderRefusal::Busy),
+        "the probe over its bound must refuse with the named Busy refusal"
+    );
+    assert_eq!(
+        await_with_deadline(loader_worker::run(|| "load behind a refused probe")),
+        Ok("load behind a refused probe"),
+        "a refused probe must not refuse bundle loads"
+    );
+
+    drop(release_guard);
+    for (depth, job) in queued.into_iter().enumerate() {
+        assert_eq!(
+            block_on(job).expect("queued probe completes once the probe worker drains"),
+            depth
+        );
+    }
+    assert_eq!(
+        block_on(parked).expect("parked probe completes once released"),
+        "parked probe"
     );
 }
 

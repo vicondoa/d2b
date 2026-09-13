@@ -5174,14 +5174,18 @@ impl ZoneResourceRuntime {
                     .cloned(),
                 None => None,
             };
+            // The load runs on the bounded loader worker so this reconcile,
+            // which every pass runs as a daemon async task, never parks a
+            // runtime worker on the bundle reads and hash verification.
+            let bundle_resolver = crate::load_bundle_resolver_on_worker(&state).await;
             let session_vmm_ready = match (
                 guest_session_target.as_ref(),
                 guest_session.as_ref(),
-                crate::load_bundle_resolver(&state),
+                bundle_resolver.as_ref(),
             ) {
                 (Some(target), Some(_), Ok(resolver)) => {
                     crate::resolve_component_session_endpoint_for_guest(
-                        &state, &resolver, self, target,
+                        &state, resolver, self, target,
                     )
                     .await
                     .is_ok()
@@ -5570,10 +5574,15 @@ impl ZoneResourceRuntime {
             tracing::warn!("Cloud Hypervisor setup Volume ownership validation failed");
             return Err(ResourceRuntimeError::CapabilityUnavailable);
         }
-        let resolver = crate::load_bundle_resolver(state).map_err(|_| {
-            tracing::warn!("Cloud Hypervisor setup Volume bundle reload failed");
-            ResourceRuntimeError::ProviderPathUnavailable
-        })?;
+        // The reload runs on the bounded loader worker so this reconcile,
+        // which every pass runs as a daemon async task, never parks a
+        // runtime worker on the bundle reads and hash verification.
+        let resolver = crate::load_bundle_resolver_on_worker(state)
+            .await
+            .map_err(|_| {
+                tracing::warn!("Cloud Hypervisor setup Volume bundle reload failed");
+                ResourceRuntimeError::ProviderPathUnavailable
+            })?;
         let intent = resolver
             .find_store_view_intent_for_zone(&self.zone, guest_ref.name().as_str())
             .ok_or_else(|| {
