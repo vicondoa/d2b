@@ -273,10 +273,18 @@ impl ZoneEnrollmentAdmission {
         }
     }
 
-    /// Consume and verify the admission, returning the exact expected tuple.
+    /// Consume and verify the admission, returning the sealed tuple.
     ///
-    /// A missing, already consumed, revoked, or expired admission is refused
-    /// with a closed reason; the admission cannot be reused afterwards.
+    /// The tuple returned is the one the runtime sealed into the evidence, so
+    /// the caller's request is checked against the seal rather than against a
+    /// value the caller supplied alongside it. An admission whose expected
+    /// tuple is not the sealed one is refused: the evidence is sealed to
+    /// exactly one expectation, and a substituted expectation is never
+    /// admitted through this pair.
+    ///
+    /// A missing, already consumed, mismatched, revoked, or expired admission
+    /// is refused with a closed reason; the admission cannot be reused
+    /// afterwards.
     pub(crate) fn consume(&self) -> Result<ZoneEnrollmentExpectation, ZoneEnrollmentRefusal> {
         let mut guard = self
             .state
@@ -293,7 +301,10 @@ impl ZoneEnrollmentAdmission {
             } => {
                 let snapshot = verifier.verify(evidence)?;
                 verifier.check_current(&snapshot)?;
-                Ok(expected)
+                if snapshot.expected() != &expected {
+                    return Err(ZoneEnrollmentRefusal::PolicyDenial);
+                }
+                Ok(snapshot.into_expected())
             }
             #[cfg(any(test, feature = "test-support"))]
             EnrollmentAdmissionState::Test(expected) => Ok(expected),
@@ -311,6 +322,11 @@ impl VerifiedEnrollmentAdmission {
     /// The exact expected tuple the evidence was issued for.
     pub const fn expected(&self) -> &ZoneEnrollmentExpectation {
         &self.expected
+    }
+
+    /// Take the sealed expected tuple, consuming the verified admission.
+    pub fn into_expected(self) -> ZoneEnrollmentExpectation {
+        self.expected
     }
 
     /// The absolute expiry of this admission, in Unix milliseconds.
@@ -501,6 +517,10 @@ mod tests {
     }
 
     fn expectation() -> ZoneEnrollmentExpectation {
+        expectation_with_reconnect(7)
+    }
+
+    fn expectation_with_reconnect(reconnect_generation: u64) -> ZoneEnrollmentExpectation {
         ZoneEnrollmentExpectation::for_enrolled_guest_session(
             ZoneId::parse("zone-1").expect("valid zone"),
             ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("valid UID"),
@@ -510,7 +530,7 @@ mod tests {
             [0x44; 32],
             [0x11; 32],
             [0x22; 32],
-            ReconnectGeneration::new(7).expect("valid generation"),
+            ReconnectGeneration::new(reconnect_generation).expect("valid generation"),
             LimitProfile::remote_default(),
         )
         .expect("the contract's enrolled guest session profile")
@@ -592,6 +612,38 @@ mod tests {
             admission.consume(),
             Err(ZoneEnrollmentRefusal::AdmissionConsumed)
         );
+    }
+
+    /// The evidence seals exactly one expectation: a second, differing tuple
+    /// held alongside it admits nothing, and the refusal is terminal.
+    #[test]
+    fn an_expectation_that_differs_from_the_sealed_one_is_refused() {
+        let now = Arc::new(AtomicU64::new(1_000));
+        let authority =
+            ZoneEnrollmentAuthority::with_lifetime(clock(Arc::clone(&now)), 30_000).expect("valid");
+        let sealed = expectation();
+        let substituted = expectation_with_reconnect(8);
+        assert_ne!(sealed, substituted, "the two tuples differ");
+
+        let (verifier, evidence) = authority.issue(sealed.clone()).expect("issued");
+        let admission = ZoneEnrollmentAdmission::verify(verifier, evidence, &substituted)
+            .expect("the pair is held");
+        assert_eq!(
+            admission.consume(),
+            Err(ZoneEnrollmentRefusal::PolicyDenial),
+            "the sealed tuple, not the substituted one, decides"
+        );
+        // The refusal consumed the admission: the sealed tuple cannot retry it.
+        assert_eq!(
+            admission.consume(),
+            Err(ZoneEnrollmentRefusal::AdmissionConsumed)
+        );
+
+        // The same pair with the sealed tuple consumes to exactly that tuple.
+        let (verifier, evidence) = authority.issue(sealed.clone()).expect("issued");
+        let admission = ZoneEnrollmentAdmission::verify(verifier, evidence, &sealed)
+            .expect("the pair is held");
+        assert_eq!(admission.consume().expect("consumed"), sealed);
     }
 
     #[test]

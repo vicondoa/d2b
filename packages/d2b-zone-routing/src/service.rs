@@ -743,6 +743,9 @@ impl ZoneServiceServer {
 
     /// Consume the admission and check the call against this Zone's truth.
     ///
+    /// The tuple every check below reads is the one the consumed evidence was
+    /// sealed to, so a request can only be admitted against the seal.
+    ///
     /// Every refusal returns without recording; the caller records exactly
     /// once through [`Self::refuse_enrollment`] or [`Self::refuse_enroll`].
     fn admit_enrollment(
@@ -1894,6 +1897,23 @@ mod tests {
         .expect("the contract enrolled guest session profile")
     }
 
+    /// The same link with a differing expected reconnect generation.
+    fn substituted_expectation() -> ZoneEnrollmentExpectation {
+        ZoneEnrollmentExpectation::for_enrolled_guest_session(
+            ZoneId::parse("zone-k1").expect("valid zone"),
+            uid('1'),
+            edge(&["k0"], &["k1", "k0"]),
+            ZoneLinkControllerGeneration::parse("controller-1").expect("valid generation"),
+            SEALED_PEER_FINGERPRINT,
+            [0x44; 32],
+            [0x11; 32],
+            [0x22; 32],
+            ReconnectGeneration::new(8).expect("valid generation"),
+            LimitProfile::remote_default(),
+        )
+        .expect("the contract enrolled guest session profile")
+    }
+
     fn enrollment_identity(expected: &ZoneEnrollmentExpectation) -> ZoneEnrollmentIdentity {
         ZoneEnrollmentIdentity {
             zone_link_uid: expected.zone_link_uid().clone(),
@@ -2157,6 +2177,48 @@ mod tests {
             server.zone_bootstrap(&request),
             ZoneBootstrapReply::Admitted { .. }
         ));
+    }
+
+    #[test]
+    fn a_substituted_expectation_is_refused_at_the_handler() {
+        let mut server = server();
+        // The allocator sealed one tuple; the runtime holds the evidence
+        // against a different one and the call names that different one. The
+        // handler decides on the seal, so the call is refused even though it
+        // matches the tuple it was presented with.
+        let sealed = enrolled_expectation();
+        let substituted = substituted_expectation();
+        assert_ne!(sealed, substituted, "the two tuples differ");
+
+        let now = Arc::new(AtomicU64::new(1_700_000_000_400));
+        let clock: Arc<dyn Fn() -> u64 + Send + Sync> = {
+            let now = Arc::clone(&now);
+            Arc::new(move || now.load(Ordering::Acquire))
+        };
+        let authority =
+            ZoneEnrollmentAuthority::with_lifetime(clock, 30_000).expect("valid authority");
+        let (verifier, evidence) = authority.issue(sealed.clone()).expect("issued");
+        let bootstrap = bootstrap_request(&substituted, 1)
+            .with_runtime_admission(verifier, evidence, &substituted)
+            .expect("admission");
+        assert_eq!(
+            server.zone_bootstrap(&bootstrap),
+            ZoneBootstrapReply::Refused {
+                reason: ZoneEnrollmentRefusal::PolicyDenial
+            }
+        );
+        let (verifier, evidence) = authority.issue(sealed).expect("issued");
+        let enroll = enroll_request(&substituted, SEALED_PEER_FINGERPRINT)
+            .with_runtime_admission(verifier, evidence, &substituted)
+            .expect("admission");
+        assert_eq!(
+            server.zone_enroll(&enroll),
+            ZoneEnrollReply::Refused {
+                reason: ZoneEnrollmentRefusal::PolicyDenial
+            }
+        );
+        // The refusals consumed both admissions and moved no link state.
+        assert_eq!(server.link_state(&zone(&["k1", "k0"])), None);
     }
 
     #[test]
