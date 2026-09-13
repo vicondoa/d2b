@@ -108,7 +108,11 @@ fn runtime(placements: ZoneEnrollmentPlacements) -> ZoneEnrollmentServer {
 }
 
 fn bootstrap_bytes(issuance: u64) -> Vec<u8> {
-    ZoneBootstrapCall::new(identity(), issuance, 300_000, ISSUED_AT_UNIX_MS)
+    bootstrap_bytes_at(issuance, 300_000, ISSUED_AT_UNIX_MS)
+}
+
+fn bootstrap_bytes_at(issuance: u64, ttl_ms: u64, issued_at_unix_ms: u64) -> Vec<u8> {
+    ZoneBootstrapCall::new(identity(), issuance, ttl_ms, issued_at_unix_ms)
         .encode()
         .expect("an encodable bootstrap call")
 }
@@ -361,6 +365,34 @@ async fn the_call_allowance_is_bounded() {
         "the runtime stops at its bounded allowance"
     );
     assert_eq!(replies, ZONE_ENROLLMENT_CALLS_MAX);
+}
+
+#[tokio::test]
+async fn an_expired_psk_issuance_refuses_the_named_bootstrap_psk_expired() {
+    let (client, server_stream) = tokio::io::duplex(FRAME_LIMIT);
+    let mut client = FramedVsockTransport::new(client);
+    let serving = serve_once(runtime(placements(Some(expectation()))), server_stream);
+
+    // An issuance within the frozen lifetime range whose absolute expiry is
+    // long past: the state machine refuses it without burning it, so the link
+    // stays where it was.
+    send(&mut client, bootstrap_bytes_at(1, 60_000, 0)).await;
+    let reply = bootstrap_reply(&mut client).await;
+    drop(client);
+    let (server, outcome) = serving.await.expect("the serving task completes");
+
+    assert_eq!(
+        reply,
+        ZoneBootstrapReply::Refused {
+            reason: ZoneEnrollmentRefusal::BootstrapPskExpired
+        }
+    );
+    assert_eq!(outcome, Err(ZoneEnrollmentServeError::Transport));
+    assert_eq!(
+        server.link_state(&zone_path(&["k1", "k0"])),
+        None,
+        "an expired issuance leaves no tracked link"
+    );
 }
 
 /// The frontend's virtual HID device, standing in for `/dev/uhid`.
