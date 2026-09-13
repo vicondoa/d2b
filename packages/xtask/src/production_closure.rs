@@ -239,6 +239,27 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
     Ok(contexts)
 }
 
+/// Write the current context set. The output tree is never pruned.
+///
+/// This function only enumerates the contexts `context_specs` returns, so every
+/// directory under `OUTPUT_ROOT` whose context key is no longer in that set - a
+/// dropped system/target tuple, a renamed context, or a context retired with
+/// the crate that owned it, as `guest-shell-runner-static` was - stays on disk
+/// exactly as it was. `check_outputs` does not see it either: it walks only the
+/// expected contexts, and `reject_extra_files` compares the files inside one
+/// context directory rather than the set of context directories. A retired
+/// context therefore stops being regenerated and validated while its files keep
+/// their protected-owner status; the advisory-policy context keys are compared,
+/// but the directory is not, so the change that retires a context has to delete
+/// its files by hand.
+///
+/// A fix needs both halves, and both must respect the protected review on
+/// `packages/policy-inputs/**`: `--write` would have to enumerate the existing
+/// context directories in deterministic order and delete the ones absent from
+/// the current set (reporting each removal, and never treating the system and
+/// target parents as contexts), and `--check` would have to fail naming any
+/// context directory it did not expect. Detection in `--check` alone is the
+/// smaller half if the deletion should stay with the protected owner.
 fn generate_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let contexts = context_specs(root)?;
     let policy = read_advisory_policy(root, false)?;
@@ -256,6 +277,10 @@ fn generate_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(written)
 }
 
+/// Check the expected context set; a retired context directory is not visible
+/// here. See the `generate_outputs` note above: neither this walk nor
+/// `reject_extra_files` compares the context directories found under
+/// `OUTPUT_ROOT` with the expected keys, so a stranded context passes `--check`.
 fn check_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let contexts = context_specs(root)?;
     let policy = read_advisory_policy(root, true)?;
