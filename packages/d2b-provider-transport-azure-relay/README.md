@@ -25,16 +25,11 @@ through the scoped `ScopedCredentialClient` boundary and
 `RelaySocketConnector`. Scoped opens fence every lease to one same-Zone
 Credential, Gateway Guest, ZoneLink, session, and reconnect generation;
 `AzureRelaySocketConnector` keeps WebSocket/TLS state in the Guest. Core owns
-ZoneLink reconnect scheduling; the Provider only performs bounded carriage
-attempt retries and preserves backpressure. `GatewayGuestZoneLinkRuntime` can
-be composed directly over the authenticated same-Zone Credential client;
+ZoneLink reconnect scheduling: the Provider opens one bounded carriage attempt
+per scoped request and preserves backpressure. `GatewayGuestZoneLinkRuntime`
+can be composed directly over the authenticated same-Zone Credential client;
 transport retains only that typed capability and never owns Resource rows or
 credential registries.
-
-`RelayTransportService` exposes typed opaque open/close/observe handles without
-owning a ResourceType, watch, scheduler, or universal RPC surface. The
-scoped-client adapter is backed by the authenticated same-Zone
-ResourceService/session gate.
 
 ## Placement and dependencies
 
@@ -58,9 +53,9 @@ distinct enrolled KK session are established.
 
 ## State and telemetry
 
-Credit windows bound aggregate buffering. Reconnect delays are capped and
-reset after a stable connection. Audit and metric labels are closed semantic
-sets.
+Credit windows bound aggregate buffering. A scoped open performs one bounded
+carriage attempt inside the caller's deadline; reconnect scheduling stays with
+Core.
 
 ## Build and test
 

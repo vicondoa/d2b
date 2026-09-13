@@ -3,41 +3,34 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub mod audit;
 pub mod auth;
 pub mod backpressure;
 pub mod credential_client;
 pub mod guest_credential;
 pub mod guest_zone_link;
-pub mod metrics;
-pub mod reconnect;
 pub mod relay_transport;
 pub mod transport_settings;
 
-pub use audit::{RelayAuditEvent, RelayAuditOperation, RelayAuditOutcome};
 pub use backpressure::{BackpressureError, CreditWindow};
 pub use credential_client::{
     MAX_ACTIVE_RELAY_LEASES, MAX_RELAY_BINDING_COMPONENT_BYTES, MAX_RELAY_LEASE_TTL_MS,
     RelayCredentialBinding, RelayCredentialError, RelayCredentialLease, RelayCredentialMaterial,
-    RelayCredentialPort, RelayCredentialRequest, RelayCredentialRole, RelaySecret,
-    ScopedCredentialClient, ScopedCredentialRequest,
+    RelayCredentialPort, RelayCredentialRole, RelaySecret, ScopedCredentialClient,
+    ScopedCredentialRequest,
 };
 pub use guest_credential::{
     CredentialEnvelopeMeta, CredentialError, CredentialFilePolicy, GATEWAY_CREDENTIAL_MODE,
     GATEWAY_CREDENTIAL_SCHEMA_VERSION, GATEWAY_SEAL_KEY_LEN, GATEWAY_SEAL_KEY_MODE,
-    GatewayCredential, GatewayCredentialMaterial, GatewayGuestCredentialPort, MintedRelaySendToken,
-    SealingKey,
+    GatewayCredential, GatewayCredentialMaterial, GatewayGuestCredentialPort, SealingKey,
 };
 pub use guest_zone_link::{GatewayGuestZoneLinkError, GatewayGuestZoneLinkRuntime};
-pub use metrics::{RelayMetricEvent, RelayMetricOutcome};
-pub use reconnect::{ReconnectBackoff, ReconnectDecision};
 pub use relay_transport::{
     AzureRelaySocketConnector, AzureRelayTransportProvider, MAX_RELAY_CA_BYTES,
     MAX_RELAY_GENERATION_FENCES, MAX_RELAY_WS_WRITE_BUFFER_BYTES, RelayAuthenticatedPeer,
     RelayComponentSessionTransport, RelayConnection, RelayEndpoint, RelayEnrollmentChallenge,
-    RelayEnrollmentProof, RelayEnrollmentVerifier, RelayFrame, RelayOpenTransportResponse,
-    RelayRole, RelaySessionPhase, RelaySocket, RelaySocketConnector, RelayTransportConfig,
-    RelayTransportError, RelayTransportHandle, RelayTransportObservation, RelayTransportService,
+    RelayEnrollmentProof, RelayEnrollmentVerifier, RelayFrame, RelayRole, RelaySessionPhase,
+    RelaySocket, RelaySocketConnector, RelayTransportConfig, RelayTransportError,
+    RelayTransportObservation,
 };
 pub use transport_settings::{RelayTransportSettings, RelayTransportSettingsError};
 

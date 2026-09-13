@@ -11,12 +11,12 @@ use async_trait::async_trait;
 use d2b_contracts::ResourceRef;
 use d2b_contracts_resource::v3::ZoneId;
 use d2b_provider_transport_azure_relay::{
-    AzureRelayTransportProvider, CreditWindow, MAX_RELAY_GENERATION_FENCES, ReconnectBackoff,
+    AzureRelayTransportProvider, CreditWindow, MAX_RELAY_GENERATION_FENCES,
     RelayAuthenticatedPeer, RelayComponentSessionTransport, RelayConnection,
     RelayCredentialBinding, RelayCredentialError, RelayCredentialLease, RelayCredentialMaterial,
     RelayCredentialPort, RelayCredentialRole, RelayEndpoint, RelayEnrollmentProof,
     RelayEnrollmentVerifier, RelayFrame, RelayRole, RelaySecret, RelaySocket, RelaySocketConnector,
-    RelayTransportConfig, RelayTransportError, RelayTransportService, RelayTransportSettings,
+    RelayTransportConfig, RelayTransportError, RelayTransportSettings,
     ScopedCredentialClient, ScopedCredentialRequest,
 };
 use d2b_session::{OwnedTransport, TransportPacket};
@@ -199,29 +199,6 @@ impl ScopedCredentialClient for ScopedOnlyCredentials {
 
     async fn revoke_credential(&self, _: RelayCredentialLease) -> Result<(), RelayCredentialError> {
         Ok(())
-    }
-}
-
-struct RetryConnector {
-    attempts: Arc<Mutex<usize>>,
-    failures: usize,
-    socket: Arc<FakeSocket>,
-}
-
-#[async_trait]
-impl RelaySocketConnector for RetryConnector {
-    async fn connect(
-        &self,
-        _: &RelayEndpoint,
-        _: RelayRole,
-        _: &RelayCredentialLease,
-    ) -> Result<Arc<dyn RelaySocket>, RelayTransportError> {
-        let mut attempts = self.attempts.lock().unwrap();
-        *attempts += 1;
-        if *attempts <= self.failures {
-            return Err(RelayTransportError::Unavailable);
-        }
-        Ok(Arc::clone(&self.socket) as Arc<dyn RelaySocket>)
     }
 }
 
@@ -490,86 +467,6 @@ fn relay_provider_configuration_rejects_host_execution_or_non_network_egress() {
 }
 
 #[tokio::test]
-async fn typed_relay_handles_reject_duplicate_carriage_and_expose_only_observation() {
-    let service = RelayTransportService::new(provider());
-    let request = scoped_request(1);
-    let opened = service
-        .open_transport(request.clone(), ReconnectBackoff::with_limits(0, 0, 0, 0))
-        .await
-        .unwrap();
-    assert_eq!(
-        service
-            .observe_transport(opened.transport_handle)
-            .await
-            .unwrap()
-            .phase,
-        d2b_provider_transport_azure_relay::RelaySessionPhase::EnrollmentCommitted
-    );
-    assert_eq!(
-        service
-            .open_transport(request, ReconnectBackoff::with_limits(0, 0, 0, 0))
-            .await
-            .unwrap_err(),
-        RelayTransportError::DuplicateTransport
-    );
-    service
-        .close_transport(opened.transport_handle)
-        .await
-        .unwrap();
-    service
-        .close_transport(opened.transport_handle)
-        .await
-        .unwrap();
-    assert_eq!(
-        service
-            .observe_transport(opened.transport_handle)
-            .await
-            .unwrap()
-            .phase,
-        d2b_provider_transport_azure_relay::RelaySessionPhase::Closed
-    );
-    assert_eq!(
-        service
-            .observe_transport(
-                d2b_provider_transport_azure_relay::RelayTransportHandle::from_core(999),
-            )
-            .await
-            .unwrap_err(),
-        RelayTransportError::UnknownTransportHandle
-    );
-}
-
-#[tokio::test]
-async fn relay_reconnect_reopens_only_carriage_for_a_new_generation() {
-    let service = RelayTransportService::new(provider());
-    let first = service
-        .open_transport(scoped_request(1), ReconnectBackoff::with_limits(0, 0, 0, 0))
-        .await
-        .unwrap();
-    service
-        .close_transport(first.transport_handle)
-        .await
-        .unwrap();
-    let second = service
-        .open_transport(scoped_request(2), ReconnectBackoff::with_limits(0, 0, 0, 0))
-        .await
-        .unwrap();
-    assert_ne!(first.transport_handle, second.transport_handle);
-    assert_eq!(
-        service
-            .observe_transport(second.transport_handle)
-            .await
-            .unwrap()
-            .reconnect_generation,
-        2
-    );
-    service
-        .close_transport(second.transport_handle)
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
 async fn sender_roundtrip_is_bounded_and_relay_has_no_local_admin() {
     let provider = provider();
     let connection = open_for(&provider, RelayRole::Sender, &test_binding(), 1_000)
@@ -657,33 +554,6 @@ async fn unauthenticated_connection_cannot_receive() {
         connection.receive().await,
         Err(RelayTransportError::InvalidSessionTransition)
     ));
-}
-
-#[tokio::test]
-async fn reconnect_policy_is_used_by_provider_open() {
-    let attempts = Arc::new(Mutex::new(0));
-    let provider = AzureRelayTransportProvider::new(
-        RelayTransportConfig {
-            max_concurrent_sessions: 1,
-            ..config()
-        },
-        endpoint(),
-        Arc::new(FakeCredentials),
-        Arc::new(RetryConnector {
-            attempts: Arc::clone(&attempts),
-            failures: 2,
-            socket: Arc::new(FakeSocket::default()),
-        }),
-    )
-    .unwrap();
-    provider
-        .open_scoped_with_backoff(
-            scoped_request_for(RelayRole::Sender, &test_binding(), 1_000),
-            ReconnectBackoff::with_limits(0, 1, 3, 1),
-        )
-        .await
-        .unwrap();
-    assert_eq!(*attempts.lock().unwrap(), 3);
 }
 
 #[tokio::test]
@@ -1172,65 +1042,6 @@ async fn newer_success_remains_authoritative_after_older_cleanup() {
         .await
         .unwrap();
     second.close().await.unwrap();
-}
-
-struct UnavailableCredentials {
-    attempts: Arc<Mutex<usize>>,
-}
-
-#[async_trait]
-impl RelayCredentialPort for UnavailableCredentials {
-    async fn acquire(
-        &self,
-        _: RelayCredentialRole,
-        _: u32,
-    ) -> Result<RelayCredentialLease, RelayCredentialError> {
-        *self.attempts.lock().unwrap() += 1;
-        Err(RelayCredentialError::Unavailable)
-    }
-
-    async fn acquire_bound(
-        &self,
-        _: RelayCredentialRole,
-        _: &RelayCredentialBinding,
-        _: u32,
-    ) -> Result<RelayCredentialLease, RelayCredentialError> {
-        *self.attempts.lock().unwrap() += 1;
-        Err(RelayCredentialError::Unavailable)
-    }
-
-    async fn revoke(&self, _: RelayCredentialLease) -> Result<(), RelayCredentialError> {
-        Ok(())
-    }
-}
-
-legacy_scoped_adapter!(UnavailableCredentials);
-
-#[tokio::test]
-async fn unavailable_credential_provider_uses_bounded_retries() {
-    let attempts = Arc::new(Mutex::new(0));
-    let provider = AzureRelayTransportProvider::new(
-        config(),
-        endpoint(),
-        Arc::new(UnavailableCredentials {
-            attempts: Arc::clone(&attempts),
-        }),
-        Arc::new(FakeConnector {
-            socket: Arc::new(FakeSocket::default()),
-        }),
-    )
-    .unwrap();
-    let binding = RelayCredentialBinding::new("link-1", "session-1", 1).unwrap();
-    assert!(matches!(
-        provider
-            .open_scoped_with_backoff(
-                scoped_request_for(RelayRole::Sender, &binding, 100),
-                ReconnectBackoff::with_limits(1, 0, 2, 50),
-            )
-            .await,
-        Err(RelayTransportError::CredentialUnavailable)
-    ));
-    assert!(*attempts.lock().unwrap() <= 3);
 }
 
 struct CleanupCredentials {

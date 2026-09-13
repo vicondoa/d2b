@@ -80,19 +80,6 @@ fn lease_binding_is_exact_and_redacted() {
 }
 
 #[test]
-fn request_debug_redacts_binding_canaries() {
-    let binding = RelayCredentialBinding::new("link-canary", "session-canary", 7).unwrap();
-    let request = d2b_provider_transport_azure_relay::RelayCredentialRequest::new(
-        RelayCredentialRole::Listen,
-        binding,
-        500,
-    );
-    let debug = format!("{request:?}");
-    assert!(!debug.contains("link-canary"));
-    assert!(!debug.contains("session-canary"));
-}
-
-#[test]
 fn unbound_port_lease_can_be_bound_only_once() {
     let binding = RelayCredentialBinding::new("zonelink-a", "session-a", 1).unwrap();
     let other = RelayCredentialBinding::new("zonelink-b", "session-b", 2).unwrap();

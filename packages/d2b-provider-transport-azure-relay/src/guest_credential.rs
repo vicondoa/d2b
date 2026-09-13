@@ -1,19 +1,19 @@
-//! Gateway runtime credential loading and relay-token minting.
+//! Gateway runtime credential loading.
 //!
 //! Credentials are runtime state inside the gateway guest, not Nix data. This
 //! module refuses `/nix/store` paths, enforces `0600`, optionally enforces the
-//! gateway principal uid, redacts all key/token debug output, and mints
-//! short-lived Relay Send tokens from a least-privilege send rule.
+//! gateway principal uid, and redacts all key debug output. The Guest only
+//! opens the sealed envelope the gateway bootstrap delivers; it never authors
+//! one.
 
 use std::collections::HashMap;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use crate::auth::{MAX_SAS_TTL_SECS, RelayCredential, RelayEndpoint, RelayError, mint_sas};
 use crate::{
     MAX_ACTIVE_RELAY_LEASES, MAX_RELAY_LEASE_TTL_MS, RelayCredentialBinding, RelayCredentialError,
     RelayCredentialLease, RelayCredentialMaterial, RelayCredentialPort, RelayCredentialRole,
@@ -38,12 +38,6 @@ pub const GATEWAY_CREDENTIAL_SCHEMA_VERSION: u32 = 1;
 pub const GATEWAY_SEAL_KEY_LEN: usize = 32;
 const GATEWAY_CREDENTIAL_NONCE_LEN: usize = 12;
 const SEALING_AAD_PREFIX: &[u8] = b"d2b-gateway-credential-v1";
-
-/// Maximum lifetime for gateway-minted Relay Send SAS bearers.
-pub const MAX_RELAY_SEND_TOKEN_TTL_SECS: u64 = MAX_SAS_TTL_SECS;
-
-/// Default lifetime for gateway-minted Relay Send SAS bearers.
-pub const DEFAULT_RELAY_SEND_TOKEN_TTL_SECS: u64 = MAX_RELAY_SEND_TOKEN_TTL_SECS;
 
 /// Runtime credential file policy.
 #[derive(Debug, Clone, Default)]
@@ -73,24 +67,6 @@ impl SealingKey {
             .try_into()
             .map_err(|_| CredentialError::BadSealKey)?;
         Ok(Self(key))
-    }
-
-    /// Load an existing key or create a new guest-local key with `0600` mode.
-    pub fn load_or_generate(
-        path: impl AsRef<Path>,
-        policy: &CredentialFilePolicy,
-    ) -> Result<Self, CredentialError> {
-        let path = path.as_ref();
-        if path.exists() {
-            return Self::load(path, policy);
-        }
-        let mut bytes = [0_u8; GATEWAY_SEAL_KEY_LEN];
-        getrandom::getrandom(&mut bytes).map_err(|_| CredentialError::Crypto)?;
-        match write_runtime_file(path, &bytes, GATEWAY_SEAL_KEY_MODE, false) {
-            Ok(()) | Err(CredentialError::AlreadyExists) => {}
-            Err(err) => return Err(err),
-        }
-        Self::load(path, policy)
     }
 }
 
@@ -146,16 +122,6 @@ pub struct CredentialEnvelopeMeta {
     pub generation: u64,
     /// Optional Unix-seconds expiry for the envelope.
     pub not_after: Option<u64>,
-}
-
-impl CredentialEnvelopeMeta {
-    /// First enrollment generation.
-    pub fn first(not_after: Option<u64>) -> Self {
-        Self {
-            generation: 1,
-            not_after,
-        }
-    }
 }
 
 /// A loaded gateway credential envelope. `Debug` redacts all secret material.
@@ -265,57 +231,6 @@ impl GatewayCredential {
         )
     }
 
-    /// Enroll a new sealed credential envelope. Existing envelopes are refused.
-    pub fn enroll_sealed(
-        path: impl AsRef<Path>,
-        sealing_key: &SealingKey,
-        material: GatewayCredentialMaterial,
-        meta: CredentialEnvelopeMeta,
-        now_unix: u64,
-    ) -> Result<(), CredentialError> {
-        if meta.generation == 0 {
-            return Err(CredentialError::GenerationNotAdvanced);
-        }
-        validate_not_after(meta.not_after, now_unix)?;
-        if path.as_ref().exists() {
-            return Err(CredentialError::AlreadyExists);
-        }
-        write_sealed(path.as_ref(), sealing_key, material, meta, false)
-    }
-
-    /// Rotate an existing sealed envelope and return the new generation.
-    pub fn rotate_sealed(
-        path: impl AsRef<Path>,
-        sealing_key: &SealingKey,
-        material: GatewayCredentialMaterial,
-        policy: &CredentialFilePolicy,
-        now_unix: u64,
-        not_after: Option<u64>,
-    ) -> Result<u64, CredentialError> {
-        let current = Self::load_sealed_inner(path.as_ref(), sealing_key, policy, None)?;
-        let generation = current.generation.saturating_add(1);
-        if generation <= current.generation {
-            return Err(CredentialError::GenerationNotAdvanced);
-        }
-        validate_not_after(not_after, now_unix)?;
-        write_sealed(
-            path.as_ref(),
-            sealing_key,
-            material,
-            CredentialEnvelopeMeta {
-                generation,
-                not_after,
-            },
-            true,
-        )?;
-        Ok(generation)
-    }
-
-    /// Parse plaintext enrollment JSON into secret material.
-    pub fn material_from_json(raw: &str) -> Result<GatewayCredentialMaterial, CredentialError> {
-        Self::parse_material_json(raw)
-    }
-
     /// Credential generation.
     pub fn generation(&self) -> u64 {
         self.generation
@@ -324,36 +239,6 @@ impl GatewayCredential {
     /// Optional Unix-seconds expiry for the sealed envelope.
     pub fn not_after(&self) -> Option<u64> {
         self.not_after
-    }
-
-    /// Build the gateway listener credential (Listen rule).
-    pub fn listener_credential(&self) -> RelayCredential {
-        RelayCredential::Sas {
-            key_name: self.listen_key_name.clone(),
-            key: self.listen_key.clone(),
-        }
-    }
-
-    /// Mint a short-lived Relay Send SAS token for a container agent. The
-    /// returned token is secret and redacts in `Debug`.
-    pub fn mint_send_token(
-        &self,
-        endpoint: &RelayEndpoint,
-        ttl_secs: u64,
-    ) -> Result<MintedRelaySendToken, RelayError> {
-        if ttl_secs > MAX_RELAY_SEND_TOKEN_TTL_SECS {
-            return Err(RelayError::TtlTooLong {
-                requested: ttl_secs,
-                max: MAX_RELAY_SEND_TOKEN_TTL_SECS,
-            });
-        }
-
-        Ok(MintedRelaySendToken(mint_sas(
-            endpoint,
-            &self.send_key_name,
-            &self.send_key,
-            ttl_secs,
-        )?))
     }
 
     fn parse_material_json(raw: &str) -> Result<GatewayCredentialMaterial, CredentialError> {
@@ -390,29 +275,6 @@ impl GatewayCredential {
             generation: meta.generation,
             not_after: meta.not_after,
         })
-    }
-}
-
-/// A minted short-lived Relay Send SAS bearer. `Debug` redacts the token.
-#[derive(Clone, PartialEq, Eq)]
-pub struct MintedRelaySendToken(String);
-
-impl MintedRelaySendToken {
-    /// Borrow the token for provider-control-plane delivery.
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl core::fmt::Debug for MintedRelaySendToken {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("MintedRelaySendToken(<redacted>)")
-    }
-}
-
-impl Drop for MintedRelaySendToken {
-    fn drop(&mut self) {
-        self.0.zeroize();
     }
 }
 
@@ -685,10 +547,6 @@ pub enum CredentialError {
     Crypto,
     /// Sealed envelope expired.
     Expired,
-    /// Enrollment target already exists.
-    AlreadyExists,
-    /// Credential generation did not advance.
-    GenerationNotAdvanced,
 }
 
 impl core::fmt::Display for CredentialError {
@@ -719,26 +577,11 @@ impl core::fmt::Display for CredentialError {
                 f.write_str("gateway credential envelope cannot be unsealed")
             }
             CredentialError::Expired => f.write_str("gateway credential envelope expired"),
-            CredentialError::AlreadyExists => {
-                f.write_str("gateway credential envelope already exists")
-            }
-            CredentialError::GenerationNotAdvanced => {
-                f.write_str("gateway credential generation did not advance")
-            }
         }
     }
 }
 
 impl std::error::Error for CredentialError {}
-
-fn validate_not_after(not_after: Option<u64>, now_unix: u64) -> Result<(), CredentialError> {
-    if let Some(not_after) = not_after
-        && not_after <= now_unix
-    {
-        return Err(CredentialError::Expired);
-    }
-    Ok(())
-}
 
 fn read_policy_file(
     path: &Path,
@@ -769,137 +612,6 @@ fn read_policy_file(
     file.read_to_end(&mut bytes)
         .map_err(|_| CredentialError::Unreadable)?;
     Ok(bytes)
-}
-
-fn write_runtime_file(
-    path: &Path,
-    bytes: &[u8],
-    mode: u32,
-    replace_existing: bool,
-) -> Result<(), CredentialError> {
-    if path.starts_with("/nix/store") {
-        return Err(CredentialError::NixStorePath);
-    }
-    let parent = path.parent().ok_or(CredentialError::Unreadable)?;
-    fs::create_dir_all(parent).map_err(|_| CredentialError::Unreadable)?;
-    if !replace_existing {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(mode)
-            .open(path)
-            .map_err(|err| {
-                if err.kind() == std::io::ErrorKind::AlreadyExists {
-                    CredentialError::AlreadyExists
-                } else {
-                    CredentialError::Unreadable
-                }
-            })?;
-        if file
-            .write_all(bytes)
-            .and_then(|_| file.set_permissions(fs::Permissions::from_mode(mode)))
-            .and_then(|_| file.sync_all())
-            .is_err()
-        {
-            let _ = fs::remove_file(path);
-            return Err(CredentialError::Unreadable);
-        }
-        sync_parent_dir(parent)?;
-        return Ok(());
-    }
-    let tmp = temp_path(path);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(mode)
-        .open(&tmp)
-        .map_err(|_| CredentialError::Unreadable)?;
-    if file
-        .write_all(bytes)
-        .and_then(|_| file.set_permissions(fs::Permissions::from_mode(mode)))
-        .and_then(|_| file.sync_all())
-        .is_err()
-    {
-        let _ = fs::remove_file(&tmp);
-        return Err(CredentialError::Unreadable);
-    }
-    fs::rename(&tmp, path).map_err(|_| {
-        let _ = fs::remove_file(&tmp);
-        CredentialError::Unreadable
-    })?;
-    sync_parent_dir(parent)?;
-    Ok(())
-}
-
-fn sync_parent_dir(parent: &Path) -> Result<(), CredentialError> {
-    fs::File::open(parent)
-        .and_then(|dir| dir.sync_all())
-        .map_err(|_| CredentialError::Unreadable)
-}
-
-fn write_sealed(
-    path: &Path,
-    sealing_key: &SealingKey,
-    material: GatewayCredentialMaterial,
-    meta: CredentialEnvelopeMeta,
-    replace_existing: bool,
-) -> Result<(), CredentialError> {
-    let plaintext = Zeroizing::new(
-        serde_json::to_vec(&material_json(material)).map_err(|_| CredentialError::Malformed)?,
-    );
-    let mut nonce = [0_u8; GATEWAY_CREDENTIAL_NONCE_LEN];
-    getrandom::getrandom(&mut nonce).map_err(|_| CredentialError::Crypto)?;
-    let aad = credential_aad(meta.generation, meta.not_after);
-    let ciphertext = cipher(sealing_key)
-        .encrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: &plaintext,
-                aad: &aad,
-            },
-        )
-        .map_err(|_| CredentialError::Crypto)?;
-    let envelope = SealedCredentialFile {
-        schema_version: GATEWAY_CREDENTIAL_SCHEMA_VERSION,
-        generation: meta.generation,
-        not_after: meta.not_after,
-        nonce: base64::engine::general_purpose::STANDARD.encode(nonce),
-        ciphertext: base64::engine::general_purpose::STANDARD.encode(ciphertext),
-    };
-    let body = serde_json::to_vec(&envelope).map_err(|_| CredentialError::Malformed)?;
-    write_runtime_file(path, &body, GATEWAY_CREDENTIAL_MODE, replace_existing)
-}
-
-fn material_json(material: GatewayCredentialMaterial) -> Value {
-    serde_json::json!({
-        "relayListen": {
-            "keyName": material.listen_key_name,
-            "key": material.listen_key,
-        },
-        "relaySend": {
-            "keyName": material.send_key_name,
-            "key": material.send_key,
-        },
-    })
-}
-
-fn temp_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("credential");
-    path.with_file_name(format!(
-        ".{file_name}.tmp-{}-{}",
-        std::process::id(),
-        monotonic_nanos()
-    ))
-}
-
-fn monotonic_nanos() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0)
 }
 
 fn cipher(sealing_key: &SealingKey) -> ChaCha20Poly1305 {
@@ -957,9 +669,61 @@ fn valid_material_text(value: &str) -> bool {
         && !value.bytes().any(|byte| byte.is_ascii_control())
 }
 
+/// Write one sealed credential envelope for tests.
+///
+/// The Guest never authors envelopes: it only opens the envelope the gateway
+/// bootstrap delivers. Unit tests build that fixture through the same
+/// envelope primitives the read path verifies.
+#[cfg(test)]
+pub(crate) fn seal_envelope_for_test(
+    path: &Path,
+    sealing_key: &SealingKey,
+    material: GatewayCredentialMaterial,
+    generation: u64,
+    not_after: Option<u64>,
+) -> Result<(), CredentialError> {
+    let plaintext = Zeroizing::new(
+        serde_json::to_vec(&serde_json::json!({
+            "relayListen": {
+                "keyName": material.listen_key_name,
+                "key": material.listen_key,
+            },
+            "relaySend": {
+                "keyName": material.send_key_name,
+                "key": material.send_key,
+            },
+        }))
+        .map_err(|_| CredentialError::Malformed)?,
+    );
+    let nonce = [0_u8; GATEWAY_CREDENTIAL_NONCE_LEN];
+    let aad = credential_aad(generation, not_after);
+    let ciphertext = cipher(sealing_key)
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: &plaintext,
+                aad: &aad,
+            },
+        )
+        .map_err(|_| CredentialError::Crypto)?;
+    let envelope = SealedCredentialFile {
+        schema_version: GATEWAY_CREDENTIAL_SCHEMA_VERSION,
+        generation,
+        not_after,
+        nonce: base64::engine::general_purpose::STANDARD.encode(nonce),
+        ciphertext: base64::engine::general_purpose::STANDARD.encode(ciphertext),
+    };
+    let body = serde_json::to_vec(&envelope).map_err(|_| CredentialError::Malformed)?;
+    std::fs::write(path, &body).map_err(|_| CredentialError::Unreadable)?;
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(GATEWAY_CREDENTIAL_MODE))
+        .map_err(|_| CredentialError::Unreadable)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
@@ -988,30 +752,6 @@ mod tests {
 
     fn sealing_key() -> SealingKey {
         SealingKey::from_bytes([9_u8; GATEWAY_SEAL_KEY_LEN])
-    }
-
-    fn endpoint() -> RelayEndpoint {
-        RelayEndpoint {
-            namespace: "relns-example.servicebus.windows.net".into(),
-            entity: "hc-display".into(),
-        }
-    }
-
-    fn now_unix_secs() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    }
-
-    fn sas_param<'a>(token: &'a str, name: &str) -> &'a str {
-        let prefix = format!("{name}=");
-        token
-            .strip_prefix("SharedAccessSignature ")
-            .unwrap()
-            .split('&')
-            .find_map(|part| part.strip_prefix(&prefix))
-            .unwrap()
     }
 
     #[test]
@@ -1066,28 +806,10 @@ mod tests {
     }
 
     #[test]
-    fn sealing_key_load_or_generate_creates_guest_local_0600_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("seal.key");
-        let key = SealingKey::load_or_generate(&path, &CredentialFilePolicy::default()).unwrap();
-        assert_eq!(format!("{key:?}"), "SealingKey(<redacted>)");
-        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
-        let again = SealingKey::load(&path, &CredentialFilePolicy::default()).unwrap();
-        assert_eq!(key, again);
-    }
-
-    #[test]
-    fn enrolls_and_unseals_gateway_owned_credential_envelope() {
+    fn unseals_gateway_owned_credential_envelope() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credential.sealed.json");
-        GatewayCredential::enroll_sealed(
-            &path,
-            &sealing_key(),
-            material(),
-            CredentialEnvelopeMeta::first(Some(2_000)),
-            1_000,
-        )
-        .unwrap();
+        seal_envelope_for_test(&path, &sealing_key(), material(), 1, Some(2_000)).unwrap();
         assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
         let raw = fs::read_to_string(&path).unwrap();
         assert!(!raw.contains("listen-secret"));
@@ -1111,136 +833,13 @@ mod tests {
     fn sealed_gateway_credential_expiry_is_fail_closed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credential.sealed.json");
-        GatewayCredential::enroll_sealed(
-            &path,
-            &sealing_key(),
-            material(),
-            CredentialEnvelopeMeta::first(Some(10)),
-            1,
-        )
-        .unwrap();
+        seal_envelope_for_test(&path, &sealing_key(), material(), 1, Some(10)).unwrap();
         assert_eq!(
             GatewayCredential::load_sealed(
                 &path,
                 &sealing_key(),
                 &CredentialFilePolicy::default(),
                 10,
-            )
-            .unwrap_err(),
-            CredentialError::Expired
-        );
-    }
-
-    #[test]
-    fn enrollment_rejects_immediately_expired_envelope() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("credential.sealed.json");
-        assert_eq!(
-            GatewayCredential::enroll_sealed(
-                &path,
-                &sealing_key(),
-                material(),
-                CredentialEnvelopeMeta::first(Some(10)),
-                10,
-            )
-            .unwrap_err(),
-            CredentialError::Expired
-        );
-    }
-
-    #[test]
-    fn rotation_advances_generation_and_invalidates_old_key_material() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("credential.sealed.json");
-        GatewayCredential::enroll_sealed(
-            &path,
-            &sealing_key(),
-            material(),
-            CredentialEnvelopeMeta::first(None),
-            1,
-        )
-        .unwrap();
-        let mut rotated = material();
-        rotated.send_key = "new-send-secret".to_owned();
-        let next = GatewayCredential::rotate_sealed(
-            &path,
-            &sealing_key(),
-            rotated,
-            &CredentialFilePolicy::default(),
-            1,
-            Some(3_000),
-        )
-        .unwrap();
-        assert_eq!(next, 2);
-        let cred = GatewayCredential::load_sealed(
-            &path,
-            &sealing_key(),
-            &CredentialFilePolicy::default(),
-            2,
-        )
-        .unwrap();
-        assert_eq!(cred.generation(), 2);
-        assert_eq!(cred.not_after(), Some(3_000));
-        let token = cred.mint_send_token(&endpoint(), 60).unwrap();
-        assert_eq!(sas_param(token.expose(), "skn"), "gateway-send");
-        assert!(!token.expose().contains("new-send-secret"));
-    }
-
-    #[test]
-    fn rotation_can_recover_expired_envelope() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("credential.sealed.json");
-        GatewayCredential::enroll_sealed(
-            &path,
-            &sealing_key(),
-            material(),
-            CredentialEnvelopeMeta::first(Some(10)),
-            1,
-        )
-        .unwrap();
-        let next = GatewayCredential::rotate_sealed(
-            &path,
-            &sealing_key(),
-            material(),
-            &CredentialFilePolicy::default(),
-            20,
-            Some(40),
-        )
-        .unwrap();
-        assert_eq!(next, 2);
-        assert_eq!(
-            GatewayCredential::load_sealed(
-                &path,
-                &sealing_key(),
-                &CredentialFilePolicy::default(),
-                20,
-            )
-            .unwrap()
-            .not_after(),
-            Some(40)
-        );
-    }
-
-    #[test]
-    fn rotation_rejects_new_expired_deadline() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("credential.sealed.json");
-        GatewayCredential::enroll_sealed(
-            &path,
-            &sealing_key(),
-            material(),
-            CredentialEnvelopeMeta::first(None),
-            1,
-        )
-        .unwrap();
-        assert_eq!(
-            GatewayCredential::rotate_sealed(
-                &path,
-                &sealing_key(),
-                material(),
-                &CredentialFilePolicy::default(),
-                20,
-                Some(20),
             )
             .unwrap_err(),
             CredentialError::Expired
@@ -1253,28 +852,10 @@ mod tests {
     }
 
     #[test]
-    fn sealed_envelope_rejects_wrong_key_and_duplicate_enrollment() {
+    fn sealed_envelope_rejects_wrong_key() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credential.sealed.json");
-        GatewayCredential::enroll_sealed(
-            &path,
-            &sealing_key(),
-            material(),
-            CredentialEnvelopeMeta::first(None),
-            1,
-        )
-        .unwrap();
-        assert_eq!(
-            GatewayCredential::enroll_sealed(
-                &path,
-                &sealing_key(),
-                material(),
-                CredentialEnvelopeMeta::first(None),
-                1,
-            )
-            .unwrap_err(),
-            CredentialError::AlreadyExists
-        );
+        seal_envelope_for_test(&path, &sealing_key(), material(), 1, None).unwrap();
         let wrong = SealingKey::from_bytes([8_u8; GATEWAY_SEAL_KEY_LEN]);
         assert_eq!(
             GatewayCredential::load_sealed(&path, &wrong, &CredentialFilePolicy::default(), 1,)
@@ -1283,52 +864,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn mints_redacted_short_lived_send_token() {
-        let dir = tempfile::tempdir().unwrap();
-        let cred =
-            GatewayCredential::load(fixture(dir.path()), &CredentialFilePolicy::default()).unwrap();
-        let ttl = 60;
-        let before = now_unix_secs();
-        let token = cred.mint_send_token(&endpoint(), ttl).unwrap();
-        let after = now_unix_secs();
-        assert!(token.expose().starts_with("SharedAccessSignature "));
-        assert_eq!(sas_param(token.expose(), "skn"), "gateway-send");
-        let expiry = sas_param(token.expose(), "se").parse::<u64>().unwrap();
-        assert!(expiry >= before + ttl);
-        assert!(expiry <= after + ttl);
-        assert!(!token.expose().contains("send-secret"));
-        assert_eq!(format!("{token:?}"), "MintedRelaySendToken(<redacted>)");
-        assert!(!format!("{token:?}").contains("SharedAccessSignature"));
-    }
-
-    #[test]
-    fn rejects_send_token_ttl_above_short_lived_cap() {
-        let dir = tempfile::tempdir().unwrap();
-        let cred =
-            GatewayCredential::load(fixture(dir.path()), &CredentialFilePolicy::default()).unwrap();
-        assert_eq!(
-            cred.mint_send_token(&endpoint(), MAX_RELAY_SEND_TOKEN_TTL_SECS + 1)
-                .unwrap_err(),
-            RelayError::TtlTooLong {
-                requested: MAX_RELAY_SEND_TOKEN_TTL_SECS + 1,
-                max: MAX_RELAY_SEND_TOKEN_TTL_SECS
-            }
-        );
-    }
-
     #[tokio::test]
     async fn guest_port_requires_exact_binding_and_revokes_exact_lease() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credential.sealed.json");
-        GatewayCredential::enroll_sealed(
-            &path,
-            &sealing_key(),
-            material(),
-            CredentialEnvelopeMeta::first(None),
-            1,
-        )
-        .unwrap();
+        seal_envelope_for_test(&path, &sealing_key(), material(), 1, None).unwrap();
         let credential = Arc::new(
             GatewayCredential::load_sealed(
                 &path,
@@ -1363,14 +903,7 @@ mod tests {
     async fn guest_port_removes_active_row_when_lease_drops() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credential.sealed.json");
-        GatewayCredential::enroll_sealed(
-            &path,
-            &sealing_key(),
-            material(),
-            CredentialEnvelopeMeta::first(None),
-            1,
-        )
-        .unwrap();
+        seal_envelope_for_test(&path, &sealing_key(), material(), 1, None).unwrap();
         let credential = Arc::new(
             GatewayCredential::load_sealed(
                 &path,
@@ -1395,14 +928,7 @@ mod tests {
     fn sealed_guest_port_does_not_materialize_canary_in_file_or_debug() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credential.sealed.json");
-        GatewayCredential::enroll_sealed(
-            &path,
-            &sealing_key(),
-            material(),
-            CredentialEnvelopeMeta::first(None),
-            1,
-        )
-        .unwrap();
+        seal_envelope_for_test(&path, &sealing_key(), material(), 1, None).unwrap();
         let port = GatewayGuestCredentialPort::from_sealed(
             &path,
             &sealing_key(),
@@ -1439,14 +965,7 @@ mod tests {
     async fn guest_port_rejects_expired_envelope_without_materializing_a_lease() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credential.sealed.json");
-        GatewayCredential::enroll_sealed(
-            &path,
-            &sealing_key(),
-            material(),
-            CredentialEnvelopeMeta::first(Some(10)),
-            1,
-        )
-        .unwrap();
+        seal_envelope_for_test(&path, &sealing_key(), material(), 1, Some(10)).unwrap();
         let credential = Arc::new(
             GatewayCredential::load_sealed(
                 &path,

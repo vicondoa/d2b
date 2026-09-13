@@ -213,55 +213,6 @@ impl fmt::Debug for ScopedCredentialRequest {
     }
 }
 
-/// Bounded request context for a binding-aware credential acquisition.
-#[derive(Clone, PartialEq, Eq)]
-pub struct RelayCredentialRequest {
-    role: RelayCredentialRole,
-    binding: RelayCredentialBinding,
-    deadline_ms: u32,
-}
-
-impl RelayCredentialRequest {
-    /// Construct a credential request.
-    pub const fn new(
-        role: RelayCredentialRole,
-        binding: RelayCredentialBinding,
-        deadline_ms: u32,
-    ) -> Self {
-        Self {
-            role,
-            binding,
-            deadline_ms,
-        }
-    }
-
-    /// Return the requested role.
-    pub const fn role(&self) -> RelayCredentialRole {
-        self.role
-    }
-
-    /// Return the exact connection binding.
-    pub const fn binding(&self) -> &RelayCredentialBinding {
-        &self.binding
-    }
-
-    /// Return the bounded acquisition deadline.
-    pub const fn deadline_ms(&self) -> u32 {
-        self.deadline_ms
-    }
-}
-
-impl fmt::Debug for RelayCredentialRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RelayCredentialRequest")
-            .field("role", &self.role)
-            .field("binding", &self.binding)
-            .field("deadline_ms", &self.deadline_ms)
-            .finish()
-    }
-}
-
 /// Bounded zeroizing secret.
 pub struct RelaySecret(Zeroizing<Vec<u8>>);
 
@@ -553,15 +504,6 @@ pub trait RelayCredentialPort: Send + Sync {
         _deadline_ms: u32,
     ) -> Result<RelayCredentialLease, RelayCredentialError> {
         Err(RelayCredentialError::BindingRequired)
-    }
-
-    /// Alias for callers that model acquisition as a request.
-    async fn acquire_for(
-        &self,
-        request: &RelayCredentialRequest,
-    ) -> Result<RelayCredentialLease, RelayCredentialError> {
-        self.acquire_bound(request.role(), request.binding(), request.deadline_ms())
-            .await
     }
 
     /// Revoke one exact lease.
