@@ -29,9 +29,6 @@ pub const SHELL_SESSION_TYPE: &str = "shell-terminal.d2bus.org.ShellSession";
 /// The Provider reference the type's rows select.
 pub const SHELL_SESSION_PROVIDER_REF: &str = d2b_provider_shell_terminal::PROVIDER_REF;
 
-/// The preserved controller identity of the type's rows.
-pub const SHELL_SESSION_CONTROLLER_REF: &str = "Process/shell-terminal-controller";
-
 /// The preserved reconcile resync cadence of the type.
 pub const SHELL_SESSION_RESYNC: Duration = Duration::from_secs(SHELL_REPAIR_INTERVAL_SECS);
 

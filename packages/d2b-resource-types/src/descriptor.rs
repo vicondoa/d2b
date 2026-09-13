@@ -11,6 +11,23 @@ use crate::{
     AllowedSources, ChildCreation, OperationDef, ServiceDecl, StartupStep, WellKnownType,
 };
 
+/// The resource verbs every converted type is served by.
+///
+/// The manager serves one verb set for every converted type, so a descriptor
+/// declares this set rather than repeating the labels. The labels stay plain
+/// strings for the same reason [`DriverDescriptor::verbs`] does.
+pub const CONVERTED_TYPE_VERBS: &[&str] = &[
+    "get",
+    "list",
+    "watch",
+    "create",
+    "update-spec",
+    "update-status",
+    "update-metadata",
+    "update-finalizers",
+    "delete",
+];
+
 /// The declaration of one resource type's driver.
 ///
 /// A descriptor covers exactly one resource type. The registry keys the

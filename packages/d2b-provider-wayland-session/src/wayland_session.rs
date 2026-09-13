@@ -31,9 +31,6 @@ pub const WAYLAND_SESSION_TYPE: &str = "display-wayland.d2bus.org.WaylandSession
 /// The Provider reference the type's rows select.
 pub const WAYLAND_SESSION_PROVIDER_REF: &str = d2b_provider_display_wayland::PROVIDER_REF;
 
-/// The preserved controller identity of the type's rows.
-pub const WAYLAND_SESSION_CONTROLLER_REF: &str = "Process/display-wayland-controller";
-
 /// The preserved reconcile resync cadence of the type.
 pub const WAYLAND_SESSION_RESYNC: Duration =
     Duration::from_secs(DISPLAY_REPAIR_INTERVAL_SECS);

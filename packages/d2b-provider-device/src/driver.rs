@@ -44,7 +44,7 @@ use d2b_provider_toolkit::{
     shared_provider_spec_decoder,
 };
 use d2b_resource_runtime::context::ResourceContext;
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 use serde_json::Value;
 
 /// The Device ResourceType served by the four hardware Providers.
@@ -246,19 +246,6 @@ pub fn declared_dependency_refs(
     }
 }
 
-/// The resource verbs the Device type supports.
-const DEVICE_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains the Device type can be reconciled in.
 const DEVICE_EXECUTION_DOMAINS: &[&str] = &["host"];
 
@@ -288,7 +275,7 @@ pub fn device_descriptor(args: DeviceDriverArgs) -> DriverDescriptor {
         allowed_sources: AllowedSources::BUILTIN
             | AllowedSources::STARTUP
             | AllowedSources::RUNTIME,
-        verbs: DEVICE_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: DEVICE_EXECUTION_DOMAINS,
         exportable: false,
         reads: DEVICE_READS,

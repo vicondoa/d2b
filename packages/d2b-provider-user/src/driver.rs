@@ -48,7 +48,7 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
 // ---------------------------------------------------------------------------
 // Driver error and status
@@ -349,18 +349,6 @@ impl ResourceDriver for UserDriver {
 /// `Credential` type. Every converted type is served by the same manager
 /// verbs, and Role rules and the typed CLI nouns resolve their gating from
 /// this declaration.
-const USER_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains the User type can be reconciled in.
 ///
 /// Derived from the placement contract: `User` names no placement anchor
@@ -381,7 +369,7 @@ pub fn user_descriptor(effects: Arc<dyn UserDriverEffects>) -> DriverDescriptor 
     DriverDescriptor {
         resource_type: WellKnownType::USER,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
-        verbs: USER_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: USER_EXECUTION_DOMAINS,
         exportable: false,
         reads: &[],

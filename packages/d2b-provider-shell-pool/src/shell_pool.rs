@@ -33,9 +33,6 @@ pub const SHELL_POOL_TYPE: &str = "shell-terminal.d2bus.org.ShellPool";
 /// The Provider reference the type's rows select.
 pub const SHELL_POOL_PROVIDER_REF: &str = d2b_provider_shell_terminal::PROVIDER_REF;
 
-/// The preserved controller identity of the type's rows.
-pub const SHELL_POOL_CONTROLLER_REF: &str = "Process/shell-terminal-controller";
-
 /// The preserved reconcile resync cadence of the type.
 pub const SHELL_POOL_RESYNC: Duration = Duration::from_secs(SHELL_REPAIR_INTERVAL_SECS);
 

@@ -27,9 +27,6 @@ pub const AUDIO_SERVICE_TYPE: &str = "audio.d2bus.org.AudioService";
 /// The Provider reference the type's rows select.
 pub const AUDIO_SERVICE_PROVIDER_REF: &str = d2b_provider_audio_pipewire::PROVIDER_REF;
 
-/// The preserved controller identity of the type's rows.
-pub const AUDIO_SERVICE_CONTROLLER_REF: &str = "Process/audio-pipewire-controller";
-
 /// The preserved reconcile resync cadence of the type.
 pub const AUDIO_SERVICE_RESYNC: Duration = Duration::from_secs(AUDIO_REPAIR_INTERVAL_SECS);
 

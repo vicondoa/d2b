@@ -12,7 +12,7 @@
 mod shell_session;
 
 pub use shell_session::{
-    SHELL_SESSION_CONTROLLER_REF, SHELL_SESSION_PROVIDER_REF, SHELL_SESSION_RESYNC,
+    SHELL_SESSION_PROVIDER_REF, SHELL_SESSION_RESYNC,
     SHELL_SESSION_TYPE, ShellSession, ShellSessionDriver, ShellSessionFactory,
     shell_session_descriptor, shell_session_execution, shell_session_pool_ref,
     shell_session_spec_decoder,

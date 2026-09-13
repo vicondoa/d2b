@@ -12,7 +12,7 @@
 mod audio_binding;
 
 pub use audio_binding::{
-    AUDIO_BINDING_CONTROLLER_REF, AUDIO_BINDING_PROVIDER_REF, AUDIO_BINDING_RESYNC,
+    AUDIO_BINDING_PROVIDER_REF, AUDIO_BINDING_RESYNC,
     AUDIO_BINDING_TYPE, AudioBinding, AudioBindingChildRequest, AudioBindingChildSource,
     AudioBindingDriver, AudioBindingFactory, audio_binding_descriptor,
     audio_binding_spec_decoder,

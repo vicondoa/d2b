@@ -28,7 +28,7 @@ pub use interaction::{
     key_ref, owned_child_ensure, resource_uid, spec_decoder,
 };
 pub use wayland_policy::{
-    WAYLAND_POLICY_CONTROLLER_REF, WAYLAND_POLICY_PROVIDER_REF, WAYLAND_POLICY_RESYNC,
+    WAYLAND_POLICY_PROVIDER_REF, WAYLAND_POLICY_RESYNC,
     WAYLAND_POLICY_TYPE, WaylandPolicy, WaylandPolicyDriver, WaylandPolicyFactory,
     wayland_policy_descriptor, wayland_policy_spec_decoder,
 };

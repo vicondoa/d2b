@@ -66,7 +66,8 @@ use d2b_resource_runtime::error::{
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::spec_store::EnsureOutcome;
 use d2b_resource_types::{
-    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
+    AllowedSources, CONVERTED_TYPE_VERBS, ChildCreation, ChildCustody, DriverDescriptor,
+    WellKnownType,
 };
 
 /// The one resource type this factory serves.
@@ -787,15 +788,7 @@ impl BindingDriver {
 }
 
 fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
-    let mut bytes = *bytes;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let text = format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-    );
-    ResourceUid::parse(text).map_err(|_| ())
+    ResourceUid::from_bytes(bytes).map_err(|_| ())
 }
 
 /// The hex spelling one compared uid renders as (issue #508).
@@ -1036,18 +1029,6 @@ impl ResourceDriver for BindingDriver {
 /// `Credential` type. Every converted type is served by the same manager
 /// verbs, and Role rules and the typed CLI nouns resolve their gating from
 /// this declaration.
-const BINDING_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains the VolumeBinding type can be reconciled in.
 ///
 /// Derived from the placement contract: `VolumeBinding` names no placement
@@ -1078,7 +1059,7 @@ pub fn binding_descriptor(args: BindingDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::VOLUME_BINDING,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
-        verbs: BINDING_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: BINDING_EXECUTION_DOMAINS,
         exportable: false,
         reads: BINDING_READS,

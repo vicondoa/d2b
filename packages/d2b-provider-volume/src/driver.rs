@@ -30,7 +30,7 @@ use std::sync::Arc;
 use d2b_contracts_resource::v3::{
     ResourceName, ResourceRef, ResourceSpec, ResourceTypeName as ContractResourceTypeName,
     ResourceUid,
-    volume::{AttachmentAccess, VolumeSpec},
+    volume::VolumeSpec,
 };
 use d2b_provider_volume_local::desired_binding_intents;
 use d2b_resource_runtime::context::{
@@ -45,8 +45,8 @@ use d2b_resource_runtime::error::{
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{
-    AllowedSources, Cardinality, ChildCreation, ChildCustody, DriverDescriptor, IsolationPosture,
-    ProviderDeclaration, WellKnownType,
+    AllowedSources, CONVERTED_TYPE_VERBS, Cardinality, ChildCreation, ChildCustody,
+    DriverDescriptor, IsolationPosture, ProviderDeclaration, WellKnownType,
 };
 
 /// The one resource type this factory serves.
@@ -286,11 +286,6 @@ pub(crate) struct VolumeDriver {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DesiredBindingChild {
     pub(crate) name: String,
-    pub(crate) volume_ref: ResourceRef,
-    pub(crate) execution_ref: ResourceRef,
-    pub(crate) view: String,
-    pub(crate) access: AttachmentAccess,
-    pub(crate) mount_path: String,
     /// Exact child spec envelope bytes (neutral binding + serving Provider
     /// reference; no provider extension, KTD1).
     pub(crate) spec: Vec<u8>,
@@ -392,11 +387,6 @@ impl VolumeDriver {
                 );
                 Ok(DesiredBindingChild {
                     name: intent.name().as_str().to_owned(),
-                    volume_ref: intent.volume_ref().clone(),
-                    execution_ref: intent.execution_ref().clone(),
-                    view: intent.view().as_str().to_owned(),
-                    access: intent.access(),
-                    mount_path: intent.mount_path().to_owned(),
                     spec: serde_json::to_vec(&serde_json::Value::Object(binding_spec))
                         .map_err(|_| self.error(VolumeDriverErrorKind::ChildDerivation, op))?,
                 })
@@ -526,15 +516,7 @@ fn derivation_detail(code: &str) -> FailureDetail {
 }
 
 fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
-    let mut bytes = *bytes;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let text = format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-    );
-    ResourceUid::parse(text).map_err(|_| ())
+    ResourceUid::from_bytes(bytes).map_err(|_| ())
 }
 
 #[async_trait::async_trait]
@@ -672,18 +654,6 @@ impl ResourceDriver for VolumeDriver {
 /// `Credential` type. Every converted type is served by the same manager
 /// verbs, and Role rules and the typed CLI nouns resolve their gating from
 /// this declaration.
-const VOLUME_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains the Volume type can be reconciled in.
 ///
 /// Derived from the placement contract: `Volume` names no placement anchor
@@ -738,7 +708,7 @@ pub fn volume_descriptor(args: VolumeDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::VOLUME,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
-        verbs: VOLUME_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: VOLUME_EXECUTION_DOMAINS,
         exportable: false,
         reads: VOLUME_READS,
