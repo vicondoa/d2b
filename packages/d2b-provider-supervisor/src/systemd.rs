@@ -44,32 +44,11 @@ pub struct SystemdInvocationIdentity {
     guest_execution: Option<GuestExecutionBinding>,
 }
 
-/// Immutable bundle binding carried by a systemd runtime identity.
-#[derive(Clone, PartialEq, Eq)]
-pub struct SystemdIdentityContext {
-    generation: u64,
-    bundle_content_identity: String,
-}
-
-impl SystemdIdentityContext {
-    /// Construct the bundle-bound portion of a systemd identity.
-    pub fn new(
-        generation: u64,
-        bundle_content_identity: impl Into<String>,
-    ) -> Result<Self, ProcessEffectError> {
-        let bundle_content_identity = bundle_content_identity.into();
-        if generation == 0 || bundle_content_identity.is_empty() {
-            return Err(ProcessEffectError::IdentityChanged);
-        }
-        Ok(Self {
-            generation,
-            bundle_content_identity,
-        })
-    }
-}
-
 impl SystemdInvocationIdentity {
     /// Construct a complete service-manager identity tuple.
+    ///
+    /// A zero generation or an empty bundle content identity is a drifted
+    /// runtime tuple, not a launchable identity.
     pub fn new(
         invocation_id: [u8; 16],
         cgroup_identity: [u8; 32],
@@ -77,13 +56,17 @@ impl SystemdInvocationIdentity {
         start_time_ticks: u64,
         provider_identity: [u8; 32],
         template_identity: [u8; 32],
-        context: SystemdIdentityContext,
+        generation: u64,
+        bundle_content_identity: impl Into<String>,
     ) -> Result<Self, ProcessEffectError> {
+        let bundle_content_identity = bundle_content_identity.into();
         if invocation_id == [0; 16]
             || cgroup_identity == [0; 32]
             || start_time_ticks == 0
             || provider_identity == [0; 32]
             || template_identity == [0; 32]
+            || generation == 0
+            || bundle_content_identity.is_empty()
         {
             return Err(ProcessEffectError::IdentityChanged);
         }
@@ -94,8 +77,8 @@ impl SystemdInvocationIdentity {
             start_time_ticks,
             provider_identity,
             template_identity,
-            generation: context.generation,
-            bundle_content_identity: context.bundle_content_identity,
+            generation,
+            bundle_content_identity,
             guest_execution: None,
         })
     }
@@ -159,10 +142,8 @@ impl SystemdInvocationIdentity {
             identity.start_time_ticks,
             identity.provider_identity,
             identity.template_identity,
-            SystemdIdentityContext::new(
-                identity.generation,
-                identity.bundle_content_identity.clone(),
-            )?,
+            identity.generation,
+            identity.bundle_content_identity.clone(),
         )?;
         value.guest_execution = identity.guest_execution.clone();
         Ok(value)
@@ -252,12 +233,6 @@ pub trait SystemdEffectOwner: Send + Sync + 'static {
         handle: &Self::Handle,
         class: ProcessStopClass,
     ) -> Result<(), ProcessEffectError>;
-
-    /// Check the trusted per-user systemd manager without retaining a
-    /// connection or process handle.
-    fn check_user_manager(&self, _request: ProcessRequest) -> Result<bool, ProcessEffectError> {
-        Err(ProcessEffectError::UnsupportedProvider)
-    }
 
     /// Forget a terminal unit identity after the unit is no longer active.
     fn finalize(&self, _handle: &Self::Handle) -> Result<(), ProcessEffectError> {
@@ -366,7 +341,8 @@ mod tests {
             u64::from(seed) + 1,
             [2; 32],
             [3; 32],
-            SystemdIdentityContext::new(1, "bundle").unwrap(),
+            1,
+            "bundle",
         )
         .unwrap()
     }
@@ -482,14 +458,6 @@ impl<O: SystemdEffectOwner> ProcessEffectBackend for SystemdProcessBackend<O> {
     }
 }
 
-impl<O: SystemdEffectOwner> SystemdProcessBackend<O> {
-    /// Check the trusted per-user manager through the broker-owned effect
-    /// owner.
-    pub fn check_user_manager(&self, request: ProcessRequest) -> Result<bool, ProcessEffectError> {
-        self.owner.check_user_manager(request)
-    }
-}
-
 /// Broker-backed systemd effect owner used by the daemon's fixed supervisor.
 ///
 /// The owner translates only typed systemd lifecycle requests to the broker.
@@ -506,32 +474,6 @@ pub struct BrokerSystemdEffectOwner {
 }
 
 impl BrokerSystemdEffectOwner {
-    /// Build a broker-backed owner from the trusted bundle resolver.
-    pub fn new(resolver: BundleBackedLaunchResolver) -> Self {
-        Self::with_socket(
-            resolver,
-            d2b_contracts::BROKER_SOCKET_PATH,
-            std::time::Duration::from_secs(10),
-            BrokerCallerRole::NotAuthorized,
-        )
-    }
-
-    /// Build an owner with explicit broker transport settings.
-    pub fn with_socket(
-        resolver: BundleBackedLaunchResolver,
-        socket_path: impl Into<std::path::PathBuf>,
-        io_timeout: std::time::Duration,
-        caller_role: BrokerCallerRole,
-    ) -> Self {
-        Self::with_socket_profile_and_role(
-            resolver,
-            socket_path,
-            io_timeout,
-            BrokerProfile::Host,
-            caller_role,
-        )
-    }
-
     /// Build an owner bound to one fixed broker profile and caller identity.
     pub fn with_socket_profile_and_role(
         resolver: BundleBackedLaunchResolver,
@@ -661,6 +603,36 @@ impl BrokerSystemdEffectOwner {
         }
         SystemdInvocationIdentity::from_wire(wire)
     }
+
+    /// Query one unit identity, optionally retaining the unit request so a
+    /// later descriptor reopen can bind it. An adopt probe must not retain
+    /// adoption state.
+    fn observed_identity(
+        &self,
+        request: ProcessRequest,
+        retain: bool,
+    ) -> Result<Option<SystemdInvocationIdentity>, ProcessEffectError> {
+        let (intent, unit) = self.intent(&request)?;
+        let frame = self.request(BrokerRequest::ObserveSystemdUnit(unit.clone()))?;
+        let BrokerResponse::ObserveSystemdUnit(response) = frame.response else {
+            return Err(response_error(&frame.response));
+        };
+        if response.vm_id != unit.vm_id || response.role_id != unit.role_id {
+            warn!(
+                provider = "supervisor",
+                "systemd unit observe response scope mismatch"
+            );
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        let Some(wire) = response.identity else {
+            return Ok(None);
+        };
+        let identity = self.identity(&wire, &intent)?;
+        if retain {
+            self.remember(&identity, unit)?;
+        }
+        Ok(Some(identity))
+    }
 }
 
 impl std::fmt::Debug for BrokerSystemdEffectOwner {
@@ -718,46 +690,14 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
         &self,
         request: ProcessRequest,
     ) -> Result<Option<SystemdInvocationIdentity>, ProcessEffectError> {
-        let (intent, unit) = self.intent(&request)?;
-        let frame = self.request(BrokerRequest::ObserveSystemdUnit(unit.clone()))?;
-        let BrokerResponse::ObserveSystemdUnit(response) = frame.response else {
-            return Err(response_error(&frame.response));
-        };
-        if response.vm_id != unit.vm_id || response.role_id != unit.role_id {
-            warn!(
-                provider = "supervisor",
-                "systemd unit observe response scope mismatch"
-            );
-            return Err(ProcessEffectError::IdentityChanged);
-        }
-        let Some(wire) = response.identity else {
-            return Ok(None);
-        };
-        let identity = self.identity(&wire, &intent)?;
-        self.remember(&identity, unit)?;
-        Ok(Some(identity))
+        self.observed_identity(request, true)
     }
 
     fn probe(
         &self,
         request: ProcessRequest,
     ) -> Result<Option<SystemdInvocationIdentity>, ProcessEffectError> {
-        let (intent, unit) = self.intent(&request)?;
-        let frame = self.request(BrokerRequest::ObserveSystemdUnit(unit.clone()))?;
-        let BrokerResponse::ObserveSystemdUnit(response) = frame.response else {
-            return Err(response_error(&frame.response));
-        };
-        if response.vm_id != unit.vm_id || response.role_id != unit.role_id {
-            warn!(
-                provider = "supervisor",
-                "systemd unit observe response scope mismatch"
-            );
-            return Err(ProcessEffectError::IdentityChanged);
-        }
-        let Some(wire) = response.identity else {
-            return Ok(None);
-        };
-        self.identity(&wire, &intent).map(Some)
+        self.observed_identity(request, false)
     }
 
     fn reopen(
@@ -829,26 +769,6 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
             let _ = self.take_request(&handle.identity)?;
         }
         Ok(())
-    }
-
-    fn check_user_manager(&self, request: ProcessRequest) -> Result<bool, ProcessEffectError> {
-        let (intent, mut unit) = self.intent(&request)?;
-        if unit.domain != SystemdUnitDomain::User {
-            return Err(ProcessEffectError::UnsupportedProvider);
-        }
-        unit.tracing_span_id = None;
-        let frame = self.request(BrokerRequest::CheckSystemdUserManager(unit.clone()))?;
-        let BrokerResponse::CheckSystemdUserManager(response) = frame.response else {
-            return Err(response_error(&frame.response));
-        };
-        if response.vm_id != intent.vm_id || response.role_id != intent.role_id {
-            warn!(
-                provider = "supervisor",
-                "user manager check response scope mismatch"
-            );
-            return Err(ProcessEffectError::IdentityChanged);
-        }
-        Ok(response.available)
     }
 
     fn finalize(&self, handle: &Self::Handle) -> Result<(), ProcessEffectError> {

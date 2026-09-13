@@ -283,26 +283,16 @@ enum LaunchOutcome {
     TimedOut,
 }
 
-struct LaunchReconciliation {
-    process_uid: ResourceUid,
-    identity: Option<ProcessIdentityDigest>,
-    quarantined: bool,
-}
-
 struct RuntimeState<H> {
     handles: BTreeMap<ProcessIdentityDigest, Arc<H>>,
-    launches: BTreeMap<ResourceUid, LaunchReconciliation>,
-    quarantined_processes: BTreeSet<ResourceUid>,
-    quarantined_identities: BTreeSet<ProcessIdentityDigest>,
+    launches: BTreeSet<ResourceUid>,
 }
 
 impl<H> Default for RuntimeState<H> {
     fn default() -> Self {
         Self {
             handles: BTreeMap::new(),
-            launches: BTreeMap::new(),
-            quarantined_processes: BTreeSet::new(),
-            quarantined_identities: BTreeSet::new(),
+            launches: BTreeSet::new(),
         }
     }
 }
@@ -395,7 +385,6 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                         .is_some_and(|retained| Arc::ptr_eq(retained, &finalize_handle))
                     {
                         state.handles.remove(&finalize_identity);
-                        state.quarantined_identities.remove(&finalize_identity);
                     }
                 }
                 result
@@ -403,29 +392,6 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             .await;
         match result {
             Ok(()) | Err(ProcessEffectError::Vanished) => Ok(()),
-            Err(error) => Err(map_error(error)),
-        }
-    }
-
-    /// Wait for one retained exact identity to exit without exposing its
-    /// local authority to the Provider. `Ok(false)` means the bounded wait
-    /// elapsed without a terminal signal.
-    pub async fn wait_identity(
-        &self,
-        identity: &ProcessIdentityDigest,
-        timeout: Duration,
-    ) -> Result<bool, ProcessConformanceError> {
-        let handle = self.handle(identity).map_err(map_error)?;
-        match self
-            .blocking(timeout, move |backend| backend.wait(handle.as_ref(), timeout))
-            .await
-        {
-            Ok(()) => Ok(true),
-            Err(
-                ProcessEffectError::StopFailed
-                | ProcessEffectError::DeadlineExceeded
-                | ProcessEffectError::Busy,
-            ) => Ok(false),
             Err(error) => Err(map_error(error)),
         }
     }
@@ -464,53 +430,28 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             .state
             .lock()
             .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
-        if state.launches.contains_key(&operation_uid) {
+        if !state.launches.insert(operation_uid.clone()) {
             return Err(ProcessEffectError::Busy);
         }
-        state.launches.insert(
-            operation_uid.clone(),
-            LaunchReconciliation {
-                process_uid: ticket.process_uid().clone(),
-                identity: None,
-                quarantined: false,
-            },
-        );
         Ok(operation_uid)
     }
 
     fn quarantine_launch(&self, operation_uid: &ResourceUid) -> Result<bool, ProcessEffectError> {
-        let mut state = self
+        let state = self
             .inner
             .state
             .lock()
             .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
-        let Some(launch) = state.launches.get_mut(operation_uid) else {
-            return Ok(false);
-        };
-        launch.quarantined = true;
-        let process_uid = launch.process_uid.clone();
-        let identity = launch.identity;
-        state.quarantined_processes.insert(process_uid);
-        if let Some(identity) = identity {
-            state.quarantined_identities.insert(identity);
-        }
-        Ok(true)
+        Ok(state.launches.contains(operation_uid))
     }
 
     fn finish_launch_success(&self, operation_uid: &ResourceUid) -> Result<(), ProcessEffectError> {
-        let mut state = self
-            .inner
+        self.inner
             .state
             .lock()
-            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
-        if let Some(launch) = state.launches.remove(operation_uid)
-            && launch.quarantined
-        {
-            state.quarantined_processes.remove(&launch.process_uid);
-            if let Some(identity) = launch.identity {
-                state.quarantined_identities.remove(&identity);
-            }
-        }
+            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?
+            .launches
+            .remove(operation_uid);
         Ok(())
     }
 
@@ -533,20 +474,15 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         identity: ProcessIdentityDigest,
         handle: &Arc<B::Handle>,
     ) -> Result<bool, ProcessEffectError> {
-        let mut state = self
+        let state = self
             .inner
             .state
             .lock()
             .map_err(|_| poisoned_state_lock(ProcessEffectError::StopFailed))?;
-        if !state
+        Ok(state
             .handles
             .get(&identity)
-            .is_some_and(|retained| Arc::ptr_eq(retained, handle))
-        {
-            return Ok(false);
-        }
-        state.quarantined_identities.insert(identity);
-        Ok(true)
+            .is_some_and(|retained| Arc::ptr_eq(retained, handle)))
     }
 
     async fn launch_with_timeout(
@@ -567,16 +503,11 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                 let late = Instant::now() >= deadline;
                 match (launch, late) {
                     (Err(error), late) => {
-                        let mut state =
-                            state.lock().map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
-                        if let Some(launch) = state.launches.remove(&worker_operation_uid)
-                            && launch.quarantined
-                        {
-                            state.quarantined_processes.remove(&launch.process_uid);
-                            if let Some(identity) = launch.identity {
-                                state.quarantined_identities.remove(&identity);
-                            }
-                        }
+                        state
+                            .lock()
+                            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?
+                            .launches
+                            .remove(&worker_operation_uid);
                         if late {
                             Err(ProcessEffectError::DeadlineExceeded)
                         } else {
@@ -586,36 +517,22 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                     (Ok(launch), false) => {
                         let (observation, handle) = launch.into_parts();
                         let identity = observation.identity();
-                        let mut state =
-                            state.lock().map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
-                        state.handles.insert(identity, Arc::new(handle));
-                        if let Some(launch) = state.launches.get_mut(&worker_operation_uid) {
-                            launch.identity = Some(identity);
-                        }
+                        state
+                            .lock()
+                            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?
+                            .handles
+                            .insert(identity, Arc::new(handle));
                         Ok(LaunchOutcome::OnTime(observation))
                     }
                     (Ok(launch), true) => {
                         let (observation, handle) = launch.into_parts();
                         let identity = observation.identity();
                         let handle = Arc::new(handle);
-                        {
-                            let mut state =
-                                state.lock().map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
-                            state.handles.insert(identity, Arc::clone(&handle));
-                            state.quarantined_identities.insert(identity);
-                            let process_uid = if let Some(launch) =
-                                state.launches.get_mut(&worker_operation_uid)
-                            {
-                                launch.identity = Some(identity);
-                                launch.quarantined = true;
-                                Some(launch.process_uid.clone())
-                            } else {
-                                None
-                            };
-                            if let Some(process_uid) = process_uid {
-                                state.quarantined_processes.insert(process_uid);
-                            }
-                        }
+                        state
+                            .lock()
+                            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?
+                            .handles
+                            .insert(identity, Arc::clone(&handle));
                         match backend.stop(handle.as_ref(), ProcessStopClass::Terminate) {
                             Ok(()) | Err(ProcessEffectError::Vanished) => {
                                 let mut state =
@@ -626,11 +543,8 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                                     .is_some_and(|retained| Arc::ptr_eq(retained, &handle))
                                 {
                                     state.handles.remove(&identity);
-                                    state.quarantined_identities.remove(&identity);
                                 }
-                                if let Some(launch) = state.launches.remove(&worker_operation_uid) {
-                                    state.quarantined_processes.remove(&launch.process_uid);
-                                }
+                                state.launches.remove(&worker_operation_uid);
                                 Ok(LaunchOutcome::TimedOut)
                             }
                             Err(stop_error) => {
@@ -787,7 +701,6 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
                             .is_some_and(|retained| Arc::ptr_eq(retained, &stop_handle))
                         {
                             state.handles.remove(&stop_identity);
-                            state.quarantined_identities.remove(&stop_identity);
                         }
                         return if late {
                             Err(ProcessEffectError::DeadlineExceeded)
@@ -796,11 +709,6 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
                         };
                     }
                     if late {
-                        state
-                            .lock()
-                            .map_err(|_| poisoned_state_lock(ProcessEffectError::StopFailed))?
-                            .quarantined_identities
-                            .insert(stop_identity);
                         error!(
                             provider = "supervisor",
                             identity = stop_identity.to_hex(),
@@ -1029,15 +937,12 @@ mod tests {
         {
             let state = supervisor.inner.state.lock().unwrap();
             assert_eq!(state.launches.len(), 1);
-            assert_eq!(state.quarantined_processes.len(), 1);
         }
         release.send(()).unwrap();
         wait_until(Duration::from_millis(250), || !live.load(Ordering::Acquire));
         let state = supervisor.inner.state.lock().unwrap();
         assert!(state.launches.is_empty());
-        assert!(state.quarantined_processes.is_empty());
         assert!(state.handles.is_empty());
-        assert!(state.quarantined_identities.is_empty());
     }
 
     #[test]
@@ -1074,9 +979,7 @@ mod tests {
         });
         let state = supervisor.inner.state.lock().unwrap();
         assert_eq!(state.launches.len(), 1);
-        assert_eq!(state.quarantined_processes.len(), 1);
         assert_eq!(state.handles.len(), 1);
-        assert_eq!(state.quarantined_identities.len(), 1);
     }
 
     struct HungStopBackend {
@@ -1173,9 +1076,7 @@ mod tests {
         assert!(live.load(Ordering::Acquire));
         let state = supervisor.inner.state.lock().unwrap();
         assert_eq!(state.launches.len(), 1);
-        assert_eq!(state.quarantined_processes.len(), 1);
         assert_eq!(state.handles.len(), 1);
-        assert_eq!(state.quarantined_identities.len(), 1);
     }
 
     #[test]
@@ -1215,7 +1116,6 @@ mod tests {
             .unwrap();
         let state = supervisor.inner.state.lock().unwrap();
         assert!(state.handles.contains_key(&launched.identity));
-        assert!(state.quarantined_identities.contains(&launched.identity));
     }
 
     #[test]

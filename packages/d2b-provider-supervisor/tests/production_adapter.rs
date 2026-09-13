@@ -20,8 +20,8 @@ use d2b_process_conformance::{
 };
 use d2b_provider_supervisor::{
     BrokerLaunchIntent, BrokerLaunchResolver, BrokerObservedProcess, BrokerProcessBackend,
-    ProviderSupervisor, SystemdEffectLaunch, SystemdEffectOwner, SystemdIdentityContext,
-    SystemdInvocationIdentity, SystemdProcessBackend,
+    ProviderSupervisor, SystemdEffectLaunch, SystemdEffectOwner, SystemdInvocationIdentity,
+    SystemdProcessBackend,
 };
 use d2b_provider_process_minijail::{MinijailProcessProvider, PROVIDER_NAME as MINIJAIL};
 use d2b_provider_process_systemd::{PROVIDER_NAME as SYSTEMD, SystemdProcessProvider};
@@ -412,7 +412,8 @@ fn invocation(start_time: u64) -> SystemdInvocationIdentity {
         start_time,
         [3; 32],
         [4; 32],
-        SystemdIdentityContext::new(1, "bundle").unwrap(),
+        1,
+        "bundle",
     )
     .unwrap()
 }
