@@ -23,7 +23,14 @@ let
   semanticSchemaFileName = resourceType:
     let parts = lib.splitString "." resourceType;
     in "${lib.concatStringsSep "." (lib.init parts)}_${lib.last parts}.schema.json";
-  schemaRoot = pkgs.linkFarm "d2b-resource-schemas" (
+  # A standard ResourceType can register before its committed schema lands:
+  # the controller family's policy types (Command, Operation, SeccompProfile)
+  # ship as declarations with their driver shells, and their rows and field
+  # model arrive with the committed policy rows. The compiler resolves one
+  # schema per ResourceType on demand and refuses a type it cannot resolve, so
+  # the farm carries the committed schemas that exist rather than naming files
+  # the repository does not hold.
+  schemaEntries =
     (map
       (resourceType: {
         name = "core.d2bus.org_${resourceType}.schema.json";
@@ -42,8 +49,9 @@ let
         path = ../docs/reference/schemas/v3 + "/${semanticSchemaFileName resourceType}";
         name = semanticSchemaFileName resourceType;
       })
-      providerResourceTypes)
-  );
+      providerResourceTypes);
+  schemaRoot = pkgs.linkFarm "d2b-resource-schemas"
+    (lib.filter (entry: builtins.pathExists entry.path) schemaEntries);
 in
 {
   config.d2b._resourceCompiler.phase2 = {

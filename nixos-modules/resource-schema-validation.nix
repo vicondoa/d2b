@@ -20,15 +20,21 @@ let
     else if builtins.elem resourceType qualifiedResourceTypes
     then qualifiedSchemaFileName resourceType
     else null;
+  # Registered ResourceTypes without a committed schema (the controller
+  # family's policy types until their rows land) contribute no farm entry:
+  # `schemaFor` below already skips such a type at eval time, and the compiler
+  # refuses a ResourceType whose schema it cannot resolve.
   schemaFarm =
     if builtins.hasAttr "d2b-resource-schemas" pkgs
     then pkgs."d2b-resource-schemas"
-    else pkgs.linkFarm "d2b-resource-schemas" (map
-      (resourceType: {
-        name = schemaFileName resourceType;
-        path = ../docs/reference/schemas/v3 + "/${schemaFileName resourceType}";
-      })
-      (standardResourceTypes ++ qualifiedResourceTypes));
+    else pkgs.linkFarm "d2b-resource-schemas" (lib.filter
+      (entry: builtins.pathExists entry.path)
+      (map
+        (resourceType: {
+          name = schemaFileName resourceType;
+          path = ../docs/reference/schemas/v3 + "/${schemaFileName resourceType}";
+        })
+        (standardResourceTypes ++ qualifiedResourceTypes)));
 
   # Evaluation-time checks must not depend on realizing a schema farm
   # derivation.  The committed schemas are the source of truth for Nix
