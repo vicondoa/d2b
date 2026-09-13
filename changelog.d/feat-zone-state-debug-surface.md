@@ -15,3 +15,7 @@
   alongside the generation it was read at, so a status that no longer
   corresponds to a row's spec is visible rather than reading as a row that
   never reported.
+- A failing host-integration fixture now prints the composed `d2b debug`
+  explanation for its zone alongside the row dumps it already collected, so a
+  failed lane names the stuck row and its structured failure without a
+  follow-up run.
