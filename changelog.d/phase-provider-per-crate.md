@@ -456,6 +456,16 @@
   with its crate cannot strand protected files that nothing regenerates or
   verifies.
 
+- The CLI runs its transport on a process runtime: `CliSocket` is a
+  non-blocking seqpacket socket driven by descriptor readiness over the same
+  4-byte-length-prefixed envelope, and the hand-rolled `ThreadWaker`/`block_on`
+  pair is gone. Connect, send, and receive carry the command's deadline, so
+  `d2b audit` against a daemon that accepts and then goes silent exits with
+  `deadline-exceeded` instead of parking in a receive forever, an unreachable
+  daemon still reports `zone-unavailable`, and the interactive shell bounds
+  each named-stream round trip at five seconds, so a wedged peer ends as a
+  named transport failure rather than a hung terminal.
+
 ### Removed
 
 - Seven broker operations nothing in tree constructed are gone with their rows,
