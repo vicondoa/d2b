@@ -1532,6 +1532,74 @@ async fn list_pages_with_a_continuation_cursor() {
     assert!(first_names.iter().all(|name| !second_names.contains(name)));
 }
 
+/// The selector sets are matched order-insensitively (both the filter list
+/// and each filter's values), so a client echoing its own query with the sets
+/// reordered - or repeated - resumes its sequence instead of being refused as
+/// a foreign cursor.
+#[tokio::test]
+async fn list_cursor_accepts_a_reordered_echo_of_the_same_selectors() {
+    let fixture = manager_fixture().await;
+    let service = wired_service(&fixture, authorizer(&[ResourceVerb::List, ResourceVerb::Get]));
+    for name in ["host-a", "host-b", "host-c"] {
+        fixture
+            .client
+            .ensure(
+                d2b_resource_runtime::manager::MutationSubject {
+                    principal: "nix:test-bundle".to_owned(),
+                    origin: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+                },
+                None,
+                d2b_resource_runtime::manager::DesiredResource {
+                    key: d2b_resource_runtime::spec_store::ResourceKey::new(TEST_ZONE, "Host", name),
+                    spec: host_spec(),
+                    metadata: serde_json::to_vec(&serde_json::json!({"ownerRef": null})).unwrap(),
+                    provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+                },
+            )
+            .await
+            .expect("commit row");
+    }
+
+    let filter = |field: &str, values: &[&str]| {
+        let mut filter = wire::ListFilter::new();
+        filter.field = field.to_owned();
+        filter.values = values.iter().map(|value| (*value).to_owned()).collect();
+        filter
+    };
+    let mut request = list_request();
+    request.page_size = 2;
+    request.filters = vec![
+        filter("metadata.name", &["host-a", "host-b", "host-c"]),
+        filter("type", &["Host"]),
+    ];
+    let first = service.list(trusted(request.clone())).await;
+    assert!(first.error.is_none(), "first page failed: {}", error_reason(&first));
+    let cursor = first
+        .next_cursor
+        .as_ref()
+        .expect("a truncated page carries the continuation cursor")
+        .value
+        .clone();
+
+    // The same selectors: filters reordered, one repeated, one filter's
+    // values reordered and repeated.
+    let mut echo = request.clone();
+    echo.filters = vec![
+        filter("type", &["Host", "Host"]),
+        filter("metadata.name", &["host-c", "host-a", "host-b"]),
+        filter("type", &["Host"]),
+    ];
+    echo.cursor = MessageField::some(wire::PageCursor { value: cursor, ..Default::default() });
+    let second = service.list(trusted(echo)).await;
+    assert!(
+        second.error.is_none(),
+        "a reordered echo of the same selectors must resume: {}",
+        error_reason(&second)
+    );
+    assert_eq!(second.resources.len(), 1, "the remainder");
+    assert!(!second.truncated, "the sequence ends after the remainder");
+}
+
 /// A cursor that cannot be honoured is refused with a typed error - a
 /// foreign-selector cursor must not silently restart the sequence at page 1.
 #[tokio::test]

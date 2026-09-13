@@ -417,10 +417,13 @@ impl BundleBackedLaunchResolver {
     /// no process identity is in question. It is reported as
     /// [`ProcessEffectError::ResolutionFailed`] (never
     /// [`ProcessEffectError::IdentityChanged`]), so the effect ports project it
-    /// as `LaunchFailed` rather than `AdoptionAmbiguous`: an adopt probe the
-    /// fence refuses must not read as an ambiguous identity, which the Process
-    /// driver would quarantine as terminal (R15 is about observed identity,
-    /// not about a ticket that never resolved).
+    /// under the `resolution-failed` conformance code rather than
+    /// `AdoptionAmbiguous` (an adopt probe the fence refuses must not read as
+    /// an ambiguous identity, which the Process driver would quarantine as
+    /// terminal - R15 is about observed identity, not about a ticket that
+    /// never resolved) and rather than `LaunchFailed` (which the Process
+    /// driver retries under its restart budget for a refusal no retry can
+    /// reverse).
     fn resolve_intent(
         &self,
         request: &ProcessRequest,
@@ -493,23 +496,30 @@ impl BundleBackedLaunchResolver {
         // Device's own Provider and carries that Device as its semantic
         // owner. It resolves through the exact declared row: the row name is
         // the role id, and the declared template pins the closed Device
-        // worker posture the broker enforces at spawn. The generic lookup
-        // below deliberately never sees these intents (it filters Provider
-        // controller roles and matches by template name, which two Devices
-        // in one Zone share).
-        let device_worker_intent = ticket
+        // worker posture the broker enforces at spawn. The arm below is
+        // terminal for Device-owned tickets - a row the bundle does not
+        // declare refuses instead of falling through - because the generic
+        // lookup matches by template name, which two Devices in one Zone
+        // share, so it can never stand in for the declared row.
+        let device_owned = ticket
             .owner_ref()
-            .filter(|owner| owner.resource_type().as_str() == "Device")
-            .and_then(|_| {
-                self.bundle.find_device_worker_intent(
-                    ticket.process_ref(),
-                    &expected_execution_ref,
-                    expected_execution_domain,
-                    expected_user_ref.as_deref(),
-                    ticket.template().as_str(),
-                )
-            });
-        let generic_intent = if let Some(owner) = ticket
+            .is_some_and(|owner| owner.resource_type().as_str() == "Device");
+        let device_worker_intent = if device_owned {
+            self.bundle.find_device_worker_intent(
+                ticket.process_ref(),
+                &expected_execution_ref,
+                expected_execution_domain,
+                expected_user_ref.as_deref(),
+                ticket.template().as_str(),
+            )
+        } else {
+            None
+        };
+        let generic_intent = if device_owned {
+            // Unreachable by construction: the process-controller arm
+            // resolves Device-owned tickets through the declared row alone.
+            None
+        } else if let Some(owner) = ticket
             .owner_ref()
             .filter(|owner| owner.resource_type().as_str() == "Guest")
             .filter(|owner| {
@@ -551,11 +561,22 @@ impl BundleBackedLaunchResolver {
                 })?;
                 (intent, true)
             }
+            "process-controller" if device_owned => {
+                let intent = device_worker_intent.ok_or_else(|| {
+                    warn!(
+                        provider = "supervisor",
+                        resource = %ticket.process_ref().to_canonical_string(),
+                        template = ticket.template().as_str(),
+                        "assignment rejected: no declared device worker intent for this row"
+                    );
+                    ProcessEffectError::UnsupportedProvider
+                })?;
+                (intent, false)
+            }
             "process-controller" => (
                 static_controller_intent
                     .or(provider_component_intent)
                     .or(binding_worker_intent)
-                    .or(device_worker_intent)
                     .or(generic_intent)
                     .ok_or_else(|| {
                         warn!(
@@ -1775,17 +1796,28 @@ mod tests {
         let provider_ref =
             ResourceRef::parse("Provider/device-tpm").expect("provider ref");
         let device_ref = ResourceRef::parse("Device/tpm").expect("device ref");
+        // A second Device declaring the same worker template: the declared
+        // row, never the shared template name, is the launch identity.
+        let device2_ref = ResourceRef::parse("Device/tpm2").expect("second device ref");
         let host_ref = ResourceRef::parse("Host/host-system").expect("host ref");
         let rows = [
             (
                 "Process",
                 "swtpm-tpm",
+                device_ref.clone(),
                 r#"{"domain":"system","executionRef":"Host/host-system","processClass":"worker","providerRef":"Provider/system-minijail","template":"swtpm-socket"}"#,
             ),
             (
                 "EphemeralProcess",
                 "swtpm-flush-tpm",
+                device_ref.clone(),
                 r#"{"domain":"system","executionRef":"Host/host-system","processClass":"worker","providerRef":"Provider/system-minijail","template":"swtpm-init-flush"}"#,
+            ),
+            (
+                "Process",
+                "swtpm-tpm2",
+                device2_ref.clone(),
+                r#"{"domain":"system","executionRef":"Host/host-system","processClass":"worker","providerRef":"Provider/system-minijail","template":"swtpm-socket"}"#,
             ),
         ];
         let mut resources = vec![
@@ -1829,15 +1861,28 @@ mod tests {
                     .expect("device spec"),
             )
             .expect("device resource"),
+            BundleResource::new(
+                ResourceTypeName::parse("Device").expect("device type"),
+                BundleResourceMetadata::new(
+                    device2_ref.name().clone(),
+                    zone.clone(),
+                    Some(ResourceRef::parse("Guest/dev").expect("guest ref")),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(br#"{"providerRef":"Provider/device-tpm"}"#)
+                    .expect("device spec"),
+            )
+            .expect("second device resource"),
         ];
-        for (row_type, row_name, spec) in rows {
+        for (row_type, row_name, owner_ref, spec) in rows {
             resources.push(
                 BundleResource::new(
                     ResourceTypeName::parse(row_type).expect("row type"),
                     BundleResourceMetadata::new(
                         ResourceName::parse(row_name).expect("row name"),
                         zone.clone(),
-                        Some(device_ref.clone()),
+                        Some(owner_ref),
                         BTreeMap::new(),
                         BTreeMap::new(),
                     ),
@@ -1877,6 +1922,17 @@ mod tests {
                 "binaryRef": "swtpm-ioctl",
                 "artifactDigest": format!("sha256:{}", "a".repeat(64)),
                 "binaryPath": "/nix/store/device-tpm/bin/swtpm-ioctl",
+                "launchArgs": true
+            },
+            {
+                "processRef": "Process/swtpm-tpm2",
+                "ownerRef": "Provider/device-tpm",
+                "executionRef": "Host/host-system",
+                "template": "swtpm-socket",
+                "artifactId": "device-tpm",
+                "binaryRef": "swtpm",
+                "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+                "binaryPath": "/nix/store/device-tpm/bin/swtpm",
                 "launchArgs": true
             }
         ]);
@@ -1925,8 +1981,31 @@ mod tests {
         ))
     }
 
-    /// Build one typed Device-owned worker ticket against the declared row.
+    /// Build one typed Device-owned worker ticket against the declared
+    /// `Process/swtpm-tpm` row (the `Device/tpm` worker).
     fn device_worker_request(template: &str) -> ProcessRequest {
+        device_worker_request_for(
+            "Process/swtpm-tpm",
+            "Device/tpm",
+            template,
+            "swtpm-tpm",
+            "swtpm-tpm",
+        )
+    }
+
+    /// Build one typed Device-owned worker ticket for an arbitrary row,
+    /// owner Device, template, legacy process name, and runtime-scope role.
+    ///
+    /// `process_name` is the ticket's own row name; `scope_role` is the role
+    /// id the runtime-scope commitment is computed against, so a test can
+    /// hand a ticket the commitment of a row it does not name.
+    fn device_worker_request_for(
+        process_ref: &str,
+        device_ref: &str,
+        template: &str,
+        process_name: &str,
+        scope_role: &str,
+    ) -> ProcessRequest {
         use d2b_contracts_resource::v3::{
             ControllerGeneration, ResourceGeneration, execution_policy::BoundedToken,
         };
@@ -1935,9 +2014,9 @@ mod tests {
             LaunchIdentity, LaunchTicket, OperationBinding, runtime_scope_commitment,
         };
 
-        let process_ref = ResourceRef::parse("Process/swtpm-tpm").expect("process ref");
+        let process_ref = ResourceRef::parse(process_ref).expect("process ref");
         let execution_ref = ResourceRef::parse("Host/host-system").expect("execution ref");
-        let device_ref = ResourceRef::parse("Device/tpm").expect("device ref");
+        let device_ref = ResourceRef::parse(device_ref).expect("device ref");
         let zone_uid = d2b_contracts_resource::v3::ResourceUid::parse(
             "223e4567-e89b-42d3-a456-426614174001",
         )
@@ -1966,7 +2045,7 @@ mod tests {
                 None,
                 execution_ref,
                 None,
-                "swtpm-tpm",
+                process_name,
                 false,
             )
             .expect("launch identity"),
@@ -1980,7 +2059,7 @@ mod tests {
                 None,
                 &process_ref,
                 &process_uid,
-                "swtpm-tpm",
+                scope_role,
                 1,
             ),
         )
@@ -2013,10 +2092,51 @@ mod tests {
                 b"d2b-process-template-v1"
             )
         );
+        // A second Device declares the same worker template under its own
+        // row: the resolution is the exact declared row, so this row never
+        // resolves to the sibling's intent (the generic lookup, which matches
+        // by the shared template name, has two candidates here).
+        let sibling = resolver
+            .resolve(&device_worker_request_for(
+                "Process/swtpm-tpm2",
+                "Device/tpm2",
+                "swtpm-socket",
+                "swtpm-tpm2",
+                "swtpm-tpm2",
+            ))
+            .expect("second swtpm worker intent");
+        assert_eq!(sibling.role, RunnerRole::Swtpm);
+        assert_eq!(sibling.role_id.as_str(), "swtpm-tpm2");
+        assert_eq!(
+            sibling
+                .owner_ref
+                .as_ref()
+                .map(ResourceRef::to_canonical_string)
+                .as_deref(),
+            Some("Device/tpm2")
+        );
+
         // The declared template is an exact fence: the same row never
         // resolves through another template's posture.
         assert_eq!(
             resolver.resolve(&device_worker_request("gpu-worker")),
+            Err(ProcessEffectError::UnsupportedProvider)
+        );
+
+        // A Device-owned row the bundle does not declare refuses: the Device
+        // arm is terminal, so the shared-template generic lookup never stands
+        // in for the missing declared row and hands the launch a sibling
+        // row's identity. Before this the terminality was not by
+        // construction - this ticket's scope commitment is that of the
+        // declared `swtpm-flush-tpm` role, and the generic lookup resolved it.
+        assert_eq!(
+            resolver.resolve(&device_worker_request_for(
+                "EphemeralProcess/swtpm-flush-ghost",
+                "Device/tpm",
+                "swtpm-init-flush",
+                "swtpm-flush-ghost",
+                "swtpm-flush-tpm",
+            )),
             Err(ProcessEffectError::UnsupportedProvider)
         );
     }

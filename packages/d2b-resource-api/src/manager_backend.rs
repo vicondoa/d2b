@@ -400,24 +400,54 @@ fn key_order(key: &RuntimeResourceKey) -> (&str, &str, &str) {
 /// The selector binding of a LIST cursor: the request fields a page sequence
 /// depends on. A cursor replayed under different selectors addresses a
 /// different sequence, so it is refused instead of silently landing
-/// elsewhere.
+/// elsewhere. The selector sets are matched order-insensitively
+/// ([`list_view_matches`]), so they are canonicalized - sorted and deduped -
+/// before digesting: echoing the same logical query with the sets reordered,
+/// or with a repeated value, resumes the sequence instead of being refused as
+/// a foreign cursor.
 fn list_selector_digest(request: &StoreListRequest) -> String {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
     digest.update(request.zone.as_str().as_bytes());
     digest.update([request.projection as u8]);
-    for resource_type in &request.resource_types {
-        digest.update(resource_type.as_str().as_bytes());
+    let mut resource_types = request
+        .resource_types
+        .iter()
+        .map(|resource_type| resource_type.as_str())
+        .collect::<Vec<_>>();
+    resource_types.sort_unstable();
+    resource_types.dedup();
+    for resource_type in resource_types {
+        digest.update(resource_type.as_bytes());
         digest.update([0]);
     }
-    for name in &request.resource_names {
-        digest.update(name.as_str().as_bytes());
+    let mut resource_names = request
+        .resource_names
+        .iter()
+        .map(|name| name.as_str())
+        .collect::<Vec<_>>();
+    resource_names.sort_unstable();
+    resource_names.dedup();
+    for name in resource_names {
+        digest.update(name.as_bytes());
         digest.update([0]);
     }
-    for filter in &request.filters {
-        digest.update(filter.field.as_bytes());
+    let mut filters = request
+        .filters
+        .iter()
+        .map(|filter| {
+            let mut values = filter.values.iter().map(String::as_str).collect::<Vec<_>>();
+            values.sort_unstable();
+            values.dedup();
+            (filter.field.as_str(), values)
+        })
+        .collect::<Vec<_>>();
+    filters.sort_unstable();
+    filters.dedup();
+    for (field, values) in filters {
+        digest.update(field.as_bytes());
         digest.update([0]);
-        for value in &filter.values {
+        for value in values {
             digest.update(value.as_bytes());
             digest.update([0]);
         }

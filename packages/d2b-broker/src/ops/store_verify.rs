@@ -157,7 +157,17 @@ pub fn run_store_verify_read_only(
         }
     };
     let response = verify_locked(intent, repair);
-    if let Err(err) = posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm) {
+    // Diagnostic pass: a farm that was never provisioned (or whose drift is
+    // exactly what this run is classifying) reports its own verdict below
+    // instead of failing on a declared level that is not there yet - the
+    // strict enforcement of `required` belongs to the StoreSync pass that runs
+    // after the build that creates the levels.
+    if let Err(err) =
+        crate::ops::store_view_posture::posture_store_view_matrix_paths_before_build(
+            &intent.hardlink_farm_path,
+            &intent.vm,
+        )
+    {
         return failed(&intent.vm, format!("posture store-view metadata: {err}"));
     }
     drop(lock);

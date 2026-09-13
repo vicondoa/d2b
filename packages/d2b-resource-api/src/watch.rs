@@ -1,8 +1,10 @@
 //! Resource-API watch delivery contract.
 //!
-//! External watch frames are handed to the authenticated bus as encoded
-//! named-stream payloads: the sink below is the bus-side delivery trait
-//! ([`WatchSink`]), and [`WatchFrame`] is the immutable encoded delivery.
+//! The delivery shapes a producer will use are declared here: [`WatchSink`]
+//! is the bus-side delivery trait the authenticated named-stream adapter
+//! implements, and [`WatchFrame`] is the immutable encoded delivery it
+//! carries. No producer exists yet - nothing constructs a [`WatchFrame`], so
+//! `WatchSink::send` is unreachable until the manager-side pump lands.
 //!
 //! The manager plane does not serve external WATCH in this phase:
 //! [`crate::manager_backend::ManagerBackend::watch`] refuses with

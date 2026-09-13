@@ -3739,10 +3739,17 @@ fn device_worker_path(
 /// closed context classes), and the executable slot is dropped because the
 /// trusted template pins the binary and the broker composes `argv[0]`.
 ///
-/// The fence: every path the generator renders is anchored - the state
-/// directory under the trusted storage root and the sockets under the runtime
-/// root the daemon owns - so a declared row can never launch with a socket the
-/// daemon did not derive.
+/// The fence: every path this seat renders is absolute and free of `..`
+/// components, and the paths that must live under the daemon's shared socket
+/// runtime root (the swtpm server socket, the GPU socket) are additionally
+/// anchored under the root this call receives. The remaining paths are fenced
+/// at derivation instead of here: the swtpm state directory and its ctrl
+/// socket resolve through the bundle's trusted storage row
+/// (`ProductionProcessDriverEffects::device_state_dir`), the one-shot flush's
+/// ctrl socket is that same state directory, and the video and Wayland
+/// sockets come from the daemon's own runtime roots and the bundle's projected
+/// site artifacts - so a declared row launches with exactly the paths those
+/// trusted sources named.
 fn device_worker_launch_args(
     socket_runtime_dir: &std::path::Path,
     launch: &DeviceWorkerLaunch,

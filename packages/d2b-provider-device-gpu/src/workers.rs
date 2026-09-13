@@ -152,6 +152,7 @@ impl fmt::Debug for GpuWorkerSpec {
 #[derive(Clone, PartialEq, Eq)]
 pub struct VideoWorkerSpec {
     process: GpuProcessDeclaration,
+    template: &'static str,
     device_nodes: Vec<GpuDeviceNode>,
 }
 
@@ -162,16 +163,26 @@ impl VideoWorkerSpec {
         settings: &GpuSettings,
     ) -> Result<Self, GpuProcessSelectionError> {
         let process = GpuProcessDeclaration::new(device_uid, GpuProcessRole::Video)?;
-        let mut device_nodes = vec![GpuDeviceNode::Dri];
-        if settings.video_nvidia_decode {
-            device_nodes.extend([
-                GpuDeviceNode::NvidiaCtl,
-                GpuDeviceNode::NvidiaDevice,
-                GpuDeviceNode::NvidiaUvm,
-            ]);
-        }
+        // `videoNvidiaDecode` selects the closed NVIDIA-decode posture, not a
+        // grant: the launch's device binds come from the template's entry in
+        // `d2b-core`'s `device_worker_posture`, and the plain template never
+        // widens to the NVIDIA nodes.
+        let (template, device_nodes) = if settings.video_nvidia_decode {
+            (
+                "video-worker-nvidia",
+                vec![
+                    GpuDeviceNode::Dri,
+                    GpuDeviceNode::NvidiaCtl,
+                    GpuDeviceNode::NvidiaDevice,
+                    GpuDeviceNode::NvidiaUvm,
+                ],
+            )
+        } else {
+            ("video-worker", vec![GpuDeviceNode::Dri])
+        };
         Ok(Self {
             process,
+            template,
             device_nodes,
         })
     }
@@ -183,7 +194,7 @@ impl VideoWorkerSpec {
 
     /// Return the signed component template.
     pub const fn template(&self) -> &'static str {
-        "video-worker"
+        self.template
     }
 
     /// Return the signed seccomp class.
@@ -222,6 +233,7 @@ impl fmt::Debug for VideoWorkerSpec {
         formatter
             .debug_struct("VideoWorkerSpec")
             .field("process", &self.process)
+            .field("template", &self.template)
             .field("device_node_count", &self.device_nodes.len())
             .finish()
     }

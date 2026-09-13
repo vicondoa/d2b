@@ -112,7 +112,29 @@ let
     then attrs.${name}
     else fallback;
 
-  aclAssertions = path: resources: entryIndex: field: grants:
+  # The kernel mirrors the named-entry ACL mask into the file's group bits, so
+  # a grant wider than the declared mode's group class would silently widen
+  # the mode.  Every granted character must already be in the group class.
+  permissionsWithinGroupClass = mode: permissions:
+    let
+      groupDigit = builtins.substring 2 1 mode;
+      groupClass =
+        if groupDigit == "0" then ""
+        else if groupDigit == "1" then "x"
+        else if groupDigit == "2" then "w"
+        else if groupDigit == "3" then "wx"
+        else if groupDigit == "4" then "r"
+        else if groupDigit == "5" then "rx"
+        else if groupDigit == "6" then "rw"
+        else if groupDigit == "7" then "rwx"
+        else "";
+    in
+    builtins.match modePattern mode != null
+    && builtins.isString permissions
+    && lib.all (character: lib.hasInfix character groupClass)
+      (lib.stringToCharacters permissions);
+
+  aclAssertions = path: resources: entryIndex: mode: field: grants:
     let safeGrants = if builtins.isList grants then grants else [ ];
     in [
       {
@@ -139,6 +161,10 @@ let
             assertion = builtins.isString permissionValue
               && builtins.match permissionsPattern permissionValue != null;
             message = "${where}.permissions must be a POSIX rwx string.";
+          }
+          {
+            assertion = permissionsWithinGroupClass mode permissionValue;
+            message = "${where}.permissions exceed the entry's mode group class; the ACL mask is mirrored into the file's group bits, so the declared mode must cover every grant.";
           }
         ])
       safeGrants);
@@ -334,8 +360,8 @@ let
             message = "${where}.recursive conflicts with no-recursive-mutation or hardlink-farm-no-recursion.";
           }
         ]
-        ++ aclAssertions path resources index "accessAcl" (attrOr entry "accessAcl" [ ])
-        ++ aclAssertions path resources index "defaultAcl" (attrOr entry "defaultAcl" [ ]))
+        ++ aclAssertions path resources index modeValue "accessAcl" (attrOr entry "accessAcl" [ ])
+        ++ aclAssertions path resources index modeValue "defaultAcl" (attrOr entry "defaultAcl" [ ]))
       safeLayout);
 
   viewAssertions = path: views:

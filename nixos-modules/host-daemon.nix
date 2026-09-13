@@ -162,11 +162,12 @@ in
         "d /etc/d2b 0750 root d2bd -"
       ]
       # Each Device's TPM worker traverses the daemon-owned root into the
-      # state directory the controller creates for it (0700, owned by the
-      # Device's TPM principal): the long-lived swtpm worker writes its NVRAM,
-      # log, and ctrl socket there, and the one-shot flush connects to that
-      # ctrl socket. `d2bLib.deviceTpmPrincipals` derives both principals from
-      # the same trusted rows the runtime uses.
+      # state directory the controller creates for it (layout owner
+      # `User/d2bd`, with the per-Device ACL grants for the Device's two TPM
+      # principals): the long-lived swtpm worker writes its NVRAM, log, and
+      # ctrl socket there, and the one-shot flush connects to that ctrl
+      # socket. `d2bLib.deviceTpmPrincipals` derives both principals from the
+      # same trusted rows the runtime uses.
       ++ lib.concatMap
         (row: [
           "a+ ${toString cfg.site.stateDir}/tpm-state - - - - u:${row.account}:--x"

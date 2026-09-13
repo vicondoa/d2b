@@ -2535,16 +2535,13 @@ fn prepare_runner_launch_identity(
         crate::live_handlers::grant_serving_worker_launch_acls(argv, uid, runtime_root)
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
     }
-    // Device-owned worker launches (the declared swtpm/GPU rows) bind their
-    // per-VM socket inside the broker runtime root, which the daemon owns and
-    // which carries no grant for the launched principal: open exactly that
-    // directory to it, the same way the binding-owned serving worker's socket
-    // directory is opened. The gate is the trusted resolved intent's role,
-    // never a request field.
-    if d2b_core::bundle_resolver::is_device_worker_role(&intent.role) {
-        crate::live_handlers::grant_device_worker_launch_acls(argv, uid, runtime_root)
-            .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
-    }
+    // Device-owned worker launches (the declared swtpm/GPU rows) also bind
+    // their per-VM socket inside the broker runtime root, which the daemon
+    // owns and which carries no grant for the launched principal. That grant
+    // is NOT applied here: it is derived from the pinned owning Device (never
+    // from the launch arguments) and applied inside `live_spawn_runner` after
+    // the launch's typed fences pass, so a refused launch never leaves an ACL
+    // behind (`live_handlers::DeviceWorkerSocketGrant`).
     Ok((uid, gid, user_namespace))
 }
 
@@ -2599,6 +2596,13 @@ fn dispatch_request_with_request_fds(
         daemon_uid: config.d2bd_uid,
         daemon_gid: config.d2bd_gid,
         state_dir: config.state_dir.clone(),
+        // The tree the broker's own private socket lives in: the bound every
+        // Device-owned worker's per-Guest socket directory is derived under.
+        runtime_root: config
+            .socket_path
+            .parent()
+            .unwrap_or_else(|| Path::new(DEFAULT_BROKER_RUNTIME_DIR))
+            .to_path_buf(),
     };
     dispatch_request_with_backend_and_request_fds(
         request,
@@ -3227,6 +3231,9 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 // single evaluation the launch posture resolves from.
                 intent_is_serving_worker_template(intent),
                 intent,
+                // Adoption observes an already-launched runner: this request
+                // carries no owner uid to pin and derives no Device path.
+                None,
             )
             .inspect_err(|error| {
                 tracing::warn!(
@@ -3426,6 +3433,9 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.guest_execution.as_ref(),
                 posture.is_serving_worker(),
                 intent,
+                // Observation derives no Device path and the request carries
+                // no owner uid to pin against the Device row.
+                None,
             )?;
             let response = observe_registered_runner(&req, intent).inspect_err(|error| {
                 tracing::warn!(error = ?error, "ObserveRunner registry observation failed");
@@ -4066,6 +4076,13 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             // request-shaped decision is made; every decision below reads it.
             let posture = LaunchPosture::resolve(req.role, intent);
             posture.validate_request_fds(req.inherited_fd_count, request_fds.len())?;
+            // Device-owned worker launches derive every runtime path - the
+            // swtpm state identity, the per-Guest socket directory the broker
+            // opens to the worker - from the Device that owns the launched
+            // row. That Device is resolved and pinned here, from the verified
+            // bundle, before any Device-derived identity is trusted below; a
+            // launch claiming another Device is refused by name.
+            let device_worker = resolve_device_worker_launch(resolver, &req, intent)?;
             if req.resource_ref.is_some() {
                 let Some(bundle_content_identity) = req.bundle_content_identity.as_deref() else {
                     return Err(BrokerError::SpawnRunnerIntentMismatch {
@@ -4190,7 +4207,12 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     reason: err.to_string(),
                 });
             }
-            validate_spawn_runner_request_matches_intent(&req, intent, posture)?;
+            validate_spawn_runner_request_matches_intent(
+                &req,
+                intent,
+                posture,
+                device_worker.scope.as_ref(),
+            )?;
             let typed_process = req.resource_ref.is_some();
             let cgroup_placement = private_cgroup_placement(
                 &intent.cgroup_placement,
@@ -4328,6 +4350,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 resolver,
                 &req,
                 posture,
+                &device_worker,
                 std::mem::take(&mut request_fds),
                 audit_log,
             ) {
@@ -8173,6 +8196,9 @@ trait DispatchBackend {
         // Launch posture resolved from the trusted intent by the dispatch
         // arm; the backend must not re-derive it from the request.
         posture: LaunchPosture,
+        // Device-owned worker scope resolved (and pinned) by the dispatch arm
+        // from the verified bundle; `default()` for every other launch.
+        device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
         request_fds: Vec<OwnedFd>,
         audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError>;
@@ -8266,6 +8292,10 @@ struct LiveDispatchBackend {
     daemon_uid: u32,
     daemon_gid: u32,
     state_dir: PathBuf,
+    /// Broker runtime root (the private socket's directory): the tree a
+    /// Device-owned worker's per-Guest socket directory must strictly live
+    /// under before the broker opens it to the worker's principal.
+    runtime_root: PathBuf,
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -8667,6 +8697,7 @@ impl DispatchBackend for LiveDispatchBackend {
         resolver: &BundleResolver,
         req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
         posture: LaunchPosture,
+        device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
         mut request_fds: Vec<OwnedFd>,
         audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
@@ -8704,7 +8735,7 @@ impl DispatchBackend for LiveDispatchBackend {
                 "request inherited fds cannot combine with broker-preopened fds".to_owned(),
             ));
         }
-        let swtpm_identity = resource_backed_swtpm_identity(resolver, req);
+        let swtpm_identity = resource_backed_swtpm_identity(resolver, req, device_worker);
         let mut outcome = crate::live_handlers::live_spawn_runner(
             plan_input,
             preopened.child_fds,
@@ -8712,6 +8743,8 @@ impl DispatchBackend for LiveDispatchBackend {
             req.activation_input.as_ref(),
             &self.state_dir,
             swtpm_identity.as_ref(),
+            device_worker,
+            &self.runtime_root,
         )
         .map_err(|err| {
             // Log the actual LiveHandlerError detail before wrapping it
@@ -11041,6 +11074,12 @@ fn validate_typed_process_metadata(
     // `LaunchPosture`); this fence never re-derives it.
     serving_worker: bool,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+    // Owning-Device scope already pinned from the verified bundle (the
+    // launched row's `metadata.ownerRef`, `device_worker::resolve_launch_scope`).
+    // `Some` on the launch path, where that Device anchors every runtime path
+    // the launch derives; `None` for the observe/adopt requests, which carry
+    // no owner uid to pin and derive no Device paths.
+    device_worker_scope: Option<&crate::ops::device_worker::DeviceWorkerScope>,
 ) -> Result<(), BrokerError> {
     if !typed {
         return Ok(());
@@ -11121,12 +11160,33 @@ fn validate_typed_process_metadata(
         });
     }
     if let Some(owner) = owner_ref {
+        // The owning Device of a Device worker row is pinned from the verified
+        // bundle by the launch arm: a request that names another Device is
+        // refused BY NAME here, before any Device-derived identity is trusted.
+        if let Some(scope) = device_worker_scope
+            && owner != &scope.device_ref
+        {
+            return Err(BrokerError::SpawnRunnerIntentMismatch {
+                field: "owner_ref",
+                requested: owner.to_canonical_string(),
+                resolved: scope.device_ref.to_canonical_string(),
+            });
+        }
         let owner_type = owner.resource_type().as_str();
         let admitted = if d2b_core::bundle_resolver::is_device_worker_role(&intent.role) {
             // A Device worker row is declared and owned by the Device it
             // serves; its provider is the Provider that signed the template
-            // the intent was resolved through.
+            // the intent was resolved through. WHICH Device owns the launched
+            // row is pinned from the verified bundle by the launch arm
+            // (`device_worker::resolve_launch_scope`: the row's
+            // `metadata.ownerRef`, plus the Device row's durable uid), and the
+            // request must name exactly that Device - a launch aimed at
+            // another Device would derive another Guest's runtime socket
+            // directory and state Volume. The scope is `None` for the
+            // observe/adopt requests, which carry no owner uid to pin and
+            // derive no Device paths.
             owner_type == "Device"
+                && device_worker_scope.is_none_or(|scope| owner == &scope.device_ref)
         } else {
             matches!(owner_type, "Guest" | "Host" | "Provider" | "VolumeBinding")
         };
@@ -11273,34 +11333,78 @@ fn private_cgroup_placement(
 /// scope (`private_cgroup_placement`) that deliberately carries no VM name,
 /// and the Device-worker template intent ships no writable paths, so the
 /// spawn-time swtpm-dir fence cannot read the VM identity from the plan.
-/// Resolve it from the verified bundle instead, the same derivation the
-/// daemon's Device-worker ticket uses: the row's semantic owner is the Device,
-/// the Device's declared Guest owner names the VM, and the trusted
+/// Resolve it from the owning Device the launch arm already pinned against the
+/// verified bundle ([`crate::ops::device_worker::DeviceWorkerScope`]): the
+/// Device's declared Guest owner names the VM, and the trusted
 /// `path:swtpm-state:<guest>` storage row names the state root (which must
-/// equal the Provider's `path:tpm-state` policy root). `None` leaves the
+/// equal the Provider's `path:tpm-state` policy root). The Device ref and uid
+/// read here are the pinned ones, never the request's claim. `None` leaves the
 /// launch to the hardening's fail-closed refusal.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn resource_backed_swtpm_identity(
     resolver: &BundleResolver,
     req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+    device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
 ) -> Option<crate::ops::swtpm_dir::ResourceBackedSwtpm> {
-    if req.resource_ref.is_none() {
-        return None;
-    }
     if !matches!(req.role, RunnerRole::Swtpm | RunnerRole::SwtpmFlush) {
         return None;
     }
-    let device = req
-        .owner_ref
-        .as_ref()
-        .filter(|owner| owner.resource_type().as_str() == "Device")?;
-    let zone_uid = req.zone_uid.as_ref()?;
+    let scope = device_worker.scope.as_ref()?;
     crate::ops::swtpm_dir::resource_backed_identity(
         resolver,
+        &scope.zone_uid,
+        &scope.device_ref,
+        Some(&scope.device_uid),
+    )
+}
+
+/// What one launch arm resolved for a Device-owned worker row.
+///
+/// A launch whose intent is not a Device-owned worker role resolves
+/// [`DeviceWorkerLaunch::default`]: it has no Device-derived runtime path and
+/// no per-Guest socket directory to open.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn resolve_device_worker_launch(
+    resolver: &BundleResolver,
+    req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> Result<crate::ops::device_worker::DeviceWorkerLaunch, BrokerError> {
+    use crate::ops::device_worker::{
+        DeviceWorkerLaunch, binds_runtime_socket, resolve_launch_scope,
+    };
+    if !d2b_core::bundle_resolver::is_device_worker_role(&intent.role) {
+        return Ok(DeviceWorkerLaunch::default());
+    }
+    let binds_runtime_socket = binds_runtime_socket(&intent.role);
+    // A legacy VM-scoped Device worker (the `swtpm` role of a manifest VM)
+    // launches without a typed Process identity: it carries no resource row,
+    // so there is no owning Device to pin. Its runtime socket directory is
+    // derived from the launch's own trusted placement instead (the `w1-swtpm`
+    // fence's `derive_paths`, which cross-checks the placement's VM against
+    // the plan's writable paths) - never from a launch argument.
+    let (Some(resource_ref), Some(zone_uid)) = (req.resource_ref.as_ref(), req.zone_uid.as_ref())
+    else {
+        return Ok(DeviceWorkerLaunch {
+            scope: None,
+            binds_runtime_socket,
+        });
+    };
+    let scope = resolve_launch_scope(
+        resolver,
+        resource_ref,
         zone_uid,
-        device,
+        req.owner_ref.as_ref(),
         req.owner_uid.as_ref(),
     )
+    .map_err(|error| BrokerError::SpawnRunnerIntentMismatch {
+        field: error.field(),
+        requested: error.requested(),
+        resolved: error.resolved(),
+    })?;
+    Ok(DeviceWorkerLaunch {
+        scope: Some(scope),
+        binds_runtime_socket,
+    })
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -11310,6 +11414,10 @@ fn validate_spawn_runner_request_matches_intent(
     // Posture already resolved from the trusted intent (see `LaunchPosture`);
     // this fence never re-derives it.
     posture: LaunchPosture,
+    // Owning-Device scope already pinned from the verified bundle by
+    // `resolve_device_worker_launch` (see `DeviceWorkerScope`); `None` for
+    // every launch that is not a typed Device-owned worker.
+    device_worker_scope: Option<&crate::ops::device_worker::DeviceWorkerScope>,
 ) -> Result<(), BrokerError> {
     if req.vm_id.as_str() != intent.vm_name {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
@@ -11432,6 +11540,7 @@ fn validate_spawn_runner_request_matches_intent(
         req.guest_execution.as_ref(),
         posture.is_serving_worker(),
         intent,
+        device_worker_scope,
     )?;
     if typed {
         if !req.runtime_allocations.is_empty()
@@ -15226,6 +15335,7 @@ mod tests {
                 None,
                 false,
                 &intent,
+                None,
             )
             .is_ok()
         );
@@ -15239,6 +15349,7 @@ mod tests {
                 None,
                 false,
                 &intent,
+                None,
             )
             .is_err()
         );
@@ -15252,6 +15363,7 @@ mod tests {
                 None,
                 false,
                 &intent,
+                None,
             )
             .is_err()
         );
@@ -15340,7 +15452,7 @@ mod tests {
         let posture = LaunchPosture::resolve(valid.role, &intent);
         assert_eq!(posture, LaunchPosture::Standard);
         assert!(
-            validate_spawn_runner_request_matches_intent(&valid, &intent, posture).is_ok()
+            validate_spawn_runner_request_matches_intent(&valid, &intent, posture, None).is_ok()
         );
 
         let mut mutations = Vec::new();
@@ -15365,7 +15477,7 @@ mod tests {
 
         for mutation in mutations {
             assert!(
-                validate_spawn_runner_request_matches_intent(&mutation, &intent, posture).is_err(),
+                validate_spawn_runner_request_matches_intent(&mutation, &intent, posture, None).is_err(),
                 "mutated SpawnRunner request must fail before clone"
             );
         }
@@ -15385,7 +15497,7 @@ mod tests {
     ) -> Result<LaunchPosture, BrokerError> {
         let posture = LaunchPosture::resolve(req.role, intent);
         posture.validate_request_fds(req.inherited_fd_count, attached_fd_count)?;
-        validate_spawn_runner_request_matches_intent(req, intent, posture)?;
+        validate_spawn_runner_request_matches_intent(req, intent, posture, None)?;
         Ok(posture)
     }
 
@@ -15602,6 +15714,7 @@ mod tests {
             &attack,
             &intent,
             LaunchPosture::resolve(attack.role, &intent),
+            None,
         )
         .expect_err("untyped ProviderController launch must be refused");
         match error {
@@ -15704,7 +15817,7 @@ mod tests {
         provider_owner.owner_ref =
             Some(ResourceRef::parse("Provider/volume-virtiofs").expect("owner ref"));
         assert!(
-            validate_spawn_runner_request_matches_intent(&provider_owner, &intent, posture)
+            validate_spawn_runner_request_matches_intent(&provider_owner, &intent, posture, None)
                 .is_err()
         );
         // The serving template does not admit controller-supplied arguments,
@@ -15715,7 +15828,7 @@ mod tests {
                 .expect("launch args"),
         );
         assert!(
-            validate_spawn_runner_request_matches_intent(&with_launch_args, &intent, posture)
+            validate_spawn_runner_request_matches_intent(&with_launch_args, &intent, posture, None)
                 .is_err()
         );
     }
@@ -15859,7 +15972,7 @@ mod tests {
         foreign_owner.owner_ref =
             Some(ResourceRef::parse("VolumeBinding/forged").expect("owner ref"));
         assert!(
-            validate_spawn_runner_request_matches_intent(&foreign_owner, &intent, posture).is_err()
+            validate_spawn_runner_request_matches_intent(&foreign_owner, &intent, posture, None).is_err()
         );
     }
 
@@ -15942,9 +16055,40 @@ mod tests {
             let mut forged = request.clone();
             forged.owner_ref = owner.map(|owner| ResourceRef::parse(owner).expect("owner ref"));
             assert!(
-                validate_spawn_runner_request_matches_intent(&forged, &intent, posture).is_err(),
+                validate_spawn_runner_request_matches_intent(&forged, &intent, posture, None).is_err(),
                 "a Device worker must carry its Device owner, got {owner:?}"
             );
+        }
+        // The Device the request names must be the Device that owns the
+        // launched row under the verified bundle: the arm pins that scope and
+        // this fence refuses any request that disagrees with it (a launch
+        // aimed at another Device would derive another Guest's runtime paths).
+        let pinned = crate::ops::device_worker::DeviceWorkerScope {
+            zone_uid: d2b_contracts_resource::v3::ResourceUid::parse(
+                "123e4567-e89b-42d3-a456-426614174000",
+            )
+            .expect("zone uid"),
+            device_ref: ResourceRef::parse("Device/gpu0").expect("device ref"),
+            device_uid: d2b_contracts_resource::v3::ResourceUid::parse(
+                "4f37d6a6-759a-4c81-9a55-eaf2e00665e8",
+            )
+            .expect("device uid"),
+            guest: "other-guest".to_owned(),
+        };
+        let error =
+            validate_spawn_runner_request_matches_intent(&request, &intent, posture, Some(&pinned))
+                .expect_err("a request claiming another Device must be refused by name");
+        match error {
+            BrokerError::SpawnRunnerIntentMismatch {
+                field,
+                requested,
+                resolved,
+            } => {
+                assert_eq!(field, "owner_ref");
+                assert_eq!(requested, "Device/tpm");
+                assert_eq!(resolved, "Device/gpu0");
+            }
+            other => panic!("expected an owner_ref refusal, got {other:?}"),
         }
         // The template identity is the declared template; the per-row role id
         // is not admitted.
@@ -15952,7 +16096,7 @@ mod tests {
         wrong_template.template_identity =
             Some(provider_controller_template_identity("swtpm-tpm"));
         assert!(
-            validate_spawn_runner_request_matches_intent(&wrong_template, &intent, posture).is_err()
+            validate_spawn_runner_request_matches_intent(&wrong_template, &intent, posture, None).is_err()
         );
     }
 
@@ -16234,6 +16378,7 @@ mod tests {
             _resolver: &BundleResolver,
             _req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
             _posture: LaunchPosture,
+            _device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
             request_fds: Vec<OwnedFd>,
             _audit_log: &crate::audit::AuditLog,
         ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
@@ -16637,7 +16782,20 @@ mod tests {
                 mode,
             } => {
                 assert_eq!(vm_id, "acceptance-guest");
-                assert_eq!(base_dir, "/var/lib/d2b/tpm-state");
+                // The record names the directory the worker opens: the state
+                // Volume of the Guest's own TPM Device under the trusted root.
+                let device_uid = crate::ops::device_worker::deterministic_resource_uid(
+                    "work",
+                    "Device",
+                    "tpm0",
+                );
+                assert_eq!(
+                    base_dir,
+                    format!(
+                        "/var/lib/d2b/tpm-state/{}",
+                        crate::ops::swtpm_dir::state_volume_name(&device_uid)
+                    )
+                );
                 assert_eq!((owner_uid, owner_gid, mode), (0, 0, 0o700));
             }
             other => panic!("expected PrepareStateDir fields, got {other:?}"),

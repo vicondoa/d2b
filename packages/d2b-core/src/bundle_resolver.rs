@@ -4638,6 +4638,15 @@ const VIDEO_WORKER_NAMESPACES: NamespaceSet = device_namespaces(true, true, true
 /// | `gpu-worker` | `Gpu` | `w1-gpu` | mount, pid, ipc, uts, user | yes | kvm, dri, udmabuf |
 /// | `gpu-render-node` | `GpuRenderNode` | `w1-gpu-render-node` | mount, pid, ipc, uts, user | yes | - |
 /// | `video-worker` | `Video` | `w1-video` | mount, pid, ipc, uts | no | dri |
+/// | `video-worker-nvidia` | `Video` | `w1-video` | mount, pid, ipc, uts | no | dri, nvidia-ctl, nvidia-device, nvidia-uvm |
+///
+/// The two video arms are the plain VA-API and the NVIDIA-decode posture of
+/// the one sidecar: the owning Device's `videoNvidiaDecode` setting selects
+/// which template its row declares, and the declared row's template is the
+/// launch identity. The NVIDIA arm names the host device-class paths
+/// (`packages/d2b-host/src/devices.rs`), including the single-GPU
+/// `/dev/nvidia0` default for the per-card NVIDIA node; selecting any other
+/// card index is not expressible in a static posture.
 ///
 /// The GPU shapes are enforced by the broker's closed GPU plan validation
 /// (`d2b-broker::ops::gpu`), and the TPM shape by its `w1-swtpm` gates
@@ -4690,6 +4699,19 @@ pub fn device_worker_posture(provider_ref: &str, template: &str) -> Option<Devic
                 VIDEO_WORKER_NAMESPACES,
                 false,
                 &["/dev/dri/renderD128"][..],
+            ),
+            (DEVICE_GPU_PROVIDER_REF, "video-worker-nvidia") => (
+                ProcessRole::Video,
+                "crosvm",
+                "w1-video",
+                VIDEO_WORKER_NAMESPACES,
+                false,
+                &[
+                    "/dev/dri/renderD128",
+                    "/dev/nvidiactl",
+                    "/dev/nvidia-uvm",
+                    "/dev/nvidia0",
+                ][..],
             ),
             _ => return None,
         };
@@ -6975,6 +6997,35 @@ mod tests {
         // template is `gpu-render-node`.
         assert!(device_worker_posture(DEVICE_GPU_PROVIDER_REF, "render-node-worker").is_none());
         assert!(device_worker_posture("Provider/device-tpm", "swtpm").is_none());
+    }
+
+    /// The NVIDIA video posture is the plain video posture plus the three
+    /// reviewed NVIDIA nodes: same role, binary, seccomp policy, namespace
+    /// set, and no user namespace. The two arms are distinct templates, so a
+    /// row carrying one can never launch with the other's bind set.
+    #[test]
+    fn device_worker_posture_nvidia_video_carries_the_nvidia_nodes() {
+        use crate::bundle_resolver::DEVICE_GPU_PROVIDER_REF;
+
+        let plain = device_worker_posture(DEVICE_GPU_PROVIDER_REF, "video-worker")
+            .expect("video posture");
+        let nvidia = device_worker_posture(DEVICE_GPU_PROVIDER_REF, "video-worker-nvidia")
+            .expect("nvidia video posture");
+        assert_eq!(nvidia.role(), &ProcessRole::Video);
+        assert_eq!(nvidia.binary_ref(), "crosvm");
+        assert_eq!(nvidia.seccomp_policy_ref(), "w1-video");
+        assert_eq!(nvidia.namespaces(), plain.namespaces());
+        assert_eq!(nvidia.user_namespace(), plain.user_namespace());
+        assert_eq!(nvidia.umask(), plain.umask());
+        assert_eq!(
+            nvidia.device_binds(),
+            &[
+                "/dev/dri/renderD128",
+                "/dev/nvidiactl",
+                "/dev/nvidia-uvm",
+                "/dev/nvidia0",
+            ] as &[&str]
+        );
     }
 
     /// The serving-worker condition is spelled in this crate

@@ -232,7 +232,7 @@ pub fn live_prepare_state_dir(
         // derivation, the spawn-time swtpm-dir fence and the volume-local
         // controller's root all agree on - and keep every other unknown
         // subject failing closed.
-        let (spec, base_dir) =
+        let (spec, state_root) =
             crate::ops::swtpm_dir::zone_native_swtpm_state_row(resolver, req.vm_id.as_str())
                 .ok_or_else(|| super::OpError::UnknownSubject {
                     operation: "PrepareStateDir",
@@ -243,6 +243,21 @@ pub fn live_prepare_state_dir(
                 operation: "PrepareStateDir",
                 reason: "trusted-state-row-posture-unresolvable".to_owned(),
             })?;
+        // The directory the worker actually opens: the state Volume of the
+        // Guest's own TPM Device, which the TPM Provider names from that
+        // Device's durable uid (`<root>/device-<32hex>-tpm-state`) - the same
+        // name `d2bd`'s `device_state_dir` composes and the volume-local
+        // controller provisions. The op is per-Guest, so it can name that
+        // directory only when the verified bundles name exactly one TPM Device
+        // for the Guest; a Device committed through the Resource API lives in
+        // no bundle, and a Guest declaring several TPM Devices owns several
+        // state Volumes, in which case the shared policy root the trusted row
+        // itself names is recorded - never an invented one of them.
+        let base_dir = crate::ops::device_worker::unique_tpm_state_dir(
+            &crate::ops::device_worker::tpm_devices_of_guest(resolver, req.vm_id.as_str()),
+            &state_root,
+        )
+        .unwrap_or(state_root);
         return Ok(PreparedStateDir {
             base_dir,
             owner_uid,
@@ -333,6 +348,23 @@ pub fn live_prepare_state_dir(
 /// resolve on a host that has that account, and these tests assert the
 /// posture the row itself declares.
 #[cfg(test)]
+/// The canonical content hash of one fixture resource array, computed the way
+/// `ResourceBundle` computes it, so the fixture bundle verifies.
+fn fixture_content_hash(resources: &[serde_json::Value]) -> String {
+    use d2b_contracts_resource::v3::resource_schema::{
+        CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest,
+    };
+    let array = serde_json::Value::Array(resources.to_vec());
+    let canonical =
+        CanonicalJsonValue::parse(&serde_json::to_vec(&array).expect("fixture resources serialize"))
+            .expect("fixture resources are canonical JSON");
+    framed_canonical_digest(
+        "d2b:v3:resource-bundle",
+        &canonical_json_bytes(&canonical).expect("fixture resources encode"),
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn resolver_with_swtpm_state_row(guest: &str) -> BundleResolver {
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::contract_id::{ContractId, PathTemplate};
@@ -419,19 +451,49 @@ pub(crate) fn resolver_with_swtpm_state_row(guest: &str) -> BundleResolver {
         include_str!("../../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
     )
     .expect("manifest fixture parses");
-    BundleResolver::from_artifacts_with_optional_contracts(
+    // The Zone resource bundle names the Device that owns the Guest's TPM
+    // function, which is what the `PrepareStateDir` record resolves the
+    // worker's state Volume directory from.
+    let resources = vec![serde_json::json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "Device",
+        "metadata": {
+            "name": "tpm0",
+            "zone": "work",
+            "ownerRef": format!("Guest/{guest}"),
+        },
+        "spec": {"providerRef": "Provider/device-tpm"},
+    })];
+    let zone_bundle = serde_json::json!({
+        "schemaVersion": 3,
+        "bundleVersion": 1,
+        "zone": "work",
+        "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
+        "contentHash": fixture_content_hash(&resources),
+        "artifactCatalogDigest": format!("sha256:{}", "c".repeat(64)),
+        "schemaFingerprints": {},
+        "providerSchemaDigests": {},
+        "resources": resources,
+        "generatedAt": "1970-01-01T00:00:00.000Z",
+    });
+    let mut resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
         bundle,
         host,
         ProcessesJson {
             schema_version: "v2".to_owned(),
             vms: Vec::new(),
         },
-        Some(storage),
-        None,
-        None,
-        None,
         manifest,
-    )
+        std::collections::BTreeMap::from([(
+            "work".to_owned(),
+            serde_json::to_vec(&zone_bundle).expect("zone bundle bytes"),
+        )]),
+    );
+    // Storage travels on the same resolver: the production loader carries both
+    // artifacts, and this fixture needs the trusted row and the Device scope
+    // to resolve together.
+    resolver.storage = Some(storage);
+    resolver
 }
 
 #[cfg(test)]
@@ -616,6 +678,8 @@ mod tests {
         // The v3 TPM state directory belongs to the controller-created state
         // Volume, so the legacy prepare is a no-op for a zone-native Guest -
         // and only for one a trusted `path:swtpm-state:<guest>` row names.
+        // The record names the directory the worker actually opens: the state
+        // Volume of the Guest's own Device under the trusted root.
         let resolver = resolver_with_swtpm_state_row("acceptance-guest");
         let (exec, audit_log) = live_fixture();
         let prepared = live_prepare_state_dir(
@@ -625,7 +689,22 @@ mod tests {
             &audit_log,
         )
         .expect("the zone-native TPM subject prepares as a no-op");
-        assert_eq!(prepared.base_dir, PathBuf::from("/var/lib/d2b/tpm-state"));
+        let device_uid = crate::ops::device_worker::deterministic_resource_uid(
+            "work",
+            "Device",
+            "tpm0",
+        );
+        assert_eq!(
+            prepared.base_dir,
+            PathBuf::from("/var/lib/d2b/tpm-state").join(crate::ops::swtpm_dir::state_volume_name(
+                &device_uid
+            ))
+        );
+        assert_ne!(
+            prepared.base_dir,
+            PathBuf::from("/var/lib/d2b/tpm-state"),
+            "the record must name the worker's own state Volume directory, not the shared root"
+        );
         assert_eq!(prepared.owner_uid, 0);
         assert_eq!(prepared.owner_gid, 0);
         assert_eq!(prepared.mode, 0o700);

@@ -32,6 +32,20 @@ fn nvidia_decode_requires_the_video_sidecar() {
 }
 
 #[test]
+fn nvidia_decode_selects_the_nvidia_video_template() {
+    // The option selects the closed `video-worker-nvidia` posture
+    // (`d2b-core`'s `device_worker_posture`), whose launch carries the
+    // reviewed NVIDIA nodes alongside the render node, so the setting is
+    // accepted rather than refused.
+    let settings = GpuSettings {
+        video_sidecar: true,
+        video_nvidia_decode: true,
+        ..GpuSettings::default()
+    };
+    assert_eq!(settings.validate(DeviceArbitration::Exclusive), Ok(()));
+}
+
+#[test]
 fn context_types_are_unique() {
     let settings = GpuSettings {
         context_types: vec![

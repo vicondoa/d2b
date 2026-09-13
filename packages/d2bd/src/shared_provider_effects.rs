@@ -1170,13 +1170,50 @@ struct DaemonGpuLifecyclePort<'a> {
 }
 
 impl<'a> DaemonGpuLifecyclePort<'a> {
-    /// The declared row prefix and template of one worker role.
-    fn role_row(role: d2b_provider_device_gpu::GpuProcessRole) -> (&'static str, &'static str) {
+    /// The declared row prefix of one worker role
+    /// (`Process/gpu-<device>` / `Process/video-<device>`).
+    fn role_prefix(role: d2b_provider_device_gpu::GpuProcessRole) -> &'static str {
         match role {
-            d2b_provider_device_gpu::GpuProcessRole::FullGpu => ("gpu", "gpu-worker"),
-            d2b_provider_device_gpu::GpuProcessRole::RenderNode => ("gpu", "gpu-render-node"),
-            d2b_provider_device_gpu::GpuProcessRole::Video => ("video", "video-worker"),
+            d2b_provider_device_gpu::GpuProcessRole::FullGpu
+            | d2b_provider_device_gpu::GpuProcessRole::RenderNode => "gpu",
+            d2b_provider_device_gpu::GpuProcessRole::Video => "video",
         }
+    }
+
+    /// The closed templates one role's declared row may carry. The video
+    /// sidecar declares either the plain vaapi posture or the NVIDIA decode
+    /// posture; which one the row carries is the owning Device's declared
+    /// `videoNvidiaDecode` setting, so the declared row's own template - not
+    /// a fixed constant - is the launch identity.
+    const fn role_templates(
+        role: d2b_provider_device_gpu::GpuProcessRole,
+    ) -> &'static [&'static str] {
+        match role {
+            d2b_provider_device_gpu::GpuProcessRole::FullGpu => &["gpu-worker"],
+            d2b_provider_device_gpu::GpuProcessRole::RenderNode => &["gpu-render-node"],
+            d2b_provider_device_gpu::GpuProcessRole::Video => {
+                &["video-worker", "video-worker-nvidia"]
+            }
+        }
+    }
+
+    /// The declared row's template, when it names one of the role's closed
+    /// templates; anything else is a row this role cannot launch through.
+    fn declared_row_template(
+        view: &ResourceView,
+        role: d2b_provider_device_gpu::GpuProcessRole,
+    ) -> Result<&'static str, d2b_provider_device_gpu::GpuEffectError> {
+        let spec: Value = serde_json::from_slice(&view.spec)
+            .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?;
+        let template = spec
+            .get("template")
+            .and_then(Value::as_str)
+            .ok_or(d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?;
+        Self::role_templates(role)
+            .iter()
+            .copied()
+            .find(|candidate| *candidate == template)
+            .ok_or(d2b_provider_device_gpu::GpuEffectError::SpawnRejected)
     }
 
     /// The declared reference of one worker role
@@ -1185,7 +1222,7 @@ impl<'a> DaemonGpuLifecyclePort<'a> {
         &self,
         role: d2b_provider_device_gpu::GpuProcessRole,
     ) -> Result<ResourceRef, d2b_provider_device_gpu::GpuEffectError> {
-        let (prefix, _) = Self::role_row(role);
+        let prefix = Self::role_prefix(role);
         ResourceRef::parse(&format!("Process/{prefix}-{}", self.device_ref.name().as_str()))
             .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)
     }
@@ -1227,12 +1264,7 @@ impl<'a> DaemonGpuLifecyclePort<'a> {
         if view.owner_key.as_ref() != Some(&self.device_key()) {
             return Err(d2b_provider_device_gpu::GpuEffectError::StaleDeviceIdentity);
         }
-        let (_, template) = Self::role_row(role);
-        let spec: Value = serde_json::from_slice(&view.spec)
-            .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?;
-        if spec.get("template").and_then(Value::as_str) != Some(template) {
-            return Err(d2b_provider_device_gpu::GpuEffectError::SpawnRejected);
-        }
+        let _ = Self::declared_row_template(&view, role)?;
         Ok(Some(view))
     }
 
@@ -1263,6 +1295,37 @@ impl<'a> DaemonGpuLifecyclePort<'a> {
             platform.clone(),
             generation,
         )
+    }
+
+    /// Classify one declared row as observation evidence for `identity`.
+    ///
+    /// The row's deterministic token decides stale-versus-current, and the
+    /// row's published phase decides whether a current token names a live
+    /// worker at all: a row the Process controller reports `Pending` (a
+    /// relaunch in flight or waiting out its restart backoff) or `Failed`
+    /// publishes no live worker, so a matching token on it is `Missing` -
+    /// never `Matching`. Reading the token alone let a restart during an
+    /// outage adopt the dead worker's identity as live.
+    fn row_observation(
+        view: &ResourceView,
+        identity: &d2b_provider_device_gpu::GpuProcessIdentity,
+    ) -> d2b_provider_device_gpu::GpuProcessObservation {
+        let observed = Self::row_identity(
+            view,
+            identity.role(),
+            identity.principal(),
+            identity.platform(),
+            identity.generation(),
+        );
+        if &observed != identity {
+            // The declared row was replaced under a new uid or generation:
+            // the identity this actor holds is stale, not ambiguous.
+            return d2b_provider_device_gpu::GpuProcessObservation::StaleIdentity;
+        }
+        if crate::shared_provider_effects::view_phase(view) != "Ready" {
+            return d2b_provider_device_gpu::GpuProcessObservation::Missing;
+        }
+        d2b_provider_device_gpu::GpuProcessObservation::Matching(observed)
     }
 
     /// Observe one declared worker row as the launch/observation evidence for
@@ -1368,10 +1431,15 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<
         d2b_provider_device_gpu::GpuEffectError,
     > {
         let role = spec.process().role();
-        if Self::role_row(role).1 != spec.template() {
+        if !Self::role_templates(role).contains(&spec.template()) {
             return Err(d2b_provider_device_gpu::GpuEffectError::SpawnRejected);
         }
         let view = self.declared_worker(role)?;
+        // The declared row is the launch identity: the requested template
+        // must be the one the row carries within the role's closed set.
+        if Self::declared_row_template(&view, role)? != spec.template() {
+            return Err(d2b_provider_device_gpu::GpuEffectError::SpawnRejected);
+        }
         Ok(Self::row_identity(
             &view, role, principal, platform, generation,
         ))
@@ -1388,10 +1456,22 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<
         d2b_provider_device_gpu::GpuProcessIdentity,
         d2b_provider_device_gpu::GpuEffectError,
     > {
-        if Self::role_row(d2b_provider_device_gpu::GpuProcessRole::Video).1 != spec.template() {
+        if !Self::role_templates(d2b_provider_device_gpu::GpuProcessRole::Video)
+            .contains(&spec.template())
+        {
             return Err(d2b_provider_device_gpu::GpuEffectError::SpawnRejected);
         }
         let view = self.declared_worker(d2b_provider_device_gpu::GpuProcessRole::Video)?;
+        // The row declares one of the two closed video postures (plain or
+        // NVIDIA decode, per the owning Device's setting): the request must
+        // name the row's own template, never the other posture.
+        if Self::declared_row_template(
+            &view,
+            d2b_provider_device_gpu::GpuProcessRole::Video,
+        )? != spec.template()
+        {
+            return Err(d2b_provider_device_gpu::GpuEffectError::SpawnRejected);
+        }
         Ok(Self::row_identity(
             &view,
             d2b_provider_device_gpu::GpuProcessRole::Video,
@@ -1411,21 +1491,7 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<
         let Some(view) = self.worker_view(identity.role())? else {
             return Ok(d2b_provider_device_gpu::GpuProcessObservation::Missing);
         };
-        let observed = Self::row_identity(
-            &view,
-            identity.role(),
-            identity.principal(),
-            identity.platform(),
-            identity.generation(),
-        );
-        if &observed != identity {
-            // The declared row was replaced under a new uid or generation:
-            // the identity this actor holds is stale, not ambiguous.
-            return Ok(d2b_provider_device_gpu::GpuProcessObservation::StaleIdentity);
-        }
-        Ok(d2b_provider_device_gpu::GpuProcessObservation::Matching(
-            observed,
-        ))
+        Ok(Self::row_observation(&view, identity))
     }
 
     fn stop_worker(
@@ -2682,6 +2748,139 @@ mod tests {
             status_generation,
             status_projection: None,
         }
+    }
+
+    /// One declared worker row view: the given durable uid/generation and
+    /// published status.
+    fn worker_row_view(
+        uid: [u8; 16],
+        generation: u64,
+        status: Option<ResourceStatus>,
+    ) -> ResourceView {
+        let status_generation = status.as_ref().map(|_| generation);
+        ResourceView {
+            key: ResourceKey::new("work", "Process", "gpu-corp-gpu"),
+            uid,
+            generation,
+            deleting: false,
+            provenance: ResourceProvenance::Resource,
+            spec: b"{}".to_vec(),
+            metadata: b"{}".to_vec(),
+            owner_key: None,
+            status,
+            status_generation,
+            status_projection: None,
+        }
+    }
+
+    /// A restarting or refused declared worker row is never observation
+    /// evidence. The row's token is deterministic in its uid and generation,
+    /// so a `Pending` row (a relaunch in flight, or one waiting out its
+    /// restart backoff) still matched the held identity and the GPU controller
+    /// adopted the dead worker as live. The row's published phase gates the
+    /// match; a row replaced under a new uid stays `StaleIdentity`.
+    #[test]
+    fn worker_observation_is_gated_on_the_declared_rows_phase() {
+        use d2b_provider_device_gpu::{
+            GpuPlatformToken, GpuPrincipalToken, GpuProcessIdentity, GpuProcessObservation,
+            GpuProcessRole,
+        };
+
+        let ready = worker_row_view([0x33; 16], 7, Some(ResourceStatus::Ready));
+        let identity = GpuProcessIdentity::from_core(
+            super::DaemonGpuLifecyclePort::row_process_token(&ready),
+            GpuProcessRole::FullGpu,
+            GpuPrincipalToken::from_core([0x11; 32]),
+            GpuPlatformToken::from_core([0x22; 32]),
+            d2b_contracts_resource::v3::ResourceGeneration::new(7).expect("generation"),
+        );
+
+        assert!(
+            matches!(
+                super::DaemonGpuLifecyclePort::row_observation(&ready, &identity),
+                GpuProcessObservation::Matching(_)
+            ),
+            "a Ready row backs the observed worker"
+        );
+
+        for status in [
+            ResourceStatus::Pending,
+            ResourceStatus::Recovering,
+            ResourceStatus::Reconciling,
+            ResourceStatus::Deleting,
+            ResourceStatus::Failed(DriverFailure::terminal(DriverOp::Reconcile)),
+            ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Reconcile)),
+        ] {
+            assert_eq!(
+                super::DaemonGpuLifecyclePort::row_observation(
+                    &worker_row_view([0x33; 16], 7, Some(status.clone())),
+                    &identity,
+                ),
+                GpuProcessObservation::Missing,
+                "a non-Ready row ({status:?}) never reads as a live worker"
+            );
+        }
+
+        assert_eq!(
+            super::DaemonGpuLifecyclePort::row_observation(
+                &worker_row_view([0x44; 16], 7, Some(ResourceStatus::Ready)),
+                &identity,
+            ),
+            GpuProcessObservation::StaleIdentity,
+            "a row replaced under a new uid is stale, never live"
+        );
+    }
+
+    /// The video role's declared row may carry either closed video posture
+    /// (the plain vaapi template, or the NVIDIA decode template the owning
+    /// Device's `videoNvidiaDecode` setting selects), and the launch request
+    /// must name the row's own template. Every other role's row carries
+    /// exactly its one template.
+    #[test]
+    fn declared_worker_rows_accept_both_video_postures() {
+        use d2b_provider_device_gpu::{GpuEffectError, GpuProcessRole};
+
+        let view = |template: &str| {
+            let mut view = worker_row_view([0x33; 16], 7, Some(ResourceStatus::Ready));
+            view.spec =
+                serde_json::to_vec(&serde_json::json!({ "template": template })).expect("spec");
+            view
+        };
+
+        for (role, template) in [
+            (GpuProcessRole::FullGpu, "gpu-worker"),
+            (GpuProcessRole::RenderNode, "gpu-render-node"),
+            (GpuProcessRole::Video, "video-worker"),
+            (GpuProcessRole::Video, "video-worker-nvidia"),
+        ] {
+            assert_eq!(
+                super::DaemonGpuLifecyclePort::declared_row_template(&view(template), role),
+                Ok(template),
+                "{role:?} resolves its declared row template"
+            );
+        }
+        assert_eq!(
+            super::DaemonGpuLifecyclePort::declared_row_template(
+                &view("video-worker-nvidia"),
+                GpuProcessRole::FullGpu,
+            ),
+            Err(GpuEffectError::SpawnRejected),
+            "another role's posture is never this role's row"
+        );
+        assert_eq!(
+            super::DaemonGpuLifecyclePort::declared_row_template(
+                &view("video-worker"),
+                GpuProcessRole::Video,
+            ),
+            Ok("video-worker")
+        );
+        let mut foreign = worker_row_view([0x33; 16], 7, Some(ResourceStatus::Ready));
+        foreign.spec = b"not-json".to_vec();
+        assert_eq!(
+            super::DaemonGpuLifecyclePort::declared_row_template(&foreign, GpuProcessRole::Video),
+            Err(GpuEffectError::SpawnRejected),
+            "an undecodable row is refused, never read as a posture"
+        );
     }
 
     /// Issue #515: the phase gate (`live_phase` and `resource_value`, which

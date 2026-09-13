@@ -35,7 +35,7 @@ fn worker_allowlists_and_sandbox_shapes_are_closed() {
         },
     )
     .unwrap();
-    assert_eq!(video.template(), "video-worker");
+    assert_eq!(video.template(), "video-worker-nvidia");
     assert_eq!(video.seccomp_class(), "w1-video");
     assert!(!video.user_namespace());
     assert_eq!(
@@ -47,6 +47,17 @@ fn worker_allowlists_and_sandbox_shapes_are_closed() {
             GpuDeviceNode::NvidiaUvm
         ]
     );
+
+    let plain = VideoWorkerSpec::new(
+        &uid,
+        &GpuSettings {
+            video_sidecar: true,
+            ..GpuSettings::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(plain.template(), "video-worker");
+    assert_eq!(plain.device_nodes(), &[GpuDeviceNode::Dri]);
 }
 
 #[test]

@@ -604,12 +604,8 @@ mod tests {
     #[tokio::test]
     async fn prepare_refuses_a_second_claim_for_a_live_operation() {
         let ledger = ledger_with(OWNER_REF, OWNER_UID, 2);
-        assert!(
-            ledger
-                .prepare("operation-a", &generic_claim(OWNER_REF, OWNER_UID, 2))
-                .await
-                .is_ok()
-        );
+        let first = generic_claim(OWNER_REF, OWNER_UID, 2);
+        assert!(ledger.prepare("operation-a", &first).await.is_ok());
         // The same id with a different claim must not replace the live row or
         // hand out a capability bound to a row that does not exist.
         assert!(matches!(
@@ -620,10 +616,9 @@ mod tests {
         ));
         let rows = ledger.authority_operations();
         assert_eq!(rows.len(), 1);
-        assert_eq!(
-            rows[0].store_binding_digest,
-            ledger.authority_binding_digest(&rows[0].claim_digest)
-        );
+        // The live row still carries the first claim: the refused second
+        // prepare neither replaced it nor rebound its digest.
+        assert_eq!(rows[0].claim_digest, claim_digest(&first).expect("claim digest"));
     }
 
     #[tokio::test(flavor = "current_thread")]

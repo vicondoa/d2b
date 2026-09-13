@@ -136,6 +136,20 @@ struct ContractLevel {
     group: String,
     mode: String,
     posture: String,
+    /// Whether the level must exist (`required = true | false`, default
+    /// `true`; ADR 0027). An absent `required = false` level is
+    /// posture-if-present; an absent required level is drift. The live
+    /// validation (`tests/host-integration/state-posture-contract.nix`) reads
+    /// the same field with the same default, so the two consumers cannot
+    /// disagree about what the declaration means.
+    #[serde(default = "required_by_default")]
+    required: bool,
+}
+
+/// The declaration's default for `required`: a level is required unless it
+/// says otherwise.
+fn required_by_default() -> bool {
+    true
 }
 
 /// One `guest-store-view` contract row with its principals and mode resolved
@@ -148,6 +162,8 @@ struct ResolvedLevel {
     mode: u32,
     owner: Uid,
     group: Gid,
+    /// Whether the level must exist for the posture pass to succeed.
+    required: bool,
 }
 
 impl Principals {
@@ -246,6 +262,7 @@ fn contract_store_view_levels(
                 mode,
                 owner: principals.owner_uid,
                 group,
+                required: level.required,
             })
         })
         .collect()
@@ -273,11 +290,48 @@ fn resolved_path(store_root: &Path, level: &ResolvedLevel) -> PathBuf {
     }
 }
 
+/// What a declared level's absence means to one posture pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingLevel {
+    /// The pass runs on a provisioned farm: a declared `required` level that
+    /// is absent is drift (the declaration's default), not a silent no-op.
+    Refuse,
+    /// The pass runs before the provisioning step that creates the levels
+    /// (StoreSync's pre-build pass). A required level that is not there yet is
+    /// reported and skipped; the strict pass after a successful build owns
+    /// presence.
+    Tolerate,
+}
+
+/// Posture the declared `guest-store-view` matrix for one Guest.
+///
+/// A declared `required` level that is absent is refused: the declaration is
+/// normative, and a silent no-op would let the live validation and the
+/// applier read the same declaration differently.
 pub(crate) fn posture_store_view_matrix_paths(
     store_root: &Path,
     vm: &str,
 ) -> Result<(), PostureError> {
-    posture_store_view_matrix_paths_with(store_root, vm, resolve_principals()?)
+    posture_store_view_matrix_paths_with(store_root, vm, resolve_principals()?, MissingLevel::Refuse)
+}
+
+/// [`posture_store_view_matrix_paths`] for StoreSync's pre-build pass.
+///
+/// The pass runs before the build that creates the levels, so a level the
+/// declaration marks `required` may legitimately be absent here (it is on the
+/// very first sync of a farm); absence is logged and skipped, never treated as
+/// drift. Every other caller - including the strict pass the same StoreSync
+/// runs after a successful build - treats it as drift.
+pub(crate) fn posture_store_view_matrix_paths_before_build(
+    store_root: &Path,
+    vm: &str,
+) -> Result<(), PostureError> {
+    posture_store_view_matrix_paths_with(
+        store_root,
+        vm,
+        resolve_principals()?,
+        MissingLevel::Tolerate,
+    )
 }
 
 /// [`posture_store_view_matrix_paths`] with the host principals supplied by
@@ -294,11 +348,12 @@ fn posture_store_view_matrix_paths_with(
     store_root: &Path,
     vm: &str,
     principals: Principals,
+    missing: MissingLevel,
 ) -> Result<(), PostureError> {
     posture_daemon_traverse_ancestors(store_root, principals.daemon_gid)?;
     for level in contract_store_view_levels(&principals, vm)? {
         let path = resolved_path(store_root, &level);
-        posture_existing(&path, level.kind, level.mode, level.owner, level.group)?;
+        posture_existing(&path, &level, missing)?;
     }
     Ok(())
 }
@@ -407,7 +462,7 @@ pub(crate) fn plant_live_marker_with_matrix_posture(
     if let Ok(dir) = std::fs::File::open(&live) {
         let _ = dir.sync_all();
     }
-    posture_existing(&marker, level.kind, level.mode, level.owner, level.group)
+    posture_existing(&marker, &level, MissingLevel::Refuse)
 }
 
 /// Posture the broker's host-only integrity record
@@ -415,25 +470,47 @@ pub(crate) fn plant_live_marker_with_matrix_posture(
 pub(crate) fn posture_host_only_file(path: &Path) -> Result<(), PostureError> {
     let principals = resolve_principals()?;
     let level = contract_store_view_level(&principals, "state/integrity-unknown.json", "")?;
-    posture_existing(path, level.kind, level.mode, level.owner, level.group)
+    posture_existing(path, &level, MissingLevel::Refuse)
 }
 
+/// Stamp one declared level's posture on an existing path.
+///
+/// Absence follows the declaration: a `required = false` row is
+/// posture-if-present (the live marker before its first plant, the VM-level
+/// integrity record), while a missing `required` row is drift - unless the
+/// pass is the bring-up pass that runs before the level is created
+/// ([`MissingLevel::Tolerate`]).
 fn posture_existing(
     path: &Path,
-    kind: PathKind,
-    mode: u32,
-    uid: Uid,
-    gid: Gid,
+    level: &ResolvedLevel,
+    missing: MissingLevel,
 ) -> Result<(), PostureError> {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            if !level.required {
+                return Ok(());
+            }
+            return match missing {
+                MissingLevel::Refuse => Err(io_error(
+                    path,
+                    "declared required level is missing".to_owned(),
+                )),
+                MissingLevel::Tolerate => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        "state-posture: declared required level is absent before provisioning",
+                    );
+                    Ok(())
+                }
+            };
+        }
         Err(err) => return Err(io_error(path, format!("stat: {err}"))),
     };
     if meta.file_type().is_symlink() {
         return Err(io_error(path, "leaf is a symlink".to_owned()));
     }
-    match kind {
+    match level.kind {
         PathKind::Dir if !meta.is_dir() => {
             return Err(io_error(path, "expected directory".to_owned()));
         }
@@ -442,9 +519,10 @@ fn posture_existing(
         }
         _ => {}
     }
-    chown(path, Some(uid), Some(gid)).map_err(|err| io_error(path, format!("chown: {err}")))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-        .map_err(|err| io_error(path, format!("chmod {mode:o}: {err}")))?;
+    chown(path, Some(level.owner), Some(level.group))
+        .map_err(|err| io_error(path, format!("chown: {err}")))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(level.mode))
+        .map_err(|err| io_error(path, format!("chmod {:o}: {err}", level.mode)))?;
     Ok(())
 }
 
@@ -487,6 +565,29 @@ mod tests {
         farm.parent()
             .expect("the farm root's parent is the per-VM state dir")
             .to_path_buf()
+    }
+
+    /// Materialize every declared `guest-store-view` row under `farm`, the
+    /// shape a provisioned farm has. The strict posture pass refuses a
+    /// declared `required` level that is absent, so a test that postures a
+    /// farm must either provision the matrix first (this helper) or use the
+    /// bring-up pass that tolerates levels it is about to create.
+    fn materialize_declared_rows(farm: &Path, vm: &str) {
+        for level in
+            contract_store_view_levels(&test_principals(), vm).expect("contract rows resolve")
+        {
+            let path = resolved_path(farm, &level);
+            match level.kind {
+                PathKind::Dir => std::fs::create_dir_all(&path),
+                PathKind::File => {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent).expect("declared file parent");
+                    }
+                    std::fs::write(&path, b"")
+                }
+            }
+            .unwrap_or_else(|err| panic!("materialize declared row {}: {err}", path.display()));
+        }
     }
 
     /// The principals `cfg(test)` resolves: every principal is the test
@@ -535,6 +636,7 @@ mod tests {
         for ancestor in &ancestors {
             set_mode(ancestor, 0o700);
         }
+        materialize_declared_rows(&farm, "acceptance-guest");
 
         posture_store_view_matrix_paths(&farm, "acceptance-guest").expect("posture");
 
@@ -604,6 +706,7 @@ mod tests {
         set_mode(&guests_dir, 0o750);
         set_mode(&zone_dir, 0o755);
         set_mode(&zones_dir, 0o700);
+        materialize_declared_rows(&farm, "acceptance-guest");
 
         posture_store_view_matrix_paths(&farm, "acceptance-guest").expect("posture");
 
@@ -632,6 +735,7 @@ mod tests {
             set_mode(ancestor, 0o755);
         }
         let matrix_gid = gid_of(&matrix);
+        materialize_declared_rows(&farm, "acceptance-guest");
 
         posture_store_view_matrix_paths_with(
             &farm,
@@ -640,6 +744,7 @@ mod tests {
                 daemon_gid: foreign_daemon_gid(),
                 ..test_principals()
             },
+            MissingLevel::Refuse,
         )
         .expect("posture");
 
@@ -653,6 +758,37 @@ mod tests {
             0o3770,
             "the matrix root must keep `03770`"
         );
+    }
+
+    /// The declaration's `required` field means the same thing to this applier
+    /// as it does to the live validation: a declared `required` level that is
+    /// absent is drift, while an absent optional row (the live marker before
+    /// its first plant, the VM-level integrity record) is posture-if-present.
+    #[test]
+    fn missing_required_levels_are_drift_and_optional_levels_are_not() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (farm, _ancestors) = farm_chain(dir.path());
+        // Only the optional rows exist; every required level is absent.
+        let marker = farm.join("live").join(".d2b-marker-acceptance-guest");
+        let integrity = farm.join("state").join("integrity-unknown.json");
+        for path in [&marker, &integrity] {
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
+            std::fs::write(path, b"").expect("write optional row");
+        }
+
+        let refusal = posture_store_view_matrix_paths(&farm, "acceptance-guest")
+            .expect_err("an absent declared required level is drift");
+        assert!(
+            refusal.detail.contains("declared required level is missing"),
+            "{refusal}"
+        );
+
+        posture_store_view_matrix_paths_before_build(&farm, "acceptance-guest")
+            .expect("the bring-up pass tolerates the levels the build creates");
+
+        // The optional rows were still postured by both passes; the required
+        // levels are simply not there yet.
+        assert!(mode_of(&marker) & 0o777 != 0);
     }
 
     /// The posture applied to every materialized contract row equals the row

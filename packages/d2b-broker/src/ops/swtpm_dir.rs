@@ -294,13 +294,10 @@ pub fn resource_backed_identity(
     if device_ref.resource_type().as_str() != "Device" {
         return None;
     }
-    let zone = resolver
-        .zone_resource_bundle_zones()
-        .ok()?
-        .into_iter()
-        .find(|zone| resolver.zone_uid(zone).as_ref() == Some(zone_uid))?;
-    let guest = device_guest_owner(
-        resolver.zone_resource_bundle_bytes(zone.as_str())?,
+    let (_zone, bundle_bytes) =
+        crate::ops::device_worker::zone_bundle_for_uid(resolver, zone_uid)?;
+    let guest = crate::ops::device_worker::device_guest_owner(
+        bundle_bytes,
         device_ref.name().as_str(),
     )?;
     let state_root = storage_root(resolver, &format!("path:swtpm-state:{guest}"))?;
@@ -318,30 +315,6 @@ pub fn resource_backed_identity(
     })
 }
 
-/// `Device.metadata.ownerRef == Guest/<guest>` for one Device row of a
-/// verified Zone resource bundle.
-fn device_guest_owner(bundle_bytes: &[u8], device: &str) -> Option<String> {
-    let bundle: serde_json::Value = serde_json::from_slice(bundle_bytes).ok()?;
-    for resource in bundle.get("resources")?.as_array()? {
-        if resource.get("type").and_then(serde_json::Value::as_str) != Some("Device") {
-            continue;
-        }
-        let Some(metadata) = resource.get("metadata") else {
-            continue;
-        };
-        if metadata.get("name").and_then(serde_json::Value::as_str) != Some(device) {
-            continue;
-        }
-        let owner = metadata
-            .get("ownerRef")
-            .and_then(serde_json::Value::as_str)?;
-        return owner
-            .strip_prefix("Guest/")
-            .map(str::to_owned)
-            .filter(|guest| !guest.is_empty());
-    }
-    None
-}
 
 /// The trusted TPM state row of one zone-native Guest, when the verified
 /// storage contract carries that Guest's `path:swtpm-state:<guest>` row: the
@@ -379,7 +352,7 @@ fn storage_path(spec: &StoragePathSpec) -> Option<PathBuf> {
 /// The TPM Provider's own state Volume naming for one Device
 /// (`device_<32hex>-tpm-state`), so an argv can be bound to the exact
 /// directory the controller provisions.
-fn state_volume_name(device_uid: &ResourceUid) -> String {
+pub(crate) fn state_volume_name(device_uid: &ResourceUid) -> String {
     let short: String = device_uid
         .as_str()
         .bytes()
@@ -599,17 +572,6 @@ pub fn derive_paths(plan: &SpawnRunnerPlan) -> Result<SwtpmDirPaths, &'static st
         per_vm_root,
         runtime_dir,
     })
-}
-
-fn parse_vm_from_subtree(subtree: &str) -> Option<String> {
-    let normalized = subtree
-        .strip_prefix("d2b.slice/")
-        .or_else(|| subtree.strip_prefix("d2b/"))?;
-    let vm = normalized.split('/').find(|s| !s.is_empty())?;
-    if vm.is_empty() || vm.contains('\0') {
-        return None;
-    }
-    Some(vm.trim_end_matches(".scope").to_owned())
 }
 
 /// Provision + harden the persistent swtpm state dir. Returns a
@@ -2047,13 +2009,11 @@ mod tests {
             ]
         });
         let bytes = serde_json::to_vec(&bundle).unwrap();
-        assert_eq!(
-            device_guest_owner(&bytes, "tpm0").as_deref(),
-            Some("acceptance-guest")
-        );
-        assert_eq!(device_guest_owner(&bytes, "gpu1"), None);
-        assert_eq!(device_guest_owner(&bytes, "missing"), None);
-        assert_eq!(device_guest_owner(b"not json", "tpm0"), None);
+        let owner = crate::ops::device_worker::device_guest_owner;
+        assert_eq!(owner(&bytes, "tpm0").as_deref(), Some("acceptance-guest"));
+        assert_eq!(owner(&bytes, "gpu1"), None);
+        assert_eq!(owner(&bytes, "missing"), None);
+        assert_eq!(owner(b"not json", "tpm0"), None);
     }
 
     #[test]

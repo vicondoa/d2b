@@ -30,7 +30,7 @@ deny-unknown settings:
 | --- | --- |
 | `renderNodeOnly` | shared arbitration is valid only when true |
 | `videoSidecar` | starts the separate video worker; requires full-GPU mode |
-| `videoNvidiaDecode` | valid only with `videoSidecar` |
+| `videoNvidiaDecode` | valid only with `videoSidecar`; selects the `video-worker-nvidia` worker template, whose closed posture binds `/dev/nvidiactl`, `/dev/nvidia-uvm`, and `/dev/nvidia0` (single-GPU default) alongside `/dev/dri/renderD128` |
 | `contextTypes` | 1-3 distinct values from `virgl`, `virgl2`, `cross-domain` |
 | `displays` | at most eight `{ hidden }` entries |
 | `egl`, `vulkan`, `crossDomainTrusted`, `virglVideo` | bounded booleans; `virglVideo` conflicts with `videoSidecar` |
@@ -56,8 +56,9 @@ The controller starts the GPU worker first and starts video only after that
 worker is Ready.
 
 The declared worker rows are `Process/gpu-<device>` (template `gpu-worker`
-or `gpu-render-node`) and `Process/video-<device>` (template
-`video-worker`), named after the Device resource that owns them. The signed
+or `gpu-render-node`) and `Process/video-<device>` (template `video-worker`,
+or `video-worker-nvidia` when `videoNvidiaDecode` is set), named after the
+Device resource that owns them. The signed
 component descriptor selects the crosvm and video-decoder artifacts. GPU and
 video finalization is ordered video first, then GPU/render-node.
 

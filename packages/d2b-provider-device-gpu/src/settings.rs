@@ -32,7 +32,12 @@ pub struct GpuSettings {
     pub render_node_only: bool,
     /// Spawn the separate video decoder worker.
     pub video_sidecar: bool,
-    /// Expose the bounded NVIDIA decode devices to video.
+    /// Expose the reviewed NVIDIA decode devices to the video sidecar.
+    ///
+    /// Selects the closed `video-worker-nvidia` launch posture
+    /// (`d2b_core::bundle_resolver::device_worker_posture`): the launch's
+    /// device binds come from that posture alone, so this option selects the
+    /// node set rather than granting it.
     pub video_nvidia_decode: bool,
     /// Requested closed GPU context classes.
     pub context_types: Vec<ContextType>,

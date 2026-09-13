@@ -99,7 +99,29 @@ let
 
   allRows = rows ++ generatedRows;
 
-  aclAssertions = row: index: field: grants:
+  # The kernel mirrors the named-entry ACL mask into the file's group bits, so
+  # a grant wider than the declared mode's group class would silently widen
+  # the mode.  Every granted character must already be in the group class.
+  permissionsWithinGroupClass = mode: permissions:
+    let
+      groupDigit = builtins.substring 2 1 mode;
+      groupClass =
+        if groupDigit == "0" then ""
+        else if groupDigit == "1" then "x"
+        else if groupDigit == "2" then "w"
+        else if groupDigit == "3" then "wx"
+        else if groupDigit == "4" then "r"
+        else if groupDigit == "5" then "rx"
+        else if groupDigit == "6" then "rw"
+        else if groupDigit == "7" then "rwx"
+        else "";
+    in
+    builtins.match modePattern mode != null
+    && builtins.isString permissions
+    && lib.all (character: lib.hasInfix character groupClass)
+      (lib.stringToCharacters permissions);
+
+  aclAssertions = row: index: mode: field: grants:
     lib.flatten (lib.imap0
       (grantIndex: grant:
         let path = "${row.path}.spec.layout.${toString index}.${field}.${toString grantIndex}";
@@ -112,6 +134,10 @@ let
           {
             assertion = builtins.match "^[rwx]{1,3}$" (grant.permissions or "") != null;
             message = "${path}.permissions must be a POSIX rwx string.";
+          }
+          {
+            assertion = permissionsWithinGroupClass mode (grant.permissions or "");
+            message = "${path}.permissions exceed the entry's mode group class; the ACL mask is mirrored into the file's group bits, so the declared mode must cover every grant.";
           }
         ])
       grants);
@@ -184,8 +210,8 @@ let
               message = "${path}.foreignChildPolicy is invalid.";
             }
           ]
-          ++ aclAssertions row index "accessAcl" (entry.accessAcl or [ ])
-          ++ aclAssertions row index "defaultAcl" (entry.defaultAcl or [ ]))
+          ++ aclAssertions row index (attrOr entry "mode" "") "accessAcl" (entry.accessAcl or [ ])
+          ++ aclAssertions row index (attrOr entry "mode" "") "defaultAcl" (entry.defaultAcl or [ ]))
         layout);
     in [
       {

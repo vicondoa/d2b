@@ -499,15 +499,35 @@ async fn device_worker_vm(
 ///
 /// The name alone is not the authority - [`d2b_core::bundle_resolver::device_worker_posture`]
 /// still fences the owning Device Provider - but the daemon composes only
-/// these four argv shapes, so no other template ever receives arguments.
+/// these argv shapes, so no other template ever receives arguments. The video
+/// sidecar's two closed postures (plain vaapi, NVIDIA decode) share the same
+/// argv shape; the template the declared row carries is the posture, bound
+/// by the broker's own posture table.
 fn device_worker_family(template: &str) -> Option<DeviceWorkerFamily> {
     match template {
         "swtpm-socket" => Some(DeviceWorkerFamily::Swtpm),
         "swtpm-init-flush" => Some(DeviceWorkerFamily::SwtpmFlush),
         "gpu-worker" | "gpu-render-node" => Some(DeviceWorkerFamily::Gpu),
-        "video-worker" => Some(DeviceWorkerFamily::Video),
+        "video-worker" | "video-worker-nvidia" => Some(DeviceWorkerFamily::Video),
         _ => None,
     }
+}
+
+/// The video sidecar posture fence: the declared row's template and the
+/// owning Device's `videoNvidiaDecode` setting are one decision, so they must
+/// agree. The NVIDIA template with the setting off (a stale or hand-authored
+/// row) and the plain template with the setting on (the setting silently
+/// dropped - the regression this fence exists for) both refuse by name. The
+/// posture itself - the bound device nodes - comes from the row's template
+/// through the broker's posture table, never from the setting.
+fn video_nvidia_posture(
+    template: &str,
+    settings: &d2b_provider_device_gpu::GpuSettings,
+) -> Result<(), &'static str> {
+    if settings.video_nvidia_decode != (template == "video-worker-nvidia") {
+        return Err("device-worker-nvidia-posture-mismatch");
+    }
+    Ok(())
 }
 
 /// The host Wayland socket the GPU sidecar renders into.
@@ -834,15 +854,29 @@ impl ProductionProcessDriverEffects {
         else {
             return Err("device-worker-device-row-missing");
         };
-        let settings = serde_json::from_slice::<ResourceSpec>(&row.spec)
-            .ok()
-            .and_then(|envelope| {
-                let provider = envelope.provider()?;
-                let bytes = provider.settings().to_canonical_bytes();
-                serde_json::from_slice::<d2b_provider_device_gpu::GpuSettings>(&bytes).ok()
-            });
-        Ok(settings.unwrap_or_default())
+        decode_device_gpu_settings(&row.spec)
     }
+}
+
+/// Decode the GPU settings declared by one Device row's stored spec.
+///
+/// Only an absent Provider extension decodes to the Provider's bounded
+/// default. A present settings payload that does not decode as the closed
+/// `device-gpu.d2bus.org` extension refuses with its own code instead: folding
+/// it into the default made an undecodable declaration indistinguishable from
+/// a Device that declares nothing, and the default's context classes
+/// (including `CrossDomain`) are wider than anything the Device declared.
+fn decode_device_gpu_settings(
+    stored_spec: &[u8],
+) -> Result<d2b_provider_device_gpu::GpuSettings, &'static str> {
+    let envelope = serde_json::from_slice::<ResourceSpec>(stored_spec)
+        .map_err(|_| "device-worker-device-row-unreadable")?;
+    let Some(provider) = envelope.provider() else {
+        return Ok(d2b_provider_device_gpu::GpuSettings::default());
+    };
+    let settings = provider.settings().to_canonical_bytes();
+    serde_json::from_slice::<d2b_provider_device_gpu::GpuSettings>(&settings)
+        .map_err(|_| "device-worker-gpu-settings-invalid")
 }
 
 /// The owning Guest's durable uid for a row whose own linkage is absent.
@@ -1260,12 +1294,22 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
                     },
                 }))
             }
-            DeviceWorkerFamily::Video => DeviceWorkerLaunch::Video(Box::new(VideoWorkerParams {
-                binary_path: intent.binary_path.clone(),
-                vm_name: vm_name.clone(),
-                socket_path: video_runtime_socket(&socket_runtime_dir, &vm_name)
-                    .ok_or("device-worker-video-socket-unresolved")?,
-            })),
+            DeviceWorkerFamily::Video => {
+                // The declared row's template and the owning Device's
+                // `videoNvidiaDecode` setting are one decision (the posture
+                // binds the NVIDIA nodes only through the
+                // `video-worker-nvidia` template), so a disagreement is a
+                // refusal rather than a launch where the setting is silently
+                // ignored.
+                let settings = self.device_gpu_settings(ctx, &owner_key).await?;
+                video_nvidia_posture(template, &settings)?;
+                DeviceWorkerLaunch::Video(Box::new(VideoWorkerParams {
+                    binary_path: intent.binary_path.clone(),
+                    vm_name: vm_name.clone(),
+                    socket_path: video_runtime_socket(&socket_runtime_dir, &vm_name)
+                        .ok_or("device-worker-video-socket-unresolved")?,
+                }))
+            }
         };
         Ok(Some(params))
     }
@@ -1832,11 +1876,19 @@ impl ProcessDriver {
         // parameters into the launch: the derivation needs the trusted bundle
         // and the daemon runtime paths, so it stays behind the provider seam
         // and this pass attaches what it derived.
-        identity.device_worker_launch = self
-            .effects
-            .device_worker_launch(ctx, &identity, &spec)
-            .await
-            .map_err(|code| self.resolution_refused(op, code))?;
+        //
+        // Only the launch consumes them, and only a launch can refuse for
+        // their inputs (an unbound Wayland socket, an unresolvable state
+        // dir). The delete op stops and finalizes an identity and must never
+        // depend on launch-only inputs: an identity error there converges the
+        // delete while the launched process keeps running unowned.
+        if op != DriverOp::Delete {
+            identity.device_worker_launch = self
+                .effects
+                .device_worker_launch(ctx, &identity, &spec)
+                .await
+                .map_err(|code| self.resolution_refused(op, code))?;
+        }
         Ok(identity)
     }
 
@@ -2203,7 +2255,7 @@ impl ProcessDriver {
     /// `process_restart_allowed`): the restart policy decides between one
     /// budgeted restart, requeued at the policy backoff so the next pass
     /// re-enters the adoption path and relaunches, and the terminal
-    /// `process-exited` the row reports from then on.
+    /// `process-exited` refusal the row reports from then on.
     fn durable_exit(
         &mut self,
         ctx: &mut ResourceContext,
@@ -2212,12 +2264,29 @@ impl ProcessDriver {
     ) -> Result<ReconcileOutcome, ProcessDriverError> {
         if !self.budget.allows(spec) {
             // No restart is available (policy class `never`, or the ceiling
-            // is reached): the exit is the row's terminal reading. The row
-            // stays under observation, so a later trigger re-reports the exit
-            // instead of reading the row as a first sight and launching a
-            // process the policy forbade.
-            ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-exited" });
-            return Ok(ReconcileOutcome::Satisfied);
+            // is reached): the exit is the row's terminal reading, and the
+            // pass refuses instead of reporting a satisfied row. A satisfied
+            // pass publishes wire `Ready`, and a phase gate mints identities
+            // from that phase (`DaemonGpuLifecyclePort::declared_worker`), so
+            // a row whose process is gone and whose restart budget cannot
+            // authorize another launch must never read Ready. The refusal is
+            // the spent restart budget, terminal; the raw exit spelling rides
+            // the failure's note. The row stays under observation, so a later
+            // trigger re-reports the exit instead of reading the row as a
+            // first sight and launching a process the policy forbade.
+            ctx.set_status(ProcessDriverStatus::Failed { code: "process-exited" });
+            return Err(
+                self.error(ProcessDriverErrorKind::StartExhausted, DriverOp::Reconcile)
+                    .with_detail(
+                        FailureDetail::at("observe/liveness")
+                            .comparison(FailureComparison::new(
+                                "restart.budget",
+                                "restarts available",
+                                "exhausted",
+                            ))
+                            .with_note("process-exited"),
+                    ),
+            );
         }
         self.budget.consume_restart();
         let restart_count = self.budget.count();
@@ -2863,6 +2932,9 @@ mod tests {
         launch: Result<ProcessIdentityDigest, String>,
         /// Whether the fake reports a live retained identity.
         active: bool,
+        /// When set, the declared Device-worker parameter derivation refuses
+        /// with this named code (the launch-only refusal shape).
+        device_worker_launch: Option<&'static str>,
     }
 
     impl Default for FakeEffectsConfig {
@@ -2873,6 +2945,7 @@ mod tests {
                 liveness: VecDeque::new(),
                 launch: Ok(ProcessIdentityDigest::from_bytes([0x51; 32])),
                 active: true,
+                device_worker_launch: None,
             }
         }
     }
@@ -3077,6 +3150,23 @@ mod tests {
         ) -> Result<(), String> {
             self.calls.lock().push("stop-stale");
             Ok(())
+        }
+
+        async fn device_worker_launch(
+            &self,
+            _ctx: &mut ResourceContext,
+            _identity: &super::ProcessResourceIdentity,
+            spec: &super::ProcessFamilySpec,
+        ) -> Result<Option<crate::process_provider_runtime::DeviceWorkerLaunch>, &'static str> {
+            let template = spec.execution().template().as_str();
+            if super::device_worker_family(template).is_none() {
+                return Ok(None);
+            }
+            self.calls.lock().push("device-worker-launch");
+            match self.config.lock().device_worker_launch {
+                Some(code) => Err(code),
+                None => Ok(None),
+            }
         }
 
         async fn finalize(&self, _identity: &super::ProcessResourceIdentity) -> Result<(), String> {
@@ -3866,6 +3956,92 @@ mod tests {
             device_worker_vm(&mut f.ctx, &device_key).await,
             Err("device-worker-device-row-unreadable"),
             "an unanswerable plane is never read as absence"
+        );
+    }
+
+    /// A Device that declares GPU settings keeps them, a Device that declares
+    /// none keeps the Provider's bounded default, and a present payload that
+    /// does not decode refuses with its own code instead of silently becoming
+    /// the default - whose `CrossDomain` context class the Device never
+    /// declared.
+    #[test]
+    fn device_gpu_settings_refuse_an_undecodable_declaration() {
+        let declared = br#"{"providerRef":"Provider/device-gpu","provider":{"schemaId":"device-gpu.d2bus.org/Device/spec","schemaVersion":"1.0","settings":{"contextTypes":["virgl"],"displays":[{"hidden":false}],"egl":false,"vulkan":false}}}"#;
+        let settings =
+            super::decode_device_gpu_settings(declared).expect("declared settings decode");
+        assert_eq!(
+            settings.context_types,
+            vec![d2b_provider_device_gpu::ContextType::Virgl]
+        );
+        assert!(!settings.egl, "the declared setting wins over the default");
+        assert!(
+            super::decode_device_gpu_settings(br#"{"providerRef":"Provider/device-gpu"}"#)
+                .expect("absent settings keep the default")
+                == d2b_provider_device_gpu::GpuSettings::default(),
+            "a Device that declares nothing keeps the Provider default"
+        );
+        let undecodable = br#"{"providerRef":"Provider/device-gpu","provider":{"schemaId":"device-gpu.d2bus.org/Device/spec","schemaVersion":"1.0","settings":{"contextTypes":["bogus"]}}}"#;
+        assert_eq!(
+            super::decode_device_gpu_settings(undecodable),
+            Err("device-worker-gpu-settings-invalid"),
+            "an undecodable declaration is never read as absent"
+        );
+        assert_eq!(
+            super::decode_device_gpu_settings(b"{not-json"),
+            Err("device-worker-device-row-unreadable")
+        );
+    }
+
+    /// The NVIDIA decode posture is the same worker family and argv shape as
+    /// the plain video sidecar: the posture difference is the declared
+    /// template the broker's posture table binds, so the daemon must accept
+    /// both names for the video family.
+    #[test]
+    fn device_worker_family_accepts_both_video_postures() {
+        for template in ["video-worker", "video-worker-nvidia"] {
+            assert_eq!(
+                super::device_worker_family(template),
+                Some(super::DeviceWorkerFamily::Video),
+                "{template} is a video sidecar posture"
+            );
+        }
+        assert_eq!(
+            super::device_worker_family("gpu-worker"),
+            Some(super::DeviceWorkerFamily::Gpu)
+        );
+        assert_eq!(
+            super::device_worker_family("swtpm-socket"),
+            Some(super::DeviceWorkerFamily::Swtpm)
+        );
+        assert_eq!(super::device_worker_family("reaction"), None);
+    }
+
+    /// The owning Device's `videoNvidiaDecode` setting and the declared
+    /// video row's template are one decision: the NVIDIA posture binds its
+    /// device nodes only through the `video-worker-nvidia` template, so each
+    /// disagreement refuses by name instead of launching a sidecar where the
+    /// setting (on the plain template) or the template (on a Device that
+    /// turned the setting off) is silently ignored.
+    #[test]
+    fn video_nvidia_posture_refuses_a_setting_template_mismatch() {
+        let mut settings = d2b_provider_device_gpu::GpuSettings::default();
+        assert!(!settings.video_nvidia_decode, "the default posture is plain");
+        assert_eq!(super::video_nvidia_posture("video-worker", &settings), Ok(()));
+        assert_eq!(
+            super::video_nvidia_posture("video-worker-nvidia", &settings),
+            Err("device-worker-nvidia-posture-mismatch"),
+            "the NVIDIA template without its setting is a refusal"
+        );
+
+        settings.video_nvidia_decode = true;
+        assert_eq!(
+            super::video_nvidia_posture("video-worker-nvidia", &settings),
+            Ok(())
+        );
+        assert_eq!(
+            super::video_nvidia_posture("video-worker", &settings),
+            Err("device-worker-nvidia-posture-mismatch"),
+            "the setting on the plain template is never a silent no-op"
         );
     }
 
@@ -4700,6 +4876,39 @@ mod tests {
         assert_eq!(failure.op(), DriverOp::Delete);
     }
 
+    /// A declared Device-owned worker row deletes through its exact live
+    /// identity even when the launch-only parameter derivation refuses (an
+    /// unbound Wayland socket, an unresolvable state dir). The derivation
+    /// exists for the launch ticket, so a delete that depended on it
+    /// converged without stopping anything - retiring the row while the
+    /// process it launched kept running unowned.
+    #[tokio::test]
+    async fn delete_stops_a_device_worker_even_when_the_launch_parameters_refuse() {
+        let mut row = test_row();
+        row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"gpu-worker","drainTimeout":"250ms"}"#
+            .to_vec();
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
+            device_worker_launch: Some("device-worker-state-dir-unresolved"),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture_owned_by(
+            row,
+            Arc::new(DeadManager),
+            Some(ResourceKey::new("work", "Device", "corp-gpu")),
+        );
+        let mut driver = driver(fake.clone()).await;
+
+        driver.delete(&mut f.ctx).await.expect("delete converges");
+        assert_eq!(
+            fake.call_order(),
+            ["adopt", "stop", "finalize"],
+            "the delete never derives launch-only parameters"
+        );
+        assert_eq!(fake.stop_calls().len(), 1, "the live identity is stopped");
+        assert_eq!(fake.finalize_calls(), 1, "the exact authority is finalized");
+    }
+
     // -- retryable reconcile failure -> exactly one requeue with backoff -----
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
@@ -4900,7 +5109,11 @@ mod tests {
     /// The same observation edge never laundered the exit into a first sight:
     /// when the restart policy forbids a restart, the exit is the row's
     /// terminal reading, and a later trigger reports the exit again instead of
-    /// launching a process the policy forbade.
+    /// launching a process the policy forbade. The pass refuses (terminal,
+    /// spent restart budget) instead of reporting a satisfied row: a
+    /// satisfied pass publishes wire `Ready`, and a phase gate such as
+    /// `DaemonGpuLifecyclePort::declared_worker` mints the worker identity
+    /// from that phase over a process that no longer exists.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn durable_exit_under_a_never_policy_is_terminal_and_never_relaunches() {
         let policy = r#"{"class":"never","backoffBase":"1s","backoffMax":"60s","backoffMultiplierMilli":2000,"resetAfter":"300s"}"#;
@@ -4923,13 +5136,20 @@ mod tests {
             ProcessDriverStatus::Ready { adopted: true }
         );
 
-        assert_eq!(
-            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
-            ReconcileOutcome::Satisfied
-        );
+        let failure = driver.reconcile(&mut f.ctx).await.unwrap_err();
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.op(), DriverOp::Reconcile);
+        assert_eq!(failure.kind().code(), "process-start-budget-exhausted");
+        assert_eq!(failure.stage(), "observe/liveness");
+        assert!(!failure.defers(), "a spent restart budget schedules no retry");
         assert_eq!(
             *f.ctx.status::<ProcessDriverStatus>().expect("status"),
-            ProcessDriverStatus::Succeeded { code: "process-exited" }
+            ProcessDriverStatus::Failed { code: "process-exited" }
+        );
+        assert_eq!(
+            d2b_resource_runtime::ResourceStatus::Failed(failure.clone()).wire_phase(),
+            "Failed",
+            "an exit no restart can follow is never a readiness claim"
         );
         assert_eq!(driver.restart_count(), 0, "a refused restart consumes nothing");
         assert_eq!(
@@ -4937,16 +5157,11 @@ mod tests {
             [super::PROCESS_RESYNC],
             "a terminal exit arms no observation cadence"
         );
+        assert!(fake.launch_calls().is_empty(), "no relaunch past the policy");
 
         // A later trigger re-observes the exit; it never becomes a launch.
-        assert_eq!(
-            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
-            ReconcileOutcome::Satisfied
-        );
-        assert_eq!(
-            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
-            ProcessDriverStatus::Succeeded { code: "process-exited" }
-        );
+        let failure = driver.reconcile(&mut f.ctx).await.unwrap_err();
+        assert_eq!(failure.kind().code(), "process-start-budget-exhausted");
         assert!(fake.launch_calls().is_empty(), "no relaunch past the policy");
     }
 

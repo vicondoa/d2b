@@ -1465,6 +1465,26 @@ fn merge_manager_rows(resources: &mut Vec<StoredResource>, manager_rows: Vec<Sto
     }
 }
 
+/// The child-relist owner fence (issue #507).
+///
+/// `RelistOwnedChildren` derives the durable owner filter from the request's
+/// `guest_ref`, but the manager leg of [`CloudHypervisorResourceSession::list_stored`]
+/// is scoped to this session's own owner: a session for Guest A sending
+/// `guest_ref = Guest/B` would answer with A's manager rows for B's request
+/// (and B's manager-only rows would be silently dropped). The request's owner
+/// must therefore be the plane owner, exactly the fence the `UpdateSpec` arm
+/// applies before its manager write. A session with no published plane has no
+/// manager leg, so the durable leg's own `guest_ref`-derived filter stands.
+fn fence_relist_owner(
+    plane_owner: Option<&ResourceRef>,
+    guest_ref: &ResourceRef,
+) -> Result<(), CloudHypervisorResourceApiError> {
+    match plane_owner {
+        Some(owner) if owner != guest_ref => Err(CloudHypervisorResourceApiError::Conflict),
+        _ => Ok(()),
+    }
+}
+
 /// Whether one registered session table entry is a live session of the given
 /// Guest identity.
 fn is_live_guest_identity_session(
@@ -2017,6 +2037,12 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 guest_ref,
                 expected_refs,
             } => {
+                fence_relist_owner(
+                    self.plane_children
+                        .as_ref()
+                        .map(PlaneChildMutations::owner_ref),
+                    &guest_ref,
+                )?;
                 let owner = self
                     .get_stored(&guest_ref, "cloud-hypervisor-owner-fence")
                     .await?;
@@ -13484,6 +13510,30 @@ mod tests {
                 .iter()
                 .all(|row| row.revision == ZoneRevision::new(2)),
             "the manager rendering must win where both planes hold the reference",
+        );
+    }
+
+    /// The child relist's owner fence: the request's `guest_ref` scopes both
+    /// legs, but the manager leg is scoped to this session's own owner, so a
+    /// session for Guest A asking for Guest B used to be answered with A's
+    /// manager rows while B's manager-only rows were dropped. The request's
+    /// owner must be the plane owner; a session with no published plane keeps
+    /// the durable leg's own `guest_ref` filter.
+    #[test]
+    fn child_relist_fences_the_request_owner_against_the_plane_owner() {
+        let owner = ResourceRef::parse("Guest/acceptance-guest").expect("owner ref");
+        let other = ResourceRef::parse("Guest/other-guest").expect("other ref");
+
+        assert_eq!(fence_relist_owner(Some(&owner), &owner), Ok(()));
+        assert_eq!(
+            fence_relist_owner(Some(&owner), &other),
+            Err(CloudHypervisorResourceApiError::Conflict),
+            "a session for another Guest never answers a foreign relist"
+        );
+        assert_eq!(
+            fence_relist_owner(None, &other),
+            Ok(()),
+            "no published plane: the durable leg's own owner filter stands"
         );
     }
 

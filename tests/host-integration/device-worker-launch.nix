@@ -993,13 +993,16 @@ pkgs.testers.runNixOSTest {
         + _json.dumps(observed, sort_keys=True),
     )
     for row in flat:
-        # The refusal must name itself: the closed driver failure kind and the
-        # refined stage, never a bare failure. The fixture asserts the shape;
-        # the report records the exact code and note the run produced.
+        # The refusal is the closed classification the plan documents: the
+        # restart ceiling makes a persistently refused launch terminal as
+        # `process-start-budget-exhausted` at the launch stage
+        # (`reconcile/launch`), never Ready and never a bare failure.
         failure = (row["resource"] or {}).get("driverFailure") or {}
         check(
-            failure.get("code") and failure.get("stage"),
-            "the GPU/video refusal must name its failure kind and stage: "
+            failure.get("code") == "process-start-budget-exhausted"
+            and failure.get("stage") == "reconcile/launch",
+            "the GPU/video refusal must be the budget-exhausted launch refusal "
+            "(process-start-budget-exhausted at reconcile/launch): "
             + _json.dumps(row, sort_keys=True),
         )
     print(

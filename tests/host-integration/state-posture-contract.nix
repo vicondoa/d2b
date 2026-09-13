@@ -462,20 +462,83 @@ pkgs.testers.runNixOSTest {
         owner, group, mode = output.split()
         return owner, group, mode
 
+    # Observed ACL entries per level, cached for the whole fixture: the
+    # spawn-preflight carve-out below is structural (a worker's ancestor
+    # traversal entries are expected because of its deeper leaf grant), so it
+    # cannot be decided one level at a time.
+    observed_acls = {}
+
     def acl_entries(path):
-        output = machine.succeed(
-            "getfacl -cp " + _shlex.quote(path) + " 2>/dev/null || true"
-        )
-        entries = set()
-        for line in output.splitlines():
-            parts = line.strip().split(":")
-            if len(parts) != 3:
-                continue
-            kind, name, permissions = parts
-            short = {"user": "u", "group": "g", "other": "o", "mask": "m"}.get(kind)
-            if short is not None:
-                entries.add(short + ":" + name + ":" + permissions)
-        return entries
+        if path not in observed_acls:
+            output = machine.succeed(
+                "getfacl -cp " + _shlex.quote(path) + " 2>/dev/null || true"
+            )
+            entries = set()
+            for line in output.splitlines():
+                parts = line.strip().split(":")
+                if len(parts) != 3:
+                    continue
+                kind, name, permissions = parts
+                short = {"user": "u", "group": "g", "other": "o", "mask": "m"}.get(kind)
+                if short is not None:
+                    entries.add(short + ":" + name + ":" + permissions)
+            observed_acls[path] = entries
+        return observed_acls[path]
+
+    def named_entry(spec):
+        parts = spec.split(":", 2)
+        return len(parts) == 3 and parts[0] in ("u", "g") and parts[1] != ""
+
+    def permission_bits(permissions):
+        return {bit for bit in "rwx" if bit in permissions}
+
+    def level_exists(path):
+        return machine.execute("test -e " + _shlex.quote(path))[0] == 0
+
+    def spawn_preflight_entries():
+        """Named entries the spawn preflight is expected to add, per level.
+
+        The broker's spawn preflight opens the ancestor chain above a
+        runner-owned tree with search (`u:<uid>:--x`) and grants the runner
+        its own leaf (`rwx` for a private state tree, `r-x` for a read-only
+        served view root): `runner_tree_acl_targets` in
+        packages/d2b-broker/src/live_handlers.rs, reached from
+        `refresh_spawn_runner_acls` / `grant_serving_worker_launch_acls` /
+        `grant_device_worker_launch_acls`.  The runner principals are uids
+        minted per Guest at runtime, so the declaration cannot name them;
+        the fixture derives them from the live worker processes and then
+        allows an undeclared entry only in that structural shape - `--x` on a
+        level that has a deeper grant of the same uid, or the uid's own
+        topmost grant (`--x` when its leaf is outside the checked levels,
+        else the leaf spelling).  A foreign uid, or a wider grant on a level
+        above the worker's own leaf, still fails.
+        """
+        worker_uids = set()
+        for line in machine.succeed("ps -eo uid=,comm= --no-headers").splitlines():
+            uid, _, comm = line.strip().partition(" ")
+            if comm.startswith("cloud-hyperviso") or comm.startswith("virtiofsd"):
+                worker_uids.add(uid)
+        allowed = {}
+        for uid in worker_uids:
+            prefix = "u:" + uid + ":"
+            grant_paths = [
+                path
+                for path, entries in observed_acls.items()
+                if any(entry.startswith(prefix) for entry in entries)
+            ]
+            for path in grant_paths:
+                prefix_path = path.rstrip("/") + "/"
+                deeper = any(
+                    other != path and other.startswith(prefix_path)
+                    for other in grant_paths
+                )
+                spellings = {prefix + "--x"} if deeper else {
+                    prefix + "--x",
+                    prefix + "rwx",
+                    prefix + "r-x",
+                }
+                allowed.setdefault(path, set()).update(spellings)
+        return allowed
 
     def run_as(principal, command):
         uid, gid = PRINCIPAL_IDS[principal]
@@ -543,10 +606,57 @@ pkgs.testers.runNixOSTest {
             )
 
         entries = acl_entries(path)
-        for declared_acl in level.get("acl", []):
+        declared_acl = [declared["spec"] for declared in level.get("acl", [])]
+        for spec in declared_acl:
             check(
-                declared_acl["spec"] in entries,
-                "declared ACL missing at " + where + ": " + declared_acl["spec"],
+                spec in entries,
+                "declared ACL missing at " + where + ": " + spec,
+            )
+
+        # A declaration pins its named entries completely: an entry nobody
+        # declared is drift, not a harmless extra.  The only undeclared
+        # entries the live host may carry are the spawn-preflight traversal
+        # grants derived for the runner uids (`spawn_preflight_entries`); the
+        # base entries (u::/g::/o::/m::) are pinned only when the
+        # declaration names them.
+        declared_named = {spec for spec in declared_acl if named_entry(spec)}
+        observed_named = {entry for entry in entries if named_entry(entry)}
+        expected_named = declared_named | spawn_entries.get(path, set())
+        undeclared = sorted(observed_named - expected_named)
+        missing = sorted(declared_named - observed_named)
+        check(
+            not undeclared,
+            "undeclared ACL entry at " + where + ": " + ", ".join(undeclared),
+        )
+        check(
+            not missing,
+            "declared ACL entry missing at " + where + ": " + ", ".join(missing),
+        )
+
+        # An unpinned mask must be the union of the group entry and the named
+        # grants (setfacl semantics): a mask that drifts from that silently
+        # re-scopes the whole group class.
+        declared_mask = [spec for spec in declared_acl if spec.split(":", 2)[0] == "m"]
+        mask_entry = next(
+            (entry for entry in entries if entry.startswith("m::")), None
+        )
+        if not declared_mask and mask_entry is not None:
+            group_entry = next(
+                (entry for entry in entries if entry.startswith("g::")), None
+            )
+            expected_mask = (
+                permission_bits(group_entry.split(":", 2)[2])
+                if group_entry
+                else set()
+            )
+            for spec in observed_named:
+                expected_mask |= permission_bits(spec.split(":", 2)[2])
+            check(
+                permission_bits(mask_entry.split(":", 2)[2]) == expected_mask,
+                "ACL mask drift at " + where + ": expected "
+                + "".join(bit for bit in "rwx" if bit in expected_mask)
+                + " from the group entry and named grants, observed "
+                + mask_entry,
             )
 
         for principal, rights in level["rights"].items():
@@ -629,13 +739,24 @@ pkgs.testers.runNixOSTest {
     )
 
     stage("posture-contract")
-    for tree_id in (
+    CHECKED_TREES = (
         "state-root",
         "guest-state-chain",
         "guest-state-dir",
         "guest-store-view",
         "shared-run-dir",
-    ):
+    )
+    # Observe every checked level before comparing: the spawn-preflight
+    # carve-out relates a worker's ancestor traversal entries to the leaf
+    # grant below them, so the expected set cannot be decided level by level.
+    for tree_id in CHECKED_TREES:
+        entry = tree(tree_id)
+        for level in entry["levels"]:
+            checked_path = level_path(entry, level)
+            if level_exists(checked_path):
+                acl_entries(checked_path)
+    spawn_entries = spawn_preflight_entries()
+    for tree_id in CHECKED_TREES:
         entry = tree(tree_id)
         for level in entry["levels"]:
             check_level(entry, level)

@@ -6,11 +6,13 @@ let
   lifecycleUsers = lib.unique (cfg.site.adminUsers ++ cfg.site.launcherUsers);
 
   # The per-Device TPM principals a zone-native Guest's Device needs: the
-  # state Volume's declared layout owner (`User/device-<32hex>-swtpm-system`)
-  # resolves through NSS, and the worker rows run as their own principal
-  # uids. Both are derived from the trusted bundle rows
-  # (`d2bLib.deviceTpmPrincipals`), so the account the Volume chowns the
-  # state directory to is the account its worker actually runs as.
+  # state Volume grants both through ACL entries
+  # (`User/d2b-<zone>-<device>-swtpm` and its `-flush` sibling), and the
+  # worker rows run as those principals' uids. The directory's layout owner is
+  # the daemon itself (`User/d2bd`), which creates it and cannot chown it to
+  # another uid. Both accounts are derived from the trusted bundle rows
+  # (`d2bLib.deviceTpmPrincipals`), so the accounts the Volume grants access to
+  # are the accounts its workers actually run as.
   tpmPrincipals = d2bLib.deviceTpmPrincipals cfg;
 in
 {

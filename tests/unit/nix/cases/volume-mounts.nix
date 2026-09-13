@@ -127,13 +127,12 @@ let
     };
   };
 
-  # Self-contained eval for the U7 binding-chain cases. The storage-volume
-  # surface imports only the volume-local modules, so this module mirrors the
-  # umbrella d2b options they read or write (same pattern as the
-  # bundle-artifacts-compiler case fixtures) and declares the full resource
-  # set in one module: merging partial overrides against the base would
-  # shadow sibling resources under these scoped declarations.
-  bindingVolume = (mkEval [({ lib, ... }: {
+  # The storage-volume surface imports only the volume-local modules, so an
+  # eval that reads the umbrella `d2b` option tree must declare the options
+  # those modules read or write; the module set that declares them in the
+  # product is not imported here. The binding-chain and ACL cases share this
+  # declaration set (same pattern as the bundle-artifacts-compiler fixtures).
+  d2bScopedOptions = { lib, ... }: {
     options.d2b = {
       zones = lib.mkOption { type = lib.types.anything; default = { }; };
       artifacts = lib.mkOption { type = lib.types.anything; default = { }; };
@@ -165,53 +164,109 @@ let
         visible = false;
       };
     };
-    config = {
-      d2b.artifacts.volume-local = {
-        package = volumeArtifact;
-        type = "provider";
-      };
-      d2b.artifacts.volume-virtiofs = {
-        package = volumeArtifact;
-        type = "provider";
-      };
-      d2b.zones.local-root.resources = {
-        alice.type = "User";
-        volume-local = {
-          type = "Provider";
-          spec = {
-            artifactId = "volume-local";
-            config.controllerExecutionRef = "Host/host-system";
+  };
+
+  # Self-contained eval for the U7 binding-chain cases: the module declares
+  # the full resource set in one block because merging partial overrides
+  # against the base would shadow sibling resources under these scoped
+  # declarations.
+  bindingVolume = (mkEval [
+    d2bScopedOptions
+    {
+      config = {
+        d2b.artifacts.volume-local = {
+          package = volumeArtifact;
+          type = "provider";
+        };
+        d2b.artifacts.volume-virtiofs = {
+          package = volumeArtifact;
+          type = "provider";
+        };
+        d2b.zones.local-root.resources = {
+          alice.type = "User";
+          volume-local = {
+            type = "Provider";
+            spec = {
+              artifactId = "volume-local";
+              config.controllerExecutionRef = "Host/host-system";
+            };
+          };
+          volume-virtiofs = {
+            type = "Provider";
+            spec = {
+              artifactId = "volume-virtiofs";
+              config.controllerExecutionRef = "Host/host-system";
+            };
+          };
+          host-system = {
+            type = "Host";
+            spec.providerRef = "Provider/volume-local";
+          };
+          guest = {
+            type = "Guest";
+            spec = { };
+          };
+          state = volumeResource // {
+            spec = volumeResource.spec // {
+              attachments = [{
+                executionRef = "Guest/guest";
+                transport = "virtiofs";
+                view = "controller";
+                access = "read-only";
+                mountPath = "/state";
+              }];
+            };
           };
         };
-        volume-virtiofs = {
-          type = "Provider";
-          spec = {
-            artifactId = "volume-virtiofs";
-            config.controllerExecutionRef = "Host/host-system";
+      };
+    }
+  ]).config;
+
+  # One Volume whose only layout entry is the given ACL-declaring entry. The
+  # Volume validator's own assertion records are read back, so the ACL rule is
+  # pinned on the same records the product modules evaluate.
+  aclVolume = layout: (mkEval [
+    d2bScopedOptions
+    {
+      config = {
+        d2b.artifacts.volume-local = {
+          package = volumeArtifact;
+          type = "provider";
+        };
+        d2b.zones.local-root.resources = {
+          alice.type = "User";
+          volume-local = {
+            type = "Provider";
+            spec = {
+              artifactId = "volume-local";
+              config.controllerExecutionRef = "Host/host-system";
+            };
           };
-        };
-        host-system = {
-          type = "Host";
-          spec.providerRef = "Provider/volume-local";
-        };
-        guest = {
-          type = "Guest";
-          spec = { };
-        };
-        state = volumeResource // {
-          spec = volumeResource.spec // {
-            attachments = [{
-              executionRef = "Guest/guest";
-              transport = "virtiofs";
-              view = "controller";
-              access = "read-only";
-              mountPath = "/state";
-            }];
+          host-system = {
+            type = "Host";
+            spec.providerRef = "Provider/volume-local";
+          };
+          state = volumeResource // {
+            spec = volumeResource.spec // { inherit layout; };
           };
         };
       };
+    }
+  ]).config;
+
+  # Group-class failures for one ACL-declaring layout entry, per mirror:
+  # `volume` is the Volume validator's own record set (resources-volume.nix)
+  # and `all` the aggregate module assertions, which also carry the zone
+  # resource compiler's mirror (resources-zones-volumes.nix).  One widened
+  # grant therefore shows one refusal in each mirror.
+  aclGroupClassFailures = layout:
+    let
+      config = aclVolume layout;
+      groupClass = a: !a.assertion && lib.hasInfix "mode group class" a.message;
+    in {
+      volume = lib.length (lib.filter groupClass config.d2b._resourceCompiler.volumeValidation);
+      all = lib.length (lib.filter groupClass config.assertions);
     };
-  })]).config;
 
   validVolume = (mkEval [ volumeBase ]).config;
   nixClosureVolume = (mkEval [
@@ -761,6 +816,38 @@ in
         ];
       });
     expected = true;
+  };
+  "volume-mounts/v3-acl-grant-wider-than-the-group-class-is-refused" = {
+    # The widened grant (mode `0700`, group class empty) is refused by both
+    # mirrors: the Volume validator's record set and the aggregate module
+    # assertions.
+    expr = aclGroupClassFailures [
+      (layoutEntry {
+        accessAcl = [{
+          principal = { ref = "User/alice"; };
+          permissions = "rwx";
+        }];
+      })
+    ];
+    expected = { volume = 1; all = 2; };
+  };
+  "volume-mounts/v3-acl-grants-inside-the-group-class-pass" = {
+    # The Device TPM state Volume's `0770` grants stay inside the group class,
+    # so neither mirror raises a refusal.
+    expr = aclGroupClassFailures [
+      (layoutEntry {
+        mode = "0770";
+        accessAcl = [
+          { principal = { ref = "User/alice"; }; permissions = "rwx"; }
+          { principal = { ref = "User/alice"; }; permissions = "rx"; }
+        ];
+        defaultAcl = [
+          { principal = { ref = "User/alice"; }; permissions = "rwx"; }
+          { principal = { ref = "User/alice"; }; permissions = "rw"; }
+        ];
+      })
+    ];
+    expected = { volume = 0; all = 0; };
   };
   "volume-mounts/v3-attachment-settings-are-typed" = {
     expr = hasFailure "settings.cache must be auto, always, or never"

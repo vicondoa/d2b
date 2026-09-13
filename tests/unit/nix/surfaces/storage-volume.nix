@@ -12,6 +12,8 @@ import ../helpers/surface.nix {
         "volume-mounts/v3-attachment-emits-no-durable-binding-resource"
         "volume-mounts/v3-attachment-emits-binding-worker-principal"
         "volume-mounts/v3-binding-worker-principal-follows-attachment"
+        "volume-mounts/v3-acl-grant-wider-than-the-group-class-is-refused"
+        "volume-mounts/v3-acl-grants-inside-the-group-class-pass"
       ];
     }
   ];

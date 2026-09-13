@@ -600,15 +600,19 @@ impl SharedProviderChildSurface for ContextChildSurface<'_> {
                 .ensure_child(child.clone())
                 .await
                 .map_err(|_| SharedProviderEffectError::Unavailable)?;
-            let committed = matches!(outcome, EnsureOutcome::Created(_))
-                && matches!(child.type_name.as_str(), "Volume" | "VolumeBinding");
+            let committed = matches!(
+                outcome,
+                EnsureOutcome::Created(_) | EnsureOutcome::Updated(_)
+            ) && matches!(child.type_name.as_str(), "Volume" | "VolumeBinding");
             (outcome, committed)
         };
         // The plane's per-resource anchors are a cache of the durable rows:
         // one committed through this endpoint after the plane's last durable
         // load is only observable through a reload, and an unregistered
-        // Volume root resolves as `volume-anchor` forever. The refresh is
-        // bounded to the commit that created such a row.
+        // Volume root resolves as `volume-anchor` forever. An `Updated`
+        // Volume or VolumeBinding is a new root exactly as a `Created` one is
+        // (the controller-bridge path refreshes its registry on every such
+        // commit), so the refresh is bounded to both commit shapes.
         if committed_row {
             self.effects.refresh_volume_anchors().await;
         }
@@ -1672,10 +1676,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        DEVICE_TYPE_NAME, NETWORK_TYPE_NAME, SharedProviderDriverArgs, SharedProviderDriverFactory,
-        SharedProviderEffectError, SharedProviderEffectOutcome, SharedProviderEffectPhase,
-        SharedProviderEffectRequest, SharedProviderFinalize, SharedProviderKind,
-        shared_provider_spec_decoder,
+        ContextChildSurface, DEVICE_TYPE_NAME, NETWORK_TYPE_NAME, SharedProviderChildSurface,
+        SharedProviderDriverArgs, SharedProviderDriverFactory, SharedProviderEffectError,
+        SharedProviderEffectOutcome, SharedProviderEffectPhase, SharedProviderEffectRequest,
+        SharedProviderFinalize, SharedProviderKind, shared_provider_spec_decoder,
     };
 
     /// Ordered log every fake writes to, so ordering is one assertion.
@@ -1684,6 +1688,9 @@ mod tests {
     struct RecordingManager {
         log: Log,
         owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
+        /// Scripted ensure outcomes, consumed in order; empty falls back to a
+        /// `Created` row.
+        ensure_outcomes: parking_lot::Mutex<std::collections::VecDeque<EnsureOutcome>>,
     }
 
     impl RecordingManager {
@@ -1691,6 +1698,7 @@ mod tests {
             Arc::new(Self {
                 log,
                 owned: parking_lot::Mutex::new(Vec::new()),
+                ensure_outcomes: parking_lot::Mutex::new(std::collections::VecDeque::new()),
             })
         }
 
@@ -1698,7 +1706,12 @@ mod tests {
             Arc::new(Self {
                 log,
                 owned: parking_lot::Mutex::new(owned),
+                ensure_outcomes: parking_lot::Mutex::new(std::collections::VecDeque::new()),
             })
+        }
+
+        fn script_ensure_outcomes(&self, outcomes: Vec<EnsureOutcome>) {
+            self.ensure_outcomes.lock().extend(outcomes);
         }
     }
 
@@ -1714,6 +1727,9 @@ mod tests {
                 child.type_name.as_str(),
                 child.name
             ));
+            if let Some(outcome) = self.ensure_outcomes.lock().pop_front() {
+                return Ok(outcome);
+            }
             Ok(EnsureOutcome::Created(test_row(
                 "dev",
                 child.type_name.as_str(),
@@ -1785,6 +1801,8 @@ mod tests {
         log: Log,
         phase: parking_lot::Mutex<SharedProviderEffectPhase>,
         finalize: parking_lot::Mutex<SharedProviderFinalize>,
+        /// Volume-anchor reloads the child surface requested.
+        refreshes: parking_lot::Mutex<usize>,
     }
 
     impl RecordingEffects {
@@ -1793,7 +1811,12 @@ mod tests {
                 log,
                 phase: parking_lot::Mutex::new(phase),
                 finalize: parking_lot::Mutex::new(finalize),
+                refreshes: parking_lot::Mutex::new(0),
             })
+        }
+
+        fn refreshes(&self) -> usize {
+            *self.refreshes.lock()
         }
     }
 
@@ -1851,6 +1874,10 @@ mod tests {
         ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
             self.log.lock().push(format!("finalize:{}", kind.effect_id()));
             Ok(*self.finalize.lock())
+        }
+
+        async fn refresh_volume_anchors(&self) {
+            *self.refreshes.lock() += 1;
         }
     }
 
@@ -1966,6 +1993,53 @@ mod tests {
                 d2b_provider_device_security_key::SECURITY_KEY_BINDING_RESOURCE_TYPE.to_owned(),
             ]
         );
+    }
+
+    /// The child surface's volume-anchor reload: a `Volume`/`VolumeBinding`
+    /// child committed after the plane's last durable load is only observable
+    /// through a reload, and an `Updated` child is a new root exactly as a
+    /// `Created` one is (a spec-less update still changes the row the anchors
+    /// resolve from). Other child types and an `Unchanged` ensure change
+    /// nothing, so they never reload.
+    #[tokio::test]
+    async fn volume_anchor_refresh_covers_created_and_updated_volume_children() {
+        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let manager = RecordingManager::new(Arc::clone(&log));
+        let mut f = fixture(
+            "Volume",
+            "vol-data",
+            json!({"providerRef": "Provider/volume-local"}),
+            Arc::clone(&manager),
+            Arc::new(RecordingRequeue::default()),
+            log,
+            SharedProviderEffectPhase::Ready,
+            SharedProviderFinalize::Complete,
+        );
+        manager.script_ensure_outcomes(vec![
+            EnsureOutcome::Created(test_row("dev", "Volume", "vol-data")),
+            EnsureOutcome::Updated(test_row("dev", "Volume", "vol-data")),
+            EnsureOutcome::Unchanged(test_row("dev", "Volume", "vol-data")),
+            EnsureOutcome::Updated(test_row("dev", "Network", "net-data")),
+        ]);
+        let child = |type_name: &str, name: &str| ChildEnsure {
+            type_name: d2b_resource_runtime::identity::ResourceTypeName::new(type_name),
+            name: name.to_owned(),
+            spec: b"{}".to_vec(),
+            metadata: Vec::new(),
+        };
+
+        let surface = ContextChildSurface::new(
+            &mut f.ctx,
+            Arc::clone(&f.effects) as Arc<dyn crate::shared_provider_driver::SharedProviderDriverEffects>,
+        );
+        surface.ensure(child("Volume", "vol-data")).await.expect("created");
+        assert_eq!(f.effects.refreshes(), 1, "a created Volume reloads the anchors");
+        surface.ensure(child("Volume", "vol-data")).await.expect("updated");
+        assert_eq!(f.effects.refreshes(), 2, "an updated Volume reloads the anchors");
+        surface.ensure(child("Volume", "vol-data")).await.expect("unchanged");
+        assert_eq!(f.effects.refreshes(), 2, "an unchanged ensure reloads nothing");
+        surface.ensure(child("Network", "net-data")).await.expect("other type");
+        assert_eq!(f.effects.refreshes(), 2, "only Volume/VolumeBinding commits reload");
     }
 
     /// A Device row naming a Provider outside the family is terminal: the

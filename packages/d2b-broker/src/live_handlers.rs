@@ -3117,6 +3117,13 @@ fn served_view_root_acl_targets(
     if !is_anchored_absolute(root) {
         return Err("served view root must be an absolute normalized path".to_owned());
     }
+    // `/` has no ancestors to stop the walk at, so the loop below would fall
+    // through to the leaf push and open the filesystem root itself to the
+    // runner principal. A served view root is a bundle-declared storage path;
+    // the filesystem root is never one.
+    if root.parent().is_none() {
+        return Err("served view root must not be the filesystem root".to_owned());
+    }
     let mut targets = Vec::new();
     for directory in root.ancestors().skip(1) {
         if directory.as_os_str().is_empty() {
@@ -3218,87 +3225,101 @@ pub(crate) fn grant_serving_worker_launch_acls(
     Ok(())
 }
 
-/// The socket paths one Device-owned worker's trusted launch ticket asks the
-/// worker to bind itself.
+/// One Device-owned worker's trusted per-Guest socket directory, and the
+/// runtime root it must strictly live under.
 ///
-/// Two composed shapes live inside the broker runtime root: the long-lived
-/// swtpm worker's `--server` entry value's `path=` field, and the GPU
-/// sidecar's `--socket` value. Both are rendered by the daemon's own argv
-/// generators from the declared template and the daemon's runtime paths,
-/// never by the caller. The one-shot flush (`--unix <ctrl>`) binds nothing,
-/// and the video sidecar's `--socket-path` lives under the video module's own
-/// `/run/d2b-video` runtime dir, so neither is a grant target here; the
-/// swtpm `--ctrl` socket lives in the state Volume, whose own layout grants
-/// the worker principal `rwx` already.
-fn device_worker_socket_paths(argv: &[String]) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Some(value) = argv_flag_value(argv, "--server")
-        && let Some(path) = value
-            .split(',')
-            .find_map(|field| field.strip_prefix("path="))
-    {
-        paths.push(PathBuf::from(path));
-    }
-    if let Some(path) = argv_flag_value(argv, "--socket") {
-        paths.push(PathBuf::from(path));
-    }
-    paths
+/// The directory is derived from trusted identity - the Guest the owning
+/// Device declares, or, for a legacy VM-scoped worker, the VM of the launch's
+/// own trusted cgroup placement crossed with the plan's trusted writable
+/// paths - never from the launch arguments: a launch that is refused must not
+/// be able to leave an ACL on a directory it named.
+///
+/// The worker runs as the trusted intent's principal, never as the daemon: the
+/// per-VM device socket directory under the broker runtime root is owned by
+/// the daemon (`d2bd:d2bd 0770`) and carries no grant for that principal, so
+/// the worker cannot bind its socket there without this. Only the derived
+/// directory (strictly inside the broker's own runtime root) is opened, and
+/// only after the launch's typed fences passed, so a refused launch is a
+/// no-op.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeviceWorkerSocketGrant {
+    /// Broker runtime root (the private socket's directory).
+    runtime_root: PathBuf,
+    /// Directory the worker binds its socket in, strictly inside the root.
+    directory: PathBuf,
 }
 
-/// The value following one exact argv flag.
-fn argv_flag_value<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
-    argv.windows(2)
-        .find_map(|pair| (pair[0] == flag).then(|| pair[1].as_str()))
-}
+impl DeviceWorkerSocketGrant {
+    /// The per-Guest socket directory of one pinned owning-Device scope:
+    /// `<runtime_root>/vms/<guest>`.
+    fn for_guest(runtime_root: &Path, guest: &str) -> Result<Self, String> {
+        let directory = crate::ops::device_worker::guest_socket_directory(runtime_root, guest)
+            .map_err(str::to_owned)?;
+        Ok(Self {
+            runtime_root: runtime_root.to_path_buf(),
+            directory,
+        })
+    }
 
-/// Open a Device-owned worker's socket directory to the launched principal
-/// with the same per-runner ACL shape the binding-owned serving worker's
-/// socket directory gets ([`grant_serving_worker_launch_acls`]).
-///
-/// The worker runs as the trusted intent's principal, never as the daemon:
-/// the per-VM device socket directory under the broker runtime root is owned
-/// by the daemon (`d2bd:d2bd 0770`) and carries no grant for that principal,
-/// so the worker cannot bind its socket there without this. The gate is the
-/// trusted resolved intent's role (`d2b_core::bundle_resolver::is_device_worker_role`),
-/// never a request field.
-///
-/// Only the directory the ticket's socket strictly lives in is opened, and
-/// only inside the broker's own runtime root; a ticket naming a device socket
-/// outside it is refused (fail-closed) rather than launched against a
-/// directory the broker does not own. A device-worker ticket that binds no
-/// such socket (the one-shot flush) grants nothing.
-pub(crate) fn grant_device_worker_launch_acls(
-    argv: &[String],
-    uid: u32,
-    runtime_root: &Path,
-) -> Result<(), LiveHandlerError> {
-    for socket in device_worker_socket_paths(argv) {
-        let directory = socket
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .ok_or_else(|| LiveHandlerError::SpawnFailed {
-                detail: format!(
-                    "device worker socket {} has no directory to grant",
-                    socket.display()
-                ),
-            })?;
-        if directory == runtime_root || !directory.starts_with(runtime_root) {
-            return Err(LiveHandlerError::SpawnFailed {
-                detail: format!(
-                    "device worker socket directory {} is outside the broker runtime directory {}",
-                    directory.display(),
-                    runtime_root.display()
-                ),
-            });
+    /// The legacy VM-scoped worker's socket directory: the runtime directory
+    /// the plan's own trusted derivation names
+    /// ([`crate::ops::swtpm_dir::derive_paths`] cross-checks the cgroup
+    /// placement's VM against the plan's writable paths, so this never reads
+    /// an argument).
+    fn for_legacy_plan(plan: &SpawnRunnerPlan, runtime_root: &Path) -> Result<Self, String> {
+        let paths = crate::ops::swtpm_dir::derive_paths(plan)
+            .map_err(|reason| format!("device worker runtime directory: {reason}"))?;
+        let directory = paths.runtime_dir;
+        if !is_anchored_absolute(&directory) {
+            return Err("device worker runtime directory is not an absolute normalized path".to_owned());
         }
-        grant_runner_tree_acls(directory, runtime_root, uid).map_err(|detail| {
-            LiveHandlerError::SpawnFailed {
-                detail: format!("device worker socket directory ACL: {detail}"),
-            }
-        })?;
+        if directory == runtime_root || !directory.starts_with(runtime_root) {
+            return Err(format!(
+                "device worker socket directory {} is outside the broker runtime directory {}",
+                directory.display(),
+                runtime_root.display()
+            ));
+        }
+        Ok(Self {
+            runtime_root: runtime_root.to_path_buf(),
+            directory,
+        })
     }
-    Ok(())
+
+    /// Open the directory (and the non-world-searchable ancestors up to the
+    /// runtime root) to the launched principal.
+    fn apply(&self, uid: u32) -> Result<(), String> {
+        grant_runner_tree_acls(&self.directory, &self.runtime_root, uid)
+    }
 }
+
+/// Derive the trusted per-Guest socket grant of one Device-owned worker
+/// launch, when its role binds a socket under the runtime root.
+///
+/// A typed launch's directory comes from the owning Device the launch arm
+/// pinned against the verified bundle (`DeviceWorkerLaunch::scope`); a legacy
+/// VM-scoped launch's comes from the plan's own trusted swtpm-dir derivation
+/// (`for_legacy_plan`). A role that binds no such socket - the one-shot flush
+/// (ctrl socket in the state Volume) and the video sidecar (its own
+/// `/run/d2b-video` runtime directory) - grants nothing.
+fn device_worker_socket_grant(
+    plan: &SpawnRunnerPlan,
+    device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
+    runtime_root: &Path,
+) -> Result<Option<DeviceWorkerSocketGrant>, LiveHandlerError> {
+    if !device_worker.binds_runtime_socket {
+        return Ok(None);
+    }
+    let grant = match device_worker.scope.as_ref() {
+        Some(scope) => DeviceWorkerSocketGrant::for_guest(runtime_root, scope.guest()),
+        None => DeviceWorkerSocketGrant::for_legacy_plan(plan, runtime_root),
+    }
+    .map_err(|detail| LiveHandlerError::SpawnFailed {
+        detail: format!("device worker socket directory: {detail}"),
+    })?;
+    Ok(Some(grant))
+}
+
 
 fn grant_daemon_api_socket_acl(api_socket: PathBuf) {
     std::thread::spawn(move || {
@@ -3618,6 +3639,13 @@ pub fn live_spawn_runner(
     // the verified bundle by the dispatch layer (`None` for every other
     // launch); the swtpm-dir fence uses it instead of the cgroup placement.
     swtpm_identity: Option<&crate::ops::swtpm_dir::ResourceBackedSwtpm>,
+    // Device-owned worker scope (pinned owning Device + whether this role
+    // binds a socket under `runtime_root`) resolved by the dispatch layer;
+    // `default()` for every other launch.
+    device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
+    // Broker runtime root: the tree the worker's per-Guest socket directory
+    // must strictly live under before this handler opens it.
+    runtime_root: &Path,
 ) -> Result<SpawnRunnerResult, LiveHandlerError> {
     let plan = preflight(plan_input).map_err(LiveHandlerError::SpawnPreflight)?;
 
@@ -3719,6 +3747,20 @@ pub fn live_spawn_runner(
         qemu_media_preflight_memlock_budget(qemu_media_memlock_preflight_required_bytes(
             guest_bytes,
         ))?;
+    }
+
+    // Every typed fence above passed (the swtpm-dir hardening, the GPU plan
+    // validation, the memlock budget): only now is the worker's trusted
+    // socket directory opened to its principal. A launch the broker refuses
+    // therefore leaves no ACL behind, and the directory is derived from
+    // trusted identity - the pinned owning Device's Guest, or the legacy
+    // plan's own trusted runtime directory - never from a launch argument.
+    if let Some(grant) = device_worker_socket_grant(&plan, device_worker, runtime_root)? {
+        grant
+            .apply(plan.uid)
+            .map_err(|detail| LiveHandlerError::SpawnFailed {
+                detail: format!("device worker socket directory ACL: {detail}"),
+            })?;
     }
 
     let isolation = crate::sys::pidfd_sys::RunnerIsolationSpec {
@@ -5353,6 +5395,8 @@ mod tests {
             None,
             Path::new("/var/lib/d2b"),
             None,
+            &crate::ops::device_worker::DeviceWorkerLaunch::default(),
+            Path::new("/run/d2b"),
         )
         .unwrap_err();
         assert!(matches!(err, LiveHandlerError::SpawnPreflight(_)));
@@ -5956,12 +6000,14 @@ mod tests {
                 (served.clone(), "u:4242:rwx".to_owned()),
             ]
         );
+        // The `ancestors()` walk of `/` has nowhere to stop and would open the
+        // filesystem root to the runner principal: a `/`-shaped shared dir is
+        // refused by name, before any ACL target is produced.
+        let root_error = served_view_root_acl_targets(Path::new("/"), 4242, true)
+            .expect_err("the filesystem root must never be a served view root");
         assert!(
-            served_view_root_acl_targets(&served, 4242, true)
-                .expect("targets")
-                .iter()
-                .all(|(path, _)| path != Path::new("/")),
-            "the grant must never include the filesystem root"
+            root_error.contains("must not be the filesystem root"),
+            "{root_error}"
         );
         assert!(
             served_view_root_acl_targets(Path::new("relative/view"), 4242, true).is_err(),
@@ -6038,12 +6084,43 @@ mod tests {
         );
     }
 
+    /// A VM-scoped legacy swtpm plan: the trusted cgroup placement names the
+    /// VM, and the plan's writable paths carry the per-VM state dir and the
+    /// per-VM runtime dir `derive_paths` cross-checks against it.
+    fn legacy_swtpm_plan(vms_root: &Path, vm: &str) -> SpawnRunnerPlan {
+        let runtime_dir = vms_root.join(vm);
+        let swtpm_dir = runtime_dir.join("swtpm");
+        let mut plan = test_spawn_plan_with_argv(
+            vec![
+                "swtpm".to_owned(),
+                "socket".to_owned(),
+                "--tpm2".to_owned(),
+                "--tpmstate".to_owned(),
+                format!("dir={}", swtpm_dir.display()),
+            ],
+            "w1-swtpm",
+        );
+        plan.cgroup_placement.subtree = format!("d2b.slice/{vm}/swtpm");
+        plan.mount_policy.writable_paths = vec![
+            WritablePath {
+                path: swtpm_dir.display().to_string(),
+                purpose: "state".to_owned(),
+            },
+            WritablePath {
+                path: runtime_dir.display().to_string(),
+                purpose: "runtime".to_owned(),
+            },
+        ];
+        plan
+    }
+
     /// The per-VM device socket directory is opened to the launched worker
     /// principal (the swtpm/GPU rows run as their own intent principal, never
     /// as the daemon) with the same access-ACL shape the serving worker's
-    /// socket directory gets.
+    /// socket directory gets - and only after the launch's typed fences
+    /// passed, so the grant is applied on the success path alone.
     #[test]
-    fn device_worker_launch_acls_open_the_socket_directory_to_the_principal() {
+    fn device_worker_socket_grant_opens_the_socket_directory_to_the_principal() {
         use std::os::unix::fs::PermissionsExt as _;
 
         if !["/run/current-system/sw/bin/setfacl", "/usr/bin/setfacl", "/bin/setfacl"]
@@ -6063,18 +6140,11 @@ mod tests {
         std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
             .expect("chmod socket dir");
 
-        let argv = vec![
-            "/nix/store/swtpm/bin/swtpm".to_owned(),
-            "socket".to_owned(),
-            "--tpm2".to_owned(),
-            "--server".to_owned(),
-            format!(
-                "type=unixio,path={},mode=0660,uid=0,gid=0",
-                socket_dir.join("tpm.sock").display()
-            ),
-        ];
         let uid = 50_123;
-        grant_device_worker_launch_acls(&argv, uid, &runtime_root).expect("grant ACLs");
+        let grant = DeviceWorkerSocketGrant::for_guest(&runtime_root, "acceptance-guest")
+            .expect("the trusted Guest scope names the socket directory");
+        assert_eq!(grant.directory, socket_dir);
+        grant.apply(uid).expect("grant ACLs");
 
         let fd = crate::sys::path_safe::open_dir_path_safe(&socket_dir).expect("open dir");
         assert_eq!(
@@ -6093,61 +6163,83 @@ mod tests {
         );
     }
 
-    /// The grant may only ever reach the broker's own runtime root, and only
-    /// the directory the ticket's socket strictly lives in: a socket outside
-    /// it - or the root itself - refuses the launch instead of widening.
+    /// The grant may only ever reach a directory strictly inside the broker's
+    /// own runtime root, named by a plain Guest component: a Guest name that
+    /// escapes the per-Guest directory - or a runtime root that is not an
+    /// anchored absolute path - is refused instead of widened.
     #[test]
-    fn device_worker_launch_acls_refuse_a_socket_outside_the_runtime_root() {
+    fn device_worker_socket_grant_refuses_a_directory_outside_the_runtime_root() {
         let runtime_root = PathBuf::from("/run/d2b");
-        let outside = vec![
-            "swtpm".to_owned(),
-            "--server".to_owned(),
-            "type=unixio,path=/run/foreign/tpm.sock,mode=0660,uid=0,gid=0".to_owned(),
-        ];
-        let error = grant_device_worker_launch_acls(&outside, 4242, &runtime_root)
-            .expect_err("a foreign socket directory must be refused");
-        assert!(
-            error.to_string().contains("outside the broker runtime directory"),
-            "{error}"
-        );
+        for guest in ["", ".", "..", "../foreign", "a/b", "/etc"] {
+            let error = DeviceWorkerSocketGrant::for_guest(&runtime_root, guest)
+                .expect_err("an escaping Guest name must be refused");
+            assert!(
+                error.contains("not-a-plain-name") || error.contains("outside the runtime root"),
+                "{guest}: {error}"
+            );
+        }
+        for root in [PathBuf::from("run/d2b"), PathBuf::from("/run/d2b/../etc")] {
+            let error = DeviceWorkerSocketGrant::for_guest(&root, "acceptance-guest")
+                .expect_err("an unanchored runtime root must be refused");
+            assert!(error.contains("not-anchored"), "{error}");
+        }
 
-        let at_root = vec![
-            "swtpm".to_owned(),
-            "--server".to_owned(),
-            "type=unixio,path=/run/d2b/tpm.sock,mode=0660,uid=0,gid=0".to_owned(),
-        ];
-        let error = grant_device_worker_launch_acls(&at_root, 4242, &runtime_root)
-            .expect_err("the runtime root itself must not be opened");
+        // A legacy plan whose trusted runtime directory is outside the broker
+        // runtime root is refused the same way.
+        let dir = TestDir::new("device-worker-legacy-foreign-root");
+        let plan = legacy_swtpm_plan(&dir.join("outside").join("vms"), "acceptance-guest");
+        let error = DeviceWorkerSocketGrant::for_legacy_plan(&plan, Path::new("/run/d2b"))
+            .expect_err("a runtime directory outside the broker runtime root must be refused");
         assert!(
-            error.to_string().contains("outside the broker runtime directory"),
+            error.contains("outside the broker runtime directory"),
             "{error}"
         );
     }
 
-    /// The one-shot flush (`--unix`) and the video sidecar (`--socket-path`,
-    /// outside the broker runtime root) bind nothing the broker owns; the
-    /// grant is a no-op for them rather than a refusal.
+    /// The grant never reads the launch arguments: the directory opened to the
+    /// worker is the one the plan's own trusted derivation names, so a launch
+    /// whose argv points at another Guest's socket directory can only ever be
+    /// granted its own - and a launch whose placement carries no trusted
+    /// runtime directory at all is refused instead of granted.
     #[test]
-    fn device_worker_launch_acls_ignore_tickets_that_bind_no_broker_socket() {
-        let runtime_root = PathBuf::from("/run/d2b");
-        let flush = vec![
-            "/nix/store/swtpm/bin/swtpm_ioctl".to_owned(),
-            "-i".to_owned(),
-            "--unix".to_owned(),
-            "/var/lib/d2b/vms/guest/swtpm/device-abc-tpm-state/ctrl.sock".to_owned(),
-        ];
-        grant_device_worker_launch_acls(&flush, 4242, &runtime_root)
-            .expect("the one-shot flush binds no socket the broker owns");
+    fn device_worker_socket_grant_never_reads_the_launch_arguments() {
+        let dir = TestDir::new("device-worker-grant-argv");
+        let runtime_root = dir.join("run").join("d2b");
+        let trusted = runtime_root.join("vms").join("acceptance-guest");
+        std::fs::create_dir_all(&trusted).expect("create trusted runtime dir");
 
-        let video = vec![
-            "/nix/store/crosvm/bin/crosvm".to_owned(),
-            "device".to_owned(),
-            "video-decoder".to_owned(),
-            "--socket-path".to_owned(),
-            "/run/d2b-video/guest/video.sock".to_owned(),
-        ];
-        grant_device_worker_launch_acls(&video, 4242, &runtime_root)
-            .expect("the video sidecar's socket lives in its own runtime dir");
+        // The argv names a foreign socket directory; the plan's trusted
+        // writable paths and cgroup placement name the Guest's own.
+        let mut plan = legacy_swtpm_plan(&runtime_root.join("vms"), "acceptance-guest");
+        plan.argv.push("--server".to_owned());
+        plan.argv.push("type=unixio,path=/run/foreign/tpm.sock,mode=0660,uid=0,gid=0".to_owned());
+        let grant = DeviceWorkerSocketGrant::for_legacy_plan(&plan, &runtime_root)
+            .expect("the trusted runtime directory grants");
+        assert_eq!(grant.directory, trusted);
+        assert_ne!(grant.directory, PathBuf::from("/run/foreign"));
+
+        // A role that binds no socket under the runtime root (the one-shot
+        // flush, the video sidecar) resolves no grant at all.
+        let no_socket = crate::ops::device_worker::DeviceWorkerLaunch {
+            scope: None,
+            binds_runtime_socket: false,
+        };
+        assert!(
+            device_worker_socket_grant(&plan, &no_socket, &runtime_root)
+                .expect("no socket bound")
+                .is_none()
+        );
+
+        // The typed shape has no legacy plan to fall back to: a resource-backed
+        // placement carries no VM name the derivation may read, so the grant is
+        // refused rather than invented.
+        let mut backed = plan.clone();
+        backed.cgroup_placement.subtree =
+            format!("d2b.slice/{}/swtpm", "process-".to_owned() + &"c".repeat(64));
+        assert!(
+            DeviceWorkerSocketGrant::for_legacy_plan(&backed, &runtime_root).is_err(),
+            "a typed placement must not resolve a legacy runtime directory"
+        );
     }
 
     #[test]
@@ -6288,6 +6380,8 @@ mod tests {
             None,
             Path::new("/var/lib/d2b"),
             None,
+            &crate::ops::device_worker::DeviceWorkerLaunch::default(),
+            Path::new("/run/d2b"),
         )
         .expect("spawn privileged test child");
         let wait_status = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(outcome.pid), None)

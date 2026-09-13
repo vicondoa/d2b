@@ -509,17 +509,18 @@ rec {
   # The host principals one zone-native Device with a TPM needs, derived from
   # the same artifacts the runtime derives them from:
   #
-  # - the state Volume's layout owner the TPM Provider composes from the
-  #   Device's declared identity (`User/d2b-<zone>-<device>-swtpm`,
+  # - the two worker principals the TPM Provider's state Volume grants ACL
+  #   access to (`User/d2b-<zone>-<device>-swtpm` and its `-flush` sibling,
   #   `packages/d2b-provider-device-tpm/src/resources.rs`), which the
-  #   state-layout effect resolves through NSS, and
+  #   state-layout effect resolves through NSS - the Volume's layout owner
+  #   itself is the daemon (`User/d2bd`), and
   # - the worker-row principal uids the daemon's Device-worker tickets name
   #   (`deviceWorkerPrincipalId` over the binding's
   #   `<owner>:<rowRef>:<executionRef>` triple).
   #
   # Both worker rows of one Device share one state directory, so both
-  # principals are provisioned: the long-lived swtpm worker owns it and the
-  # one-shot flush connects to the ctrl socket inside it.
+  # principals are provisioned: the long-lived swtpm worker is granted rwx on
+  # it and the one-shot flush the traverse and socket writes it needs.
   deviceTpmPrincipals = cfg:
     let
       providerRef = "Provider/device-tpm";

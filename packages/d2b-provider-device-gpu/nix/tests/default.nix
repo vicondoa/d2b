@@ -68,6 +68,18 @@ let
               provider.settings.videoSidecar = true;
             };
           };
+          gpu-nvidia = {
+            type = "Device";
+            metadata.ownerRef = "Guest/guest";
+            spec = {
+              providerRef = "Provider/device-gpu";
+              arbitration = "exclusive";
+              provider.settings = {
+                videoSidecar = true;
+                videoNvidiaDecode = true;
+              };
+            };
+          };
         };
       }
     ];
@@ -101,7 +113,7 @@ in
     "provider-device-gpu/projects-gpu-and-video-processes" = {
       expr = lib.attrNames (projected.config.d2b._resourceCompiler
         .providerProjectionDeviceGpu.processesByZone.dev);
-      expected = [ "gpu-gpu" "video-gpu" ];
+      expected = [ "gpu-gpu" "gpu-gpu-nvidia" "video-gpu" "video-gpu-nvidia" ];
     };
     "provider-device-gpu/worker-posture" = {
       expr = let
@@ -124,8 +136,9 @@ in
         gpuTemplate = "gpu-worker";
         # A persistent launch refusal (a host-device grant the broker
         # refuses, a site with no projected Wayland socket) must reach the
-        # closed terminal classification instead of retrying forever, while
-        # `resetAfter` keeps crash-restart for a healthy worker.
+        # closed terminal classification instead of retrying forever. The
+        # ceiling is a per-daemon-lifetime launch counter: the driver's
+        # in-memory budget never resets, so `resetAfter` has no effect.
         gpuRestartPolicy = {
           class = "on-failure";
           backoffBase = "1s";
@@ -170,6 +183,30 @@ in
           oomScoreAdj = 0;
           userNamespace = null;
         };
+      };
+    };
+    "provider-device-gpu/nvidia-video-template" = {
+      expr = let
+        processes = projected.config.d2b._resourceCompiler
+          .providerProjectionDeviceGpu.processesByZone.dev;
+        plain = processes.video-gpu;
+        nvidia = processes.video-gpu-nvidia;
+      in {
+        inherit (nvidia.spec) template deviceUsage;
+        # The resource compiler fences a row's sandbox against its template's
+        # closed posture; both video templates share the one video sandbox.
+        sameSandbox = nvidia.spec.sandbox == plain.spec.sandbox;
+        sameRestartPolicy = nvidia.spec.restartPolicy == plain.spec.restartPolicy;
+      };
+      expected = {
+        template = "video-worker-nvidia";
+        deviceUsage = [{
+          deviceRef = "Device/gpu-nvidia";
+          access = "shared";
+          purpose = "video-decode";
+        }];
+        sameSandbox = true;
+        sameRestartPolicy = true;
       };
     };
   };
