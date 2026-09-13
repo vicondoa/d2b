@@ -19,7 +19,8 @@ pub use hash_chain::{
     is_canonical_digest, payload_hash, record_hash,
 };
 pub use operation::{
-    OperationIdentity, OperationIdentityError, ZoneId, ZoneOperationKey, opaque_identity,
+    OperationIdentity, OperationIdentityError, ZoneId, ZoneOperationKey,
+    operation_identity_of_canonical_json, opaque_identity,
 };
 pub use rate_limit::{
     AuditRateLimiter, AuditWriteClass, DEFAULT_AUDIT_WRITES_PER_SECOND, RateDecision,

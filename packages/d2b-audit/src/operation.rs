@@ -244,6 +244,21 @@ pub fn opaque_identity(value: &str) -> String {
     AuditHash::from_bytes(&bytes).as_str().to_owned()
 }
 
+/// Derive the operation identity of one canonical JSON document.
+///
+/// The companion of [`OperationIdentity::derive`] for a join key assembled
+/// from a declaration's own fields: the identity is the operation domain's
+/// digest of the caller's canonical bytes, so the domain stays the one the
+/// wire and the store join under while the key is bounded by the digest it
+/// hashes to rather than by the field values it hashes.
+pub fn operation_identity_of_canonical_json(canonical_bytes: &[u8]) -> String {
+    let mut bytes = Vec::with_capacity(OPERATION_ID_DOMAIN.len() + 1 + canonical_bytes.len());
+    bytes.extend_from_slice(OPERATION_ID_DOMAIN);
+    bytes.push(0);
+    bytes.extend_from_slice(canonical_bytes);
+    AuditHash::from_bytes(&bytes).as_str().to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +302,23 @@ mod tests {
         assert!(ZoneId::parse(&format!("sha256:{}", "a".repeat(64))).is_ok());
         assert!(ZoneId::parse("sha256:ABC").is_err());
         assert!(ZoneId::parse(&format!("sha256:{}", "a".repeat(63))).is_err());
+    }
+
+    #[test]
+    fn canonical_json_identities_share_the_operation_domain() {
+        let token = r#"{"label":"x"}"#;
+        assert_eq!(
+            operation_identity_of_canonical_json(token.as_bytes()),
+            OperationIdentity::derive(token).unwrap().as_str()
+        );
+        assert_ne!(
+            operation_identity_of_canonical_json(br#"{"label":"x"}"#),
+            operation_identity_of_canonical_json(br#"{"label":"y"}"#)
+        );
+        // The digest input is unbounded: a token over the derive bound still
+        // yields a canonical identity.
+        let oversized = operation_identity_of_canonical_json(&[b'a'; 4096]);
+        assert!(OperationIdentity::parse(&oversized).is_ok());
     }
 
     #[test]
