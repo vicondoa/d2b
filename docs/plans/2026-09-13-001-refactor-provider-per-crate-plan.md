@@ -383,7 +383,8 @@ Adding or changing one resource type today requires edits in four to six places 
 - **Requirements:** R25.
 - **Dependencies:** U5-U18 complete.
 - **Files:** `packages/xtask/src/provider_crate_policy.rs`.
-- **Test scenarios:** ratchet fails on growth; empty allowlist passes; shared-crate probes (type tables, provider strings, launch-intent tables) all trip.
+- **Approach:** empty the allowlist and keep it empty. The check must also stop being a line-prefix heuristic: it has to see the violation classes the restructure actually produces, including a shared driver parked in a crate its current source-root list does not cover and comments that cite modules the restructure deleted. This unit owns the check's file, including the shared-driver source-root list, so extending those roots is its edit and not a lane's.
+- **Test scenarios:** ratchet fails on growth; empty allowlist passes; shared-crate probes (type tables, provider strings, launch-intent tables) all trip; a shared driver added under any monitored source root trips, and the monitored roots cover every crate a provider could import a driver from.
 - **Verification:** allowlist empty; the check runs in CI permanently.
 
 ### U20. Guest target (enrollment handlers + guest agents)
