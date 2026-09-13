@@ -104,13 +104,14 @@
           cp -r ${./packages/d2b-provider-device-usbip} $out/packages/d2b-provider-device-usbip
           cp -r ${./packages/d2b-provider-display-wayland} $out/packages/d2b-provider-display-wayland
           cp -r ${./packages/d2b-provider-endpoint} $out/packages/d2b-provider-endpoint
+          cp -r ${./packages/d2b-provider-guest} $out/packages/d2b-provider-guest
           cp -r ${./packages/d2b-provider-network-local} $out/packages/d2b-provider-network-local
           cp -r ${./packages/d2b-provider-notification-desktop} $out/packages/d2b-provider-notification-desktop
           cp -r ${./packages/d2b-provider-observability-otel} $out/packages/d2b-provider-observability-otel
-          cp -r ${./packages/d2b-provider-runtime-azure-container-apps} $out/packages/d2b-provider-runtime-azure-container-apps
-          cp -r ${./packages/d2b-provider-runtime-azure-virtual-machine} $out/packages/d2b-provider-runtime-azure-virtual-machine
-          cp -r ${./packages/d2b-provider-runtime-cloud-hypervisor} $out/packages/d2b-provider-runtime-cloud-hypervisor
-          cp -r ${./packages/d2b-provider-runtime-qemu-media} $out/packages/d2b-provider-runtime-qemu-media
+          cp -r ${./packages/d2b-provider-guest-azure-container-apps} $out/packages/d2b-provider-guest-azure-container-apps
+          cp -r ${./packages/d2b-provider-guest-azure-virtual-machine} $out/packages/d2b-provider-guest-azure-virtual-machine
+          cp -r ${./packages/d2b-provider-guest-cloud-hypervisor} $out/packages/d2b-provider-guest-cloud-hypervisor
+          cp -r ${./packages/d2b-provider-guest-qemu-media} $out/packages/d2b-provider-guest-qemu-media
           cp -r ${./packages/d2b-provider-shell-terminal} $out/packages/d2b-provider-shell-terminal
           cp -r ${./packages/d2b-provider-supervisor} $out/packages/d2b-provider-supervisor
           cp -r ${./packages/d2b-provider-system-core} $out/packages/d2b-provider-system-core
@@ -434,7 +435,7 @@
           pname = "d2b-cloud-hypervisor-controller";
           cargoBuildFlags = [
             "--package"
-            "d2b-provider-runtime-cloud-hypervisor"
+            "d2b-provider-guest-cloud-hypervisor"
             "--bin"
             "d2b-cloud-hypervisor-controller"
           ];
@@ -445,12 +446,12 @@
           artifactId = "runtime-cloud-hypervisor";
           binary = cloudHypervisorController;
           binaryRef = "d2b-cloud-hypervisor-controller";
-          manifest = ./packages/d2b-provider-runtime-cloud-hypervisor/provider-manifest.json;
-          signature = ./packages/d2b-provider-runtime-cloud-hypervisor/provider-manifest.json.sig;
-          configSchema = ./packages/d2b-provider-runtime-cloud-hypervisor/root-config.schema.json;
-          publicKey = ./packages/d2b-provider-runtime-cloud-hypervisor/publisher-public-key.pem;
+          manifest = ./packages/d2b-provider-guest-cloud-hypervisor/provider-manifest.json;
+          signature = ./packages/d2b-provider-guest-cloud-hypervisor/provider-manifest.json.sig;
+          configSchema = ./packages/d2b-provider-guest-cloud-hypervisor/root-config.schema.json;
+          publicKey = ./packages/d2b-provider-guest-cloud-hypervisor/publisher-public-key.pem;
           providerName = "runtime-cloud-hypervisor";
-          packageName = "d2b-provider-runtime-cloud-hypervisor";
+          packageName = "d2b-provider-guest-cloud-hypervisor";
           signatureId = "default";
         };
       in {
@@ -525,7 +526,7 @@
           meta.mainProgram = "d2b-resource-compiler";
         };
         d2b-provider-test-controller = providerTestController;
-        d2b-provider-runtime-cloud-hypervisor =
+        d2b-provider-guest-cloud-hypervisor =
           cloudHypervisorArtifact.package;
         provider-matrix = providerMatrix;
 
@@ -1428,7 +1429,7 @@
         buildProviderArtifact = args: self.lib.mkProviderArtifact args;
         providerRuntimeCloudHypervisor = system:
           let
-            package = self.packages.${system}.d2b-provider-runtime-cloud-hypervisor;
+            package = self.packages.${system}.d2b-provider-guest-cloud-hypervisor;
             metadata = package.passthru.providerArtifact;
           in {
             inherit package;

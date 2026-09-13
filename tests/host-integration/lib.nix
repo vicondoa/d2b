@@ -69,8 +69,8 @@ let
         self.packages.${pkgs.stdenv.hostPlatform.system}.d2b-cloud-hypervisor-controller;
       signer = pkgs.python3.withPackages
         (pythonPackages: [ pythonPackages.cryptography ]);
-      manifest = ../../packages/d2b-provider-runtime-cloud-hypervisor/provider-manifest.json;
-      schema = ../../packages/d2b-provider-runtime-cloud-hypervisor/root-config.schema.json;
+      manifest = ../../packages/d2b-provider-guest-cloud-hypervisor/provider-manifest.json;
+      schema = ../../packages/d2b-provider-guest-cloud-hypervisor/root-config.schema.json;
       package = pkgs.runCommand "d2b-u20-runtime-cloud-hypervisor" {
         nativeBuildInputs = [ pkgs.coreutils signer ];
       } ''
@@ -157,7 +157,7 @@ let
       runtime = lib.head manifestData.runtimeArtifacts;
       catalog = {
         providerName = manifestData.trust.publisher;
-        packageName = "d2b-provider-runtime-cloud-hypervisor";
+        packageName = "d2b-provider-guest-cloud-hypervisor";
         version = "0.0.0";
         systems = [ pkgs.stdenv.hostPlatform.system ];
         platform = pkgs.stdenv.hostPlatform.system;

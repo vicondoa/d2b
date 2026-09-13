@@ -997,7 +997,7 @@ impl ProductionProcessProviders {
         self.bundle
             .guest_setup_descriptor_bytes(zone.as_str(), guest_ref.name().as_str())
             .and_then(|bytes| {
-                d2b_provider_runtime_cloud_hypervisor::GuestSetupDescriptor::from_canonical_bytes(
+                d2b_provider_guest_cloud_hypervisor::GuestSetupDescriptor::from_canonical_bytes(
                     bytes,
                 )
                 .ok()

@@ -26,7 +26,7 @@ use d2b_provider_endpoint::{
 /// purpose. Derived from the provider's role list, so the closed family
 /// cannot drift from the children a guest's provider controller commits.
 pub(crate) fn guest_control_producer(purpose: &str) -> Option<GuestControlProducer> {
-    use d2b_provider_runtime_cloud_hypervisor::ChildRole;
+    use d2b_provider_guest_cloud_hypervisor::ChildRole;
     for (role, producer) in [
         (ChildRole::ChApiEndpoint, GuestControlProducer::VmmProcess),
         (ChildRole::GuestControlEndpoint, GuestControlProducer::Guest),
@@ -147,7 +147,7 @@ mod tests {
         );
         assert_eq!(
             GuestControlProducer::VmmProcess.resource_type(),
-            d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess.resource_type(),
+            d2b_provider_guest_cloud_hypervisor::ChildRole::VmmProcess.resource_type(),
             "the family's VMM producer is the Process the provider commits"
         );
         assert!(guest_control_purpose("ch-api"));

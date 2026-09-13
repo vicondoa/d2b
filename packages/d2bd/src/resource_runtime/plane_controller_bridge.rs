@@ -745,7 +745,7 @@ mod tests {
     /// with no actor and the guest's readiness gate never converges.
     #[test]
     fn cloud_hypervisor_guest_children_reach_their_drivers_through_the_manager() {
-        use d2b_provider_runtime_cloud_hypervisor::ChildRole;
+        use d2b_provider_guest_cloud_hypervisor::ChildRole;
 
         let guest = ResourceRef::parse("Guest/acceptance-guest").expect("guest ref");
         for role in [
@@ -755,7 +755,7 @@ mod tests {
             ChildRole::SystemVolume,
         ] {
             let child =
-                d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(&guest, role)
+                d2b_provider_guest_cloud_hypervisor::deterministic_child_ref(&guest, role)
                     .expect("deterministic Cloud Hypervisor child");
             assert_eq!(
                 child_mutation_route(&child),

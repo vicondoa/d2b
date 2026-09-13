@@ -12,10 +12,10 @@ use d2b_contracts_resource::v3::{
     ArtifactId, DesiredLifecycle, ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid,
     SchemaFingerprint, SchemaVersion, ZoneId, ZoneRevision,
 };
-use d2b_provider_runtime_azure_container_apps::{
+use d2b_provider_guest_azure_container_apps::{
     AcaClock, AcaController, AcaPhase, AcaReconcileOutcome,
 };
-use d2b_provider_runtime_azure_container_apps::{
+use d2b_provider_guest_azure_container_apps::{
     AcaConfiguredDiskId, AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind,
     AcaControlHealth, AcaCpuMillis, AcaCredentialLease, AcaCredentialLeaseClient,
     AcaCredentialLeaseRequest, AcaDeleteOutcome, AcaDesiredDiskImage, AcaDesiredSandbox,
@@ -23,7 +23,7 @@ use d2b_provider_runtime_azure_container_apps::{
     AcaOperationId, AcaProfileId, AcaReadinessPolicy, AcaResourceBinding, AcaRuntimeConfig,
     AcaSandboxCandidates, AcaSandboxId, AcaSandboxLifecycle, AcaSandboxProfile, AcaSandboxRecord,
 };
-use d2b_provider_runtime_cloud_hypervisor::{
+use d2b_provider_guest_cloud_hypervisor::{
     AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph,
     BootstrapHandoff, CloudHypervisorConfig, CloudHypervisorController, CloudHypervisorError,
     CloudHypervisorReconcileOutcome, CloudHypervisorResourceApiError,
@@ -86,7 +86,7 @@ impl AcaControl for FakeAcaControl {
         &self,
         _: &AcaCredentialLease,
         _: &AcaControlContext,
-        _: &d2b_provider_runtime_azure_container_apps::AcaWorkloadQuery,
+        _: &d2b_provider_guest_azure_container_apps::AcaWorkloadQuery,
     ) -> Result<AcaSandboxCandidates, AcaControlError> {
         AcaSandboxCandidates::new(self.state.lock().unwrap().candidates.clone())
             .map_err(|_| AcaControlError::new(AcaControlErrorKind::InvalidResponse))
@@ -223,7 +223,7 @@ impl GuestSetupDescriptorVerifier for AcceptingCloudDescriptorVerifier {
     }
 }
 
-fn cloud_descriptor() -> d2b_provider_runtime_cloud_hypervisor::VerifiedGuestSetupDescriptor {
+fn cloud_descriptor() -> d2b_provider_guest_cloud_hypervisor::VerifiedGuestSetupDescriptor {
     GuestSetupDescriptor::new(
         ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
         ResourceGeneration::new(3).unwrap(),
@@ -379,7 +379,7 @@ impl AuthenticatedResourceSession for FakeCloudSession {
             }
             CloudHypervisorResourceRequest::ObserveDependencies { graph, .. } => {
                 Ok(CloudHypervisorResourceResponse::Dependencies(
-                    d2b_provider_runtime_cloud_hypervisor::GuestDependencySnapshot::ready(graph),
+                    d2b_provider_guest_cloud_hypervisor::GuestDependencySnapshot::ready(graph),
                 ))
             }
             CloudHypervisorResourceRequest::CommitBatch { .. } => Ok(
@@ -403,9 +403,9 @@ impl AuthenticatedResourceSession for FakeCloudSession {
             CloudHypervisorResourceRequest::ObserveProcessAdoption { .. } => Ok(
                 CloudHypervisorResourceResponse::ProcessAdoption(match self.mode {
                     CloudMode::ProcessAbsent => {
-                        d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Absent
+                        d2b_provider_guest_cloud_hypervisor::ProcessAdoptionStatus::Absent
                     }
-                    _ => d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current,
+                    _ => d2b_provider_guest_cloud_hypervisor::ProcessAdoptionStatus::Current,
                 }),
             ),
             CloudHypervisorResourceRequest::AssessUpdate { .. } => {
@@ -520,7 +520,7 @@ async fn cloud_composition_fails_closed_on_ambiguous_or_failed_effects() {
     assert_eq!(
         aca.reconcile(AcaOperationId::parse("cloud-ambiguous").unwrap(), 1_000)
             .await,
-        Err(d2b_provider_runtime_azure_container_apps::AcaControllerError::AmbiguousAdoption)
+        Err(d2b_provider_guest_azure_container_apps::AcaControllerError::AmbiguousAdoption)
     );
 }
 

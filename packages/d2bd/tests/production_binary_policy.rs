@@ -67,7 +67,6 @@ fn production_binary_contains_no_peer_override_surface() {
         "src/resource_runtime.rs",
         "src/process_resource_runtime.rs",
         "src/activation_driver.rs",
-        "src/guest_driver.rs",
         "src/guest_effects.rs",
         "src/shared_provider_driver.rs",
         "src/shared_provider_effects.rs",

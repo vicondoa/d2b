@@ -40,10 +40,10 @@ test_suite(
         "//packages/d2b-provider-network-local:all-tests",
         "//packages/d2b-provider-notification-desktop:all-tests",
         "//packages/d2b-provider-observability-otel:all-tests",
-        "//packages/d2b-provider-runtime-azure-container-apps:all-tests",
-        "//packages/d2b-provider-runtime-azure-virtual-machine:all-tests",
-        "//packages/d2b-provider-runtime-cloud-hypervisor:all-tests",
-        "//packages/d2b-provider-runtime-qemu-media:all-tests",
+        "//packages/d2b-provider-guest-azure-container-apps:all-tests",
+        "//packages/d2b-provider-guest-azure-virtual-machine:all-tests",
+        "//packages/d2b-provider-guest-cloud-hypervisor:all-tests",
+        "//packages/d2b-provider-guest-qemu-media:all-tests",
         "//packages/d2b-provider-shell-terminal:all-tests",
         "//packages/d2b-provider-supervisor:all-tests",
         "//packages/d2b-provider-system-core:all-tests",
@@ -70,6 +70,7 @@ test_suite(
         "//packages/d2bd-runtime:all-tests",
         "//packages/xtask:all-tests",
         "//packages/d2b-provider-endpoint:all-tests",
+        "//packages/d2b-provider-guest:all-tests",
     ],
 )
 

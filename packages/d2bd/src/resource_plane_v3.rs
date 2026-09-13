@@ -49,6 +49,7 @@ use d2b_core::bundle_resolver::{BundleResolver, ResolvedStoreViewIntent, intent_
 use d2b_provider_endpoint::{
     EndpointDriverArgs, EndpointDriverEffects, GuestControlProducer, endpoint_descriptor,
 };
+use d2b_provider_guest::{GuestDriverArgs, GuestDriverEffects, guest_descriptor};
 use d2b_provider_process::{
     GuestOwnerIdentitySource, ProcessDriverArgs, ProcessDriverEffects, decode_metadata_owner_ref,
     process_family_descriptors,
@@ -100,9 +101,6 @@ use crate::volume_driver::{
 use crate::shared_provider_driver::{
     SharedProviderDriverArgs, SharedProviderDriverEffects, SharedProviderDriverFactory,
     shared_provider_spec_decoder,
-};
-use crate::guest_driver::{
-    GuestDriverArgs, GuestDriverEffects, GuestDriverFactory, guest_spec_decoder,
 };
 use crate::guest_effects::ProductionGuestDriverEffects;
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
@@ -742,9 +740,9 @@ impl GuestControlEndpointProbe {
             GuestControlProducer::VmmProcess => producer_ref.clone(),
             GuestControlProducer::Guest => {
                 let Ok(vmm_ref) =
-                    d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
+                    d2b_provider_guest_cloud_hypervisor::deterministic_child_ref(
                         producer_ref,
-                        d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess,
+                        d2b_provider_guest_cloud_hypervisor::ChildRole::VmmProcess,
                     )
                 else {
                     return false;
@@ -1792,11 +1790,16 @@ impl ResourcePlaneV3 {
                 effects: Arc::clone(&inputs.shared_provider_effects),
             },
         )))?;
-        providers.register(Arc::new(GuestDriverFactory::new(GuestDriverArgs {
+        // The Guest type registers through its driver declaration: the
+        // registry serves the type's decoder and factory from it, and the
+        // declaration carries the family's verbs, execution domains,
+        // exportability, reads, and the children its runtime Providers
+        // create.
+        providers.register_driver(&guest_descriptor(GuestDriverArgs {
             zone: inputs.zone.as_str().to_owned(),
             controller_generation: inputs.authority.controller_generation,
             effects: Arc::clone(&inputs.guest_effects),
-        })))?;
+        }))?;
         providers.register(Arc::new(SystemCoreDriverFactory::new()))?;
         providers.register(Arc::new(CoreResourceDriverFactory::with_effects(
             Arc::clone(&inputs.core_effects),
@@ -1837,10 +1840,6 @@ impl ResourcePlaneV3 {
                 ResourceTypeName::new(resource_type),
                 shared_provider_spec_decoder(),
             );
-        }
-        // U12: the four runtime-Provider Guests.
-        for resource_type in [crate::guest_driver::GUEST_TYPE_NAME] {
-            decoders.insert(ResourceTypeName::new(resource_type), guest_spec_decoder());
         }
         decoders.insert(
             ResourceTypeName::new("Host"),
@@ -2681,29 +2680,29 @@ mod tests {
     struct FakeGuestEffects;
 
     #[async_trait::async_trait]
-    impl crate::guest_driver::GuestDriverEffects for FakeGuestEffects {
+    impl d2b_provider_guest::GuestDriverEffects for FakeGuestEffects {
         async fn reconcile(
             &self,
-            _kind: crate::guest_driver::GuestKind,
-            _request: &crate::guest_driver::GuestEffectRequest<'_>,
+            _kind: d2b_provider_guest::GuestKind,
+            _request: &d2b_provider_guest::GuestEffectRequest<'_>,
         ) -> Result<
-            crate::guest_driver::GuestEffectOutcome,
-            crate::guest_driver::GuestEffectError,
+            d2b_provider_guest::GuestEffectOutcome,
+            d2b_provider_guest::GuestEffectError,
         > {
-            Ok(crate::guest_driver::GuestEffectOutcome::phase(
-                crate::guest_driver::GuestEffectPhase::Pending,
+            Ok(d2b_provider_guest::GuestEffectOutcome::phase(
+                d2b_provider_guest::GuestEffectPhase::Pending,
             ))
         }
 
         async fn finalize(
             &self,
-            _kind: crate::guest_driver::GuestKind,
-            _request: &crate::guest_driver::GuestEffectRequest<'_>,
+            _kind: d2b_provider_guest::GuestKind,
+            _request: &d2b_provider_guest::GuestEffectRequest<'_>,
         ) -> Result<
-            crate::guest_driver::GuestFinalizeStage,
-            crate::guest_driver::GuestEffectError,
+            d2b_provider_guest::GuestFinalizeStage,
+            d2b_provider_guest::GuestEffectError,
         > {
-            Ok(crate::guest_driver::GuestFinalizeStage::Complete)
+            Ok(d2b_provider_guest::GuestFinalizeStage::Complete)
         }
     }
 

@@ -8,7 +8,6 @@ pub mod volume_driver;
 pub mod activation_driver;
 pub(crate) mod shared_provider_driver;
 pub(crate) mod shared_provider_effects;
-pub(crate) mod guest_driver;
 pub(crate) mod guest_effects;
 pub(crate) mod system_core_driver;
 /// U12: the core-family `ResourceDriver`. Registered on the v3 plane by
@@ -17,8 +16,9 @@ pub(crate) mod system_core_driver;
 pub(crate) mod core_driver;
 pub(crate) mod interaction_driver;
 
-pub(crate) mod guest_target_control;
+/// The daemon-side half of the Guest target-control seam: the family crate
+/// owns the channel, this module offers it the authenticated session.
+pub(crate) mod guest_target_session;
 pub(crate) mod resource_plane_v3;
-pub(crate) mod guest_target_service;
 
 include!("composition.rs");

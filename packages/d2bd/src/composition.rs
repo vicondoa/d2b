@@ -4479,12 +4479,12 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                 detail: error.to_string(),
             })?;
     let target_service = std::sync::Arc::new(
-        crate::guest_target_service::GuestTargetService::new(
+        d2b_provider_guest::GuestTargetService::new(
             std::sync::Arc::new(d2b_resource_runtime::guest_target::GuestTargetRuntime::new(
                 guest_target,
             )),
             identity.zone().clone(),
-            crate::guest_target_service::production_guest_target_effects(),
+            d2b_provider_guest::production_guest_target_effects(),
         ),
     );
     tracing::info!("Guest target-control service composed");
@@ -4559,7 +4559,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                     let mut services = resource_session.ttrpc_services();
                     services.extend(config_services);
                     services.extend(
-                        crate::guest_target_service::target_control_services(Arc::clone(
+                        d2b_provider_guest::target_control_services(Arc::clone(
                             &target_service,
                         )),
                     );
@@ -4635,7 +4635,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                 };
             let mut services = resource_session.ttrpc_services();
             services.extend(config_services);
-            services.extend(crate::guest_target_service::target_control_services(
+            services.extend(d2b_provider_guest::target_control_services(
                 Arc::clone(&target_service),
             ));
             let ttrpc = session.into_ttrpc_handle();
@@ -6620,14 +6620,14 @@ fn bind_plane_guest_target(
         tracing::warn!(zone = %zone, "guest target bind skipped: Zone v3 plane unavailable");
         return;
     };
-    let Some(guest) = crate::guest_target_control::guest_target_ref(session.identity().guest_ref())
+    let Some(guest) = d2b_provider_guest::guest_target_ref(session.identity().guest_ref())
     else {
         tracing::warn!(zone = %zone, "guest target bind skipped: session subject is not a guest");
         return;
     };
     let generation = session.generation();
-    let control = match crate::guest_target_control::session_target_control(
-        Arc::clone(session),
+    let control = match d2b_provider_guest::session_target_control(
+        crate::guest_target_session::DaemonGuestTargetSession::new(Arc::clone(session)),
         generation,
     ) {
         Ok(control) => control,
@@ -6657,7 +6657,7 @@ fn unbind_plane_guest_target(
     let Some(plane) = plane else {
         return;
     };
-    let Some(guest) = crate::guest_target_control::guest_target_ref(session.identity().guest_ref())
+    let Some(guest) = d2b_provider_guest::guest_target_ref(session.identity().guest_ref())
     else {
         return;
     };
@@ -7689,7 +7689,7 @@ fn dispatch_wave6_resource_reconcile(
         .and_then(Value::as_str)
         .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
     if resource_type == "Guest"
-        && !crate::guest_driver::GUEST_REGISTRATIONS
+        && !d2b_provider_guest::GUEST_REGISTRATIONS
             .iter()
             .any(|registration| registration.provider_ref == provider_ref)
     {
@@ -7797,7 +7797,7 @@ fn dispatch_wave6_resource_reconcile(
             "device-tpm-reconciled"
         }
         "Guest" => {
-            if provider_ref == d2b_provider_runtime_cloud_hypervisor::PROVIDER_REF {
+            if provider_ref == d2b_provider_guest_cloud_hypervisor::PROVIDER_REF {
                 block_on_future(runtime.reconcile_cloud_hypervisor_guests(Arc::new(state.clone())))?;
                 ready = resource
                     .get("status")
@@ -11408,7 +11408,7 @@ pub(crate) async fn resolve_committed_guest_session_target(
         .provider_ref()
         .cloned()
         .ok_or_else(|| "guest-session:provider-ref-missing".to_owned())?;
-    if !d2b_provider_runtime_cloud_hypervisor::is_provider_ref(&provider_ref) {
+    if !d2b_provider_guest_cloud_hypervisor::is_provider_ref(&provider_ref) {
         return Err("guest-session:provider-ref-unsupported".to_owned());
     }
     let provider_value = runtime
@@ -11429,9 +11429,9 @@ pub(crate) async fn resolve_committed_guest_session_target(
     {
         return Err("guest-session:provider-identity-invalid".to_owned());
     }
-    let endpoint_ref = d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
+    let endpoint_ref = d2b_provider_guest_cloud_hypervisor::deterministic_child_ref(
         guest_ref,
-        d2b_provider_runtime_cloud_hypervisor::ChildRole::GuestControlEndpoint,
+        d2b_provider_guest_cloud_hypervisor::ChildRole::GuestControlEndpoint,
     )
     .map_err(|_| "guest-session:endpoint-ref-invalid".to_owned())?;
     // `Endpoint` is a converted type: the manager is its only writer, so the
@@ -11709,7 +11709,7 @@ pub(crate) async fn resolve_component_session_endpoint_for_guest(
         .guest_setup_descriptor_bytes(target.zone().as_str(), target.guest_ref().name().as_str())
         .ok_or_else(|| "guest-session:descriptor-unavailable".to_owned())?;
     let descriptor =
-        d2b_provider_runtime_cloud_hypervisor::GuestSetupDescriptor::from_canonical_bytes(
+        d2b_provider_guest_cloud_hypervisor::GuestSetupDescriptor::from_canonical_bytes(
             descriptor_bytes,
         )
         .map_err(|_| "guest-session:descriptor-invalid".to_owned())?;
@@ -11727,9 +11727,9 @@ pub(crate) async fn resolve_component_session_endpoint_for_guest(
     if descriptor.descriptor().provider_generation() != target.provider_generation() {
         return Err("guest-session:provider-generation-mismatch".to_owned());
     }
-    let process_ref = d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
+    let process_ref = d2b_provider_guest_cloud_hypervisor::deterministic_child_ref(
         target.guest_ref(),
-        d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess,
+        d2b_provider_guest_cloud_hypervisor::ChildRole::VmmProcess,
     )
     .map_err(|_| "guest-session:process-ref-invalid".to_owned())?;
     let process_value = runtime
@@ -11823,7 +11823,7 @@ pub(crate) async fn resolve_component_session_endpoint_for_guest(
         .ok_or_else(|| "guest-session:vmm-socket-parent-unavailable".to_owned())?;
     let (expected_state_root_uid, expected_state_root_gid) =
         resolve_component_session_state_root_owner(state)?;
-    let endpoint = d2b_provider_runtime_cloud_hypervisor::GuestControlEndpoint::new(
+    let endpoint = d2b_provider_guest_cloud_hypervisor::GuestControlEndpoint::new(
         target.endpoint_ref().clone(),
         target.guest_ref().clone(),
         target.zone().clone(),
@@ -12200,7 +12200,7 @@ pub(crate) async fn ensure_guest_target_session(
     zone: &ZoneId,
     guest_ref: &ResourceRef,
 ) -> Result<(), String> {
-    let Some(guest) = crate::guest_target_control::guest_target_ref(guest_ref) else {
+    let Some(guest) = d2b_provider_guest::guest_target_ref(guest_ref) else {
         return Err("guest-session:subject-not-a-guest".to_owned());
     };
     let plane = state
@@ -12242,8 +12242,10 @@ pub(crate) async fn ensure_guest_target_session(
     {
         return Ok(());
     }
-    let control = crate::guest_target_control::session_target_control(
-        std::sync::Arc::clone(&session),
+    let control = d2b_provider_guest::session_target_control(
+        crate::guest_target_session::DaemonGuestTargetSession::new(std::sync::Arc::clone(
+            &session,
+        )),
         generation,
     )
     .map_err(|error| format!("guest-session:target-control-unavailable:{error}"))?;
