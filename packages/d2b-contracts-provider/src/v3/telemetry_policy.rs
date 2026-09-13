@@ -6,6 +6,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::v3::generated::telemetry_catalog::{API_VERBS, PROCESS_PROVIDERS, RESOURCE_TYPE_VALUES};
+
 /// Exact keys which can never be metric dimensions.
 pub const FORBIDDEN_LABEL_KEYS: &[&str] = &[
     "vm",
@@ -42,28 +44,6 @@ pub const OTEL_RESOURCE_ATTRIBUTES: &[&str] = &[
     "d2b.provider",
     "d2b.component",
     "service.version",
-];
-
-const RESOURCE_TYPE_VALUES: &[&str] = &[
-    "Zone",
-    "ZoneLink",
-    "Provider",
-    "Role",
-    "RoleBinding",
-    "Quota",
-    "Host",
-    "Guest",
-    "Process",
-    "EphemeralProcess",
-    "Volume",
-    "Network",
-    "Device",
-    "User",
-    "Credential",
-    "Endpoint",
-    "ResourceExport",
-    "ResourceImport",
-    "vendor",
 ];
 
 /// Closed value domains for accepted metric-label keys.
@@ -130,19 +110,7 @@ pub const METRIC_LABEL_POLICY: &[(&str, &[&str])] = &[
     ("projection_type", RESOURCE_TYPE_VALUES),
     (
         "verb",
-        &[
-            "get",
-            "list",
-            "watch",
-            "create",
-            "update-spec",
-            "update-status",
-            "update-metadata",
-            "update-finalizers",
-            "delete",
-            "use-credential",
-            "admin-credential",
-        ],
+        API_VERBS,
     ),
     ("profile", &["NN", "KK", "IKpsk2"]),
     ("purpose_class", &["local", "enrolled", "bootstrap"]),
@@ -755,7 +723,7 @@ pub const METRIC_DESCRIPTOR_REGISTRY: &[MetricDescriptorSpec] = &[
         "d2b_api_request_total",
         &[
             ("verb", API_VERBS),
-            ("resource_type", RESOURCE_TYPES),
+            ("resource_type", RESOURCE_TYPE_VALUES),
             (
                 "outcome",
                 &[
@@ -772,7 +740,7 @@ pub const METRIC_DESCRIPTOR_REGISTRY: &[MetricDescriptorSpec] = &[
     ),
     descriptor(
         "d2b_api_request_duration_seconds",
-        &[("verb", API_VERBS), ("resource_type", RESOURCE_TYPES)],
+        &[("verb", API_VERBS), ("resource_type", RESOURCE_TYPE_VALUES)],
     ),
     descriptor("d2b_api_watch_active", &[]),
     descriptor(
@@ -880,7 +848,7 @@ pub const METRIC_DESCRIPTOR_REGISTRY: &[MetricDescriptorSpec] = &[
     descriptor("d2b_store_group_commit_size", &[]),
     descriptor(
         "d2b_store_conflict_total",
-        &[("resource_type", RESOURCE_TYPES)],
+        &[("resource_type", RESOURCE_TYPE_VALUES)],
     ),
     descriptor("d2b_store_watch_active", &[]),
     descriptor("d2b_store_revision", &[]),
@@ -973,42 +941,6 @@ pub const METRIC_DESCRIPTOR_REGISTRY: &[MetricDescriptorSpec] = &[
     descriptor("d2b_session_active", &[("transport", TRANSPORTS)]),
 ];
 
-const API_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-    "use-credential",
-    "admin-credential",
-];
-
-const RESOURCE_TYPES: &[&str] = &[
-    "Zone",
-    "ZoneLink",
-    "Provider",
-    "Role",
-    "RoleBinding",
-    "Quota",
-    "Host",
-    "Guest",
-    "Process",
-    "EphemeralProcess",
-    "Volume",
-    "Network",
-    "Device",
-    "User",
-    "Credential",
-    "Endpoint",
-    "ResourceExport",
-    "ResourceImport",
-    "vendor",
-];
-
 const SERVICE_LABELS: &[&str] = &[
     "bus",
     "d2b.resource.v3",
@@ -1024,7 +956,6 @@ const SERVICE_LABELS: &[&str] = &[
 
 const DIRECTIONS: &[&str] = &["local", "host", "guest", "zone_link"];
 const TRANSPORTS: &[&str] = &["unix", "vsock", "zone_link"];
-const PROCESS_PROVIDERS: &[&str] = &["minijail", "systemd"];
 const HANDLERS: &[&str] = &[
     "configuration",
     "api_catalog",
