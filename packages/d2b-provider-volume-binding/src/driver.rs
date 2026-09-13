@@ -1,53 +1,47 @@
-//! VolumeBinding resource driver (U7): the v3 `ResourceDriver` conversion
-//! of the binding leg of the shared-Volume path (R4, R8, R9; KTD7, KTD1,
-//! F1, F4).
+//! The VolumeBinding resource driver: the v3 `ResourceDriver` conversion of
+//! the binding leg of the shared-Volume path.
 //!
-//! This driver now owns the whole binding family: the legacy shared-Runner
-//! binding leg (`SharedVolumeResourceReconciler` over
-//! `DaemonVolumeProviderEffects::reconcile_binding`/`finalize_binding`) is
-//! deleted, and the behavior that survived it is folded here:
+//! The driver owns the whole binding family: the derived
+//! [`VirtiofsdWorkerPlan`] is the serving authority (a binding the frozen
+//! plan contract rejects is refused with the stable provider reason, the plan
+//! travels in the in-memory status and never in a resource, and the worker
+//! Process child is minted argv-free so the Process controller composes its
+//! launch from the binding and Volume rows), reconcile derives the
+//! binding-owned worker Process and Endpoint children, ensures each through
+//! the manager-routed ensure (the child spec is committed BEFORE the child
+//! actor exists), retires owned children the derived set no longer names
+//! endpoint-first / process-last, registers the dependency watches, and
+//! publishes the in-memory status.
 //!
-//! - the derived [`VirtiofsdWorkerPlan`] is the serving authority: a
-//!   binding the frozen plan contract rejects is refused with the stable
-//!   provider reason, the plan travels in the in-memory status (never in a
-//!   resource, KTD1), and the worker Process child is minted argv-free so
-//!   the Process controller composes its launch from the binding/Volume
-//!   rows (KTD13, U17);
-//! - reconcile derives the binding-owned worker Process and Endpoint
-//!   children exactly as the preserved `binding_children` minting did
-//!   (`worker_child_specs`), ensures each through the manager-routed ensure
-//!   (the child spec is committed BEFORE the child actor exists, F1),
-//!   retires owned children the derived set no longer names endpoint-first /
-//!   process-last, registers the dependency watches (R12/R17), and
-//!   publishes the in-memory status (R11);
-//! - delete preserves the drain/finalizer semantics: the guest mount is
-//!   observed BEFORE anything is deleted (KTD6), and a present mount blocks
-//!   the teardown - retryable, durable deleting mark and owned children
-//!   still in place - instead of force-clearing a served share. Otherwise
-//!   the worker drains, the Endpoint is removed first and the worker Process
-//!   child last, and the manager holds the parent row until the last child
-//!   retires (F3), which is exactly what the old finalizer gated.
+//! Delete preserves the drain/finalizer semantics: the guest mount is
+//! observed BEFORE anything is deleted, and a present mount blocks the
+//! teardown - retryable, durable deleting mark and owned children still in
+//! place - instead of force-clearing a served share. Otherwise the worker
+//! drains, the Endpoint is removed first and the worker Process child last,
+//! and the manager holds the parent row until the last child retires.
 //!
 //! Recover re-derives the launch plan from the persisted binding plus the
-//! bundle-resolved view spec (KTD7) so the re-derived plan matches the
-//! pre-restart incarnation, and adopts the owned-child realization (both
-//! child rows current and the serving socket listening).
+//! bundle-resolved view spec, so the re-derived plan matches the pre-restart
+//! incarnation, and adopts the owned-child realization (both child rows
+//! current and the serving socket listening).
 //!
-//! Conversion mapping (spec section 13):
-//! - `describe` -> [`BindingDriverFactory`] registration under `VolumeBinding`.
+//! Conversion mapping:
+//! - `describe` -> [`binding_descriptor`] registration under `VolumeBinding`.
 //! - `validate_spec` -> [`ResourceDriver::validate`].
 //! - `observe` -> [`ResourceDriver::recover`].
 //! - `binding_children` minting + readiness -> [`ResourceDriver::reconcile`].
 //! - `finalize_binding` drain + endpoint-first teardown -> [`ResourceDriver::delete`].
-//! - `UpdateStatus` -> `ctx.set_status` (in-memory only, R11).
+//! - `UpdateStatus` -> `ctx.set_status` (in-memory only).
 //!
-//! The KTD7 zone-authority inputs (target Guest vcpu count for the worker
-//! thread pool) are factory wiring: U9 folds them from the bundle resolver
-//! and ZoneAuthorityIdentity path, never from the spec store.
-#![allow(dead_code)]
+//! Everything the driver needs from outside arrives through the driver
+//! effect port ([`BindingDriverEffects`]): the serving socket probe, the
+//! socket removal, and the guest-mount observation the daemon realizes. The
+//! production implementation lives in the daemon behind that port, so the
+//! family carries no host state. The zone-authority inputs (target Guest
+//! vcpu count for the worker thread pool) are factory wiring, folded by the
+//! plane from the bundle resolver and the Zone authority path, never from the
+//! spec store.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -71,20 +65,43 @@ use d2b_resource_runtime::error::{
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::spec_store::EnsureOutcome;
+use d2b_resource_types::{
+    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
+};
 
-/// The one resource type this factory serves (KTD4 Phase A).
-pub(crate) const BINDING_TYPE_NAME: &str = "VolumeBinding";
+/// The one resource type this factory serves.
+pub const BINDING_TYPE_NAME: &str = "VolumeBinding";
 
-/// The serving Provider this driver owns (old `VOLUME_VIRTIOFS_PROVIDER_REF`).
-const BINDING_PROVIDER_REF: &str = "Provider/volume-virtiofs";
+/// The serving Provider this driver owns.
+const BINDING_PROVIDER_REF: &str = d2b_provider_volume_virtiofs::PROVIDER_REF;
 
 /// The Process Provider the binding-owned worker runs under (old
 /// `worker_child_specs`).
-const WORKER_PROVIDER_REF: &str = "Provider/system-minijail";
+const WORKER_PROVIDER_REF: &str = d2b_provider_process_minijail::PROVIDER_REF;
 
 /// Deterministic owned-child resource types.
 const WORKER_TYPE: &str = "Process";
 const ENDPOINT_TYPE: &str = "Endpoint";
+
+/// The children this driver mints, in creation rank order: the worker
+/// Process first, because the Endpoint names it as producer and a realized
+/// producer must exist before the socket that serves it, then that Endpoint.
+/// Children retire in descending rank order, which is the preserved
+/// endpoint-first / process-last teardown.
+pub const BINDING_CREATIONS: &[ChildCreation] = &[
+    ChildCreation {
+        child: WellKnownType::PROCESS,
+        provider_ref: WORKER_PROVIDER_REF,
+        custody: ChildCustody::DriverOwned,
+        order: 0,
+    },
+    ChildCreation {
+        child: WellKnownType::ENDPOINT,
+        provider_ref: BINDING_PROVIDER_REF,
+        custody: ChildCustody::DriverOwned,
+        order: 1,
+    },
+];
 
 /// Preserved resync cadence while the derived child set is not yet current:
 /// the `volume-virtiofs` Runner contract's repair interval (the old runner's
@@ -93,14 +110,15 @@ const BINDING_RESYNC: Duration = Duration::from_secs(
     d2b_provider_volume_virtiofs::virtiofs_runner_contract().repair_interval_secs,
 );
 
-/// Teardown rank of the owned-child types (R9/F3): the Endpoint is removed
-/// before the worker Process that produces it; anything else ranks last.
-fn teardown_rank(type_name: &str) -> u8 {
-    match type_name {
-        ENDPOINT_TYPE => 0,
-        WORKER_TYPE => 1,
-        _ => 2,
-    }
+/// Teardown rank of one owned-child type, read from this family's own child
+/// declaration (R9/F3): the Endpoint is removed before the worker Process
+/// that produces it, and a type this driver declares no creation for has no
+/// rank at all, so it retires last.
+fn teardown_rank(type_name: &str) -> Option<u16> {
+    BINDING_CREATIONS
+        .iter()
+        .find(|creation| creation.child.to_resource_type_name().as_str() == type_name)
+        .map(|creation| creation.order)
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +277,7 @@ pub(crate) struct BindingSpecEnvelope {
 }
 
 /// The manager-wired decode hook for VolumeBinding rows.
-pub(crate) fn binding_spec_decoder() -> Arc<dyn SpecDecoder> {
+pub fn binding_spec_decoder() -> Arc<dyn SpecDecoder> {
     typed_spec_decoder(|bytes| {
         serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| BindingSpecEnvelope {
             raw: bytes.to_vec(),
@@ -277,7 +295,7 @@ pub(crate) fn binding_spec_decoder() -> Arc<dyn SpecDecoder> {
 /// The production implementation delegates to the preserved virtiofs
 /// serving effect adapter; test doubles implement the same seam (R4).
 #[async_trait::async_trait]
-pub(crate) trait BindingDriverEffects: Send + Sync + 'static {
+pub trait BindingDriverEffects: Send + Sync + 'static {
     /// Whether the worker's private socket is ready (child-phase evidence).
     async fn socket_ready(&self, socket: &d2b_provider_volume_virtiofs::SocketIdentity)
         -> bool;
@@ -310,102 +328,21 @@ pub(crate) trait BindingDriverEffects: Send + Sync + 'static {
     }
 }
 
-/// Boxed future returned by one production serving-socket probe: resolving
-/// the socket target is store-backed (the registry loads derived-child rows
-/// from the authority on a miss), so the port cannot be a sync closure.
-pub(crate) type ServingEffectFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-/// Production effects over the preserved virtiofs serving adapter. U9 wires
-/// the adapter construction (the same inputs the old
-/// `ChildReadinessPort` consumed); U13 wires the guest-mount observation over
-/// the Zone target directory, so the KTD6 drain gate reads the target layer's
-/// own evidence instead of the old Endpoint-published state.
-pub(crate) struct ProductionBindingDriverEffects {
-    ready: Arc<
-        dyn for<'a> Fn(&'a d2b_provider_volume_virtiofs::SocketIdentity) -> ServingEffectFuture<'a, bool>
-            + Send
-            + Sync,
-    >,
-    remove: Arc<
-        dyn for<'a> Fn(
-                &'a d2b_provider_volume_virtiofs::SocketIdentity,
-            ) -> ServingEffectFuture<'a, Result<(), String>>
-            + Send
-            + Sync,
-    >,
-    /// Guest mount observation (U13/KTD6): one row key resolved through the
-    /// Zone target directory - a target-local realization the Guest reports
-    /// `ready` for that source is the only `true` answer.
-    guest_mount: Arc<
-        dyn for<'a> Fn(&'a ResourceKey) -> ServingEffectFuture<'a, bool> + Send + Sync,
-    >,
-}
-
-impl ProductionBindingDriverEffects {
-    pub(crate) fn new(
-        ready: Arc<
-            dyn for<'a> Fn(
-                    &'a d2b_provider_volume_virtiofs::SocketIdentity,
-                ) -> ServingEffectFuture<'a, bool>
-                + Send
-                + Sync,
-        >,
-        remove: Arc<
-            dyn for<'a> Fn(
-                    &'a d2b_provider_volume_virtiofs::SocketIdentity,
-                ) -> ServingEffectFuture<'a, Result<(), String>>
-                + Send
-                + Sync,
-        >,
-        guest_mount: Arc<
-            dyn for<'a> Fn(&'a ResourceKey) -> ServingEffectFuture<'a, bool> + Send + Sync,
-        >,
-    ) -> Self {
-        Self {
-            ready,
-            remove,
-            guest_mount,
-        }
-    }
-}
-#[async_trait::async_trait]
-impl BindingDriverEffects for ProductionBindingDriverEffects {
-    async fn socket_ready(
-        &self,
-        socket: &d2b_provider_volume_virtiofs::SocketIdentity,
-    ) -> bool {
-        (self.ready)(socket).await
-    }
-
-    async fn remove_socket(
-        &self,
-        socket: &d2b_provider_volume_virtiofs::SocketIdentity,
-    ) -> Result<(), String> {
-        (self.remove)(socket).await
-    }
-
-    async fn guest_mount_ready(
-        &self,
-        key: &ResourceKey,
-        _binding: &StoredBinding,
-    ) -> Result<bool, String> {
-        Ok((self.guest_mount)(key).await)
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Factory (U9 wiring shape)
+// Factory
 // ---------------------------------------------------------------------------
 
-/// Everything the composition unit (U9) must construct to instantiate the
-/// binding driver factory for one zone: the serving effects plus the KTD7
-/// zone-authority inputs (the target Guest vcpu count resolved by the
-/// bundle resolver, never read from the spec store).
-pub(crate) struct BindingDriverArgs {
-    pub(crate) zone: String,
-    pub(crate) effects: Arc<dyn BindingDriverEffects>,
-    /// Target Guest vcpu count; the worker thread-pool size (KTD7).
-    pub(crate) vcpu_count: u32,
+/// Everything the plane must construct to instantiate the binding driver
+/// factory for one zone: the serving effects plus the zone-authority inputs
+/// (the target Guest vcpu count resolved by the bundle resolver, never read
+/// from the spec store).
+pub struct BindingDriverArgs {
+    /// The zone this driver's rows live in.
+    pub zone: String,
+    /// The serving effect port the production implementation realizes.
+    pub effects: Arc<dyn BindingDriverEffects>,
+    /// Target Guest vcpu count; the worker thread-pool size.
+    pub vcpu_count: u32,
 }
 
 /// [`ResourceDriverFactory`] for the `VolumeBinding` resource type.
@@ -486,16 +423,14 @@ impl BindingDriver {
             .spec::<BindingSpecEnvelope>()
             .map_err(|_| self.error(BindingDriverErrorKind::SpecInvalid, op))?;
         match envelope.provider_ref.as_ref() {
-            Some(provider_ref)
-                if provider_ref.resource_type().as_str() == "Provider"
-                    && provider_ref.name().as_str() == "volume-virtiofs" => {}
+            Some(provider_ref) if provider_ref.to_canonical_string() == BINDING_PROVIDER_REF => {}
             other => {
                 return Err(self
                     .error(BindingDriverErrorKind::ProviderUnsupported, op)
                     .with_detail(
                         FailureDetail::at("spec/provider").comparison(FailureComparison::new(
                             "spec.providerRef",
-                            "Provider/volume-virtiofs",
+                            BINDING_PROVIDER_REF,
                             other
                                 .map(|reference| reference.to_canonical_string())
                                 .unwrap_or_else(|| "absent".to_owned()),
@@ -702,7 +637,12 @@ impl BindingDriver {
             .iter()
             .filter(|row| !row.deleting && !desired.contains(&row.key))
             .collect::<Vec<_>>();
-        obsolete.sort_by_key(|row| (teardown_rank(&row.key.type_name), row.key.name.clone()));
+        obsolete.sort_by_key(|row| {
+            (
+                core::cmp::Reverse(teardown_rank(&row.key.type_name)),
+                row.key.name.clone(),
+            )
+        });
         let retired = !obsolete.is_empty();
         for row in obsolete {
             ctx.delete(&row.key)
@@ -880,11 +820,7 @@ impl ResourceDriver for BindingDriver {
                 DriverFailure::not_yet(error.op, error.kind.failure_kind())
             }
             BindingDriverErrorKind::ServingEffect | BindingDriverErrorKind::ChildMutation => {
-                DriverFailure::error(
-                    error.op,
-                    error.kind.failure_kind(),
-                    FailureClass::Retryable,
-                )
+                DriverFailure::error(error.op, error.kind.failure_kind(), error.kind.class())
             }
         };
         failure.with_detail(error.detail.clone())
@@ -1089,9 +1025,76 @@ impl ResourceDriver for BindingDriver {
 }
 
 // ---------------------------------------------------------------------------
+// Registration: the type's driver declaration
+// ---------------------------------------------------------------------------
+
+/// The resource verbs the VolumeBinding type supports.
+///
+/// Derived from the v3 resource plane's converted-type verb surface: the
+/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
+/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
+/// `Credential` type. Every converted type is served by the same manager
+/// verbs, and Role rules and the typed CLI nouns resolve their gating from
+/// this declaration.
+const BINDING_VERBS: &[&str] = &[
+    "get",
+    "list",
+    "watch",
+    "create",
+    "update-spec",
+    "update-status",
+    "update-metadata",
+    "update-finalizers",
+    "delete",
+];
+
+/// The execution domains the VolumeBinding type can be reconciled in.
+///
+/// Derived from the placement contract: `VolumeBinding` names no placement
+/// anchor (`PlacementAnchor::canonical_for` resolves none), so a binding row
+/// never carries the canonical `spec.executionRef` and the plane reconciles
+/// it on its containing Zone's Host. The attachment's `executionRef` selects
+/// the Guest that consumes the share, never where the binding row itself is
+/// reconciled.
+const BINDING_EXECUTION_DOMAINS: &[&str] = &["host"];
+
+/// The resource types the binding driver reads while reconciling.
+///
+/// The driver resolves the owning Volume row through the manager for its view
+/// spec and its owner fence; the worker plan it derives from that row is what
+/// the owned children are minted from.
+const BINDING_READS: &[WellKnownType] = &[WellKnownType::VOLUME];
+
+/// The VolumeBinding type's driver declaration.
+///
+/// `VolumeBinding` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot
+/// serve the converted binding shapes without it, so it must be registered
+/// before the plane opens. The type is not exportable: `ResourceExport`
+/// admits only qualified `*.d2bus.org.*Service` types, so a binding can never
+/// be an export subject. The driver serves no broker operations and
+/// contributes no startup steps or services; the worker Process and Endpoint
+/// children it mints are declared in [`BINDING_CREATIONS`].
+pub fn binding_descriptor(args: BindingDriverArgs) -> DriverDescriptor {
+    DriverDescriptor {
+        resource_type: WellKnownType::VOLUME_BINDING,
+        allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+        verbs: BINDING_VERBS,
+        execution: BINDING_EXECUTION_DOMAINS,
+        exportable: false,
+        reads: BINDING_READS,
+        operations: &[],
+        creations: BINDING_CREATIONS,
+        startup: &[],
+        services: &[],
+        decoder: binding_spec_decoder(),
+        factory: Arc::new(BindingDriverFactory::new(args)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests: driver unit tests over a scripted serving port and a recording
-// manager endpoint with one shared ordered log (R4; F1/AE1 and teardown
-// ordering observed as the manager records it).
+// manager endpoint with one shared ordered log (teardown and commit-before-
+// spawn ordering observed as the manager records it).
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -1110,8 +1113,6 @@ mod tests {
     };
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
-    use d2b_resource_runtime::manager::ResourceView;
-    use d2b_resource_runtime::resource::ResourceStatus;
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
 
@@ -1586,12 +1587,12 @@ mod tests {
 
     // -- fenced status projection (KTD3) ---------------------------------------
 
-    /// The converted binding's wire view carries `resource.ready` and the
-    /// fence of the row's own identity: the driver projection is rendered
-    /// verbatim by the manager-backed API, and the frozen reader accepts it
-    /// for exactly this row.
+    /// The concluding pass publishes the fenced projection as the frozen
+    /// typed contract: the fence names the row's own uid, generation, and
+    /// revision, so the frozen reader accepts it for exactly this row and for
+    /// no unfenced revision.
     #[tokio::test]
-    async fn fenced_projection_renders_as_the_wire_status_resource() {
+    async fn the_concluding_pass_publishes_the_fenced_status_projection() {
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
         let fake = FakeServingEffects::shared(manager.log());
         let row = binding_row([0x42; 16]);
@@ -1611,53 +1612,25 @@ mod tests {
         assert!(typed.ready, "the worker socket is serving");
         assert!(typed.reason.is_none());
 
-        // The manager-backed API renders exactly this layer as the wire
-        // `status.resource` of a row whose status is current for its
-        // generation (the same rendering the fixture's `jq` waits read).
-        let view = ResourceView {
-            key: f.ctx.key().clone(),
-            uid: *f.ctx.uid(),
-            generation: f.ctx.generation(),
-            deleting: false,
-            provenance: ResourceProvenance::Resource,
-            spec: row.spec.clone(),
-            metadata: Vec::new(),
-            owner_key: None,
-            status: Some(ResourceStatus::Ready),
-            status_generation: Some(f.ctx.generation()),
-            status_projection: Some(projection.clone()),
-        };
-        let stored =
-            d2b_resource_api::manager_backend::manager_row_stored(&view).expect("wire render");
-        let wire: serde_json::Value =
-            serde_json::from_slice(&stored.canonical_json).expect("wire envelope json");
-        let resource = &wire["status"]["resource"];
-        assert_eq!(resource, &projection, "the projection is the whole wire layer");
-        assert_eq!(resource["ready"], serde_json::json!(true));
+        // The fence names this row's own identity at the row revision the
+        // manager publishes (the row generation), so the frozen reader accepts
+        // the layer for exactly this row and for no other.
+        let fence = typed.fence.clone();
         assert_eq!(
-            resource["fence"]["uid"], wire["metadata"]["uid"],
-            "the fence names the row's own uid"
+            fence.uid,
+            super::resource_uid(f.ctx.uid()).expect("the row uid is canonical"),
         );
         assert_eq!(
-            resource["fence"]["generation"], wire["metadata"]["generation"],
-            "the fence names the row's own generation"
+            fence.generation,
+            ResourceGeneration::new(f.ctx.generation()).expect("the row generation is canonical"),
         );
-        assert_eq!(
-            resource["fence"]["revision"], wire["metadata"]["revision"],
-            "the fence revision is the row revision the manager publishes"
+        assert_eq!(fence.revision.get(), f.ctx.generation());
+        assert!(fence.revision.get() > 0);
+        assert!(typed.readiness_is_current(&fence.uid, fence.generation, fence.revision));
+        assert!(
+            !typed.readiness_is_current(&fence.uid, fence.generation, ZoneRevision::new(0)),
+            "an unfenced revision never reports the row ready"
         );
-        assert!(resource["fence"]["revision"].as_u64().expect("revision") > 0);
-
-        // And the frozen reader accepts it for exactly that identity.
-        let uid = ResourceUid::parse(wire["metadata"]["uid"].as_str().expect("uid")).expect("uid");
-        let generation = ResourceGeneration::new(
-            wire["metadata"]["generation"].as_u64().expect("generation"),
-        )
-        .expect("generation");
-        let revision = ZoneRevision::new(wire["metadata"]["revision"].as_u64().expect("revision"));
-        let typed =
-            serde_json::from_value::<VolumeBindingStatusResource>(resource.clone()).expect("typed");
-        assert!(typed.readiness_is_current(&uid, generation, revision));
     }
 
     /// The fence cannot be satisfied vacuously: a pass that cannot observe

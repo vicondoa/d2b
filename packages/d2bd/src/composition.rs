@@ -400,7 +400,6 @@ use d2bd_runtime::admission::{PeerOverride, TEST_PEER_OVERRIDE, TEST_PEER_OVERRI
 mod audio_dispatch;
 mod audio_host_controller;
 mod audio_resource_runtime;
-mod binding_child_resource_runtime;
 mod credential_backend_runtime;
 mod credential_resource_runtime;
 pub mod interaction_composition;

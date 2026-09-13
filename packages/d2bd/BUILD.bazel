@@ -43,6 +43,8 @@ d2bd_shared_deps = [
     "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
     "//packages/d2b-provider-device-gpu:d2b_provider_device_gpu",
     "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
+    "//packages/d2b-provider-volume:d2b_provider_volume",
+    "//packages/d2b-provider-volume-binding:d2b_provider_volume_binding",
     "//packages/d2b-provider-observability-otel:d2b_provider_observability_otel",
     "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland",
     "//packages/d2b-provider-network-local:d2b_provider_network_local",

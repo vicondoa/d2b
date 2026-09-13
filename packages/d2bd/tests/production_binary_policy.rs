@@ -17,6 +17,25 @@ fn read_required_d2bd_source(relative: &str) -> String {
     panic!("required d2bd source is missing: {relative}");
 }
 
+/// Read one source file from a sibling package: the family crates now own the
+/// drivers, so a policy assertion about a moved driver reads it there.
+fn read_required_package_source(relative_to_packages: &str) -> String {
+    let manifest_root =
+        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()));
+    let mut candidates = vec![manifest_root.join("..").join(relative_to_packages)];
+    if let Some(repo_root) = env::var_os("D2B_REPO_ROOT") {
+        candidates.push(PathBuf::from(repo_root).join("packages").join(relative_to_packages));
+    }
+    for path in candidates {
+        match fs::read_to_string(&path) {
+            Ok(source) => return source,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("read required package source {}: {error}", path.display()),
+        }
+    }
+    panic!("required package source is missing: {relative_to_packages}");
+}
+
 #[test]
 fn production_binary_contains_no_peer_override_surface() {
     let binary = fs::read(env!("CARGO_BIN_EXE_d2bd")).expect("read production d2bd binary");
@@ -115,7 +134,7 @@ fn cloud_hypervisor_guest_does_not_publish_volume_readiness() {
         "Cloud Hypervisor Guest setup must not publish Volume Ready"
     );
 
-    let volume_driver = read_required_d2bd_source("src/volume_driver.rs");
+    let volume_driver = read_required_package_source("d2b-provider-volume/src/driver.rs");
     assert!(
         volume_driver.contains("VOLUME_TYPE_NAME: &str = \"Volume\""),
         "volume-local must remain the sole Volume owner"

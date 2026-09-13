@@ -2145,7 +2145,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                         .get_stored(resource_ref, "cloud-hypervisor-binding-dependency")
                         .await
                         .map(|binding| {
-                            crate::binding_child_resource_runtime::binding_readiness_current(
+                            d2b_provider_volume_binding::binding_readiness_current(
                                 &binding,
                             )
                         })
@@ -5970,7 +5970,7 @@ impl ZoneResourceRuntime {
                 continue;
             }
             let Some(spec) =
-                crate::binding_child_resource_runtime::parsed_binding_spec(binding)
+                d2b_provider_volume_binding::parsed_binding_spec(binding)
             else {
                 tracing::debug!(
                     binding = %binding.resource_ref.to_canonical_string(),

@@ -1,30 +1,30 @@
-//! Volume resource driver (U7): the v3 `ResourceDriver` conversion of the
-//! daemon-owned shared-Volume path (R4, R8, R9; KTD7, F1, F4).
+//! The Volume resource driver: the v3 `ResourceDriver` conversion of the
+//! shared-Volume path.
 //!
-//! The driver keeps the old shared-volume Volume leg (the deleted
-//! `SharedVolumeResourceReconciler`'s `reconcile_volume`) and nothing else:
-//! recover discovers existing volume-local layout state on the host target,
+//! The driver keeps the shared-volume Volume leg and nothing else: recover
+//! discovers existing volume-local layout state on the host target,
 //! reconcile runs the preserved volume-local layout effect and then derives
 //! one deterministic `VolumeBinding` child per virtiofs attachment through
 //! the manager-routed ensure (the child spec is committed BEFORE the child
-//! actor exists, F1), and delete removes the Volume's own layout state.
-//! Child teardown on parent delete is the manager's reconcile_children diff
-//! (R9/F3): the manager marks children deleting and drives bindings ->
-//! endpoint -> process-last ordering; this driver's delete covers only the
-//! Volume's own effect, with the drain finalizer preserved behind the
-//! provider port.
+//! actor exists), and delete removes the Volume's own layout state. Child
+//! teardown on parent delete is the manager's reconcile_children diff: the
+//! manager marks children deleted and drives bindings -> endpoint ->
+//! process-last ordering; this driver's delete covers only the Volume's own
+//! effect, with the drain finalizer preserved behind the provider port.
 //!
-//! Conversion mapping (spec section 13):
-//! - `describe` -> [`VolumeDriverFactory`] registration under `Volume`.
+//! Conversion mapping:
+//! - `describe` -> [`volume_descriptor`] registration under `Volume`.
 //! - `validate_spec` -> [`ResourceDriver::validate`].
 //! - `observe` -> [`ResourceDriver::recover`].
 //! - layout effect + `volume_children` ensure -> [`ResourceDriver::reconcile`].
 //! - volume-local cleanup -> [`ResourceDriver::delete`].
-//! - `UpdateStatus` -> `ctx.set_status` (in-memory only, R11).
+//! - `UpdateStatus` -> `ctx.set_status` (in-memory only).
 //!
-//! U9 wires this factory into the composition; until the cutover the
-//! module surface is only exercised from its tests.
-#![allow(dead_code)]
+//! Everything the driver needs from outside arrives through the driver
+//! effect port ([`VolumeDriverEffects`]): the layout effect the daemon
+//! realizes over the preserved volume-local controller and the durable
+//! probe recover reads. The production implementation lives in the daemon
+//! behind that port, so the family carries no effect implementation.
 use std::sync::Arc;
 
 use d2b_contracts_resource::v3::{
@@ -32,7 +32,7 @@ use d2b_contracts_resource::v3::{
     ResourceUid,
     volume::{AttachmentAccess, VolumeSpec},
 };
-use d2b_provider_volume_local::{LayoutPhase, VolumeLocalController, desired_binding_intents};
+use d2b_provider_volume_local::desired_binding_intents;
 use d2b_resource_runtime::context::{
     ChildEnsure, ResourceContext, SpecDecoder, typed_spec_decoder,
 };
@@ -44,19 +44,32 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_types::{
+    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
+};
 
-/// The one resource type this factory serves (KTD4 Phase A).
-pub(crate) const VOLUME_TYPE_NAME: &str = "Volume";
+/// The one resource type this factory serves.
+pub const VOLUME_TYPE_NAME: &str = "Volume";
 
 /// The fixed Provider this driver serves (old `SharedVolumeResourceKind`).
 const VOLUME_PROVIDER_NAME: &str = "volume-local";
 
 /// The serving Provider the derived `VolumeBinding` rows select.
-const BINDING_PROVIDER_REF: &str = "Provider/volume-virtiofs";
+const BINDING_PROVIDER_REF: &str = d2b_provider_volume_virtiofs::PROVIDER_REF;
 
 /// Deterministic `VolumeBinding` child type (old
 /// `VOLUME_BINDING_RESOURCE_TYPE`).
 const VOLUME_BINDING_TYPE: &str = "VolumeBinding";
+
+/// The children this driver mints: one deterministic `VolumeBinding` per
+/// admitted virtiofs attachment, served by the Provider the derived rows
+/// select and created by this driver, which also owns their teardown.
+pub const VOLUME_CREATIONS: &[ChildCreation] = &[ChildCreation {
+    child: WellKnownType::VOLUME_BINDING,
+    provider_ref: BINDING_PROVIDER_REF,
+    custody: ChildCustody::DriverOwned,
+    order: 0,
+}];
 
 // ---------------------------------------------------------------------------
 // Driver error and status
@@ -70,9 +83,6 @@ enum VolumeDriverErrorKind {
     ProviderUnsupported,
     /// A provider layout effect failed transiently.
     LayoutEffect,
-    /// The provider layout report is not Ready yet (Degraded/Pending): the
-    /// pass defers with a requeue instead of respawning the effect.
-    LayoutNotReady,
     /// The manager refused a child ensure/delete.
     ChildMutation,
     /// Owned children are still retiring before this Volume may drain.
@@ -84,7 +94,7 @@ enum VolumeDriverErrorKind {
 impl VolumeDriverErrorKind {
     const fn class(self) -> FailureClass {
         match self {
-            Self::LayoutEffect | Self::ChildMutation | Self::LayoutNotReady | Self::DrainPending => {
+            Self::LayoutEffect | Self::ChildMutation | Self::DrainPending => {
                 FailureClass::Retryable
             }
             Self::SpecInvalid | Self::ProviderUnsupported | Self::ChildDerivation => {
@@ -99,7 +109,6 @@ impl VolumeDriverErrorKind {
             Self::SpecInvalid => FailureKinds::VOLUME_SPEC_INVALID,
             Self::ProviderUnsupported => FailureKinds::VOLUME_PROVIDER_UNSUPPORTED,
             Self::LayoutEffect => FailureKinds::VOLUME_LAYOUT_EFFECT_FAILED,
-            Self::LayoutNotReady => FailureKinds::VOLUME_LAYOUT_NOT_READY,
             Self::ChildMutation => FailureKinds::VOLUME_CHILD_MUTATION_FAILED,
             // The shared child-first-teardown kind: draining is not a child
             // mutation.
@@ -136,7 +145,6 @@ impl core::fmt::Display for VolumeDriverError {
             VolumeDriverErrorKind::SpecInvalid => "volume-spec-invalid",
             VolumeDriverErrorKind::ProviderUnsupported => "volume-provider-unsupported",
             VolumeDriverErrorKind::LayoutEffect => "volume-layout-effect-failed",
-            VolumeDriverErrorKind::LayoutNotReady => "volume-layout-not-ready",
             VolumeDriverErrorKind::ChildMutation => "volume-child-mutation-failed",
             VolumeDriverErrorKind::DrainPending => "children-draining",
             VolumeDriverErrorKind::ChildDerivation => "volume-child-derivation-invalid",
@@ -171,7 +179,7 @@ pub(crate) struct VolumeSpecEnvelope {
 }
 
 /// The manager-wired decode hook for Volume rows.
-pub(crate) fn volume_spec_decoder() -> Arc<dyn SpecDecoder> {
+pub fn volume_spec_decoder() -> Arc<dyn SpecDecoder> {
     typed_spec_decoder(|bytes| {
         serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| VolumeSpecEnvelope {
             raw: bytes.to_vec(),
@@ -192,7 +200,7 @@ pub(crate) fn volume_spec_decoder() -> Arc<dyn SpecDecoder> {
 /// Object-erased on purpose: the driver holds the port as
 /// `Arc<dyn VolumeDriverEffects>` so one factory serves every Volume row.
 #[async_trait::async_trait]
-pub(crate) trait VolumeDriverEffects: Send + Sync + 'static {
+pub trait VolumeDriverEffects: Send + Sync + 'static {
     /// Run the preserved volume-local layout reconcile and report whether
     /// the layout phase reached `Ready`.
     async fn ensure_layout(
@@ -213,68 +221,17 @@ pub(crate) trait VolumeDriverEffects: Send + Sync + 'static {
     fn has_layout(&self, volume_uid: &ResourceUid) -> bool;
 }
 
-/// Production effects over the preserved `VolumeLocalController`. U9 wires
-/// the root resolver/adapter construction (the same inputs the old
-/// reconciler assembled inline per call).
-pub(crate) struct ProductionVolumeDriverEffects<S, L> {
-    controller: Arc<dyn Fn() -> VolumeLocalController<S, L> + Send + Sync>,
-    state: Arc<dyn Fn(&ResourceUid) -> bool + Send + Sync>,
-}
-
-impl<S, L> ProductionVolumeDriverEffects<S, L> {
-    pub(crate) fn new(
-        controller: Arc<dyn Fn() -> VolumeLocalController<S, L> + Send + Sync>,
-        state: Arc<dyn Fn(&ResourceUid) -> bool + Send + Sync>,
-    ) -> Self {
-        Self { controller, state }
-    }
-}
-
-#[async_trait::async_trait]
-impl<
-    S: d2b_provider_volume_local::VolumeSourceEffectPort + 'static,
-    L: d2b_provider_volume_local::VolumeLayoutEffectPort + 'static,
-> VolumeDriverEffects for ProductionVolumeDriverEffects<S, L> {
-    async fn ensure_layout(
-        &self,
-        volume_uid: &ResourceUid,
-        spec: &VolumeSpec,
-        provider: Option<&serde_json::Value>,
-        owner_ref: Option<&ResourceRef>,
-    ) -> Result<bool, String> {
-        let report = (self.controller)()
-            .reconcile(volume_uid, spec, provider, owner_ref)
-            .await
-            .map_err(|error| error.to_string())?;
-        Ok(report.layout_phase == LayoutPhase::Ready)
-    }
-
-    async fn remove_layout(
-        &self,
-        volume_uid: &ResourceUid,
-        spec: &VolumeSpec,
-    ) -> Result<(), String> {
-        (self.controller)()
-            .cleanup(volume_uid, spec)
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-
-    fn has_layout(&self, volume_uid: &ResourceUid) -> bool {
-        (self.state)(volume_uid)
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Factory (U9 wiring shape)
+// Factory
 // ---------------------------------------------------------------------------
 
-/// Everything the composition unit (U9) must construct to instantiate the
-/// Volume driver factory for one zone.
-pub(crate) struct VolumeDriverArgs {
-    pub(crate) zone: String,
-    pub(crate) effects: Arc<dyn VolumeDriverEffects>,
+/// Everything the plane must construct to instantiate the Volume driver
+/// factory for one zone.
+pub struct VolumeDriverArgs {
+    /// The zone this driver's rows live in.
+    pub zone: String,
+    /// The layout effect port the production implementation realizes.
+    pub effects: Arc<dyn VolumeDriverEffects>,
 }
 
 /// [`ResourceDriverFactory`] for the `Volume` resource type. Construction is
@@ -314,7 +271,6 @@ impl ResourceDriverFactory for VolumeDriverFactory {
 /// One Volume resource's driver.
 #[derive(Clone)]
 pub(crate) struct VolumeDriver {
-    zone: String,
     effects: Arc<dyn VolumeDriverEffects>,
     /// In-memory layout phase (spec section 32: nothing persisted; recover
     /// re-probes the host state through [`VolumeDriverEffects::has_layout`]).
@@ -342,7 +298,6 @@ pub(crate) struct DesiredBindingChild {
 impl VolumeDriver {
     pub(crate) fn new(args: VolumeDriverArgs) -> Self {
         Self {
-            zone: args.zone,
             effects: args.effects,
             layout_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
@@ -593,11 +548,11 @@ impl ResourceDriver for VolumeDriver {
             VolumeDriverErrorKind::ChildDerivation => {
                 DriverFailure::refused(error.op, error.kind.failure_kind())
             }
-            VolumeDriverErrorKind::LayoutNotReady | VolumeDriverErrorKind::DrainPending => {
+            VolumeDriverErrorKind::DrainPending => {
                 DriverFailure::not_yet(error.op, error.kind.failure_kind())
             }
             VolumeDriverErrorKind::LayoutEffect | VolumeDriverErrorKind::ChildMutation => {
-                DriverFailure::error(error.op, error.kind.failure_kind(), FailureClass::Retryable)
+                DriverFailure::error(error.op, error.kind.failure_kind(), error.kind.class())
             }
         };
         failure.with_detail(error.detail.clone())
@@ -705,8 +660,73 @@ impl ResourceDriver for VolumeDriver {
 }
 
 // ---------------------------------------------------------------------------
+// Registration: the type's driver declaration
+// ---------------------------------------------------------------------------
+
+/// The resource verbs the Volume type supports.
+///
+/// Derived from the v3 resource plane's converted-type verb surface: the
+/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
+/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
+/// `Credential` type. Every converted type is served by the same manager
+/// verbs, and Role rules and the typed CLI nouns resolve their gating from
+/// this declaration.
+const VOLUME_VERBS: &[&str] = &[
+    "get",
+    "list",
+    "watch",
+    "create",
+    "update-spec",
+    "update-status",
+    "update-metadata",
+    "update-finalizers",
+    "delete",
+];
+
+/// The execution domains the Volume type can be reconciled in.
+///
+/// Derived from the placement contract: `Volume` names no placement anchor
+/// (`PlacementAnchor::canonical_for` resolves none), so a Volume row never
+/// carries the canonical `spec.executionRef` and the plane reconciles it on
+/// its containing Zone's Host. A source or attachment reference selects
+/// where a share is served, never where the row itself is reconciled.
+const VOLUME_EXECUTION_DOMAINS: &[&str] = &["host"];
+
+/// The resource types the Volume driver reads while reconciling.
+///
+/// The driver derives every child from its own stored spec plus the layout
+/// intents that spec admits, so it reads no other row.
+const VOLUME_READS: &[WellKnownType] = &[];
+
+/// The Volume type's driver declaration.
+///
+/// `Volume` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot serve
+/// the converted volume shapes without it, so it must be registered before
+/// the plane opens. The type is not exportable: `ResourceExport` admits only
+/// qualified `*.d2bus.org.*Service` types, so a volume can never be an
+/// export subject. The driver serves no broker operations and contributes no
+/// startup steps or services; the `VolumeBinding` children it mints are
+/// declared in [`VOLUME_CREATIONS`].
+pub fn volume_descriptor(args: VolumeDriverArgs) -> DriverDescriptor {
+    DriverDescriptor {
+        resource_type: WellKnownType::VOLUME,
+        allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+        verbs: VOLUME_VERBS,
+        execution: VOLUME_EXECUTION_DOMAINS,
+        exportable: false,
+        reads: VOLUME_READS,
+        operations: &[],
+        creations: VOLUME_CREATIONS,
+        startup: &[],
+        services: &[],
+        decoder: volume_spec_decoder(),
+        factory: Arc::new(VolumeDriverFactory::new(args)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests: driver unit tests over a scripted layout port and a recording
-// manager endpoint (R4; F1/AE1 ordering observed as the manager records it).
+// manager endpoint (ordering observed as the manager records it).
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -992,7 +1012,6 @@ mod tests {
         effects: tokio::sync::mpsc::UnboundedReceiver<
             d2b_resource_runtime::context::EffectCompleted,
         >,
-        manager: RecordingManager,
     }
 
     fn fixture(row: StoredDesiredResource, manager: RecordingManager) -> Fixture {
@@ -1002,12 +1021,12 @@ mod tests {
             row,
             TargetHandle::Host,
             volume_spec_decoder(),
-            Arc::new(manager.clone()),
+            Arc::new(manager),
             Arc::new(NullRequeue),
             effects_tx,
             notify_tx,
         );
-        Fixture { ctx, effects: effects_rx, manager }
+        Fixture { ctx, effects: effects_rx }
     }
 
     async fn driver(effects: Arc<FakeLayoutEffects>) -> Box<dyn DynResourceDriver> {
@@ -1018,12 +1037,6 @@ mod tests {
         factory
             .create(&ResourceKey::new("work", "Volume", "data"))
             .await
-    }
-
-    async fn settle() {
-        for _ in 0..16 {
-            tokio::task::yield_now().await;
-        }
     }
 
     async fn reconcile_to_children(

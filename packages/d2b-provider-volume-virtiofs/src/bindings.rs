@@ -167,7 +167,7 @@ impl StoredBinding {
             .and_then(serde_json::Value::as_object)
             .ok_or(invalid)?;
         if spec.get("providerRef").and_then(serde_json::Value::as_str)
-            != Some("Provider/volume-virtiofs")
+            != Some(crate::PROVIDER_REF)
         {
             return Err(invalid);
         }

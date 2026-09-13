@@ -25,6 +25,13 @@
 
 #![deny(missing_docs)]
 
+/// The canonical `Provider/<name>` reference this Provider owns.
+///
+/// The VolumeBinding rows this Provider serves select it, and the
+/// binding-owned worker Process and its Endpoint are minted under it, so the
+/// declaring crates read the reference instead of spelling it again.
+pub const PROVIDER_REF: &str = "Provider/volume-virtiofs";
+
 mod controller;
 mod error;
 mod bindings;
