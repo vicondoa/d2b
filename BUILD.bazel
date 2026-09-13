@@ -430,7 +430,6 @@ filegroup(
     srcs = ["docs/reference/daemon-api.md"],
     visibility = ["//visibility:public"],
 )
-
 filegroup(
     name = "generated_cli_shell_artifacts",
     srcs = glob([
@@ -466,6 +465,25 @@ filegroup(
 filegroup(
     name = "generated_provider_packaging",
     srcs = ["nixos-modules/generated/provider-catalog-shape.nix"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_nix_inventories",
+    srcs = [
+        "nixos-modules/generated/provider-projections.nix",
+        "nixos-modules/generated/resource-inventories.nix",
+        "nixos-modules/host-users.nix",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# The committed v3 schema artifacts the Nix inventory generator reads for its
+# schema pointers. Every qualified namespace is included: a new Provider's
+# schema entering the tree must be visible to the generator that points at it.
+filegroup(
+    name = "committed_v3_schema_artifacts",
+    srcs = glob(["docs/reference/schemas/v3/**/*.schema.json"]),
     visibility = ["//visibility:public"],
 )
 

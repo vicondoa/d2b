@@ -14,12 +14,12 @@ let
     fallback = d2bHostTools.resourceCompiler;
   };
 
+  vocabulary = import ./generated/resource-inventories.nix;
   resourceTypes = import ./generated/resource-types.nix;
   semanticResourceTypes = import ./generated/semantic-resource-types.nix;
-  providerResourceTypes = [
-    "display-wayland.d2bus.org.WaylandPolicy"
-    "display-wayland.d2bus.org.WaylandSession"
-  ];
+  # The qualified types the farm carries beyond the standard registry and the
+  # semantic catalog, generated with the registry they extend.
+  providerFarmTypes = map (row: row.type) vocabulary.providerFarmTypes;
   semanticSchemaFileName = resourceType:
     let parts = lib.splitString "." resourceType;
     in "${lib.concatStringsSep "." (lib.init parts)}_${lib.last parts}.schema.json";
@@ -30,9 +30,8 @@ let
   schemaEntries =
     (map
       (resourceType: {
-        name = "core.d2bus.org_${resourceType}.schema.json";
-        path = ../docs/reference/schemas/v3
-          + "/core.d2bus.org_${resourceType}.schema.json";
+        name = vocabulary.coreSchemaPointers.${resourceType};
+        path = ../docs/reference/schemas/v3 + "/${vocabulary.coreSchemaPointers.${resourceType}}";
       })
       resourceTypes)
     ++ (map
@@ -46,7 +45,7 @@ let
         path = ../docs/reference/schemas/v3 + "/${semanticSchemaFileName resourceType}";
         name = semanticSchemaFileName resourceType;
       })
-      providerResourceTypes);
+      providerFarmTypes);
   schemaRoot = pkgs.linkFarm "d2b-resource-schemas"
     (lib.filter (entry: builtins.pathExists entry.path) schemaEntries);
 in

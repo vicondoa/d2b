@@ -18,18 +18,9 @@ let
     entries = [ ];
     schemaVersion = 3;
   };
-  runtimeFields = [
-    "uid"
-    "generation"
-    "revision"
-    "status"
-    "managedBy"
-    "configurationGeneration"
-    "timestamp"
-    "createdAt"
-    "updatedAt"
-    "finalizers"
-  ];
+  # The public projection strips every runtime-managed field; the list is
+  # generated beside the registry the bundle validates against.
+  runtimeFields = (import ./generated/resource-inventories.nix).runtimeFields;
   executionDefaults = {
     providerRef = null;
     defaultDomain = "system";
@@ -91,43 +82,12 @@ let
 
   # Keep this list explicit so every Provider projection has a visible bundle
   # owner and no consumer can register an implicit fallback.
-  providerProjectionOwners = [
-    "volume-local"
-    "volume-virtiofs"
-    "device-gpu"
-    "device-usbip"
-    "device-security-key"
-    "device-tpm"
-    "display-wayland"
-    "audio-pipewire"
-    "clipboard-wayland"
-    "notification-desktop"
-    "activation-nixos"
-    "observability-otel"
-    "shell-terminal"
-    "runtime-qemu-media"
-    "runtime-azure-container-apps"
-    "runtime-azure-virtual-machine"
-  ];
-
-  providerProjectionKeys = {
-    "volume-local" = "providerProjectionVolumeLocal";
-    "volume-virtiofs" = "providerProjectionVolumeVirtiofs";
-    "device-gpu" = "providerProjectionDeviceGpu";
-    "device-usbip" = "providerProjectionDeviceUsbip";
-    "device-security-key" = "providerProjectionDeviceSecurityKey";
-    "device-tpm" = "providerProjectionDeviceTpm";
-    "display-wayland" = "providerProjectionDisplayWayland";
-    "audio-pipewire" = "providerProjectionAudioPipewire";
-    "clipboard-wayland" = "providerProjectionClipboardWayland";
-    "notification-desktop" = "providerProjectionNotificationDesktop";
-    "activation-nixos" = "providerProjectionActivationNixos";
-    "observability-otel" = "providerProjectionObservabilityOtel";
-    "shell-terminal" = "providerProjectionShellTerminal";
-    "runtime-qemu-media" = "providerProjectionRuntimeQemuMedia";
-    "runtime-azure-container-apps" = "providerProjectionRuntimeAzureContainerApps";
-    "runtime-azure-virtual-machine" = "providerProjectionRuntimeAzureVirtualMachine";
-  };
+  # The Provider projections this consumer folds, and the compiler option key
+  # each one lands on. Generated from the closed Provider matrix, so the three
+  # consumers and the projection producers cannot drift apart.
+  providerProjections = import ./generated/provider-projections.nix;
+  providerProjectionOwners = providerProjections.owners;
+  providerProjectionKeys = providerProjections.keys;
 
   providerProjection = owner:
     let

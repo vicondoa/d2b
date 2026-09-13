@@ -64,6 +64,18 @@ _SURFACES = {
             "packages/d2b-provider-network-local/nix/net.nix",
         ],
     },
+    "host-contract": {
+        "cases": ["host-contract-digest"],
+        "files": [
+            "docs/reference/policy/principal-allocation.json",
+            "nixos-modules/resources-bundle.nix",
+            "packages/d2b-broker/src/ops/state-posture-contract.json",
+        ],
+        "modules": [
+            "nixos-modules/host-contract.nix",
+            "nixos-modules/options-zones.nix",
+        ],
+    },
     "zone-control": {
         "cases": ["bundle-artifacts-compiler", "zone-control", "zone-link"],
         "package": "packages/d2b-provider-volume-local",
