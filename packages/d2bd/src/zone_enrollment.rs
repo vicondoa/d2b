@@ -47,9 +47,7 @@ use d2b_contracts_zone_session::v3::ZoneLinkSpec;
 use d2b_contracts_zone_session::v3::zone_routing::{
     ZoneLinkControllerGeneration, ZonePath, ZoneTreeEdge,
 };
-use d2b_contracts_zone_session::v3::zone_session::{
-    ZoneEnrollmentIdentity, ZoneEnrollmentRefusal,
-};
+use d2b_contracts_zone_session::v3::zone_session::{ZoneEnrollmentIdentity, ZoneEnrollmentRefusal};
 use d2b_session_unix::FramedVsockTransport;
 use d2b_zone_routing::enrollment::ZoneEnrollmentExpectation;
 use d2b_zone_routing::serving::{ZoneEnrollmentPlacements, ZoneEnrollmentServer};
@@ -326,10 +324,9 @@ fn replace_stale_socket(path: &Path) -> std::io::Result<()> {
 /// not fatal: the endpoint stays bound, and the refusal a connection then hits
 /// is the kernel's permission check, not a silently widened one.
 fn set_socket_owner(path: &Path, owner: (u32, u32)) {
-    if let Err(error) = std::fs::set_permissions(
-        path,
-        PermissionsExt::from_mode(ZONE_ENROLLMENT_SOCKET_MODE),
-    ) {
+    if let Err(error) =
+        std::fs::set_permissions(path, PermissionsExt::from_mode(ZONE_ENROLLMENT_SOCKET_MODE))
+    {
         tracing::warn!(endpoint = %path.display(), error = %error, "enrollment endpoint mode refused");
     }
     if let Err(error) = std::os::unix::fs::chown(path, Some(owner.0), Some(owner.1)) {
@@ -371,8 +368,8 @@ fn allocator_binding(
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"d2b-guest-enrollment-allocator-binding-v3\0");
-    digest.update(edge.parent().to_string().as_bytes());
-    digest.update(edge.child().to_string().as_bytes());
+    digest.update(edge.parent().to_storage_string().as_bytes());
+    digest.update(edge.child().to_storage_string().as_bytes());
     digest.update(controller_generation.as_str().as_bytes());
     digest.update(identity.guest_ref().to_canonical_string().as_bytes());
     digest.update(identity.guest_uid().as_str().as_bytes());
@@ -426,8 +423,10 @@ mod tests {
             )
             .expect("a valid boot identity"),
             SessionPurpose::parse(GUEST_COMPONENT_SESSION_PURPOSE).expect("a valid purpose"),
-            SchemaFingerprint::parse("sha256:1111111111111111111111111111111111111111111111111111111111111111")
-                .expect("a valid schema fingerprint"),
+            SchemaFingerprint::parse(
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            )
+            .expect("a valid schema fingerprint"),
             ReconnectGeneration::new(7).expect("a valid generation"),
             3,
             4,
@@ -493,8 +492,9 @@ mod tests {
             "portClass": "d2b-link",
             "connectTimeoutSeconds": 30,
         }));
-        let facts = declared_enrollment_link(&link, &ZoneId::parse("zone-k1").expect("a valid zone"))
-            .expect("a declared enrollment link");
+        let facts =
+            declared_enrollment_link(&link, &ZoneId::parse("zone-k1").expect("a valid zone"))
+                .expect("a declared enrollment link");
         assert_eq!(facts.guest_name, "sk-vm");
         assert_eq!(
             facts.link_uid.as_str(),
@@ -587,14 +587,10 @@ mod tests {
                 .await
                 .expect("the bound endpoint accepts"),
         );
-        let bootstrap = ZoneBootstrapCall::new(
-            named_identity(&endpoint),
-            1,
-            300_000,
-            ISSUED_AT_UNIX_MS,
-        )
-        .encode()
-        .expect("an encodable bootstrap call");
+        let bootstrap =
+            ZoneBootstrapCall::new(named_identity(&endpoint), 1, 300_000, ISSUED_AT_UNIX_MS)
+                .encode()
+                .expect("an encodable bootstrap call");
         client
             .send(TransportPacket::new(bootstrap))
             .await
