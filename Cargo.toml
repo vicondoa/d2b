@@ -66,6 +66,12 @@ members = [
     "packages/d2b-broker",
     "packages/d2b-guest-shell-runner",
     "packages/d2b-provider-endpoint",
+    "packages/d2b-provider-wayland-policy",
+    "packages/d2b-provider-wayland-session",
+    "packages/d2b-provider-audio-service",
+    "packages/d2b-provider-audio-binding",
+    "packages/d2b-provider-shell-pool",
+    "packages/d2b-provider-shell-session",
 ]
 
 [workspace.package]

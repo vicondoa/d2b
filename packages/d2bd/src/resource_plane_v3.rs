@@ -108,11 +108,36 @@ use crate::guest_effects::ProductionGuestDriverEffects;
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
 use crate::system_core_driver::{SystemCoreDriverFactory, system_core_spec_decoder};
 use crate::core_driver::{CoreDriverEffects, CoreResourceDriverFactory, CORE_RESOURCE_TYPES, core_spec_decoder};
-use crate::interaction_driver::{
-    InteractionDriverArgs, InteractionDriverEffects, InteractionDriverFactory,
-    interaction_spec_decoder,
+use crate::interaction_child_sources::{
+    ProductionAudioBindingChildSource, ProductionDisplayChildSource,
 };
 use crate::resource_runtime::ProductionInteractionDriverEffects;
+use d2b_provider_audio_binding::{
+    AudioBinding, audio_binding_descriptor,
+};
+use d2b_provider_audio_service::{AudioService, audio_service_descriptor};
+use d2b_provider_shell_pool::{ShellPool, shell_pool_descriptor};
+use d2b_provider_shell_session::{ShellSession, shell_session_descriptor};
+use d2b_provider_wayland_policy::{
+    InteractionDriverArgs, InteractionDriverEffects, WaylandPolicy, wayland_policy_descriptor,
+};
+use d2b_provider_wayland_session::{WaylandSession, wayland_session_descriptor};
+
+/// The construction arguments every interaction driver of this plane shares.
+///
+/// Construction is infallible by contract: the zone was validated at plane
+/// construction and the effect port is the daemon's production adapter.
+fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
+    inputs: &ConstructionInputs,
+    behavior: T,
+) -> InteractionDriverArgs<T> {
+    InteractionDriverArgs {
+        zone: inputs.zone.as_str().to_owned(),
+        controller_generation: inputs.authority.controller_generation,
+        effects: Arc::clone(&inputs.interaction_effects),
+        behavior,
+    }
+}
 
 /// Frozen purpose of the binding-owned virtiofsd socket.
 const VIRTIOFSD_PURPOSE: &str = "virtiofsd";
@@ -1801,11 +1826,33 @@ impl ResourcePlaneV3 {
         providers.register(Arc::new(CoreResourceDriverFactory::with_effects(
             Arc::clone(&inputs.core_effects),
         )))?;
-        providers.register(Arc::new(InteractionDriverFactory::new(InteractionDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            controller_generation: inputs.authority.controller_generation,
-            effects: Arc::clone(&inputs.interaction_effects),
-        })))?;
+        // The six interaction types register through their driver
+        // declarations: the registry serves each type's decoder and factory
+        // from its own crate's descriptor, and no daemon table names them.
+        providers.register_driver(&wayland_policy_descriptor(interaction_driver_args(
+            inputs,
+            WaylandPolicy,
+        )))?;
+        providers.register_driver(&wayland_session_descriptor(interaction_driver_args(
+            inputs,
+            WaylandSession::new(Arc::new(ProductionDisplayChildSource)),
+        )))?;
+        providers.register_driver(&audio_service_descriptor(interaction_driver_args(
+            inputs,
+            AudioService,
+        )))?;
+        providers.register_driver(&audio_binding_descriptor(interaction_driver_args(
+            inputs,
+            AudioBinding::new(Arc::new(ProductionAudioBindingChildSource)),
+        )))?;
+        providers.register_driver(&shell_pool_descriptor(interaction_driver_args(
+            inputs,
+            ShellPool,
+        )))?;
+        providers.register_driver(&shell_session_descriptor(interaction_driver_args(
+            inputs,
+            ShellSession,
+        )))?;
         Ok(providers)
     }
 
@@ -1850,12 +1897,6 @@ impl ResourcePlaneV3 {
             ResourceTypeName::new("User"),
             system_core_spec_decoder(),
         );
-        for resource_type in crate::interaction_driver::INTERACTION_TYPES {
-            decoders.insert(
-                ResourceTypeName::new(resource_type),
-                interaction_spec_decoder(),
-            );
-        }
         // U12: the nine fixed Core controller-family types (the core spec
         // decoder is the JSON-object envelope every core row stores).
         for resource_type in CORE_RESOURCE_TYPES {
@@ -2575,26 +2616,26 @@ mod tests {
     impl InteractionDriverEffects for FakeInteractionEffects {
         async fn reconcile(
             &self,
-            _kind: crate::interaction_driver::InteractionKind,
-            _request: &crate::interaction_driver::InteractionEffectRequest<'_>,
+            _kind: d2b_provider_wayland_policy::InteractionKind,
+            _request: &d2b_provider_wayland_policy::InteractionEffectRequest<'_>,
         ) -> Result<
-            crate::interaction_driver::InteractionEffectOutcome,
-            crate::interaction_driver::InteractionEffectError,
+            d2b_provider_wayland_policy::InteractionEffectOutcome,
+            d2b_provider_wayland_policy::InteractionEffectError,
         > {
-            Ok(crate::interaction_driver::InteractionEffectOutcome::phase(
-                crate::interaction_driver::InteractionEffectPhase::Pending,
+            Ok(d2b_provider_wayland_policy::InteractionEffectOutcome::phase(
+                d2b_provider_wayland_policy::InteractionEffectPhase::Pending,
             ))
         }
 
         async fn finalize(
             &self,
-            _kind: crate::interaction_driver::InteractionKind,
-            _request: &crate::interaction_driver::InteractionEffectRequest<'_>,
+            _kind: d2b_provider_wayland_policy::InteractionKind,
+            _request: &d2b_provider_wayland_policy::InteractionEffectRequest<'_>,
         ) -> Result<
-            crate::interaction_driver::InteractionFinalize,
-            crate::interaction_driver::InteractionEffectError,
+            d2b_provider_wayland_policy::InteractionFinalize,
+            d2b_provider_wayland_policy::InteractionEffectError,
         > {
-            Ok(crate::interaction_driver::InteractionFinalize::Complete)
+            Ok(d2b_provider_wayland_policy::InteractionFinalize::Complete)
         }
     }
 

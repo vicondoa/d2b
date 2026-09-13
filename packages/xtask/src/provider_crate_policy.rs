@@ -601,11 +601,6 @@ const SHARED_DRIVER_EXEMPTIONS: &[SharedDriverExemption] = &[
         retires_with: "the family moves into its own provider crate",
     },
     SharedDriverExemption {
-        module: "packages/d2bd/src/interaction_driver.rs",
-        family: "interaction",
-        retires_with: "the family moves into its own provider crate",
-    },
-    SharedDriverExemption {
         module: "packages/d2bd/src/semantic_binding_resource_runtime.rs",
         family: "telemetry",
         retires_with: "the family moves into its own provider crate",

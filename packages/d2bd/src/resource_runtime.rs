@@ -153,7 +153,27 @@ pub use volume_effect_adapter::{
     AnchoredVolumeEffectAdapter, FdRootResolver, ResolvedVolumeRoot, VolumeRootResolver,
 };
 pub(crate) use interaction_effects::ProductionInteractionDriverEffects;
-use crate::interaction_driver::{INTERACTION_PROVIDER_REFS, INTERACTION_TYPES};
+
+/// The interaction family's ResourceTypes, as each type's own crate declares
+/// them.
+const INTERACTION_TYPES: [&str; 6] = [
+    d2b_provider_wayland_policy::WAYLAND_POLICY_TYPE,
+    d2b_provider_wayland_session::WAYLAND_SESSION_TYPE,
+    d2b_provider_audio_service::AUDIO_SERVICE_TYPE,
+    d2b_provider_audio_binding::AUDIO_BINDING_TYPE,
+    d2b_provider_shell_pool::SHELL_POOL_TYPE,
+    d2b_provider_shell_session::SHELL_SESSION_TYPE,
+];
+
+/// The Providers whose committed rows select the interaction family, as the
+/// provider crates declare them.
+const INTERACTION_PROVIDER_REFS: [&str; 5] = [
+    d2b_provider_wayland_policy::WAYLAND_POLICY_PROVIDER_REF,
+    d2b_provider_audio_service::AUDIO_SERVICE_PROVIDER_REF,
+    d2b_provider_clipboard_wayland::PROVIDER_REF,
+    d2b_provider_notification_desktop::PROVIDER_REF,
+    d2b_provider_shell_pool::SHELL_POOL_PROVIDER_REF,
+];
 
 /// Bounded attempts when a policy-input change races the authorization
 /// policy projection refresh. The projection compiles the committed policy
@@ -164,7 +184,7 @@ const POLICY_REFRESH_RETRY_BACKOFF: std::time::Duration = std::time::Duration::f
 
 fn trusted_provider_resource_types() -> Result<Vec<ResourceTypeName>, ResourceRuntimeError> {
     let mut resource_types = BTreeSet::new();
-    for resource_type in crate::interaction_driver::INTERACTION_TYPES
+    for resource_type in INTERACTION_TYPES
         .iter()
         .copied()
         .filter(|resource_type| resource_type.contains(".d2bus.org."))
@@ -9050,10 +9070,7 @@ fn contains_u9_provider_ref(value: &Value) -> bool {
 }
 
 fn is_u9_resource_type(resource_type: &ResourceTypeName) -> bool {
-    let resource_type = resource_type.as_str();
-    resource_type.starts_with("display-wayland.")
-        || resource_type.starts_with("audio.d2bus.org.")
-        || resource_type.starts_with("shell-terminal.d2bus.org.")
+    INTERACTION_TYPES.contains(&resource_type.as_str())
 }
 
 /// Whether the manager holds any row of the interaction family (U9): a

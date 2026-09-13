@@ -70,6 +70,12 @@ test_suite(
         "//packages/d2bd-runtime:all-tests",
         "//packages/xtask:all-tests",
         "//packages/d2b-provider-endpoint:all-tests",
+        "//packages/d2b-provider-wayland-policy:all-tests",
+        "//packages/d2b-provider-wayland-session:all-tests",
+        "//packages/d2b-provider-audio-service:all-tests",
+        "//packages/d2b-provider-audio-binding:all-tests",
+        "//packages/d2b-provider-shell-pool:all-tests",
+        "//packages/d2b-provider-shell-session:all-tests",
     ],
 )
 

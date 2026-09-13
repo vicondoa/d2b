@@ -15,7 +15,7 @@ pub(crate) mod system_core_driver;
 /// `resource_plane_v3`; until that registration lands the module is only
 /// exercised by its tests.
 pub(crate) mod core_driver;
-pub(crate) mod interaction_driver;
+pub(crate) mod interaction_child_sources;
 
 pub(crate) mod guest_target_control;
 pub(crate) mod resource_plane_v3;
