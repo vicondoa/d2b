@@ -145,7 +145,6 @@ pub struct BundleResolver {
     usbip_firewall_intents: BTreeMap<String, ResolvedUsbipFirewallIntent>,
     usbip_bind_intents: BTreeMap<String, ResolvedUsbipBindIntent>,
     runner_intents: BTreeMap<String, ResolvedRunnerIntent>,
-    socket_intents: BTreeMap<String, ResolvedSocketIntent>,
     installer_intents: BTreeMap<String, ResolvedInstallerIntent>,
     migrate_intents: BTreeMap<String, ResolvedMigrateIntent>,
     activation_intents: BTreeMap<String, ResolvedActivationIntent>,
@@ -623,19 +622,6 @@ impl From<UserNamespaceSpec> for crate::processes::RoleUserNamespace {
             host_gid_for_zero: s.host_gid_for_zero,
         }
     }
-}
-
-/// Resolved per-role Unix socket plan - input to broker
-/// `BindUnixSocket` / `SetSocketAcl`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedSocketIntent {
-    pub intent_id: String,
-    pub vm_name: String,
-    pub role_id: String,
-    pub socket_path: PathBuf,
-    pub mode: u32,
-    pub owner_uid: u32,
-    pub group_gid: u32,
 }
 
 /// Resolved host-install plan.
@@ -1624,7 +1610,6 @@ impl BundleResolver {
                 .cloned()
                 .map(|intent| (intent.intent_id.clone(), intent)),
         );
-        let socket_intents = build_socket_intents(&processes);
         let installer_intents = build_installer_intents(&bundle);
         let migrate_intents = build_migrate_intents(&processes);
         let activation_intents = build_activation_intents(&closures, &manifest);
@@ -1672,7 +1657,6 @@ impl BundleResolver {
             usbip_firewall_intents,
             usbip_bind_intents,
             runner_intents,
-            socket_intents,
             installer_intents,
             migrate_intents,
             activation_intents,
@@ -2476,10 +2460,6 @@ impl BundleResolver {
         matches.next().is_none().then_some(first)
     }
 
-    pub fn find_socket_intent(&self, id: &str) -> Option<&ResolvedSocketIntent> {
-        self.socket_intents.get(id)
-    }
-
     pub fn find_installer_intent(&self, id: &str) -> Option<&ResolvedInstallerIntent> {
         self.installer_intents.get(id)
     }
@@ -3070,10 +3050,6 @@ impl BundleResolver {
         self.runner_intents.keys().map(String::as_str)
     }
 
-    pub fn socket_intent_ids(&self) -> impl Iterator<Item = &str> {
-        self.socket_intents.keys().map(String::as_str)
-    }
-
     pub fn installer_intent_ids(&self) -> impl Iterator<Item = &str> {
         self.installer_intents.keys().map(String::as_str)
     }
@@ -3646,10 +3622,6 @@ pub fn intent_id_runner(zone: &ZoneId, vm: &str, role_id: &str) -> String {
 
 pub fn intent_id_legacy_runner(vm: &str, role_id: &str) -> String {
     format!("runner:vm:{vm}:role:{role_id}")
-}
-
-pub fn intent_id_socket(vm: &str, role_id: &str) -> String {
-    format!("socket:vm:{vm}:role:{role_id}")
 }
 
 fn network_cidr_host_address(cidr: &str, host: u8) -> Option<String> {
@@ -5084,29 +5056,6 @@ fn user_visible_ifname_for(
         .iter()
         .find(|mapping| mapping.env == env && mapping.vm.as_deref() == vm && mapping.role == role)
         .map(|mapping| mapping.user_visible_name.clone())
-}
-
-fn build_socket_intents(processes: &ProcessesJson) -> BTreeMap<String, ResolvedSocketIntent> {
-    let mut out = BTreeMap::new();
-    for dag in &processes.vms {
-        for node in &dag.nodes {
-            let intent_id = intent_id_socket(&dag.vm, &node.id.0);
-            let socket_path = PathBuf::from(format!("/run/d2b/vms/{}/{}.sock", dag.vm, node.id.0));
-            out.insert(
-                intent_id.clone(),
-                ResolvedSocketIntent {
-                    intent_id,
-                    vm_name: dag.vm.clone(),
-                    role_id: node.id.0.clone(),
-                    socket_path,
-                    mode: 0o660,
-                    owner_uid: node.profile.uid,
-                    group_gid: node.profile.gid,
-                },
-            );
-        }
-    }
-    out
 }
 
 fn build_installer_intents(bundle: &Bundle) -> BTreeMap<String, ResolvedInstallerIntent> {
