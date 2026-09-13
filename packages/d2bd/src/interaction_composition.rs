@@ -5676,6 +5676,18 @@ where
         } else {
             Vec::new()
         };
+        // Residual, recorded rather than half-fixed: this session's request
+        // dispatch holds the *global* runtime-set lock across its awaits, so
+        // another Zone's session (and the VM-start display reconcile) waits
+        // behind it. Removing the hold means the set must hand out a per-Zone
+        // handle (`BTreeMap<String, Arc<AsyncMutex<InteractionComposition>>>`)
+        // so the outer lock is taken only to clone that handle - which also
+        // moves `reconcile_committed_display_for_vm_start` and
+        // `component_session_driver_for_target` off their synchronous seats,
+        // and the latter's documented rule is that a contended lock is never
+        // reported as an absent source. That is a design change to the
+        // interaction runtime's ownership, not a seat swap, and it needs its
+        // own concurrency test.
         let mut guard = runtime.lock().await;
         let composition = guard
             .as_mut()

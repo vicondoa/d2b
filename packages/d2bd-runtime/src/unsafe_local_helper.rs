@@ -365,6 +365,15 @@ impl HelperRegistry {
             return Err(error);
         }
 
+        // The wait is synchronous because its seat is: a launch verb is
+        // dispatched from the daemon's connection handler, which is one
+        // `d2b-conn` thread per connection admitted through the accept loop's
+        // `ConnSemaphore`. So this parks a bounded handler thread - never an
+        // async worker - for at most `HELPER_OPERATION_TIMEOUT`, the reply
+        // arrives from the helper's own connection loop through the pending
+        // seat, and no registry lock is held across the wait. An async seat
+        // here would need the whole dispatch chain above it, from
+        // `dispatch_request_locked` down to this call, to become async first.
         match receiver.recv_timeout(HELPER_OPERATION_TIMEOUT) {
             Ok(Ok(HelperReply::Operation(result))) => {
                 self.operations.lock().complete(
