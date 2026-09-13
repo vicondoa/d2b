@@ -74,6 +74,7 @@
       "tests/tools/bazel-check"
     ],
     "allowedSecurityDigests": [
+      "sha256:ae62b88d73958b2f17ae305530b279e77a70e8c0096275e6273212f41beb2f8e",
       "sha256:108a94caa1cea641c02cfabf202822da8946b252078575d87307c8c2f9da7116",
       "sha256:2e7d025a487ec36344becd663ab8181dd68d689f75e84a7da39e25eac7b44ec5",
       "sha256:8cf550134ab6d12803208f8a8a672b1240a7cb320d46cbd1afb73a8e6b1b14c8",
