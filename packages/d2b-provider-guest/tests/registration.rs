@@ -118,11 +118,14 @@ async fn descriptor_declares_and_registers_the_guest_type() {
     factory.create(&ResourceKey::new("work", "Guest", "gateway")).await;
 }
 
-/// Every child the family's runtime Providers create is declared, and every
-/// row is controller-owned: the runtime Provider controllers create their
-/// children on the declaring driver's behalf.
+/// Every child the family creates is declared with the creator that creates
+/// it: the driver commits the qemu-media and azure-container-apps children
+/// through the manager child API, and the Cloud Hypervisor controller session
+/// commits its fixed child roles through the plane's child bridge - the same
+/// Volume and Process Providers, so each of those pairs carries one row per
+/// creator.
 #[tokio::test]
-async fn the_declaration_names_the_children_the_runtime_providers_create() {
+async fn the_declaration_names_every_child_and_its_creator() {
     let descriptor = descriptor();
     let declared = descriptor
         .creations
@@ -141,7 +144,17 @@ async fn the_declaration_names_the_children_the_runtime_providers_create() {
             (
                 "Volume".to_owned(),
                 d2b_provider_guest_cloud_hypervisor::identity::VOLUME_PROVIDER_REF.to_owned(),
+                ChildCustody::DriverOwned,
+            ),
+            (
+                "Volume".to_owned(),
+                d2b_provider_guest_cloud_hypervisor::identity::VOLUME_PROVIDER_REF.to_owned(),
                 ChildCustody::ControllerOwned,
+            ),
+            (
+                "Process".to_owned(),
+                d2b_provider_guest_cloud_hypervisor::identity::PROCESS_PROVIDER_REF.to_owned(),
+                ChildCustody::DriverOwned,
             ),
             (
                 "Process".to_owned(),
@@ -156,11 +169,50 @@ async fn the_declaration_names_the_children_the_runtime_providers_create() {
             (
                 "Endpoint".to_owned(),
                 d2b_provider_guest_azure_container_apps::PROVIDER_REF.to_owned(),
-                ChildCustody::ControllerOwned,
+                ChildCustody::DriverOwned,
             ),
         ],
-        "the declaration must name the children the family's Providers create"
+        "the declaration must name every child the family creates and who creates it"
     );
+}
+
+/// The pairs the driver itself commits through the manager child API are
+/// declared driver-owned, so the toolkit's creation fence authorizes them and
+/// a creations-driven consumer sees the driver as their creator.
+///
+/// The pairs are the ones `qemu_child_ensures` (the runtime Volume and the
+/// VMM Process) and `aca_child_ensures` (the sandbox-agent Endpoint) commit
+/// through `ResourceContext::ensure_child`.
+#[tokio::test]
+async fn the_children_the_driver_commits_are_declared_driver_owned() {
+    let descriptor = descriptor();
+    let driver_committed = [
+        (
+            WellKnownType::VOLUME,
+            d2b_provider_guest_cloud_hypervisor::identity::VOLUME_PROVIDER_REF,
+        ),
+        (
+            WellKnownType::PROCESS,
+            d2b_provider_guest_cloud_hypervisor::identity::PROCESS_PROVIDER_REF,
+        ),
+        (
+            WellKnownType::ENDPOINT,
+            d2b_provider_guest_azure_container_apps::PROVIDER_REF,
+        ),
+    ];
+    for (child, provider_ref) in driver_committed {
+        let custody = descriptor
+            .creations
+            .iter()
+            .filter(|creation| creation.child == child && creation.provider_ref == provider_ref)
+            .map(|creation| creation.custody)
+            .collect::<Vec<_>>();
+        assert!(
+            custody.contains(&ChildCustody::DriverOwned),
+            "{child:?} over {provider_ref} is created by the driver and must be declared \
+             driver-owned, declared custody: {custody:?}"
+        );
+    }
 }
 
 /// One driver per resource type: a second registration for the same type is

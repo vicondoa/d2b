@@ -27,11 +27,15 @@ constants, so the table cannot drift from the Providers it names.
 `guest_descriptor(args)` builds the type's descriptor. `Guest` is
 `BUILTIN | STARTUP` and is not exportable, so the plane refuses to open
 without a guest driver. The declaration carries the type's verbs, execution
-domains (`host`, `guest`), reads, and the children every runtime Provider
-creates on the driver's behalf - all controller-owned: the Cloud Hypervisor
-controller session commits its fixed child roles through the plane's child
-bridge, and the qemu-media and azure-container-apps controllers own the
-runtime Volume, the VMM Process, and the sandbox-agent Endpoint.
+domains (`host`, `guest`), reads, and every child the family creates with who
+creates it: the driver commits the qemu-media runtime Volume and VMM Process
+and the azure-container-apps sandbox-agent Endpoint through the manager child
+API, so those rows are driver-owned, while the Cloud Hypervisor controller
+session commits its fixed child roles - the system Volume, the VMM Process,
+and the two control Endpoints - through the plane's child bridge, so those
+rows are controller-owned. The qemu-media children and the Cloud Hypervisor
+children name the same Volume and Process Providers, so each of those pairs
+carries one row per creator.
 
 ## Effect port
 
@@ -87,7 +91,9 @@ bazel test //packages/d2b-provider-guest:all-tests
 The driver's behavior tests run over a scripted effect port;
 `tests/registration.rs` proves the declaration registers the type with its
 decoder and factory, that a second registration is refused, that the declared
-mask cannot arrive after the plane opens, and that the declared children are
-the ones the family's Providers create. The Guest-side target-control tests
-run from the daemon crate (`packages/d2bd/tests/guest_target_service.rs`),
-because their scene is the daemon's authenticated session runtime.
+mask cannot arrive after the plane opens, that every declared child carries
+the creator that actually creates it, and that the pairs the driver commits
+through the manager child API are declared driver-owned. The Guest-side
+target-control tests run from the daemon crate
+(`packages/d2bd/tests/guest_target_service.rs`), because their scene is the
+daemon's authenticated session runtime.

@@ -706,19 +706,23 @@ const GUEST_READS: &[WellKnownType] = &[
     WellKnownType::NETWORK,
 ];
 
-/// The children the Guest family's Providers create, and who owns them.
+/// The children the Guest family's drivers and controllers create, and who
+/// owns each one.
 ///
-/// Every row is controller-owned: the child exists because the Guest's
-/// runtime Provider controller creates it on the declaring driver's behalf.
-/// The Cloud Hypervisor controller session commits its fixed child roles
-/// through the plane's child bridge (the VMM Process over the Process
-/// Provider, the `ch-api` and `guest-control` Endpoints over this Provider,
-/// the system Volume over the Volume Provider), and the qemu-media and
-/// azure-container-apps controllers own the runtime Volume, the VMM Process,
-/// and the sandbox-agent Endpoint the driver realizes for them. The children
-/// are created in ascending order and retire in descending order, so the
-/// Volume a VMM consumes is realized first and retires last, and the control
-/// Endpoints fronting a process retire before it.
+/// One row is one creator's claim on a `(child type, Provider)` pair, so a
+/// pair both creators create carries two rows. The declaring driver commits
+/// the qemu-media kind's runtime Volume and VMM Process and the
+/// azure-container-apps kind's sandbox-agent Endpoint through the manager
+/// child API, so those rows are driver-owned. The Cloud Hypervisor controller
+/// session commits its fixed child roles through the plane's child bridge
+/// (the system Volume over the Volume Provider, the VMM Process over the
+/// Process Provider, the `ch-api` and `guest-control` Endpoints over its own
+/// Provider), so those rows are controller-owned - the same Volume and
+/// Process Providers the qemu-media children name, created by the controller
+/// instead of the driver. The children are created in ascending order and
+/// retire in descending order, so the Volume a VMM consumes is realized
+/// first and retires last, and the control Endpoints fronting a process
+/// retire before it.
 ///
 /// The Provider references are the realizer crates' own constants, so the
 /// declaration cannot drift from the Providers it names.
@@ -726,8 +730,20 @@ const GUEST_CREATIONS: &[ChildCreation] = &[
     ChildCreation {
         child: WellKnownType::VOLUME,
         provider_ref: d2b_provider_guest_cloud_hypervisor::identity::VOLUME_PROVIDER_REF,
+        custody: ChildCustody::DriverOwned,
+        order: 1,
+    },
+    ChildCreation {
+        child: WellKnownType::VOLUME,
+        provider_ref: d2b_provider_guest_cloud_hypervisor::identity::VOLUME_PROVIDER_REF,
         custody: ChildCustody::ControllerOwned,
         order: 1,
+    },
+    ChildCreation {
+        child: WellKnownType::PROCESS,
+        provider_ref: d2b_provider_guest_cloud_hypervisor::identity::PROCESS_PROVIDER_REF,
+        custody: ChildCustody::DriverOwned,
+        order: 2,
     },
     ChildCreation {
         child: WellKnownType::PROCESS,
@@ -744,7 +760,7 @@ const GUEST_CREATIONS: &[ChildCreation] = &[
     ChildCreation {
         child: WellKnownType::ENDPOINT,
         provider_ref: d2b_provider_guest_azure_container_apps::PROVIDER_REF,
-        custody: ChildCustody::ControllerOwned,
+        custody: ChildCustody::DriverOwned,
         order: 4,
     },
 ];
@@ -756,8 +772,8 @@ const GUEST_CREATIONS: &[ChildCreation] = &[
 /// present before the plane opens. The type is not exportable:
 /// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
 /// guest can never be an export subject. The driver serves no broker
-/// operations and contributes no startup step or service of its own; the
-/// children every runtime Provider creates on its behalf are declared in
+/// operations and contributes no startup step or service of its own; every
+/// child the family's drivers and controller sessions create is declared in
 /// [`GUEST_CREATIONS`].
 pub fn guest_descriptor(args: GuestDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
