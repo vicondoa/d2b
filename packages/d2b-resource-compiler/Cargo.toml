@@ -25,3 +25,17 @@ path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = "3"
+
+# U33: this crate does not inherit `[workspace.lints]` (it carries its own lint
+# posture), but `clippy.toml` at the workspace root arms
+# `clippy::disallowed_methods` for every crate clippy checks - the lint is
+# warn-by-default and the blocking-API list is what makes it fire, so the
+# workspace lint table is not what turns it on. Without the levels below the
+# workspace's pre-existing blocking calls would fail this crate's build under
+# the repo's `-D warnings`. TEMPORARY: remove this table together with the
+# workspace-level allowance in the root manifest - see the removal condition
+# there.
+[lints.clippy]
+disallowed_methods = "allow"
+await_holding_lock = "allow"
+await_holding_refcell_ref = "deny"

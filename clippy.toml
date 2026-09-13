@@ -1,0 +1,119 @@
+# Clippy configuration for the whole workspace (U33, plan R22/R25).
+#
+# `clippy::disallowed_methods` is denied in the workspace manifest's
+# `[lints.clippy]` table. Every entry below names a call that blocks the thread
+# it runs on, plus the replacement this repository already uses or ships.
+# The lint is deliberately global: it does not know whether the caller is async,
+# so a genuinely synchronous path (a command-line-only path, a `cfg(test)`
+# helper, a dedicated blocking worker thread) takes an inline
+# `#[allow(clippy::disallowed_methods, reason = "...")]` and every such allow is
+# tracked by the crate policy check (`xtask provider-crate-policy`), which fails
+# an allow that is not on its list. Blanket allows turn this list into
+# decoration; per-site allows with reasons do not.
+#
+# Replacement vocabulary - all of it in-tree today:
+#   * `tokio::time` (feature "time") for timers and timeouts.
+#   * `tokio::sync` (feature "sync") for mutexes, read-write locks, channels and
+#     `Notify`.
+#   * `tokio::fs` / `tokio::process` / `tokio::net` (features "fs", "process",
+#     "net") where the operation has an async form; the consuming crate enables
+#     the feature it uses.
+#   * `tokio::io::unix::AsyncFd` over a non-blocking descriptor where the
+#     operation is readiness-driven. `d2b-session-unix` already wraps both a
+#     sequence-packet socket (`SeqpacketSocket::recv_burst` /
+#     `send_burst`) and a stream socket (`StreamSocket::read_available` /
+#     `write_all`) that way, and `d2bd::forward_rendezvous` drives a raw
+#     `AsyncFd<Socket>`; reuse those rather than re-wrapping.
+#   * For work that must block but eventually finishes: one dedicated bounded
+#     worker, not a thread per call. `d2b-core`'s `loader_worker` is the shape
+#     (one thread, bounded `sync_channel`, refusing `try_send` so a caller can
+#     never grow the pool), and `d2bd-runtime`'s `concurrency::ConnSemaphore` is
+#     the bounded-admission half of the same idea.
+#   * For a wait on a condition: `tokio::sync::Notify` armed *before* the check
+#     plus `tokio::time::timeout` (the drain in
+#     `d2b-provider-toolkit`'s `GeneratedProviderServiceServer::shutdown`).
+#   * `parking_lot` for a short lock on a path that is synchronous by
+#     construction, when no await can happen inside the critical section.
+#
+# `clippy::await_holding_invalid_type`, the nightly lint for "values that must
+# not be held across a suspension point", is NOT enabled: the pinned toolchain
+# is stable 1.97.0 and the lint does not fire on it even when configured (its
+# config key `await-holding-invalid-types` is accepted, no diagnostic is
+# produced). Re-evaluate if the toolchain moves to nightly; until then the
+# guard-across-await class is covered by `clippy::await_holding_lock` and
+# `clippy::await_holding_refcell_ref`.
+#
+# A path that does not resolve in a given crate (for example `nix::sys::socket`
+# in a crate that does not depend on `nix`) simply does not apply there; clippy
+# reports no problem for an unknown path, so the census in the unit that landed
+# this list is the evidence of what actually fires.
+
+disallowed-methods = [
+    # --- Sleeping on the thread that runs the task ------------------------
+    { path = "std::thread::sleep", reason = "Sleeps the whole executor worker, stalling every task scheduled on it; use the async timer", replacement = "tokio::time::sleep" },
+
+    # --- Locks ------------------------------------------------------------
+    { path = "std::sync::Mutex::lock", reason = "Blocks the calling thread until the lock is free, and the guard it returns cannot be held across an await; use the async mutex, or parking_lot for a short lock on a synchronous path", replacement = "tokio::sync::Mutex::lock" },
+    { path = "std::sync::RwLock::read", reason = "Blocks the calling thread until the read lock is free, and the guard it returns cannot be held across an await", replacement = "tokio::sync::RwLock::read" },
+    { path = "std::sync::RwLock::write", reason = "Blocks the calling thread until the write lock is free, and the guard it returns cannot be held across an await", replacement = "tokio::sync::RwLock::write" },
+
+    # --- Condition variables ---------------------------------------------
+    { path = "std::sync::Condvar::wait", reason = "Parks the caller until another thread notifies; on a single-threaded runtime the notifier is the parked worker itself, so the wait can never be satisfied", replacement = "arm tokio::sync::Notify before the check, then tokio::time::timeout" },
+    { path = "std::sync::Condvar::wait_timeout", reason = "Parks the caller until a notification or the deadline, stalling the worker for the whole budget", replacement = "arm tokio::sync::Notify before the check, then tokio::time::timeout" },
+    { path = "std::sync::Condvar::wait_while", reason = "Parks the caller in a predicate loop on a thread an executor worker needs", replacement = "re-check the predicate around an armed tokio::sync::Notify inside tokio::time::timeout" },
+    { path = "std::sync::Condvar::wait_timeout_while", reason = "Parks the caller in a predicate loop for up to the deadline, stalling the worker for the whole budget", replacement = "re-check the predicate around an armed tokio::sync::Notify inside tokio::time::timeout" },
+    { path = "parking_lot::Condvar::wait", reason = "Parks the caller until another thread notifies, which on a single-threaded runtime can never happen", replacement = "arm tokio::sync::Notify before the check, then tokio::time::timeout" },
+
+    # --- Channels ---------------------------------------------------------
+    { path = "std::sync::mpsc::Receiver::recv", reason = "Blocks the receiving thread until a message arrives; only a dedicated blocking worker thread may do this, and then it takes an inline allow with that reason", replacement = "tokio::sync::mpsc::Receiver::recv, or the bounded dedicated-worker pattern in d2b-core's loader_worker" },
+    { path = "std::sync::mpsc::Receiver::recv_timeout", reason = "Blocks the receiving thread for up to the timeout, stalling the worker for the whole budget", replacement = "tokio::sync::mpsc::Receiver::recv inside tokio::time::timeout" },
+    { path = "std::sync::mpsc::Receiver::iter", reason = "Iterating a channel blocks the receiving thread on every step", replacement = "tokio::sync::mpsc::Receiver::recv in an async loop" },
+
+    # --- Filesystem -------------------------------------------------------
+    { path = "std::fs::read", reason = "Blocks the calling thread on filesystem I/O; the async filesystem interface is the shape callers expect, and long-lived blocking work belongs on the bounded worker", replacement = "tokio::fs::read (tokio feature \"fs\"), or d2b-core's loader_worker for a path with no async form" },
+    { path = "std::fs::read_to_string", reason = "Blocks the calling thread on filesystem I/O", replacement = "tokio::fs::read_to_string (tokio feature \"fs\")" },
+    { path = "std::fs::write", reason = "Blocks the calling thread on filesystem I/O", replacement = "tokio::fs::write (tokio feature \"fs\")" },
+    { path = "std::fs::File::open", reason = "Blocks the calling thread on filesystem I/O", replacement = "tokio::fs::File::open (tokio feature \"fs\")" },
+    { path = "std::fs::File::create", reason = "Blocks the calling thread on filesystem I/O", replacement = "tokio::fs::File::create (tokio feature \"fs\")" },
+    { path = "std::fs::OpenOptions::open", reason = "Blocks the calling thread on filesystem I/O", replacement = "tokio::fs::OpenOptions::open (tokio feature \"fs\")" },
+    { path = "std::fs::File::sync_all", reason = "Blocks the calling thread until the kernel has flushed the file", replacement = "tokio::fs::File::sync_all (tokio feature \"fs\")" },
+    { path = "std::fs::read_dir", reason = "Blocks the calling thread reading a directory, and the iterator it returns blocks on every step", replacement = "tokio::fs::read_dir (tokio feature \"fs\")" },
+    { path = "std::fs::metadata", reason = "Blocks the calling thread on a stat syscall", replacement = "tokio::fs::metadata (tokio feature \"fs\")" },
+    { path = "std::fs::symlink_metadata", reason = "Blocks the calling thread on a stat syscall", replacement = "tokio::fs::symlink_metadata (tokio feature \"fs\")" },
+    { path = "std::fs::canonicalize", reason = "Blocks the calling thread resolving a path through the filesystem", replacement = "tokio::fs::canonicalize (tokio feature \"fs\")" },
+    { path = "std::path::Path::canonicalize", reason = "Delegates to std::fs::canonicalize and blocks the calling thread the same way", replacement = "tokio::fs::canonicalize (tokio feature \"fs\")" },
+    { path = "std::fs::read_link", reason = "Blocks the calling thread on a readlink syscall", replacement = "tokio::fs::read_link (tokio feature \"fs\")" },
+    { path = "std::fs::remove_file", reason = "Blocks the calling thread on an unlink syscall", replacement = "tokio::fs::remove_file (tokio feature \"fs\")" },
+    { path = "std::fs::remove_dir_all", reason = "Blocks the calling thread for the whole recursive delete", replacement = "tokio::fs::remove_dir_all (tokio feature \"fs\")" },
+    { path = "std::fs::create_dir_all", reason = "Blocks the calling thread for the whole recursive create", replacement = "tokio::fs::create_dir_all (tokio feature \"fs\")" },
+    { path = "std::fs::copy", reason = "Blocks the calling thread for the whole copy", replacement = "tokio::fs::copy (tokio feature \"fs\")" },
+    { path = "std::fs::rename", reason = "Blocks the calling thread on a rename syscall", replacement = "tokio::fs::rename (tokio feature \"fs\")" },
+    { path = "std::fs::set_permissions", reason = "Blocks the calling thread on a chmod syscall", replacement = "tokio::fs::set_permissions (tokio feature \"fs\")" },
+
+    # --- Subprocesses -----------------------------------------------------
+    { path = "std::process::Command::spawn", reason = "Fork/exec blocks the calling thread, and a std child's pipes block on every read and write", replacement = "tokio::process::Command::spawn (tokio feature \"process\"), or d2b-core's loader_worker where the child needs stdio plumbing the async interface cannot give" },
+    { path = "std::process::Command::output", reason = "Runs the child to completion, blocking the calling thread for its whole lifetime", replacement = "tokio::process::Command::output (tokio feature \"process\"), or d2b-core's loader_worker for a long-lived child" },
+    { path = "std::process::Command::status", reason = "Waits for the child to exit, blocking the calling thread for its whole lifetime", replacement = "tokio::process::Command::status (tokio feature \"process\"), or d2b-core's loader_worker for a long-lived child" },
+    { path = "std::process::Child::wait", reason = "Blocks the calling thread until the child exits", replacement = "tokio::process::Child::wait (tokio feature \"process\")" },
+    { path = "std::process::Child::wait_with_output", reason = "Blocks the calling thread until the child exits and its pipes are drained", replacement = "tokio::process::Child::wait_with_output (tokio feature \"process\")" },
+
+    # --- Sockets ----------------------------------------------------------
+    { path = "std::net::TcpStream::connect", reason = "Blocks the calling thread for the whole connection attempt, with no bound the caller can set", replacement = "tokio::net::TcpStream::connect (tokio feature \"net\")" },
+    { path = "std::net::TcpStream::connect_timeout", reason = "Blocks the calling thread for up to the timeout", replacement = "tokio::net::TcpStream::connect inside tokio::time::timeout (tokio features \"net\", \"time\")" },
+    { path = "std::net::TcpListener::accept", reason = "Blocks the calling thread until a connection arrives, stalling every task on that worker", replacement = "tokio::net::TcpListener::accept (tokio feature \"net\")" },
+    { path = "std::net::UdpSocket::recv", reason = "Blocks the calling thread until a datagram arrives", replacement = "tokio::net::UdpSocket::recv (tokio feature \"net\")" },
+    { path = "std::net::UdpSocket::send", reason = "Can block the calling thread when the send buffer is full", replacement = "tokio::net::UdpSocket::send (tokio feature \"net\")" },
+    { path = "std::os::unix::net::UnixStream::connect", reason = "Blocks the calling thread for the whole connection attempt", replacement = "tokio::net::UnixStream::connect (tokio feature \"net\"), or an AsyncFd wrapper as d2b-session-unix does for sequence-packet sockets" },
+    { path = "std::os::unix::net::UnixListener::accept", reason = "Blocks the calling thread until a connection arrives", replacement = "tokio::net::UnixListener::accept (tokio feature \"net\"), or an AsyncFd wrapper as d2b-session-unix does for sequence-packet sockets" },
+    { path = "std::io::Read::read", reason = "Blocks the calling thread on the underlying descriptor; a runtime worker parked here runs no other task", replacement = "tokio::io::AsyncReadExt::read (tokio feature \"io-util\"), or an AsyncFd wrapper over a non-blocking descriptor" },
+    { path = "std::io::Read::read_exact", reason = "Blocks the calling thread until the whole buffer arrives", replacement = "tokio::io::AsyncReadExt::read_exact (tokio feature \"io-util\")" },
+    { path = "std::io::Read::read_to_end", reason = "Blocks the calling thread until end of input", replacement = "tokio::io::AsyncReadExt::read_to_end (tokio feature \"io-util\")" },
+    { path = "std::io::Write::write", reason = "Blocks the calling thread when the descriptor's send buffer is full", replacement = "tokio::io::AsyncWriteExt::write (tokio feature \"io-util\")" },
+    { path = "std::io::Write::write_all", reason = "Blocks the calling thread until the whole buffer is written", replacement = "tokio::io::AsyncWriteExt::write_all (tokio feature \"io-util\")" },
+    { path = "nix::sys::socket::recv", reason = "Raw blocking recv on the calling thread; the repository's sequence-packet path already has an async form", replacement = "d2b-session-unix's SeqpacketSocket::recv_burst, or AsyncFd over a non-blocking descriptor" },
+    { path = "nix::sys::socket::send", reason = "Raw blocking send on the calling thread", replacement = "d2b-session-unix's SeqpacketSocket::send_burst, or AsyncFd over a non-blocking descriptor" },
+    { path = "nix::sys::socket::recvmsg", reason = "Raw blocking recvmsg on the calling thread; descriptor-passing paths need an inline allow naming why the async wrapper does not fit", replacement = "AsyncFd over a non-blocking descriptor, as d2bd::forward_rendezvous drives a raw Socket" },
+    { path = "nix::sys::socket::sendmsg", reason = "Raw blocking sendmsg on the calling thread; descriptor-passing paths need an inline allow naming why the async wrapper does not fit", replacement = "AsyncFd over a non-blocking descriptor, as d2bd::forward_rendezvous drives a raw Socket" },
+    { path = "nix::sys::socket::connect", reason = "Blocking connect on the calling thread, with no bound the caller can set", replacement = "tokio::net::UnixStream::connect (tokio feature \"net\"), or AsyncFd over a non-blocking descriptor" },
+    { path = "nix::sys::socket::accept4", reason = "Blocking accept on the calling thread", replacement = "tokio::net::UnixListener::accept (tokio feature \"net\"), or AsyncFd over a non-blocking descriptor" },
+]

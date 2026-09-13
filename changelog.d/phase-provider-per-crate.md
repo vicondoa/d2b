@@ -466,6 +466,40 @@
   each named-stream round trip at five seconds, so a wedged peer ends as a
   named transport failure rather than a hung terminal.
 
+- The rule that nothing blocks an executor worker is enforced by tooling
+  instead of memory. `clippy.toml` at the workspace root carries the deny list
+  of blocking APIs - standard mutex and read-write lock acquisition,
+  condition-variable waits, blocking channel receives, thread sleep, blocking
+  filesystem and subprocess calls, and blocking socket connect, accept, read
+  and write including the `nix` socket entry points this tree actually uses -
+  each entry naming why the call blocks and the replacement this workspace
+  already ships (`tokio::time`/`sync`/`fs`/`process`/`net`, `tokio::io::unix::
+  AsyncFd` as `d2b-session-unix` wraps it for sequence-packet sockets, the
+  `d2b-core` bounded loader worker, the toolkit's notify-plus-timeout drain,
+  the daemon's bounded-admission semaphore). The workspace lint table denies
+  `clippy::disallowed_methods` beside `clippy::await_holding_lock` and its
+  interior-mutability sibling: the first catches a blocking call that awaits
+  nothing, the other two catch a synchronous guard held across a suspension
+  point, and neither sees what the other does, so both are on. The exception
+  for a genuinely synchronous path - a command-line-only path, a dedicated
+  blocking worker, test scaffolding - is an inline `#[allow(..., reason = "..")]`
+  that the crate policy check must find on its tracked list, so a reasonless or
+  untracked allow fails rather than decorates. Three facts from landing it:
+  the configuration alone arms the lint at its default warn level in every
+  crate clippy checks, so the manifest levels decide enforcement and not the
+  config; the workspace rustflags set `-D warnings`, which makes `warn` fail
+  exactly as `deny` does; and `clippy::await_holding_invalid_type`, the nightly
+  lint for values that must not be suspended across, does not fire on the
+  pinned stable toolchain, which is recorded in `clippy.toml` rather than
+  assumed. The census at 38d1b7407 - 4948 distinct blocking-API call sites
+  (2196 production, 2752 test) and three lock-across-await sites - is still
+  being worked off, so `disallowed_methods` and `await_holding_lock` are
+  temporarily allowed at the workspace level and in the six members that carry
+  their own lint posture instead of inheriting the table;
+  `await_holding_refcell_ref` is denied outright at zero hits. The numbers,
+  the census command, and the removal condition sit in the root manifest next
+  to the allowance.
+
 ### Removed
 
 - Seven broker operations nothing in tree constructed are gone with their rows,
