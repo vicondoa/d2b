@@ -360,3 +360,17 @@
   rather than a single-variant enum with accessors, and `ZoneLink` no longer
   restates the bootstrap-PSK and session cryptoperiod bounds that the bus
   enrollment machine owns.
+- The dormant guest shell helper is gone. `packages/d2b-guest-shell-runner` was
+  a single-shot `libshpool` CLI with no d2b dependencies whose one declared
+  caller was a guest systemd unit whose socket had no in-tree client, so the
+  crate goes with the image wiring it needed: the static musl package output and
+  its dependency-policy check, the shpool config, the service's PAM and linger
+  configuration, the guest-side shell policy options, the Rust suite with its
+  Bazel suites, Make targets, and CI job, and the pins that named the crate.
+  Persistent guest sessions are served by the shell family: a
+  `ShellPool`/`ShellSession` carries a `Host` or `Guest` execution reference and
+  a login-shell artifact, guest placement is validated against the user domain,
+  and the per-session supervisor service is served over the Guest
+  ComponentSession route with the session's supervisor owned as a target-local
+  Process child. The `d2b-sk-waybar-helper` package output, whose sources were
+  already deleted, is dropped in the same pass.
