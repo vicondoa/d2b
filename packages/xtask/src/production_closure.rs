@@ -1302,11 +1302,33 @@ fn cargo_metadata(
     features: &[String],
     default_features: bool,
 ) -> Result<Value, String> {
+    // Offline first: a warm Cargo cache resolves the workspace from disk, which
+    // is what a developer machine has. A cold cache - a fresh CI runner is
+    // exactly that - holds no checkout of the workspace's git dependencies, and
+    // Cargo refuses to load their sources without the network, so the check
+    // fails on a fetch rather than on drift. Retry online for that case only;
+    // `--locked` pins the resolution either way, so the projection cannot
+    // differ between the two attempts.
+    match cargo_metadata_attempt(root, target, features, default_features, true) {
+        Ok(value) => Ok(value),
+        Err(error) if error.contains("offline mode") => {
+            cargo_metadata_attempt(root, target, features, default_features, false)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn cargo_metadata_attempt(
+    root: &Path,
+    target: &str,
+    features: &[String],
+    default_features: bool,
+    offline: bool,
+) -> Result<Value, String> {
     let mut command = Command::new("cargo");
     command.current_dir(root).args([
         "metadata",
         "--locked",
-        "--offline",
         "--format-version",
         "1",
         "--manifest-path",
@@ -1314,6 +1336,9 @@ fn cargo_metadata(
         "--filter-platform",
         target,
     ]);
+    if offline {
+        command.arg("--offline");
+    }
     if !default_features {
         command.arg("--no-default-features");
     }
