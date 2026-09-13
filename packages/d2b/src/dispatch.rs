@@ -927,6 +927,20 @@ fn provider_projection(
     Ok(0)
 }
 
+/// The zone this invocation routes to.
+///
+/// `d2b debug` names its zone twice over: the global `--zone`/`D2B_ZONE`
+/// route, and the positional argument that says which zone to explain. The
+/// positional argument is the route's authority when it is given, so
+/// `d2b debug prod` connects to `prod` instead of failing against whichever
+/// zone the ambient environment happened to select.
+fn routed_zone<'a>(cli: &'a ModernCli) -> Option<&'a str> {
+    match &cli.command {
+        ModernCommand::Debug(args) => Some(args.zone.as_str()),
+        _ => cli.zone.as_deref(),
+    }
+}
+
 pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
     let cli = match ModernCli::try_parse_from(raw_args.clone()) {
         Ok(cli) => cli,
@@ -969,7 +983,7 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
             cli.zone.is_some() || std::env::var_os("D2B_ZONE").is_some(),
         )
     } else {
-        match ZoneContext::discover(cli.zone.as_deref()) {
+        match ZoneContext::discover(routed_zone(&cli)) {
             Ok(context) => context,
             Err(error) => {
                 let mode = output_mode(cli.json, cli.human).unwrap_or(OutputMode::Json);
@@ -1072,6 +1086,24 @@ mod tests {
         assert_eq!(cli.zone.as_deref(), Some("dev"));
         assert!(cli.json);
         assert!(matches!(cli.command, ModernCommand::Guest(_)));
+    }
+
+    #[test]
+    fn modern_debug_routes_by_its_positional_zone() {
+        let cli = ModernCli::try_parse_from(["d2b", "debug", "prod"])
+            .expect("debug command parses without a global zone");
+        assert_eq!(routed_zone(&cli), Some("prod"));
+
+        // The positional zone is the route's authority, so an ambient zone
+        // cannot silently redirect the explanation to another zone.
+        let cli = ModernCli::try_parse_from(["d2b", "--zone", "dev", "debug", "prod"])
+            .expect("debug command parses with both zones");
+        assert_eq!(routed_zone(&cli), Some("prod"));
+
+        // Every other command keeps the global flag.
+        let cli = ModernCli::try_parse_from(["d2b", "--zone", "dev", "list", "Host"])
+            .expect("list command parses");
+        assert_eq!(routed_zone(&cli), Some("dev"));
     }
 
     #[test]

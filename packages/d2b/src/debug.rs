@@ -417,6 +417,23 @@ fn rows_of(value: &Value) -> Vec<&Value> {
         .unwrap_or_default()
 }
 
+/// The error class a CLI failure carries, as its message prefix.
+fn failure_class(message: &str) -> &str {
+    match message.split_once(':') {
+        Some((class, _)) if !class.contains(' ') => class,
+        _ => "debug-read-refused",
+    }
+}
+
+/// Classes that mean the zone is not answering at all, so the report has no
+/// rows to explain and must refuse rather than print an empty zone.
+fn aborts_the_report(class: &str) -> bool {
+    matches!(
+        class,
+        "zone-unavailable" | "deadline-exceeded" | "exec-auth-error"
+    )
+}
+
 /// Read one resource type, walking every page.
 fn read_type(
     context: &ZoneContext,
@@ -439,8 +456,13 @@ fn read_type(
             limit: Some(PAGE_SIZE),
         };
         let value = request_list(context, &args, mode, deadline).map_err(|failure| {
+            let class = failure_class(&failure.message);
             DebugReadError {
-                class: "debug-read-refused",
+                class: if aborts_the_report(class) {
+                    "zone-unavailable"
+                } else {
+                    "debug-read-refused"
+                },
                 message: failure.message,
                 exit_code: 1,
             }
@@ -504,7 +526,7 @@ pub(crate) fn read_zone(
         }
     }
     for resource_type in &types {
-        if let Err(error) = read_type(
+        match read_type(
             context,
             resource_type,
             mode,
@@ -512,13 +534,17 @@ pub(crate) fn read_zone(
             &mut budget,
             &mut zone,
         ) {
-            if error.class == "debug-read-exhausted" {
+            Ok(()) => {}
+            // An exhausted budget and a zone that is not answering are not
+            // per-type outcomes: the first cannot be degraded into a smaller
+            // report, and the second means there is no report to render.
+            Err(error) if error.class == "zone-unavailable" || error.class == "debug-read-exhausted" => {
                 return Err(error);
             }
-            zone.degraded.push(DegradedRead {
+            Err(error) => zone.degraded.push(DegradedRead {
                 resource_type: resource_type.clone(),
                 detail: error.message,
-            });
+            }),
         }
     }
     Ok(zone)
@@ -842,6 +868,25 @@ mod tests {
         let never = zone(vec![row("Host/local", "uid-1", None, "Pending", 1, None)]);
         let never_human = render_human(&compose(&never, "dev", None), false);
         assert!(never_human.contains("no status published"), "{never_human}");
+    }
+
+    #[test]
+    fn an_unreachable_zone_aborts_rather_than_degrading_every_type() {
+        // A zone that is not answering is not 33 degraded type reads; the
+        // report must refuse instead of printing an empty zone.
+        assert!(aborts_the_report(&failure_class(
+            "zone-unavailable: Zone runtime is unavailable"
+        )));
+        assert!(aborts_the_report(&failure_class(
+            "deadline-exceeded: request deadline expired"
+        )));
+        // A per-type answer stays a per-type outcome.
+        assert!(!aborts_the_report(&failure_class(
+            "capability-unavailable: resource types are not served"
+        )));
+        // An unprefixed message falls back to the per-type class rather than
+        // aborting a report on an unrecognized string.
+        assert_eq!(failure_class("unprefixed failure"), "debug-read-refused");
     }
 
     #[test]
