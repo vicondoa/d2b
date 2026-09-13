@@ -3890,6 +3890,14 @@ mod tests {
 
         let command = "virtiofsd-worker";
         let (_dir, mut inputs, _readiness) = test_inputs();
+        // The readers resolve the Zone the seed homes its rows under: two
+        // declarations of the reserved name would put the commit and the read
+        // back out of agreement.
+        assert_eq!(
+            crate::foundation_seed::SYSTEM_ZONE,
+            d2b_contracts::identity::SYSTEM_ZONE_NAME,
+            "the seed homes its rows in the Zone the readers select",
+        );
         let declarations = seeded_declarations(command);
         let provider_ref = declarations
             .providers
