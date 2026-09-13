@@ -495,6 +495,15 @@ literals, doc drift, and cosmetic duplication are out of scope for this extensio
 - **Test scenarios:** the deleted crate has no caller or image reference; the guest image still builds and its shell surfaces are served by the family; no gate names the removed target.
 - **Verification:** gates green; no `shpool` reference remains outside historical documentation.
 
+### U29. Ponytail audit every completed provider crate, the shared runtime, and the toolkit
+- **Goal:** the restructure's crates carry no unrequested machinery - no single-implementation trait, no config for a value that never changes, no forwarding wrapper, no duplicated declaration, no hand-rolled code the standard library or an installed dependency already covers.
+- **Requirements:** R1 (one implementation per capability), R12, R24.
+- **When:** in parallel with the remaining extension units; the *improvements* it produces are applied per family as each audit reports, and all of them are in before the final host-integration pass. This is the last planned simplification pass, so its deletions may fold into the units it overlaps.
+- **Scope:** each provider crate whose family has a driver, its realizations, and a lifecycle (completed), plus the shared runtime and the toolkit framework the providers build on. Declaration-only skeleton crates are recorded as skeleton and skipped.
+- **Approach:** run the whole-crate over-engineering audit per family read-only, ranked by payoff, each finding naming the deletion, simplification, or standard-library or dependency replacement. Then apply the accepted improvements per family, keeping behavior fixed: gates green, tests that pin removed behavior removed with the code, and any deletion that would change an operator-visible surface called out for the summary rather than done quietly. Findings that argue against something the plan deliberately declares (a provider's namespace, a contract type that exists for the wire) are refused with the reason, not deleted.
+- **Test scenarios:** nothing - this unit preserves behavior; existing suites are the check. A deletion that needs a new test to stay correct is not a simplification and is rejected.
+- **Verification:** for each audited family, the applied-improvement list (with the refused findings and why); gates green after every family's pass; the final host-integration pass starts from an audited tree.
+
 ### Review gate (applies to every unit in this extension)
 Every unit in this extension - and every unit landed before it - receives independent review in a separate clean context before signoff; findings are fixed or recorded as accepted residuals, and a head-changing fix requires fresh review. Reviews run in a dedicated worktree so they never race implementation work.
 
