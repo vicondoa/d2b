@@ -13,7 +13,6 @@ rust_library(
     visibility = ["//visibility:public"],
     compile_data = [
         "Cargo.toml",
-        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",
     ],
     deps = [
         "//packages/d2b-core:d2b_core",
@@ -35,7 +34,6 @@ rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
         "Cargo.toml",
-        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",
     ],
     crate_name = "d2b_provider_device_usbip",
     visibility = ["//visibility:public"],
@@ -60,7 +58,6 @@ rust_test(
     crate = ":d2b_provider_device_usbip",
     compile_data = [
         "Cargo.toml",
-        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",
     ],
     visibility = ["//visibility:public"],
     deps = [

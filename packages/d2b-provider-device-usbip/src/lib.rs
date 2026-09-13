@@ -18,7 +18,6 @@ mod process;
 mod production;
 pub mod reconcile_state;
 pub mod state_machine;
-pub mod usbip_argv;
 mod workers;
 
 pub use arbitration::{UsbipArbitrator, UsbipClaim, UsbipClaimError};
@@ -55,7 +54,6 @@ pub use state_machine::{
     UsbipPlanError, UsbipStepExecutor, build_usbip_explicit_plan, build_usbip_plan,
     execute_usbip_plan,
 };
-pub use usbip_argv::{UsbipArgvError, UsbipArgvInput, UsbipSubcommand, generate_usbip_argv};
 pub use workers::{
     AttachmentActivation, AttachmentCommand, UsbipWorkerClass, UsbipWorkerDeclaration,
 };
