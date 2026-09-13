@@ -49,7 +49,9 @@ use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
 };
-use d2b_controller_toolkit::{DependencySnapshot, ResourceKey as CoreResourceKey, ResourceSnapshot};
+use d2b_controller_toolkit::{
+    DependencySnapshot, ResourceKey as CoreResourceKey, ResourceSnapshot,
+};
 use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
 use d2b_resource_runtime::driver::{
     DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
@@ -65,8 +67,8 @@ use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
 use serde_json::{Value, json};
 
 use crate::providers::{
-    ProviderHandler, ProviderIntent, ProviderObservation, ProviderPhase, fixed_system_core_handlers_ready,
-    provider_observation,
+    ProviderHandler, ProviderIntent, ProviderObservation, ProviderPhase,
+    fixed_system_core_handlers_ready, provider_observation,
 };
 
 /// The one resource type this driver serves.
@@ -147,52 +149,17 @@ const PROVIDER_READS: &[WellKnownType] = &[
 /// compares them with the current dependency list (a declared state Volume
 /// that disappeared still fails the provider).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProviderDriverStatus {
-    /// The `Provider` observation, at the generation it was taken.
-    Provider {
-        /// The desired generation this observation was taken at (the old
-        /// `status.observedGeneration`).
-        observed_generation: u64,
-        /// The phase the pure policy projected.
-        phase: ProviderPhase,
-        /// The observation the pass computed.
-        observation: ProviderObservation,
-        /// The `Volume` references among the Provider's owned rows at the last
-        /// published observation.
-        volume_refs: BTreeSet<String>,
-    },
-}
-
-impl ProviderDriverStatus {
-    /// The desired generation this observation was taken at.
-    pub const fn observed_generation(&self) -> u64 {
-        match self {
-            Self::Provider {
-                observed_generation, ..
-            } => *observed_generation,
-        }
-    }
-
-    /// The projected Provider phase.
-    pub const fn phase(&self) -> ProviderPhase {
-        match self {
-            Self::Provider { phase, .. } => *phase,
-        }
-    }
-
-    /// The observation the last pass computed.
-    pub const fn observation(&self) -> ProviderObservation {
-        match self {
-            Self::Provider { observation, .. } => *observation,
-        }
-    }
-
-    /// The `Volume` references the last observation carried.
-    pub fn volume_refs(&self) -> &BTreeSet<String> {
-        match self {
-            Self::Provider { volume_refs, .. } => volume_refs,
-        }
-    }
+pub struct ProviderDriverStatus {
+    /// The desired generation this observation was taken at (the old
+    /// `status.observedGeneration`).
+    pub observed_generation: u64,
+    /// The phase the pure policy projected.
+    pub phase: ProviderPhase,
+    /// The observation the pass computed.
+    pub observation: ProviderObservation,
+    /// The `Volume` references among the Provider's owned rows at the last
+    /// published observation.
+    pub volume_refs: BTreeSet<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -384,17 +351,12 @@ impl ProviderDriver {
             )
         })?;
         if children.iter().any(is_controller_process) {
-            return Err(DriverFailure::not_yet(
-                DriverOp::Delete,
-                FailureKinds::CORE_DRAIN_PENDING,
-            )
-            .with_detail(
-                FailureDetail::at("finalize/drain").comparison(FailureComparison::new(
-                    "owned.controllerProcess",
-                    "retired",
-                    "live",
-                )),
-            ));
+            return Err(
+                DriverFailure::not_yet(DriverOp::Delete, FailureKinds::CORE_DRAIN_PENDING)
+                    .with_detail(FailureDetail::at("finalize/drain").comparison(
+                        FailureComparison::new("owned.controllerProcess", "retired", "live"),
+                    )),
+            );
         }
         Ok(())
     }
@@ -406,8 +368,8 @@ impl ProviderDriver {
     async fn reconcile_provider(&self, ctx: &mut ResourceContext) -> Result<(), DriverFailure> {
         let spec = spec_object(ctx, DriverOp::Reconcile)?;
         let provider_ref = resource_ref(ctx)?;
-        let provider_uid = resource_uid(ctx.uid())
-            .ok_or_else(|| spec_invalid(DriverOp::Reconcile, "spec/uid"))?;
+        let provider_uid =
+            resource_uid(ctx.uid()).ok_or_else(|| spec_invalid(DriverOp::Reconcile, "spec/uid"))?;
         let generation = ResourceGeneration::new(ctx.generation())
             .map_err(|_| spec_invalid(DriverOp::Reconcile, "spec/generation"))?;
         let zone = ZoneId::parse(ctx.key().zone.clone())
@@ -417,7 +379,7 @@ impl ProviderDriver {
         // `Enable` intent; the in-memory status is its runtime-only successor.
         let previous = ctx.status::<ProviderDriverStatus>().cloned();
         let intent = match previous.as_ref() {
-            Some(status) if status.observed_generation() == ctx.generation() => {
+            Some(status) if status.observed_generation == ctx.generation() => {
                 ProviderIntent::Enable
             }
             _ => ProviderIntent::Update,
@@ -435,9 +397,9 @@ impl ProviderDriver {
             .map_err(|_| spec_invalid(DriverOp::Reconcile, "spec/metadata"))?;
         let status = match previous.as_ref() {
             Some(previous) => json!({
-                "observedGeneration": previous.observed_generation(),
+                "observedGeneration": previous.observed_generation,
                 "resource": {
-                    "owned": { "refs": previous.volume_refs().iter().collect::<Vec<_>>() },
+                    "owned": { "refs": previous.volume_refs.iter().collect::<Vec<_>>() },
                 },
             }),
             None => json!({}),
@@ -490,7 +452,7 @@ impl ProviderDriver {
                     .to_canonical_string()
             })
             .collect();
-        ctx.set_status(ProviderDriverStatus::Provider {
+        ctx.set_status(ProviderDriverStatus {
             observed_generation: ctx.generation(),
             phase,
             observation,
@@ -584,9 +546,9 @@ impl ProviderDriver {
         let spec: Value = serde_json::from_slice(&view.spec).ok()?;
         let mut status = observed_status(view);
         if resource_ref.resource_type().as_str() == "Process"
-            && let Some(evidence) = self
-                .effects
-                .controller_session_evidence(&resource_ref, &uid, generation)
+            && let Some(evidence) =
+                self.effects
+                    .controller_session_evidence(&resource_ref, &uid, generation)
         {
             status["resource"] = json!({ "controllerSession": evidence });
         }
@@ -594,9 +556,10 @@ impl ProviderDriver {
         // Provider's child carries the Provider reference in the synthesized
         // payload, because the pure core reads ownership from
         // `metadata.ownerRef`, not from the manager.
-        metadata
-            .as_object_mut()?
-            .insert("ownerRef".to_owned(), Value::String(provider_ref.to_owned()));
+        metadata.as_object_mut()?.insert(
+            "ownerRef".to_owned(),
+            Value::String(provider_ref.to_owned()),
+        );
         let canonical = serde_json::to_vec(&json!({
             "apiVersion": "resources.d2bus.org/v3",
             "type": view.key.type_name,
@@ -624,7 +587,8 @@ impl ProviderDriver {
 
 /// A terminal spec refusal at one stage.
 fn spec_invalid(op: DriverOp, stage: &'static str) -> DriverFailure {
-    DriverFailure::refused(op, FailureKinds::CORE_SPEC_INVALID).with_detail(FailureDetail::at(stage))
+    DriverFailure::refused(op, FailureKinds::CORE_SPEC_INVALID)
+        .with_detail(FailureDetail::at(stage))
 }
 
 /// The stored spec object fence every core type shares: the manager's decode
@@ -644,23 +608,25 @@ fn spec_object(ctx: &ResourceContext, op: DriverOp) -> Result<Value, DriverFailu
             Value::Array(_) => "array",
             Value::Object(_) => "object",
         };
-        return Err(DriverFailure::refused(op, FailureKinds::CORE_SPEC_INVALID).with_detail(
-            FailureDetail::at("spec/shape").comparison(FailureComparison::new(
-                "spec.shape",
-                "object",
-                shape,
-            )),
-        ));
+        return Err(
+            DriverFailure::refused(op, FailureKinds::CORE_SPEC_INVALID).with_detail(
+                FailureDetail::at("spec/shape").comparison(FailureComparison::new(
+                    "spec.shape",
+                    "object",
+                    shape,
+                )),
+            ),
+        );
     }
     Ok(spec.clone())
 }
 
 /// The row's own contract reference.
 fn resource_ref(ctx: &ResourceContext) -> Result<ResourceRef, DriverFailure> {
-    ResourceRef::parse(&format!("{}/{}", ctx.key().type_name, ctx.key().name))
-        .map_err(|error| spec_invalid(DriverOp::Reconcile, "spec/ref").with_detail(
-            FailureDetail::at("spec/ref").with_note(error.to_string()),
-        ))
+    ResourceRef::parse(&format!("{}/{}", ctx.key().type_name, ctx.key().name)).map_err(|error| {
+        spec_invalid(DriverOp::Reconcile, "spec/ref")
+            .with_detail(FailureDetail::at("spec/ref").with_note(error.to_string()))
+    })
 }
 
 /// The child-first drain: every owned child is nudged through its own
@@ -729,8 +695,22 @@ fn resource_uid(bytes: &[u8; 16]) -> Option<ResourceUid> {
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let text = format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
     );
     ResourceUid::parse(text).ok()
 }
@@ -873,16 +853,25 @@ mod tests {
         }
 
         fn add_owned(&self, row: StoredDesiredResource, view: ResourceView) {
-            self.views.lock().expect("views").push((view.key.clone(), view));
+            self.views
+                .lock()
+                .expect("views")
+                .push((view.key.clone(), view));
             self.rows.lock().expect("rows").push(row);
         }
 
         fn add_view(&self, view: ResourceView) {
-            self.views.lock().expect("views").push((view.key.clone(), view));
+            self.views
+                .lock()
+                .expect("views")
+                .push((view.key.clone(), view));
         }
 
         fn drop_row(&self, key: &ResourceKey) {
-            self.rows.lock().expect("rows").retain(|row| row.key != *key);
+            self.rows
+                .lock()
+                .expect("rows")
+                .retain(|row| row.key != *key);
             self.views
                 .lock()
                 .expect("views")
@@ -933,7 +922,10 @@ mod tests {
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.calls.lock().expect("calls").push("delete".to_owned());
-            self.rows.lock().expect("rows").retain(|row| row.key != *key);
+            self.rows
+                .lock()
+                .expect("rows")
+                .retain(|row| row.key != *key);
             self.views
                 .lock()
                 .expect("views")
@@ -945,7 +937,10 @@ mod tests {
             &self,
             owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().expect("calls").push("list-owned".to_owned());
+            self.calls
+                .lock()
+                .expect("calls")
+                .push("list-owned".to_owned());
             if self.fail_reads.load(Ordering::SeqCst) {
                 return Err(ResourceError::ManagerRpc("scripted read failure".into()));
             }
@@ -1156,7 +1151,10 @@ mod tests {
         let failure = driver.validate(&mut ctx).await.expect_err("terminal");
         assert_eq!(failure.kind().code(), "core-spec-invalid");
         assert_eq!(failure.class(), FailureClass::Terminal);
-        assert_eq!(failure.op(), d2b_resource_runtime::error::DriverOp::Validate);
+        assert_eq!(
+            failure.op(),
+            d2b_resource_runtime::error::DriverOp::Validate
+        );
         assert!(
             manager.call_order().is_empty(),
             "validate must not touch the manager"
@@ -1175,7 +1173,10 @@ mod tests {
             .recover(&mut ctx)
             .await
             .expect("recovery realizes nothing");
-        assert_eq!(outcome, d2b_resource_runtime::driver::RecoveryOutcome::Adopted);
+        assert_eq!(
+            outcome,
+            d2b_resource_runtime::driver::RecoveryOutcome::Adopted
+        );
         assert!(
             manager.call_order().is_empty(),
             "recovery realizes nothing on a target and owns no child rows"
@@ -1206,10 +1207,10 @@ mod tests {
             d2b_resource_runtime::driver::ReconcileOutcome::Satisfied
         );
         let status = provider_status(&ctx);
-        assert_eq!(status.observed_generation(), 1);
-        assert_eq!(status.phase(), crate::providers::ProviderPhase::Ready);
-        let observation = status.observation();
-        let volume_refs = status.volume_refs();
+        assert_eq!(status.observed_generation, 1);
+        assert_eq!(status.phase, crate::providers::ProviderPhase::Ready);
+        let observation = status.observation;
+        let volume_refs = status.volume_refs;
         assert!(observation.package_present && observation.config_valid);
         assert!(observation.graph_valid && observation.conformance_valid);
         assert!(observation.required_dependencies_ready);
@@ -1243,11 +1244,11 @@ mod tests {
         );
         let status = provider_status(&ctx);
         assert_eq!(
-            status.phase(),
+            status.phase,
             crate::providers::ProviderPhase::Pending,
             "a controller child without live session evidence is never Ready"
         );
-        let observation = status.observation();
+        let observation = status.observation;
         assert!(
             !observation.required_components_ready,
             "a controller component is not ready without live session evidence"
@@ -1268,7 +1269,7 @@ mod tests {
         effects.set_evidence(ready_session());
         driver.reconcile(&mut ctx).await.expect("first pass");
         assert_eq!(
-            provider_status(&ctx).phase(),
+            provider_status(&ctx).phase,
             crate::providers::ProviderPhase::Ready
         );
         // The Volume row disappears (drift): the carried expectation must keep
@@ -1278,11 +1279,11 @@ mod tests {
         driver.reconcile(&mut ctx).await.expect("second pass");
         let status = provider_status(&ctx);
         assert_eq!(
-            status.phase(),
+            status.phase,
             crate::providers::ProviderPhase::Pending,
             "a declared state Volume that disappeared must fail the provider"
         );
-        assert!(!status.observation().required_dependencies_ready);
+        assert!(!status.observation.required_dependencies_ready);
     }
 
     #[tokio::test]
@@ -1295,7 +1296,10 @@ mod tests {
             FailureClass::Retryable,
             "the old dependency read was a retried source read"
         );
-        assert_eq!(failure.op(), d2b_resource_runtime::error::DriverOp::Reconcile);
+        assert_eq!(
+            failure.op(),
+            d2b_resource_runtime::error::DriverOp::Reconcile
+        );
     }
 
     #[tokio::test]
@@ -1323,7 +1327,7 @@ mod tests {
         let mut driver = build(Arc::clone(&effects)).await;
         driver.reconcile(&mut ctx).await.expect("observed");
         assert_eq!(
-            provider_status(&ctx).phase(),
+            provider_status(&ctx).phase,
             crate::providers::ProviderPhase::Pending
         );
         assert!(
