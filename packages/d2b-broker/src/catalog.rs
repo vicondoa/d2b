@@ -110,6 +110,12 @@ pub struct BrokerOperationRow {
     pub family: Option<&'static str>,
     /// The crate that declares the family handler.
     pub declaring_provider: Option<&'static str>,
+    /// Why a row no family owns is not provider-owned.
+    ///
+    /// A row the broker or a transport concern owns records what owns it and
+    /// why; a family-owned row carries its declaring provider instead, so
+    /// exactly one of the two facets is set.
+    pub justification: Option<&'static str>,
     /// The profiles that admit the operation.
     pub profiles: &'static [BrokerProfileId],
     /// Whether the operation is a member of the `W3BrokerOperation`
@@ -242,7 +248,6 @@ wire_variants! {
         BrokerRequest::ApplyNmUnmanaged(..) => "ApplyNmUnmanaged",
         BrokerRequest::ApplyRoute(..) => "ApplyRoute",
         BrokerRequest::ApplySysctl(..) => "ApplySysctl",
-        BrokerRequest::BindUnixSocket(..) => "BindUnixSocket",
         BrokerRequest::CreateOrReconcileUsersGroups(..) => "CreateOrReconcileUsersGroups",
         BrokerRequest::CreateBridge(..) => "CreateBridge",
         BrokerRequest::DeleteBridge(..) => "DeleteBridge",
@@ -279,7 +284,6 @@ wire_variants! {
         BrokerRequest::OpenSystemdUnitPidfd(..) => "OpenSystemdUnitPidfd",
         BrokerRequest::StopSystemdUnit(..) => "StopSystemdUnit",
         BrokerRequest::OpenVhostNet(..) => "OpenVhostNet",
-        BrokerRequest::PauseBroker => "PauseBroker",
         BrokerRequest::PollChildReaped => "PollChildReaped",
         BrokerRequest::PrepareRuntimeDir(..) => "PrepareRuntimeDir",
         BrokerRequest::PrepareStateDir(..) => "PrepareStateDir",
@@ -290,7 +294,6 @@ wire_variants! {
         BrokerRequest::StoreSync(..) => "StoreSync",
         BrokerRequest::StoreVerify(..) => "StoreVerify",
         BrokerRequest::ReadSecretById(..) => "ReadSecretById",
-        BrokerRequest::ResumeBroker => "ResumeBroker",
         BrokerRequest::RotateSecretById(..) => "RotateSecretById",
         BrokerRequest::RunHostInstall(..) => "RunHostInstall",
         BrokerRequest::RunMigrate(..) => "RunMigrate",
@@ -300,7 +303,6 @@ wire_variants! {
         BrokerRequest::RunHostKeyTrust(..) => "RunHostKeyTrust",
         BrokerRequest::RunRotateKnownHost(..) => "RunRotateKnownHost",
         BrokerRequest::SetBridgePortFlags(..) => "SetBridgePortFlags",
-        BrokerRequest::SetSocketAcl(..) => "SetSocketAcl",
         BrokerRequest::SetupMountNamespace(..) => "SetupMountNamespace",
         BrokerRequest::CgroupKill(..) => "CgroupKill",
         BrokerRequest::SignalRunner(..) => "SignalRunner",
@@ -313,8 +315,6 @@ wire_variants! {
         BrokerRequest::UsbipUnbind(..) => "UsbipUnbind",
         BrokerRequest::UsbipExplicitBind(..) => "UsbipExplicitBind",
         BrokerRequest::UsbipExplicitFirewallRule(..) => "UsbipExplicitFirewallRule",
-        BrokerRequest::ResourceActivationAudit(..) => "ResourceActivationAudit",
-        BrokerRequest::ValidateBundle => "ValidateBundle",
         BrokerRequest::SeedDnsmasqLease(..) => "SeedDnsmasqLease",
         BrokerRequest::BindMountFromHardlinkFarm(..) => "BindMountFromHardlinkFarm",
         BrokerRequest::OwnershipMatrixCheck(..) => "OwnershipMatrixCheck",
@@ -322,7 +322,6 @@ wire_variants! {
         BrokerRequest::DiskInit(..) => "DiskInit",
         BrokerRequest::SecurityKeyOpenDevice(..) => "SecurityKeyOpenDevice",
         BrokerRequest::SecurityKeyApplyUdevRules(..) => "SecurityKeyApplyUdevRules",
-        BrokerRequest::Invoke(..) => "Invoke",
 }
 
 /// The committed row one wire variant names, when a row declares it.
@@ -417,13 +416,10 @@ audit_fields! {
         OperationFields::RunHostKeyTrust { .. } => "RunHostKeyTrust",
         OperationFields::RunRotateKnownHost { .. } => "RunRotateKnownHost",
         OperationFields::Hello { .. } => "Hello",
-        OperationFields::ResourceActivationAudit { .. } => "ResourceActivationAudit",
-        OperationFields::ValidateBundle { .. } => "ValidateBundle",
         OperationFields::ExportBrokerAudit { .. } => "ExportBrokerAudit",
         OperationFields::DiskInit { .. } => "DiskInit",
         OperationFields::ReconcileStorageScope { .. } => "ReconcileStorageScope",
         OperationFields::ValidateLockSpec { .. } => "ValidateLockSpec",
-        OperationFields::Invoke { .. } => "Invoke",
 }
 
 /// One mismatch between the committed rows and a derived view.
@@ -536,6 +532,21 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
             mismatches.push(missing(
                 "rows",
                 format!("{}: not family-owned but names a family", row.operation),
+            ));
+        }
+        if row.owner != OperationOwner::Family && row.justification.is_none() {
+            mismatches.push(missing(
+                "rows",
+                format!(
+                    "{}: not family-owned without a recorded justification",
+                    row.operation
+                ),
+            ));
+        }
+        if row.owner == OperationOwner::Family && row.justification.is_some() {
+            mismatches.push(missing(
+                "rows",
+                format!("{}: family-owned but records a justification", row.operation),
             ));
         }
         if row.disposition == "stubbed-unimplemented" && row.stub_target.is_none() {
@@ -828,12 +839,10 @@ mod tests {
 
     #[test]
     fn wire_row_resolves_every_variant_it_names() {
-        for (request, name) in [
-            (d2b_contracts_broker::broker_wire::BrokerRequest::PauseBroker, "PauseBroker"),
-            (d2b_contracts_broker::broker_wire::BrokerRequest::ResumeBroker, "ResumeBroker"),
-            (d2b_contracts_broker::broker_wire::BrokerRequest::PollChildReaped, "PollChildReaped"),
-            (d2b_contracts_broker::broker_wire::BrokerRequest::ValidateBundle, "ValidateBundle"),
-        ] {
+        for (request, name) in [(
+            d2b_contracts_broker::broker_wire::BrokerRequest::PollChildReaped,
+            "PollChildReaped",
+        )] {
             assert_eq!(wire_variant_name(&request), name);
             assert_eq!(wire_row(&request).map(|row| row.operation), Some(name));
         }
@@ -869,6 +878,29 @@ mod tests {
                     && mismatch.detail.contains("Hello")
                     && mismatch.detail.contains("no committed row")),
             "a wire variant with no committed row must fail: {mismatches:?}"
+        );
+    }
+
+    #[test]
+    fn a_row_without_an_owner_or_a_recorded_justification_fails_the_gate() {
+        // Every committed row is either provider-owned or explicitly
+        // broker/transport-owned with the reason recorded: a row that drops
+        // the reason is a row the broker commits without an owner the
+        // operator can read.
+        let mut rows = BROKER_OPERATION_CATALOG.to_vec();
+        let non_provider = rows
+            .iter_mut()
+            .find(|row| row.owner != OperationOwner::Family)
+            .expect("a committed row the broker or a transport concern owns");
+        let operation = non_provider.operation;
+        assert!(non_provider.justification.is_some());
+        non_provider.justification = None;
+        let mismatches = audit(&rows, &live_views());
+        assert!(
+            mismatches.iter().any(|mismatch| mismatch.view == "rows"
+                && mismatch.detail.contains(operation)
+                && mismatch.detail.contains("without a recorded justification")),
+            "a non-provider row without a justification must fail: {mismatches:?}"
         );
     }
 
@@ -909,12 +941,5 @@ mod tests {
                     && mismatch.detail.contains("empty join")),
             "an empty join must fail: {mismatches:?}"
         );
-    }
-
-    #[test]
-    fn the_generic_entry_point_is_generic() {
-        let row = BrokerOperationRow::find("Invoke").expect("Invoke is a committed row");
-        assert!(row.is_generic());
-        assert_eq!(row.owner, OperationOwner::BrokerGeneric);
     }
 }

@@ -51,7 +51,6 @@ pub enum BrokerRequest {
     ApplyNmUnmanaged(ApplyNmUnmanagedRequest),
     ApplyRoute(ApplyRouteRequest),
     ApplySysctl(ApplySysctlRequest),
-    BindUnixSocket(BindUnixSocketRequest),
     CreateOrReconcileUsersGroups(CreateOrReconcileUsersGroupsRequest),
     /// Create the bridge an environment's links attach to. The daemon
     /// names only the opaque bundle intent ref and scope; the broker
@@ -169,7 +168,6 @@ pub enum BrokerRequest {
     /// Stop one exact transient systemd unit identity.
     StopSystemdUnit(StopSystemdUnitRequest),
     OpenVhostNet(OpenVhostNetRequest),
-    PauseBroker,
     /// Drain the broker's in-memory ring buffer of ChildReaped events.
     /// Returns [`PollChildReapedResponse`] containing all buffered
     /// notifications in FIFO order; clears the buffer. Idempotent.
@@ -196,7 +194,6 @@ pub enum BrokerRequest {
     /// store-view directly.
     StoreVerify(StoreVerifyRequest),
     ReadSecretById(SecretByIdRequest),
-    ResumeBroker,
     RotateSecretById(SecretByIdRequest),
     /// Live host installer + migrate writer. Drives the per-host
     /// systemd unit install + `--enable` / `--start` flow (or migrate
@@ -218,7 +215,6 @@ pub enum BrokerRequest {
     RunHostKeyTrust(RunHostKeyTrustRequest),
     RunRotateKnownHost(RunRotateKnownHostRequest),
     SetBridgePortFlags(SetBridgePortFlagsRequest),
-    SetSocketAcl(SetSocketAclRequest),
     SetupMountNamespace(SetupMountNamespaceRequest),
     /// Kill exactly one trusted runner cgroup leaf during intentional
     /// teardown. The broker resolves the leaf from its trusted runner
@@ -251,12 +247,6 @@ pub enum BrokerRequest {
     ///
     /// Currently a typed stub (`Unimplemented`).
     UsbipExplicitFirewallRule(UsbipExplicitFirewallRuleRequest),
-    /// Record the broker durability evidence that closes an authenticated
-    /// resource-bundle activation commit. The request carries only the
-    /// canonical audit join; the broker does not accept resource rows or
-    /// caller-selected host effects over this operation.
-    ResourceActivationAudit(ResourceActivationAuditRequest),
-    ValidateBundle,
     /// Write the per-VM dnsmasq lease file. Replaces leaves of the
     /// retired `microvm-setup@<vm>.service`. Currently a typed stub
     /// (`Unimplemented`) until the live handler is wired.
@@ -310,45 +300,6 @@ pub enum BrokerRequest {
     ///
     /// Typed stub - live handler target: `live_security_key_apply_udev_rules`.
     SecurityKeyApplyUdevRules(d2b_contracts::security_key::SecurityKeyApplyUdevRulesRequest),
-    /// Invoke one committed operation by name through the generic envelope.
-    ///
-    /// The broker resolves the committed `Operation` row the name declares,
-    /// validates the payload against that row's payload schema, authorizes
-    /// the caller against the committed grants, audits the invocation with
-    /// its `invocationId`, and dispatches to the handler the declaring
-    /// driver registered for it.
-    ///
-    /// A new operation is reached by committing a row - never by adding a
-    /// variant here, which is what keeps the wire enum a view of the
-    /// committed rows rather than a second inventory to keep in step.
-    Invoke(InvokeRequest),
-}
-
-/// Invoke one committed operation by name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct InvokeRequest {
-    /// The committed operation name the caller invokes.
-    pub operation: String,
-    /// The Zone the invocation runs in.
-    pub zone: String,
-    /// The canonical payload object the operation row validates.
-    pub payload: serde_json::Value,
-    /// Optional tracing correlation identifier.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-/// The result of one committed operation invocation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct InvokeResponse {
-    /// The operation the broker dispatched.
-    pub operation: String,
-    /// The invocation identifier the audit record carries.
-    pub invocation_id: String,
-    /// The canonical result payload the handler returned.
-    pub result: serde_json::Value,
 }
 
 /// Path-free result of a source-to-target generation handoff.
@@ -442,7 +393,6 @@ impl BrokerRequest {
             Self::ApplyNmUnmanaged(_) => "ApplyNmUnmanaged",
             Self::ApplyRoute(_) => "ApplyRoute",
             Self::ApplySysctl(_) => "ApplySysctl",
-            Self::BindUnixSocket(_) => "BindUnixSocket",
             Self::CreateOrReconcileUsersGroups(_) => "CreateOrReconcileUsersGroups",
             Self::CreateBridge(_) => "CreateBridge",
             Self::DeleteBridge(_) => "DeleteBridge",
@@ -479,7 +429,6 @@ impl BrokerRequest {
             Self::OpenSystemdUnitPidfd(_) => "OpenSystemdUnitPidfd",
             Self::StopSystemdUnit(_) => "StopSystemdUnit",
             Self::OpenVhostNet(_) => "OpenVhostNet",
-            Self::PauseBroker => "PauseBroker",
             Self::PollChildReaped => "PollChildReaped",
             Self::PrepareRuntimeDir(_) => "PrepareRuntimeDir",
             Self::PrepareStateDir(_) => "PrepareStateDir",
@@ -490,7 +439,6 @@ impl BrokerRequest {
             Self::StoreSync(_) => "StoreSync",
             Self::StoreVerify(_) => "StoreVerify",
             Self::ReadSecretById(_) => "ReadSecretById",
-            Self::ResumeBroker => "ResumeBroker",
             Self::RotateSecretById(_) => "RotateSecretById",
             Self::RunHostInstall(_) => "RunHostInstall",
             Self::RunMigrate(_) => "RunMigrate",
@@ -500,7 +448,6 @@ impl BrokerRequest {
             Self::RunHostKeyTrust(_) => "RunHostKeyTrust",
             Self::RunRotateKnownHost(_) => "RunRotateKnownHost",
             Self::SetBridgePortFlags(_) => "SetBridgePortFlags",
-            Self::SetSocketAcl(_) => "SetSocketAcl",
             Self::SetupMountNamespace(_) => "SetupMountNamespace",
             Self::CgroupKill(_) => "CgroupKill",
             Self::SignalRunner(_) => "SignalRunner",
@@ -513,8 +460,6 @@ impl BrokerRequest {
             Self::UsbipUnbind(_) => "UsbipUnbind",
             Self::UsbipExplicitBind(_) => "UsbipExplicitBind",
             Self::UsbipExplicitFirewallRule(_) => "UsbipExplicitFirewallRule",
-            Self::ResourceActivationAudit(_) => "ResourceActivationAudit",
-            Self::ValidateBundle => "ValidateBundle",
             Self::SeedDnsmasqLease(_) => "SeedDnsmasqLease",
             Self::BindMountFromHardlinkFarm(_) => "BindMountFromHardlinkFarm",
             Self::OwnershipMatrixCheck(_) => "OwnershipMatrixCheck",
@@ -522,7 +467,6 @@ impl BrokerRequest {
             Self::DiskInit(_) => "DiskInit",
             Self::SecurityKeyOpenDevice(_) => "SecurityKeyOpenDevice",
             Self::SecurityKeyApplyUdevRules(_) => "SecurityKeyApplyUdevRules",
-            Self::Invoke(_) => "Invoke",
         }
     }
 
@@ -543,8 +487,6 @@ impl BrokerRequest {
     pub fn opaque_target_id(&self) -> &'static str {
         match self {
             Self::Hello(_) => "daemon-handshake",
-            Self::ValidateBundle => "bundle",
-            Self::ResourceActivationAudit(_) => "resource-activation-audit",
             Self::ExportBrokerAudit(_) => "audit-log",
             Self::PollChildReaped => "pidfd-reap-buffer",
             Self::OpenPeerPidfdFromAcceptedSocket(_) => "accepted-socket",
@@ -605,10 +547,6 @@ impl BrokerRequest {
                     request.bundle_sysctl_intent_ref,
                     request.destroy
                 ),
-            ),
-            Self::BindUnixSocket(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
             ),
             Self::CreateOrReconcileUsersGroups(request) => (
                 request
@@ -734,10 +672,6 @@ impl BrokerRequest {
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
             ),
             Self::OpenPeerPidfdFromAcceptedSocket(_) => return None,
-            Self::ResourceActivationAudit(request) => (
-                request.audit_join.zone_id.as_str().to_owned(),
-                request.audit_join.operation_identity.as_str().to_owned(),
-            ),
             Self::ObserveRunner(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
@@ -902,10 +836,6 @@ impl BrokerRequest {
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
             ),
-            Self::SetSocketAcl(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
             Self::SetupMountNamespace(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
@@ -1014,15 +944,7 @@ impl BrokerRequest {
                     request.operation
                 ),
             ),
-            Self::ValidateBundle
-            | Self::ExportBrokerAudit(_)
-            | Self::Hello(_)
-            | Self::PauseBroker
-            | Self::PollChildReaped
-            | Self::ResumeBroker => return None,
-            // A generic invocation carries no typed durable identity of its
-            // own: the invoked row's join comes from the row, not the wire.
-            | Self::Invoke(_) => return None,
+            Self::ExportBrokerAudit(_) | Self::Hello(_) | Self::PollChildReaped => return None,
         };
         Some((
             d2b_contracts_resource::v3::canonical_digest("d2b:broker-zone:v2", scope.as_bytes()),
@@ -1040,17 +962,9 @@ impl BrokerRequest {
         !matches!(
             self,
             Self::OpenPeerPidfdFromAcceptedSocket(_)
-                | Self::ValidateBundle
                 | Self::ExportBrokerAudit(_)
                 | Self::Hello(_)
-                | Self::PauseBroker
                 | Self::PollChildReaped
-                | Self::ResumeBroker
-                // The generic entry point carries no durable identity of its
-                // own: the envelope records the invoked operation and its
-                // invocation identifier, and a row whose records have an
-                // identity emits them with it.
-                | Self::Invoke(_)
         )
     }
 }
@@ -1468,8 +1382,6 @@ pub enum BrokerResponse {
     OpenSystemdUnitPidfd(OpenSystemdUnitPidfdResponse),
     /// Stop response for an exact transient unit identity.
     StopSystemdUnit(StopSystemdUnitResponse),
-    /// Response for [`BrokerRequest::ResourceActivationAudit`].
-    ResourceActivationAudit(ResourceActivationAuditResponse),
     /// Drain response for `BrokerRequest::PollChildReaped`.
     PollChildReaped(PollChildReapedResponse),
     ReconcileStorageScope(ReconcileStorageScopeResponse),
@@ -1487,9 +1399,6 @@ pub enum BrokerResponse {
     /// Result of an explicit live-pool verification request.
     StoreVerify(StoreVerifyResponse),
     ValidateLockSpec(ValidateLockSpecResponse),
-    ValidateBundle(ValidateBundleResponse),
-    /// Result of one committed operation invocation.
-    Invoke(InvokeResponse),
 }
 
 /// Typed broker error envelope for the real wire. Mirrors the
@@ -1623,16 +1532,6 @@ pub struct ApplySysctlRequest {
     pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub destroy: bool,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BindUnixSocketRequest {
-    pub bundle_socket_intent_ref: BundleOpId,
-    pub vm_id: VmId,
-    pub role_id: RoleId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2105,7 +2004,7 @@ pub struct ConsumeLifecycleLeaseResponse {
 }
 
 /// OpenPidfd daemon-side reconcile-and-adopt support. The daemon's
-/// `d2bd::supervisor::state::reconcile_and_adopt` loop sends this
+/// `d2bd_runtime::supervisor::state::reconcile_and_adopt` loop sends this
 /// request for every snapshot the classifier returned `Adopt` for. The
 /// broker:
 ///
@@ -2691,16 +2590,6 @@ pub struct SetBridgePortFlagsRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SetSocketAclRequest {
-    pub bundle_socket_intent_ref: BundleOpId,
-    pub vm_id: VmId,
-    pub role_id: RoleId,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetupMountNamespaceRequest {
     pub vm_id: VmId,
     pub role_id: RoleId,
@@ -2889,36 +2778,8 @@ pub struct BridgePortFlagsResponse {
     pub port: IfName,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ValidateBundleResponse {
-    pub valid: bool,
-}
-
-/// Authenticated resource-bundle activation audit join. Both identities are
-/// broker-derived canonical SHA-256 values; no resource payload or path is
-/// accepted over the wire.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ResourceActivationAuditRequest {
-    pub audit_join: AuditJoinContext,
-}
-
-impl core::fmt::Debug for ResourceActivationAuditRequest {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("ResourceActivationAuditRequest(<redacted>)")
-    }
-}
-
-/// Confirmation that the broker appended the activation durability record.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ResourceActivationAuditResponse {
-    pub recorded: bool,
-}
-
 /// Runner-signal broker envelope. The live daemon stop/restart path first
-/// delivers signals through `d2bd::supervisor::pidfd_table` after
+/// delivers signals through `d2bd_runtime::supervisor::pidfd_table` after
 /// `SpawnRunner` pidfd registration; on pidfd `EPERM`, d2bd falls back
 /// to this broker-owned live caller via `stop_vm_pidfd_role`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -3075,7 +2936,7 @@ pub enum RunnerRole {
     /// crosvm GPU sidecar. Broker invokes the device GPU Provider argv generator.
     Gpu,
     /// vhost-device-sound audio sidecar. Broker invokes
-    /// `d2b_provider_audio_pipewire::generate_audio_argv`.
+    /// `d2b_provider_audio_pipewire::argv`.
     Audio,
     /// crosvm video-decoder sidecar. Broker invokes the device GPU Provider argv generator.
     Video,
@@ -3802,12 +3663,6 @@ mod tests {
     use d2b_contracts::{decode_frame, encode_frame};
 
     #[test]
-    fn validate_bundle_serializes_with_exact_kind() {
-        let json = serde_json::to_value(BrokerRequest::ValidateBundle).expect("serializes");
-        assert_eq!(json, serde_json::json!({ "kind": "ValidateBundle" }));
-    }
-
-    #[test]
     fn pipewire_audio_request_is_opaque_and_closed() {
         let request = BrokerRequest::PipeWireAudio(PipeWireAudioRequest {
             vm_id: VmId::new("corp-vm"),
@@ -3877,7 +3732,7 @@ mod tests {
     #[test]
     fn broker_request_envelope_round_trips_with_admin() {
         let env = BrokerRequestEnvelope {
-            request: BrokerRequest::ValidateBundle,
+            request: BrokerRequest::PollChildReaped,
             caller_role: BrokerCallerRole::AdminUid { uid: 1000 },
             test_peer_uid: None,
             audit_join: None,
@@ -3891,7 +3746,7 @@ mod tests {
     #[test]
     fn broker_request_envelope_default_caller_role_is_not_authorized() {
         let json = serde_json::json!({
-            "request": { "kind": "ValidateBundle" }
+            "request": { "kind": "PollChildReaped" }
         });
         let env: BrokerRequestEnvelope = serde_json::from_value(json).unwrap();
         assert!(matches!(env.caller_role, BrokerCallerRole::NotAuthorized));

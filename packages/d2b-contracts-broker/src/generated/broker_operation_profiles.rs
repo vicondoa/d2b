@@ -7,7 +7,6 @@
 pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "Hello",
     "ExportBrokerAudit",
-    "ValidateBundle",
     "OpenPidfd",
     "OpenPeerPidfdFromAcceptedSocket",
     "ObserveRunner",
@@ -30,7 +29,6 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "ApplyNmUnmanaged",
     "ApplyRoute",
     "ApplySysctl",
-    "BindUnixSocket",
     "CreateOrReconcileUsersGroups",
     "CreateBridge",
     "DeleteBridge",
@@ -57,7 +55,6 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "ConsumeLifecycleLease",
     "PipeWireAudio",
     "OpenVhostNet",
-    "PauseBroker",
     "MigrateLegacySwtpmState",
     "ReconcileStorageScope",
     "ValidateLockSpec",
@@ -65,7 +62,6 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "StoreSync",
     "StoreVerify",
     "ReadSecretById",
-    "ResumeBroker",
     "RotateSecretById",
     "RunHostInstall",
     "RunMigrate",
@@ -75,7 +71,6 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "RunHostKeyTrust",
     "RunRotateKnownHost",
     "SetBridgePortFlags",
-    "SetSocketAcl",
     "UpdateHostsFile",
     "UsbipBind",
     "UsbipBindFirewallRule",
@@ -83,7 +78,6 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "UsbipUnbind",
     "UsbipExplicitBind",
     "UsbipExplicitFirewallRule",
-    "ResourceActivationAudit",
     "SeedDnsmasqLease",
     "BindMountFromHardlinkFarm",
     "OwnershipMatrixCheck",
@@ -91,7 +85,6 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "DiskInit",
     "SecurityKeyOpenDevice",
     "SecurityKeyApplyUdevRules",
-    "Invoke",
 ];
 
 /// Guest-local process and broker lifecycle effects. Host networking,
@@ -100,7 +93,6 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
 pub const GUEST_OPERATION_CATALOG: &[&str] = &[
     "Hello",
     "ExportBrokerAudit",
-    "ValidateBundle",
     "OpenPidfd",
     "OpenPeerPidfdFromAcceptedSocket",
     "ObserveRunner",

@@ -23,7 +23,7 @@ if [ -z "${D2B_PERF_IN_NIX_SHELL:-}" ] && ! command -v python3 >/dev/null 2>&1; 
 fi
 
 DAEMON_HELLO_BUDGET_MS=${D2B_PERF_DAEMON_HELLO_BUDGET_MS:-200}
-BROKER_VALIDATE_P99_BUDGET_MS=${D2B_PERF_BROKER_VALIDATE_P99_BUDGET_MS:-25}
+BROKER_ROUND_TRIP_P99_BUDGET_MS=${D2B_PERF_BROKER_ROUND_TRIP_P99_BUDGET_MS:-25}
 VM_START_DRY_RUN_BUDGET_MS=${D2B_PERF_VM_START_DRY_RUN_BUDGET_MS:-100}
 MARGIN_PERCENT=20
 
@@ -117,7 +117,7 @@ EOF
   median_of_three "$sample1" "$sample2" "$sample3"
 }
 
-measure_broker_validate_p99_ms() {
+measure_broker_round_trip_p99_ms() {
   local socket_path="$scratch/broker/priv.sock"
   local audit_dir="$scratch/broker/audit"
   local broker_pid
@@ -150,7 +150,7 @@ for _ in range(100):
     s = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
     s.connect(socket_path)
     payload = json.dumps({
-        "request": {"kind": "ValidateBundle"},
+        "request": {"kind": "PollChildReaped"},
         "testPeerUid": peer_uid,
     }).encode()
     frame = struct.pack("<I", len(payload)) + payload
@@ -167,7 +167,7 @@ for _ in range(100):
         raise SystemExit("broker response length prefix mismatch")
     parsed = json.loads(body.decode())
     kind = parsed.get("kind")
-    if kind not in {"ValidateBundleOk", "ValidateBundle"}:
+    if kind not in {"PollChildReaped"}:
         raise SystemExit(f"unexpected broker response kind: {kind!r}")
     samples.append((end - start + 999_999) // 1_000_000)
 
@@ -210,9 +210,9 @@ assert_budget() {
 }
 
 daemon_hello_ms=$(measure_daemon_cold_start_ms)
-broker_validate_p99_ms=$(measure_broker_validate_p99_ms)
+broker_round_trip_p99_ms=$(measure_broker_round_trip_p99_ms)
 vm_start_dry_run_ms=$(measure_vm_start_dry_run_ms)
 
 assert_budget "daemon cold start → first Hello" "$daemon_hello_ms" "$DAEMON_HELLO_BUDGET_MS"
-assert_budget "broker ValidateBundle p99" "$broker_validate_p99_ms" "$BROKER_VALIDATE_P99_BUDGET_MS"
+assert_budget "broker PollChildReaped p99" "$broker_round_trip_p99_ms" "$BROKER_ROUND_TRIP_P99_BUDGET_MS"
 assert_budget "d2b vm start --dry-run wall time" "$vm_start_dry_run_ms" "$VM_START_DRY_RUN_BUDGET_MS"

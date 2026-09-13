@@ -25,7 +25,6 @@ use d2b_contracts_resource::v3::ResourceRef;
 fn guest_profile_admits_only_local_process_effects() {
     for operation in [
         "Hello",
-        "ValidateBundle",
         "ExportBrokerAudit",
         "SpawnRunner",
         "OpenPidfd",

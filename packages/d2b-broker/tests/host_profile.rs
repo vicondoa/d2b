@@ -9,7 +9,6 @@ fn host_profile_keeps_the_complete_closed_operation_catalog() {
         "SpawnRunner",
         "ApplyHostGenerationHandoff",
         "ExportBrokerAudit",
-        "ValidateBundle",
         "ConsumeLifecycleLease",
     ] {
         assert!(

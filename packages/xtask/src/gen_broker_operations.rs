@@ -54,6 +54,13 @@ struct Row {
     family: Option<String>,
     #[serde(default)]
     declaring_provider: Option<String>,
+    /// Why a row no family owns is not provider-owned.
+    ///
+    /// A row the broker or a transport concern owns records what owns it and
+    /// why, so a non-provider row's triage is a committed fact rather than an
+    /// omission; a family-owned row carries its declaring provider instead.
+    #[serde(default)]
+    justification: Option<String>,
     profiles: Vec<String>,
     w3: bool,
     capabilities: bool,
@@ -165,6 +172,28 @@ fn parse(repo_root: &Path) -> Result<Catalog, Box<dyn std::error::Error>> {
         if row.owner != "family" && (row.family.is_some() || row.declaring_provider.is_some()) {
             return Err(render_error(format!(
                 "{POLICY_PATH}: {} is not family-owned but names a family",
+                row.operation
+            )));
+        }
+        if row.owner != "family" && row.justification.is_none() {
+            return Err(render_error(format!(
+                "{POLICY_PATH}: {} is not family-owned without a recorded justification",
+                row.operation
+            )));
+        }
+        if row.owner == "family" && row.justification.is_some() {
+            return Err(render_error(format!(
+                "{POLICY_PATH}: {} is family-owned but records a justification",
+                row.operation
+            )));
+        }
+        if row
+            .justification
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(render_error(format!(
+                "{POLICY_PATH}: {} records an empty justification",
                 row.operation
             )));
         }
@@ -425,6 +454,10 @@ fn generate_catalog(catalog: &Catalog) -> String {
             "        declaring_provider: {},\n",
             optional_str(row.declaring_provider.as_deref())
         ));
+        rows.push_str(&format!(
+            "        justification: {},\n",
+            optional_str(row.justification.as_deref())
+        ));
         rows.push_str(&format!("        profiles: &[{profiles}],\n"));
         rows.push_str(&format!("        w3: {},\n", row.w3));
         rows.push_str(&format!("        capabilities: {},\n", row.capabilities));
@@ -575,19 +608,20 @@ fn generate_triage(catalog: &Catalog) -> String {
         catalog.rows.len() - wire
     ));
     out.push_str(
-        "| Operation | Owner | Family | Declaring provider | Profiles | Disposition | Target |\n",
+        "| Operation | Owner | Family | Declaring provider | Profiles | Disposition | Target | Justification |\n",
     );
-    out.push_str("| --- | --- | --- | --- | --- | --- | --- |\n");
+    out.push_str("| --- | --- | --- | --- | --- | --- | --- | --- |\n");
     for row in &catalog.rows {
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
             row.operation,
             row.owner,
             row.family.as_deref().unwrap_or("-"),
             row.declaring_provider.as_deref().unwrap_or("-"),
             row.profiles.join(", "),
             row.disposition,
-            row.disposition_target
+            row.disposition_target,
+            row.justification.as_deref().unwrap_or("-")
         ));
     }
     out

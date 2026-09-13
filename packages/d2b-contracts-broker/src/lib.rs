@@ -33,7 +33,6 @@ impl BrokerCapabilities {
         operations.extend(
             [
                 "Hello",
-                "ValidateBundle",
                 "ExportBrokerAudit",
                 "CreateOrReconcileUsersGroups",
                 "SetupMountNamespace",
@@ -45,8 +44,6 @@ impl BrokerCapabilities {
                 "UsbipBind",
                 "UsbipUnbind",
                 "UsbipProxyReconcile",
-                "PauseBroker",
-                "ResumeBroker",
             ]
             .into_iter()
             .map(str::to_owned),

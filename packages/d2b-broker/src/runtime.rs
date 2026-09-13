@@ -50,9 +50,6 @@ use crate::protocol::{
 };
 
 #[cfg(feature = "layer1-bootstrap")]
-#[allow(unused_imports)]
-use crate::bootstrap::manifest as manifest_api;
-#[cfg(feature = "layer1-bootstrap")]
 use crate::bootstrap::wire::{BrokerRequest, BrokerResponse, CallerRole, RequestEnvelope};
 #[cfg(feature = "layer1-bootstrap")]
 use d2b_contracts_broker::broker_wire::BrokerProfile;
@@ -98,7 +95,6 @@ const DEFAULT_GUEST_STATE_DIR: &str = "/var/lib/d2b/guest-broker";
 const DEFAULT_ACTIVATION_HELPER_PATH: &str = "/run/current-system/sw/bin/d2b-activation-helper";
 const CAPABILITIES: &[&str] = &[
     "Hello",
-    "ValidateBundle",
     "ExportBrokerAudit",
     "ConsumeLifecycleLease",
     "MigrateLegacySwtpmState",
@@ -215,8 +211,6 @@ enum BrokerError {
     },
     AuditRequiresAdmin,
     HostShutdownRestricted,
-    #[cfg_attr(not(feature = "layer1-bootstrap"), allow(dead_code))]
-    ValidateBundle(String),
     /// Broker started without a loadable bundle at
     /// `ServerConfig.bundle_path`; bundle-dependent real-wire ops cannot
     /// resolve their `BundleOpId` refs and refuse fail-closed.
@@ -347,15 +341,6 @@ enum BrokerError {
         reason: &'static str,
     },
     /// A generic envelope invocation the committed rows do not admit.
-    ///
-    /// The envelope already wrote exactly one audit record naming the
-    /// invoked operation and the refusal code, so this variant's audit is a
-    /// deliberate no-op; `operation` names what the caller asked for.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
-    EnvelopeRefused {
-        operation: String,
-        reason: &'static str,
-    },
     IpcRateLimited,
 }
 
@@ -1908,24 +1893,6 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
             }
             Ok(())
         }
-        BrokerRequest::Invoke(req) => {
-            // The operation name and zone reach the audit record and the
-            // wire refusal envelope, so both are bounded and control-free
-            // before the envelope resolves anything.
-            validate_small_wire_id(req.operation.as_str(), 128, "invalid-operation-name").map_err(
-                |reason| BrokerError::RequestValidation {
-                    operation: "Invoke",
-                    reason,
-                },
-            )?;
-            validate_small_wire_id(req.zone.as_str(), 128, "invalid-zone").map_err(|reason| {
-                BrokerError::RequestValidation {
-                    operation: "Invoke",
-                    reason,
-                }
-            })?;
-            Ok(())
-        }
         _ => Ok(()),
     }
 }
@@ -2075,34 +2042,6 @@ impl DispatchAuditContext {
     }
 }
 
-/// The audit context of one row-keyed generic invocation.
-///
-/// The invoked row's declared join replaces the identity this request would
-/// have derived from its operation name: the record keys on the payload
-/// fields the row declares, and the Zone identity is derived from the Zone
-/// the invocation ran in.
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn invoked_row_audit_context(
-    context: &DispatchAuditContext,
-    zone: &str,
-    identity: Option<String>,
-) -> Result<DispatchAuditContext, BrokerError> {
-    let Some(operation_identity) = identity else {
-        return Ok(context.clone());
-    };
-    let zone_id = d2b_audit::ZoneId::derive(zone)
-        .map_err(|_| BrokerError::Protocol("audit zone identity invalid".to_owned()))?;
-    Ok(DispatchAuditContext {
-        audit_join: Some(AuditJoinContext {
-            zone_id: CanonicalAuditDigest::parse(zone_id.as_str().to_owned())
-                .map_err(|_| BrokerError::Protocol("audit zone identity invalid".to_owned()))?,
-            operation_identity: CanonicalAuditDigest::parse(operation_identity)
-                .map_err(|_| BrokerError::Protocol("audit operation identity invalid".to_owned()))?,
-        }),
-        ..context.clone()
-    })
-}
-
 fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
     #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaEnroll(req) = request {
@@ -2220,9 +2159,6 @@ fn dispatch_request(
                 .map_err(|err| BrokerError::Protocol(err.to_string()))?;
             Ok(hello_ok_response(_config.profile))
         }
-        BrokerRequest::ValidateBundle { path } => {
-            handle_validate_bundle(&path, caller_uid, caller_gid, audit_log)
-        }
         BrokerRequest::ExportBrokerAudit { since, filter } => handle_export_broker_audit(
             since.as_deref(),
             filter.as_deref(),
@@ -2246,10 +2182,6 @@ fn dispatch_request(
         BrokerRequest::ApplySysctl { .. } => Err(BrokerError::Unimplemented {
             operation: "ApplySysctl",
             target_wave: "W3",
-        }),
-        BrokerRequest::BindUnixSocket { .. } => Err(BrokerError::Unimplemented {
-            operation: "BindUnixSocket",
-            target_wave: "W5",
         }),
         BrokerRequest::CreateOrReconcileUsersGroups { .. } => Err(BrokerError::Unimplemented {
             operation: "CreateOrReconcileUsersGroups",
@@ -2303,10 +2235,6 @@ fn dispatch_request(
             operation: "OpenVhostNet",
             target_wave: "W3",
         }),
-        BrokerRequest::PauseBroker { .. } => Err(BrokerError::Unimplemented {
-            operation: "PauseBroker",
-            target_wave: "W4",
-        }),
         BrokerRequest::PrepareRuntimeDir { .. } => Err(BrokerError::Unimplemented {
             operation: "PrepareRuntimeDir",
             target_wave: "W3",
@@ -2327,10 +2255,6 @@ fn dispatch_request(
             operation: "ReadSecretById",
             target_wave: "W8",
         }),
-        BrokerRequest::ResumeBroker { .. } => Err(BrokerError::Unimplemented {
-            operation: "ResumeBroker",
-            target_wave: "W4",
-        }),
         BrokerRequest::RotateSecretById { .. } => Err(BrokerError::Unimplemented {
             operation: "RotateSecretById",
             target_wave: "W8",
@@ -2338,10 +2262,6 @@ fn dispatch_request(
         BrokerRequest::SetBridgePortFlags { .. } => Err(BrokerError::Unimplemented {
             operation: "SetBridgePortFlags",
             target_wave: "W3",
-        }),
-        BrokerRequest::SetSocketAcl { .. } => Err(BrokerError::Unimplemented {
-            operation: "SetSocketAcl",
-            target_wave: "W5",
         }),
         BrokerRequest::SetupMountNamespace { .. } => Err(BrokerError::Unimplemented {
             operation: "SetupMountNamespace",
@@ -2792,73 +2712,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(hello_ok_response(config.profile)))
-        }
-        RealBrokerRequest::ValidateBundle => {
-            // The broker validates the server-configured bundle path.
-            // The daemon never names a bundle path on the wire (security:
-            // prevents path-traversal + symlink-confusion).
-            // ServerConfig.bundle_path defaults to
-            // `/var/lib/d2b/current-bundle/manifest.json` and is
-            // operator-overridable via the `--bundle-path` flag (or the
-            // NixOS module's `d2b.site.bundle.currentManifest`
-            // option once that lands).
-            manifest_api::validate_bundle(&config.bundle_path)
-                .map_err(BrokerError::ValidateBundle)?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "ValidateBundle",
-                "bundle",
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                "bundle",
-                "broker",
-                None,
-                OperationFields::ValidateBundle {},
-            )?;
-            Ok(DispatchResult::no_fds(validate_bundle_ok_response()))
-        }
-        RealBrokerRequest::ResourceActivationAudit(req) => {
-            let op_fields = OperationFields::ResourceActivationAudit {};
-            if !caller_role_is_admin(&caller_role) {
-                write_decision_op_record!(
-                    audit_log,
-                    bundle_metadata,
-                    "ResourceActivationAudit",
-                    req.audit_join.operation_identity.as_str(),
-                    caller_uid,
-                    caller_gid,
-                    &caller_role,
-                    "resource-bundle",
-                    req.audit_join.zone_id.as_str(),
-                    None,
-                    "denied-refused",
-                    Some("audit-requires-admin"),
-                    op_fields,
-                )?;
-                return Err(BrokerError::AuditRequiresAdmin);
-            }
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "ResourceActivationAudit",
-                req.audit_join.operation_identity.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                "resource-bundle",
-                req.audit_join.zone_id.as_str(),
-                None,
-                op_fields,
-            )?;
-            Ok(DispatchResult::no_fds(
-                BrokerResponse::ResourceActivationAudit(
-                    d2b_contracts_broker::broker_wire::ResourceActivationAuditResponse {
-                        recorded: true,
-                    },
-                ),
-            ))
         }
         RealBrokerRequest::ExportBrokerAudit(req) => {
             // Real wire filter is a typed BrokerAuditFilter struct;
@@ -6841,87 +6694,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::no_fds(ack_response("DiskInit")))
         }
-        // The generic envelope. One call runs the five steps every family
-        // arm runs by hand: resolve the committed operation row, validate
-        // the payload against the row's schema, authorize the caller against
-        // the row's committed grants, audit the invocation with the
-        // identifier the envelope minted, and dispatch to the handler the
-        // declaring driver registered.
-        RealBrokerRequest::Invoke(req) => {
-            let envelope = backend.operation_envelope();
-            let caller = crate::envelope::CallerAuthority::classify(&caller_role);
-            let outcome = envelope.call(
-                caller,
-                req.operation.as_str(),
-                req.zone.as_str(),
-                &req.payload,
-            );
-            match outcome {
-                Ok(invocation) => {
-                    // The record of a generic invocation keys on the invoked
-                    // row's declared join rather than on this request's
-                    // derived identity, so the arm names its own context.
-                    let invocation_context = invoked_row_audit_context(
-                        audit_context,
-                        req.zone.as_str(),
-                        invocation.audit_join_identity,
-                    )?;
-                    write_success_op_record_impl(
-                        audit_log,
-                        bundle_metadata,
-                        "Invoke",
-                        req.operation.as_str(),
-                        caller_uid,
-                        caller_gid,
-                        &caller_role,
-                        "operation",
-                        req.zone.as_str(),
-                        tracing_span_id_str(req.tracing_span_id.as_ref()),
-                        OperationFields::Invoke {
-                            operation: req.operation.clone(),
-                            invocation_id: invocation.invocation_id.clone(),
-                            reason: None,
-                        },
-                        &invocation_context,
-                    )?;
-                    let result = serde_json::to_value(&invocation.outcome.result).map_err(|err| {
-                        BrokerError::Protocol(format!("serialize invocation result: {err}"))
-                    })?;
-                    Ok(DispatchResult::no_fds(BrokerResponse::Invoke(
-                        d2b_contracts_broker::broker_wire::InvokeResponse {
-                            operation: req.operation,
-                            invocation_id: invocation.invocation_id,
-                            result,
-                        },
-                    )))
-                }
-                Err(refusal) => {
-                    write_decision_op_record!(
-                        audit_log,
-                        bundle_metadata,
-                        "Invoke",
-                        req.operation.as_str(),
-                        caller_uid,
-                        caller_gid,
-                        &caller_role,
-                        "operation",
-                        req.zone.as_str(),
-                        tracing_span_id_str(req.tracing_span_id.as_ref()),
-                        "denied-refused",
-                        Some(refusal.code),
-                        OperationFields::Invoke {
-                            operation: refusal.operation.clone(),
-                            invocation_id: refusal.invocation_id.clone(),
-                            reason: Some(refusal.code.to_owned()),
-                        },
-                    )?;
-                    Err(BrokerError::EnvelopeRefused {
-                        operation: refusal.operation,
-                        reason: refusal.code,
-                    })
-                }
-            }
-        }
         // Every remaining variant is a reserved stub. One table arm serves
         // them all, so the arm count follows the committed dispositions rather
         // than the variant list, and the refusal names the deferral marker the
@@ -9289,9 +9061,7 @@ pub fn dispatch_run_host_install_response(
 #[cfg(not(feature = "layer1-bootstrap"))]
 pub fn probe_bundle_load_response(bundle_path: &std::path::Path) -> BrokerResponse {
     match try_load_resolver(bundle_path) {
-        BundleSlot::Loaded(_) => BrokerResponse::ValidateBundle(
-            d2b_contracts_broker::broker_wire::ValidateBundleResponse { valid: true },
-        ),
+        BundleSlot::Loaded(_) => ack_response("BundleLoad"),
         BundleSlot::Unavailable => BrokerError::BundleResolverUnavailable.into_response(),
         BundleSlot::Tampered { path, reason } => {
             BrokerError::BundleTampered { path, reason }.into_response()
@@ -9309,9 +9079,7 @@ pub fn probe_bundle_load_response_with_policy(
     policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
 ) -> BrokerResponse {
     match try_load_resolver_with_policy(bundle_path, policy) {
-        BundleSlot::Loaded(_) => BrokerResponse::ValidateBundle(
-            d2b_contracts_broker::broker_wire::ValidateBundleResponse { valid: true },
-        ),
+        BundleSlot::Loaded(_) => ack_response("BundleLoad"),
         BundleSlot::Unavailable => BrokerError::BundleResolverUnavailable.into_response(),
         BundleSlot::Tampered { path, reason } => {
             BrokerError::BundleTampered { path, reason }.into_response()
@@ -12447,36 +12215,6 @@ fn usbip_lock_path_for_busid(bus_id: &str) -> PathBuf {
     PathBuf::from(format!("/run/d2b/locks/usbip/{bus_id}"))
 }
 
-// Route ValidateBundle through `d2b_core::manifest::validate_bundle`,
-// which parses the configured bundle path as a v0.4 manifest. The
-// bootstrap path keeps its own loose "file exists" check in
-// `crate::bootstrap::manifest` because the legacy probe-* test harnesses
-// pre-date the v0.4 schema.
-#[cfg(not(feature = "layer1-bootstrap"))]
-use d2b_core::manifest as manifest_api;
-
-#[cfg(feature = "layer1-bootstrap")]
-fn handle_validate_bundle(
-    path: &Path,
-    caller_uid: u32,
-    caller_gid: u32,
-    audit_log: &AuditLog,
-) -> Result<BrokerResponse, BrokerError> {
-    crate::bootstrap::manifest::validate_bundle(path)
-        .map_err(|err| BrokerError::ValidateBundle(err.to_string()))?;
-    audit_log
-        .write_entry_with_caller_ids(
-            "ValidateBundle",
-            caller_uid,
-            caller_gid,
-            "callable-read-only",
-            "bundle",
-            "ok",
-        )
-        .map_err(|err| BrokerError::Protocol(err.to_string()))?;
-    Ok(validate_bundle_ok_response())
-}
-
 #[cfg(feature = "layer1-bootstrap")]
 fn handle_export_broker_audit(
     since: Option<&str>,
@@ -12755,7 +12493,6 @@ impl BrokerError {
                 | Self::SwtpmDirHardening { .. }
                 | Self::RequestValidation { .. }
                 | Self::ProfileOperationRefused { .. }
-                | Self::EnvelopeRefused { .. }
         );
         let has_request_payload = !audit_context
             .request_fields
@@ -12880,17 +12617,6 @@ impl BrokerError {
                     runner_id,
                     "Broker.NoPidfd",
                     &format!("no pidfd registered for runner `{runner_id}`"),
-                )?;
-            }
-            Self::ValidateBundle(message) => {
-                audit_log.write_error_entry_with_caller_ids(
-                    operation,
-                    caller_uid,
-                    caller_gid,
-                    "bundle-validation-failed",
-                    opaque_target_id,
-                    "Broker.ValidateBundleFailed",
-                    message,
                 )?;
             }
             Self::BundleResolverUnavailable => {
@@ -13283,10 +13009,6 @@ impl BrokerError {
             // duplicate it, so this is a deliberate no-op (mirrors
             // `StoreSyncFailed`).
             Self::SwtpmDirHardening { .. } => {}
-            // The envelope wrote exactly one record for this invocation
-            // (denied, carrying the refusal code and the invoked operation);
-            // a second generic entry would duplicate it.
-            Self::EnvelopeRefused { .. } => {}
             Self::RequestValidation {
                 operation: op,
                 reason,
@@ -13370,13 +13092,6 @@ impl BrokerError {
                 Some("W4"),
                 &format!("no pidfd registered for runner `{runner_id}`"),
                 "Open or spawn the runner first so the broker can retain a pidfd for signaling.",
-            ),
-            Self::ValidateBundle(message) => error_response(
-                "Broker.ValidateBundleFailed",
-                "ValidateBundle",
-                None,
-                &message,
-                "Fix the bundle inputs and retry via d2b_core::manifest::validate_bundle.",
             ),
             Self::BundleResolverUnavailable => error_response(
                 "Broker.BundleResolverUnavailable",
@@ -13564,13 +13279,6 @@ impl BrokerError {
                 &format!("broker request validation failed: {reason}"),
                 "Regenerate the daemon request from the trusted d2b bundle and retry.",
             ),
-            Self::EnvelopeRefused { operation, reason } => error_response(
-                "Broker.EnvelopeRefused",
-                &operation,
-                None,
-                &format!("operation envelope refused: {reason}"),
-                "Commit an operation row and a handler for the operation, or correct the caller's committed grants; the audit record names the refusal.",
-            ),
             Self::IpcRateLimited => error_response(
                 "Broker.IpcRateLimited",
                 "Broker",
@@ -13631,19 +13339,6 @@ fn hello_ok_response(profile: BrokerProfile) -> BrokerResponse {
             server_version: "0.0.0-w2".to_owned(),
             selected_version: "0.0.0-w2".to_owned(),
             capabilities: profile_capabilities(profile),
-        })
-    }
-}
-
-fn validate_bundle_ok_response() -> BrokerResponse {
-    #[cfg(feature = "layer1-bootstrap")]
-    {
-        BrokerResponse::ValidateBundleOk { valid: true }
-    }
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    {
-        BrokerResponse::ValidateBundle(d2b_contracts_broker::broker_wire::ValidateBundleResponse {
-            valid: true,
         })
     }
 }
@@ -14722,9 +14417,9 @@ mod tests {
         // The real-wire dispatch match serves one explicit arm per operation it
         // implements and defers the committed reserved stubs to the fallback
         // arm. Retiring a family arm is the point of the per-variant shrink, so
-        // an arm that disappears must show up as one of two deliberate states
-        // rather than as a variant that silently falls through to a refusal:
-        // a committed deferral marker, or an entry in the caller-free set below.
+        // an arm that disappears must show up as a deliberate state rather
+        // than as a variant that silently falls through to a refusal: a
+        // committed deferral marker.
         //
         // The sets are pinned because the gate has to fail on a *new* state, and
         // a source-scanning test would fail on a comment. An arm moved out of the
@@ -14752,7 +14447,6 @@ mod tests {
             "DiskInit",
             "ExportBrokerAudit",
             "Hello",
-            "Invoke",
             "MigrateLegacySwtpmState",
             "ModprobeIfAllowed",
             "ObserveRunner",
@@ -14780,7 +14474,6 @@ mod tests {
             "QemuMediaRefreshRegistry",
             "QemuMediaSystemPowerdown",
             "ReconcileStorageScope",
-            "ResourceActivationAudit",
             "RunActivation",
             "RunGc",
             "RunHostInstall",
@@ -14806,14 +14499,6 @@ mod tests {
             "UsbipUnbind",
             "ValidateLockSpec",
         ];
-        // The wire variants no dispatch arm and no committed deferral marker
-        // covers. They are caller-free, so retiring them is a deletion of the
-        // variant, its row, and its arm together - the work is recorded for the
-        // unit that owns it, not deferred here. `ValidateBundle` has an arm only
-        // in the bootstrap-feature dispatch, which the real wire does not build.
-        #[cfg(not(feature = "layer1-bootstrap"))]
-        const CALLER_FREE: &[&str] = &["PauseBroker", "ResumeBroker", "ValidateBundle"];
-
         #[cfg(not(feature = "layer1-bootstrap"))]
         {
             let dispatched: BTreeSet<&str> = DISPATCHED.iter().copied().collect();
@@ -14842,14 +14527,11 @@ mod tests {
                 if crate::catalog::stub_target(name).is_some() {
                     continue;
                 }
-                if CALLER_FREE.contains(name) {
-                    continue;
-                }
                 undecided.push(name);
             }
             assert!(
                 undecided.is_empty(),
-                "variants with no dispatch arm, no committed deferral, and no recorded deletion: {undecided:?}"
+                "variants with no dispatch arm and no committed deferral: {undecided:?}"
             );
         }
     }
@@ -14860,19 +14542,16 @@ mod tests {
         // the fallback arm refuses the reserved stubs. A served operation whose
         // row declares no audit shape therefore has no record shape on either
         // path - a row that can be dispatched but cannot be audited. The
-        // reserved stubs and the caller-free variants never serve a request, so
-        // no record shape is expected of them.
+        // reserved stubs never serve a request, so no record shape is expected
+        // of them.
         #[cfg(not(feature = "layer1-bootstrap"))]
         {
-            const NEVER_SERVED: &[&str] = &["PauseBroker", "ResumeBroker", "ValidateBundle"];
             // Served, but their records carry no typed field shape yet. Pinned
             // so the gap cannot grow while the audit shapes are brought up to
             // the served set.
             const UNAUDITED: &[&str] = &["PollChildReaped", "QemuMediaQueryStatus"];
             for name in crate::catalog::WIRE_VARIANTS {
-                if crate::catalog::stub_target(name).is_some()
-                    || NEVER_SERVED.contains(name)
-                    || UNAUDITED.contains(name)
+                if crate::catalog::stub_target(name).is_some() || UNAUDITED.contains(name)
                 {
                     continue;
                 }
@@ -17462,17 +17141,6 @@ mod tests {
                 assert!(response.capabilities.contains(&"Hello".to_owned()));
             }
             other => panic!("expected Hello response, got {other:?}"),
-        }
-
-        let validate_bundle = assert_dispatch(
-            BrokerRequest::ValidateBundle,
-            "ValidateBundle",
-            OperationFields::ValidateBundle {},
-            None,
-        );
-        match validate_bundle.response {
-            BrokerResponse::ValidateBundle(response) => assert!(response.valid),
-            other => panic!("expected ValidateBundle response, got {other:?}"),
         }
 
         let export_filter = BrokerAuditFilter {
@@ -21061,14 +20729,6 @@ mod tests {
                     .to_owned(),
             },
             AuditCase {
-                error: BrokerError::ValidateBundle("bundle digest mismatch".to_owned()),
-                operation: "ValidateBundle",
-                target_id: "bundle".to_owned(),
-                decision: "bundle-validation-failed",
-                error_kind: "Broker.ValidateBundleFailed",
-                error_message: "bundle digest mismatch".to_owned(),
-            },
-            AuditCase {
                 error: BrokerError::Protocol("read request frame failed: unexpected EOF".to_owned()),
                 operation: "RunHostInstall",
                 target_id: "operation".to_owned(),
@@ -21728,339 +21388,4 @@ mod tests {
         }
     }
 
-    /// A row for an operation the committed catalog does not carry and no
-    /// wire variant names, reached only by the name the caller writes.
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    fn envelope_test_row(groups: &'static [&'static str]) -> crate::catalog::BrokerOperationRow {
-        crate::catalog::BrokerOperationRow {
-            operation: "ZoneEchoOperation",
-            wire_variant: None,
-            owner: crate::catalog::OperationOwner::BrokerGeneric,
-            family: None,
-            declaring_provider: None,
-            profiles: &[crate::catalog::BrokerProfileId::Host],
-            w3: false,
-            capabilities: false,
-            disposition: "promoted-live",
-            stub_target: None,
-            audit_fields: &[],
-            authz: crate::catalog::BrokerAuthzFacets {
-                subject: "test",
-                scope: "per-Zone",
-                allowed_groups: groups,
-                destructive: false,
-                secret_access: "None",
-                broker_required: "Yes",
-                audit_mode: "yes",
-            },
-            payload_provenance: crate::catalog::PayloadProvenance::Request,
-            payload_fields: &["label"],
-            payload_required: &["label"],
-            audit_join: Some(&["label"]),
-        }
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    fn envelope_test_backend(groups: &'static [&'static str]) -> FakeDispatchBackend {
-        let envelope = crate::envelope::BrokerEnvelope::over(
-            crate::catalog::BrokerProfileId::Host,
-            Box::new(
-                crate::envelope::HandlerTable::new().with(
-                    "ZoneEchoOperation",
-                    |invocation| {
-                        Ok(crate::envelope::DispatchOutcome {
-                            result: serde_json::from_value(serde_json::json!({
-                                "operation": invocation.ctx.operation,
-                                "invocation": invocation.ctx.invocation_id,
-                                "zone": invocation.ctx.zone,
-                                "fields": invocation.payload.len(),
-                            }))
-                            .expect("canonical result"),
-                        })
-                    },
-                ),
-            ),
-        )
-        .declare(envelope_test_row(groups))
-        .build();
-        FakeDispatchBackend {
-            envelope,
-            ..Default::default()
-        }
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    fn envelope_test_request() -> d2b_contracts_broker::broker_wire::BrokerRequest {
-        d2b_contracts_broker::broker_wire::BrokerRequest::Invoke(
-            d2b_contracts_broker::broker_wire::InvokeRequest {
-                operation: "ZoneEchoOperation".to_owned(),
-                zone: "zone-a".to_owned(),
-                payload: serde_json::json!({ "label": "x" }),
-                tracing_span_id: None,
-            },
-        )
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn envelope_invokes_a_declared_operation_without_a_wire_variant() {
-        use d2b_contracts_broker::broker_wire::{BrokerCallerRole, InvokeResponse};
-
-        let root = test_audit_dir("envelope-invoke");
-        let config = test_server_config(&root, &root.join("manifest.json"));
-        crate::sys::path_safe::ensure_dir(&root, 0o750, None, None).expect("create audit root");
-        crate::sys::path_safe::ensure_dir(&config.audit_dir, 0o750, None, None)
-            .expect("create audit dir");
-        let (log, capture) = AuditLog::open_capturing(
-            &config.audit_dir,
-            Gid::current().as_raw(),
-            true,
-            config.audit_retention_days,
-        )
-        .expect("open capturing audit log");
-        // The committed catalog does not carry the operation, and the wire
-        // enum has no variant for it: the caller reaches it by name alone.
-        assert!(crate::catalog::BrokerOperationRow::find("ZoneEchoOperation").is_none());
-        let backend = envelope_test_backend(&["d2bd"]);
-        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
-        let request = envelope_test_request();
-        let audit_context =
-            DispatchAuditContext::from_request(&request, 4242, &caller_role).expect("audit context");
-
-        let result = dispatch_request_with_backend(
-            request,
-            1000,
-            Gid::current().as_raw(),
-            caller_role.clone(),
-            &audit_context,
-            &config,
-            &log,
-            None,
-            &backend,
-        )
-        .expect("dispatch succeeds");
-        assert!(result.fds.is_empty());
-        let BrokerResponse::Invoke(InvokeResponse {
-            operation,
-            invocation_id,
-            result,
-        }) = result.response
-        else {
-            panic!("expected an Invoke response");
-        };
-        assert_eq!(operation, "ZoneEchoOperation");
-        assert!(invocation_id.starts_with("invocation-"));
-        assert_eq!(result["operation"], "ZoneEchoOperation");
-        assert_eq!(result["invocation"], invocation_id.clone());
-        assert_eq!(result["zone"], "zone-a");
-
-        let records = capture.lock().expect("capture lock");
-        assert_eq!(records.len(), 1, "one invocation writes one record");
-        let record = records[0].clone();
-        drop(records);
-        assert_eq!(record.operation, "Invoke");
-        assert_eq!(record.decision, "allowed");
-        assert_eq!(
-            record.operation_fields.as_ref().unwrap()["operation"],
-            "ZoneEchoOperation"
-        );
-        assert_eq!(
-            record.operation_fields.as_ref().unwrap()["invocation_id"],
-            invocation_id
-        );
-        // The invoked row declares the join: the record keys on the payload
-        // field the row names, not on the operation name alone.
-        let expected_identity = d2b_audit::operation_identity_of_canonical_json(
-            &d2b_contracts_resource::v3::canonical_json_bytes(&serde_json::json!({
-                "label": "x"
-            }))
-            .expect("the declared join key canonicalizes"),
-        );
-        assert_eq!(record.operation_identity.as_str(), expected_identity);
-        assert_eq!(record.zone_operation_key.operation().as_str(), expected_identity);
-        assert_ne!(
-            record.operation_identity.as_str(),
-            d2b_audit::OperationIdentity::derive("operation")
-                .expect("the derived fallback identity")
-                .as_str(),
-            "the record must not fall back to the operation name"
-        );
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn envelope_keys_one_row_on_its_declared_join_fields() {
-        use d2b_contracts_broker::broker_wire::BrokerCallerRole;
-
-        let root = test_audit_dir("envelope-join");
-        let config = test_server_config(&root, &root.join("manifest.json"));
-        crate::sys::path_safe::ensure_dir(&root, 0o750, None, None).expect("create audit root");
-        crate::sys::path_safe::ensure_dir(&config.audit_dir, 0o750, None, None)
-            .expect("create audit dir");
-        let (log, capture) = AuditLog::open_capturing(
-            &config.audit_dir,
-            Gid::current().as_raw(),
-            true,
-            config.audit_retention_days,
-        )
-        .expect("open capturing audit log");
-        let backend = envelope_test_backend(&["d2bd"]);
-        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
-        let invoke = |label: &str| {
-            let request = d2b_contracts_broker::broker_wire::BrokerRequest::Invoke(
-                d2b_contracts_broker::broker_wire::InvokeRequest {
-                    operation: "ZoneEchoOperation".to_owned(),
-                    zone: "zone-a".to_owned(),
-                    payload: serde_json::json!({ "label": label }),
-                    tracing_span_id: None,
-                },
-            );
-            let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
-                .expect("audit context");
-            let outcome = dispatch_request_with_backend(
-                request,
-                1000,
-                Gid::current().as_raw(),
-                caller_role.clone(),
-                &audit_context,
-                &config,
-                &log,
-                None,
-                &backend,
-            )
-            .expect("dispatch succeeds");
-            outcome.response
-        };
-        // Two invocations of one row join under the keys their payload
-        // declares: distinct labels, distinct identities, one Zone key.
-        let _ = invoke("alpha");
-        let _ = invoke("beta");
-        let records = capture.lock().expect("capture lock");
-        assert_eq!(records.len(), 2, "each invocation writes one record");
-        let identities: Vec<String> = records
-            .iter()
-            .map(|record| record.operation_identity.as_str().to_owned())
-            .collect();
-        assert_ne!(identities[0], identities[1]);
-        assert_eq!(records[0].zone_operation_key.zone(), records[1].zone_operation_key.zone());
-        drop(records);
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn envelope_refuses_an_ungranted_caller_and_names_it() {
-        use d2b_contracts_broker::broker_wire::BrokerCallerRole;
-
-        let root = test_audit_dir("envelope-ungranted");
-        let config = test_server_config(&root, &root.join("manifest.json"));
-        crate::sys::path_safe::ensure_dir(&root, 0o750, None, None).expect("create audit root");
-        crate::sys::path_safe::ensure_dir(&config.audit_dir, 0o750, None, None)
-            .expect("create audit dir");
-        let (log, capture) = AuditLog::open_capturing(
-            &config.audit_dir,
-            Gid::current().as_raw(),
-            true,
-            config.audit_retention_days,
-        )
-        .expect("open capturing audit log");
-        let backend = envelope_test_backend(&["d2b-admin"]);
-        // A daemon-class caller that is not an admin: the row admits only
-        // admins, so the invocation is refused rather than served.
-        let caller_role = BrokerCallerRole::LauncherUid { uid: 1000 };
-        let request = envelope_test_request();
-        let audit_context =
-            DispatchAuditContext::from_request(&request, 4242, &caller_role).expect("audit context");
-
-        let error = dispatch_request_with_backend(
-            request,
-            1000,
-            Gid::current().as_raw(),
-            caller_role.clone(),
-            &audit_context,
-            &config,
-            &log,
-            None,
-            &backend,
-        )
-        .expect_err("an ungranted caller is refused");
-        assert!(matches!(
-            error,
-            BrokerError::EnvelopeRefused { ref operation, reason }
-                if operation == "ZoneEchoOperation"
-                    && reason == crate::envelope::UNGRANTED_CALLER
-        ));
-
-        let records = capture.lock().expect("capture lock");
-        assert_eq!(records.len(), 1, "one refusal writes one record");
-        let record = records[0].clone();
-        drop(records);
-        assert_eq!(record.operation, "Invoke");
-        assert_eq!(record.decision, "denied-refused");
-        assert_eq!(record.error_kind.as_deref(), Some("ungranted-caller"));
-        assert_eq!(record.operation_fields.as_ref().unwrap()["operation"], "ZoneEchoOperation");
-        assert_eq!(record.operation_fields.as_ref().unwrap()["reason"], "ungranted-caller");
-        assert!(
-            record.operation_fields.as_ref().unwrap()["invocation_id"]
-                .as_str()
-                .is_some_and(|id| id.starts_with("invocation-")),
-            "a refusal record carries the invocation identifier it denied: {:?}",
-            record.operation_fields
-        );
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn envelope_refuses_an_unknown_operation_and_names_it() {
-        use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest, InvokeRequest};
-
-        let root = test_audit_dir("envelope-unknown");
-        let config = test_server_config(&root, &root.join("manifest.json"));
-        crate::sys::path_safe::ensure_dir(&root, 0o750, None, None).expect("create audit root");
-        crate::sys::path_safe::ensure_dir(&config.audit_dir, 0o750, None, None)
-            .expect("create audit dir");
-        let (log, capture) = AuditLog::open_capturing(
-            &config.audit_dir,
-            Gid::current().as_raw(),
-            true,
-            config.audit_retention_days,
-        )
-        .expect("open capturing audit log");
-        let backend = envelope_test_backend(&["d2bd"]);
-        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
-        let request = BrokerRequest::Invoke(InvokeRequest {
-            operation: "NoSuchOperation".to_owned(),
-            zone: "zone-a".to_owned(),
-            payload: serde_json::json!({}),
-            tracing_span_id: None,
-        });
-        let audit_context =
-            DispatchAuditContext::from_request(&request, 4242, &caller_role).expect("audit context");
-
-        let error = dispatch_request_with_backend(
-            request,
-            1000,
-            Gid::current().as_raw(),
-            caller_role.clone(),
-            &audit_context,
-            &config,
-            &log,
-            None,
-            &backend,
-        )
-        .expect_err("an unknown operation is refused");
-        assert!(matches!(
-            error,
-            BrokerError::EnvelopeRefused { ref operation, reason }
-                if operation == "NoSuchOperation"
-                    && reason == crate::envelope::UNKNOWN_OPERATION
-        ));
-
-        let records = capture.lock().expect("capture lock");
-        assert_eq!(records.len(), 1, "one refusal writes one record");
-        let record = records[0].clone();
-        drop(records);
-        assert_eq!(record.decision, "denied-refused");
-        assert_eq!(record.error_kind.as_deref(), Some("unknown-operation"));
-        assert_eq!(record.operation_fields.as_ref().unwrap()["operation"], "NoSuchOperation");
-    }
 }

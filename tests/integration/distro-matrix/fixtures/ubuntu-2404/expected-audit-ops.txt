@@ -2,7 +2,6 @@
 # /var/lib/d2b/audit/broker-<UTC-date>.jsonl. Lines starting with
 # `#` are comments; everything else is matched as an exact substring.
 Hello
-ValidateBundle
 RunHostInstall
 ApplyNftables
 ApplyRoute

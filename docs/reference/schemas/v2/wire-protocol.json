@@ -1064,23 +1064,6 @@
         "json"
       ]
     },
-    "AuditJoinContext": {
-      "description": "Explicit Zone and operation identity carried with broker requests.",
-      "type": "object",
-      "required": [
-        "operationIdentity",
-        "zoneId"
-      ],
-      "properties": {
-        "operationIdentity": {
-          "type": "string"
-        },
-        "zoneId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
     "AuditRequest": {
       "type": "object",
       "properties": {
@@ -1256,33 +1239,6 @@
             "string",
             "null"
           ]
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "BindUnixSocketRequest": {
-      "type": "object",
-      "required": [
-        "bundleSocketIntentRef",
-        "roleId",
-        "vmId"
-      ],
-      "properties": {
-        "bundleSocketIntentRef": {
-          "type": "string"
-        },
-        "roleId": {
-          "type": "string"
         },
         "tracingSpanId": {
           "default": null,
@@ -1550,24 +1506,6 @@
             },
             "payload": {
               "$ref": "#/definitions/ApplySysctlRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "BindUnixSocket"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/BindUnixSocketRequest"
             }
           }
         },
@@ -2243,20 +2181,6 @@
           }
         },
         {
-          "type": "object",
-          "required": [
-            "kind"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "PauseBroker"
-              ]
-            }
-          }
-        },
-        {
           "description": "Drain the broker's in-memory ring buffer of ChildReaped events. Returns [`PollChildReapedResponse`] containing all buffered notifications in FIFO order; clears the buffer. Idempotent.",
           "type": "object",
           "required": [
@@ -2439,20 +2363,6 @@
         {
           "type": "object",
           "required": [
-            "kind"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ResumeBroker"
-              ]
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
             "kind",
             "payload"
           ],
@@ -2612,24 +2522,6 @@
             },
             "payload": {
               "$ref": "#/definitions/SetBridgePortFlagsRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "SetSocketAcl"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/SetSocketAclRequest"
             }
           }
         },
@@ -2853,39 +2745,6 @@
           }
         },
         {
-          "description": "Record the broker durability evidence that closes an authenticated resource-bundle activation commit. The request carries only the canonical audit join; the broker does not accept resource rows or caller-selected host effects over this operation.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ResourceActivationAudit"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ResourceActivationAuditRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ValidateBundle"
-              ]
-            }
-          }
-        },
-        {
           "description": "Write the per-VM dnsmasq lease file. Replaces leaves of the retired `microvm-setup@<vm>.service`. Currently a typed stub (`Unimplemented`) until the live handler is wired.\n\nLive handler target: `live_seed_dnsmasq_lease`, resolved through `BundleResolver` from the per-VM dnsmasq lease row.",
           "type": "object",
           "required": [
@@ -3015,25 +2874,6 @@
             },
             "payload": {
               "$ref": "#/definitions/SecurityKeyApplyUdevRulesRequest"
-            }
-          }
-        },
-        {
-          "description": "Invoke one committed operation by name through the generic envelope.\n\nThe broker resolves the committed `Operation` row the name declares, validates the payload against that row's payload schema, authorizes the caller against the committed grants, audits the invocation with its `invocationId`, and dispatches to the handler the declaring driver registered for it.\n\nA new operation is reached by committing a row - never by adding a variant here, which is what keeps the wire enum a view of the committed rows rather than a second inventory to keep in step.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "Invoke"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/InvokeRequest"
             }
           }
         }
@@ -3651,25 +3491,6 @@
           }
         },
         {
-          "description": "Response for [`BrokerRequest::ResourceActivationAudit`].",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ResourceActivationAudit"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ResourceActivationAuditResponse"
-            }
-          }
-        },
-        {
           "description": "Drain response for `BrokerRequest::PollChildReaped`.",
           "type": "object",
           "required": [
@@ -3849,43 +3670,6 @@
             },
             "payload": {
               "$ref": "#/definitions/ValidateLockSpecResponse"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ValidateBundle"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ValidateBundleResponse"
-            }
-          }
-        },
-        {
-          "description": "Result of one committed operation invocation.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "Invoke"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/InvokeResponse"
             }
           }
         }
@@ -7225,59 +7009,6 @@
       "maxLength": 15,
       "minLength": 1,
       "pattern": "^[A-Za-z0-9_-]+$"
-    },
-    "InvokeRequest": {
-      "description": "Invoke one committed operation by name.",
-      "type": "object",
-      "required": [
-        "operation",
-        "payload",
-        "zone"
-      ],
-      "properties": {
-        "operation": {
-          "description": "The committed operation name the caller invokes.",
-          "type": "string"
-        },
-        "payload": {
-          "description": "The canonical payload object the operation row validates."
-        },
-        "tracingSpanId": {
-          "description": "Optional tracing correlation identifier.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "zone": {
-          "description": "The Zone the invocation runs in.",
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "InvokeResponse": {
-      "description": "The result of one committed operation invocation.",
-      "type": "object",
-      "required": [
-        "invocationId",
-        "operation",
-        "result"
-      ],
-      "properties": {
-        "invocationId": {
-          "description": "The invocation identifier the audit record carries.",
-          "type": "string"
-        },
-        "operation": {
-          "description": "The operation the broker dispatched.",
-          "type": "string"
-        },
-        "result": {
-          "description": "The canonical result payload the handler returned."
-        }
-      },
-      "additionalProperties": false
     },
     "IsolationPosture": {
       "description": "Security boundary presented by a workload runtime.",
@@ -10672,32 +10403,6 @@
       },
       "additionalProperties": false
     },
-    "ResourceActivationAuditRequest": {
-      "description": "Authenticated resource-bundle activation audit join. Both identities are broker-derived canonical SHA-256 values; no resource payload or path is accepted over the wire.",
-      "type": "object",
-      "required": [
-        "auditJoin"
-      ],
-      "properties": {
-        "auditJoin": {
-          "$ref": "#/definitions/AuditJoinContext"
-        }
-      },
-      "additionalProperties": false
-    },
-    "ResourceActivationAuditResponse": {
-      "description": "Confirmation that the broker appended the activation durability record.",
-      "type": "object",
-      "required": [
-        "recorded"
-      ],
-      "properties": {
-        "recorded": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false
-    },
     "ResourceBundleGenerationId": {
       "type": "string",
       "maxLength": 71,
@@ -12083,33 +11788,6 @@
               "type": "null"
             }
           ]
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "SetSocketAclRequest": {
-      "type": "object",
-      "required": [
-        "bundleSocketIntentRef",
-        "roleId",
-        "vmId"
-      ],
-      "properties": {
-        "bundleSocketIntentRef": {
-          "type": "string"
         },
         "roleId": {
           "type": "string"
@@ -14373,18 +14051,6 @@
       "properties": {
         "mappingClass": {
           "$ref": "#/definitions/MappingClass"
-        }
-      },
-      "additionalProperties": false
-    },
-    "ValidateBundleResponse": {
-      "type": "object",
-      "required": [
-        "valid"
-      ],
-      "properties": {
-        "valid": {
-          "type": "boolean"
         }
       },
       "additionalProperties": false

@@ -7,6 +7,7 @@
       "owner": "broker-generic",
       "family": null,
       "declaringProvider": null,
+      "justification": "transport handshake: the first frame on the private socket, answered from the broker's own capability table, with no host effect and no resource family behind it",
       "profiles": [
         "host",
         "guest"
@@ -44,6 +45,7 @@
       "owner": "broker-generic",
       "family": null,
       "declaringProvider": null,
+      "justification": "broker self-audit: the broker reads its own append-only audit log, so the effect is the broker's record keeping rather than a family effect",
       "profiles": [
         "host",
         "guest"
@@ -66,43 +68,6 @@
       "audit": {
         "fields": [
           "ExportBrokerAudit"
-        ],
-        "required": true,
-        "mode": "yes"
-      },
-      "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
-    },
-    {
-      "operation": "ValidateBundle",
-      "wireVariant": "ValidateBundle",
-      "owner": "broker-generic",
-      "family": null,
-      "declaringProvider": null,
-      "profiles": [
-        "host",
-        "guest"
-      ],
-      "w3": false,
-      "capabilities": true,
-      "disposition": "callable-read-only",
-      "dispositionTarget": "live read-only callable",
-      "authz": {
-        "subject": "bundle",
-        "scope": "global",
-        "allowedGroups": [
-          "d2bd"
-        ],
-        "destructive": false,
-        "secretAccess": "None",
-        "brokerRequired": "Yes",
-        "auditMode": "Yes"
-      },
-      "audit": {
-        "fields": [
-          "ValidateBundle"
         ],
         "required": true,
         "mode": "yes"
@@ -711,6 +676,7 @@
       "owner": "broker-generic",
       "family": null,
       "declaringProvider": null,
+      "justification": "broker-owned host effect: the handoff runs in the broker against the broker's own helper path and state dir, the activation family requests it through its effect port, so no declaring crate holds the handler",
       "profiles": [
         "host"
       ],
@@ -913,40 +879,6 @@
         "fields": [
           "ApplySysctl"
         ],
-        "required": true,
-        "mode": "yes"
-      },
-      "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
-    },
-    {
-      "operation": "BindUnixSocket",
-      "wireVariant": "BindUnixSocket",
-      "owner": "transport-excluded",
-      "family": null,
-      "declaringProvider": null,
-      "profiles": [
-        "host"
-      ],
-      "w3": true,
-      "capabilities": true,
-      "disposition": "stubbed-unimplemented",
-      "dispositionTarget": "reserved",
-      "authz": {
-        "subject": "socket",
-        "scope": "per-VM/role",
-        "allowedGroups": [
-          "d2bd"
-        ],
-        "destructive": true,
-        "secretAccess": "None",
-        "brokerRequired": "Yes",
-        "auditMode": "Yes"
-      },
-      "audit": {
-        "fields": [],
         "required": true,
         "mode": "yes"
       },
@@ -1932,40 +1864,6 @@
       }
     },
     {
-      "operation": "PauseBroker",
-      "wireVariant": "PauseBroker",
-      "owner": "broker-generic",
-      "family": null,
-      "declaringProvider": null,
-      "profiles": [
-        "host"
-      ],
-      "w3": false,
-      "capabilities": true,
-      "disposition": "stubbed-unimplemented",
-      "dispositionTarget": "future work",
-      "authz": {
-        "subject": "broker-admin",
-        "scope": "global",
-        "allowedGroups": [
-          "d2bd"
-        ],
-        "destructive": true,
-        "secretAccess": "MetadataOnly",
-        "brokerRequired": "Yes",
-        "auditMode": "Yes"
-      },
-      "audit": {
-        "fields": [],
-        "required": true,
-        "mode": "yes"
-      },
-      "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
-    },
-    {
       "operation": "MigrateLegacySwtpmState",
       "wireVariant": "MigrateLegacySwtpmState",
       "owner": "family",
@@ -2203,40 +2101,6 @@
         ],
         "destructive": false,
         "secretAccess": "ReadWrite",
-        "brokerRequired": "Yes",
-        "auditMode": "Yes"
-      },
-      "audit": {
-        "fields": [],
-        "required": true,
-        "mode": "yes"
-      },
-      "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
-    },
-    {
-      "operation": "ResumeBroker",
-      "wireVariant": "ResumeBroker",
-      "owner": "broker-generic",
-      "family": null,
-      "declaringProvider": null,
-      "profiles": [
-        "host"
-      ],
-      "w3": false,
-      "capabilities": true,
-      "disposition": "stubbed-unimplemented",
-      "dispositionTarget": "future work",
-      "authz": {
-        "subject": "broker-admin",
-        "scope": "global",
-        "allowedGroups": [
-          "d2bd"
-        ],
-        "destructive": true,
-        "secretAccess": "MetadataOnly",
         "brokerRequired": "Yes",
         "auditMode": "Yes"
       },
@@ -2573,40 +2437,6 @@
       }
     },
     {
-      "operation": "SetSocketAcl",
-      "wireVariant": "SetSocketAcl",
-      "owner": "transport-excluded",
-      "family": null,
-      "declaringProvider": null,
-      "profiles": [
-        "host"
-      ],
-      "w3": true,
-      "capabilities": true,
-      "disposition": "stubbed-unimplemented",
-      "dispositionTarget": "reserved",
-      "authz": {
-        "subject": "socket",
-        "scope": "per-VM/role",
-        "allowedGroups": [
-          "d2bd"
-        ],
-        "destructive": true,
-        "secretAccess": "None",
-        "brokerRequired": "Yes",
-        "auditMode": "Yes"
-      },
-      "audit": {
-        "fields": [],
-        "required": true,
-        "mode": "yes"
-      },
-      "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
-    },
-    {
       "operation": "UpdateHostsFile",
       "wireVariant": "UpdateHostsFile",
       "owner": "family",
@@ -2861,42 +2691,6 @@
       }
     },
     {
-      "operation": "ResourceActivationAudit",
-      "wireVariant": "ResourceActivationAudit",
-      "owner": "broker-generic",
-      "family": null,
-      "declaringProvider": null,
-      "profiles": [
-        "host"
-      ],
-      "w3": false,
-      "capabilities": false,
-      "disposition": "promoted-live",
-      "dispositionTarget": "live in production broker",
-      "authz": {
-        "subject": "resource-bundle",
-        "scope": "per-Zone",
-        "allowedGroups": [
-          "d2bd"
-        ],
-        "destructive": false,
-        "secretAccess": "MetadataOnly",
-        "brokerRequired": "Yes",
-        "auditMode": "Yes"
-      },
-      "audit": {
-        "fields": [
-          "ResourceActivationAudit"
-        ],
-        "required": true,
-        "mode": "yes"
-      },
-      "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
-    },
-    {
       "operation": "SeedDnsmasqLease",
       "wireVariant": "SeedDnsmasqLease",
       "owner": "family",
@@ -3141,52 +2935,12 @@
       }
     },
     {
-      "operation": "Invoke",
-      "wireVariant": "Invoke",
-      "owner": "broker-generic",
-      "family": null,
-      "declaringProvider": null,
-      "profiles": [
-        "host"
-      ],
-      "w3": false,
-      "capabilities": false,
-      "disposition": "untriaged",
-      "dispositionTarget": "broker-generic row",
-      "authz": {
-        "subject": "operation",
-        "scope": "per-operation",
-        "allowedGroups": [
-          "d2bd"
-        ],
-        "destructive": false,
-        "secretAccess": "None",
-        "brokerRequired": "Yes",
-        "auditMode": "Yes"
-      },
-      "audit": {
-        "fields": [
-          "Invoke"
-        ],
-        "required": true,
-        "mode": "yes"
-      },
-      "payload": {
-        "provenance": "request",
-        "schema": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {},
-          "required": []
-        }
-      }
-    },
-    {
       "operation": "PrepareSwtpmDir",
       "wireVariant": null,
       "owner": "broker-generic",
       "family": null,
       "declaringProvider": null,
+      "justification": "broker pre-spawn step: the broker provisions and hardens the per-VM swtpm state dir from its SpawnRunner step before the child starts, and the row carries that record shape only",
       "profiles": [
         "host"
       ],

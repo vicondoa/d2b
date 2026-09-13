@@ -500,8 +500,6 @@ pub enum OperationFields {
     Hello {
         client_version: String,
     },
-    ResourceActivationAudit {},
-    ValidateBundle {},
     ExportBrokerAudit {
         since: Option<String>,
         filter: Option<String>,
@@ -535,16 +533,6 @@ pub enum OperationFields {
         cloexec_required: bool,
         fd_passing_mechanism: String,
         order_key: String,
-    },
-    /// One generic envelope invocation: the operation the caller named, the
-    /// invocation identifier the audit record carries, and, when refused, the
-    /// closed refusal code. Only the operation name, the identifier, and the
-    /// code are recorded; payload bytes never reach the audit log.
-    Invoke {
-        operation: String,
-        invocation_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reason: Option<String>,
     },
 }
 
@@ -878,8 +866,6 @@ impl OperationFields {
             "Hello" => parse_fields!(value => Hello {
                 client_version: String,
             }),
-            "ResourceActivationAudit" => parse_fields!(value => ResourceActivationAudit {}),
-            "ValidateBundle" => parse_fields!(value => ValidateBundle {}),
             "ExportBrokerAudit" => parse_fields!(value => ExportBrokerAudit {
                 since: Option<String>,
                 filter: Option<String>,
@@ -908,11 +894,6 @@ impl OperationFields {
                 cloexec_required: bool,
                 fd_passing_mechanism: String,
                 order_key: String,
-            }),
-            "Invoke" => parse_fields!(value => Invoke {
-                operation: String,
-                invocation_id: String,
-                reason: Option<String>,
             }),
             other => Err(serde_json::Error::io(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -1572,11 +1553,6 @@ mod tests {
         OperationFields::Hello {
             client_version: "1.2.3".to_owned(),
         }
-    );
-    roundtrip_test!(
-        validate_bundle_round_trip,
-        "ValidateBundle",
-        OperationFields::ValidateBundle {}
     );
     roundtrip_test!(
         export_broker_audit_round_trip,

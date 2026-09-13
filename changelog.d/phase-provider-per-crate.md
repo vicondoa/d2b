@@ -419,3 +419,32 @@
   resource schema marks a property `writeOnly`, so the declared secret surface
   it would read does not exist yet, and the check moves onto the marker when
   the schemas grow it.
+- Every broker row no family owns now records why it is not provider-owned, and
+  the completeness gate fails a row that does not: `Hello` and
+  `ExportBrokerAudit` (the broker's own handshake and self-audit),
+  `ApplyHostGenerationHandoff` (the broker executes the handoff against its own
+  helper path and state dir, and the activation family requests it through its
+  effect port), and `PrepareSwtpmDir` (the broker's pre-spawn step provisions
+  and hardens the per-VM swtpm state dir before the child starts). The reason is
+  a committed row facet, it reaches the generated catalog and the operator
+  triage table, and a row that drops it fails both the generator and the
+  broker's gate.
+### Removed
+
+- Seven broker operations nothing in tree constructed are gone with their rows,
+  dispatch arms, and wire variants: `ValidateBundle`, `ResourceActivationAudit`,
+  `Invoke`, `PauseBroker`, `ResumeBroker`, `BindUnixSocket`, and `SetSocketAcl`.
+  No daemon or CLI caller existed for any of them - the generic `Invoke` variant
+  was superseded by the committed `ForwardOperationRequest` carrier the broker
+  dials, and the other six were refusals, a read-only probe, or a dispatcher
+  entry the daemon stopped naming. The removal takes the whole surface with it:
+  the committed rows and every generated view of them (the broker catalog, the
+  profile catalogs, the `W3BrokerOperation` inventory, the private authorization
+  rows, the triage table, and the telemetry label domain), the typed wire
+  request and response shapes, the audit record shapes, the bootstrap probe
+  wire's matching call shapes (including its looser bundle-exists check), the
+  broker's capability advertisement, and `d2b_core::manifest`, whose strict
+  v0.4 manifest parse existed only for the retired dispatch. A previous-protocol
+  client that still sends a retired request is refused as an unknown variant,
+  and the broker round-trip budget now measures a live read-only operation
+  instead of the removed probe.

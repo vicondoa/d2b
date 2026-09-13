@@ -9,8 +9,8 @@
 //! `OpenKvm`, `OpenVhostNet`, `OpenFuse`, `OpenDevice`, `CreateTapFd`,
 //! `CreatePersistentTap`, `SetBridgePortFlags`, `ApplyNftables`,
 //! `ApplyRoute`, `ApplySysctl`, `ApplyNmUnmanaged`, `UpdateHostsFile`,
-//! `BindUnixSocket`, `SetSocketAcl`, `ModprobeIfAllowed`,
-//! `PrepareStateDir`, `PrepareRuntimeDir`) already have rows in
+//! `ModprobeIfAllowed`, `PrepareStateDir`, `PrepareRuntimeDir`) already have
+//! rows in
 //! [`super::privileges::BROKER_OPERATION_AUTHZ`]. Their audit fields are
 //! documented in `docs/reference/privileges.md` and enforced by the broker
 //! dispatcher.
@@ -44,8 +44,6 @@ pub enum W3BrokerOperation {
     ApplySysctl,
     ApplyNmUnmanaged,
     UpdateHostsFile,
-    BindUnixSocket,
-    SetSocketAcl,
     ModprobeIfAllowed,
     UsbipBindFirewallRule,
     MigrateLegacySwtpmState,
@@ -83,8 +81,6 @@ impl W3BrokerOperation {
             Self::ApplySysctl => "ApplySysctl",
             Self::ApplyNmUnmanaged => "ApplyNmUnmanaged",
             Self::UpdateHostsFile => "UpdateHostsFile",
-            Self::BindUnixSocket => "BindUnixSocket",
-            Self::SetSocketAcl => "SetSocketAcl",
             Self::ModprobeIfAllowed => "ModprobeIfAllowed",
             Self::UsbipBindFirewallRule => "UsbipBindFirewallRule",
             Self::MigrateLegacySwtpmState => "MigrateLegacySwtpmState",
@@ -137,11 +133,6 @@ impl W3BrokerOperation {
             | Self::ApplySysctl
             | Self::ApplyNmUnmanaged
             | Self::UpdateHostsFile => W3OperationFlags {
-                audit: true,
-                destructive: true,
-                secret_access: false,
-            },
-            Self::BindUnixSocket | Self::SetSocketAcl => W3OperationFlags {
                 audit: true,
                 destructive: true,
                 secret_access: false,

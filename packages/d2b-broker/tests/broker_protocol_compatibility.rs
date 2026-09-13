@@ -11,11 +11,16 @@ const PREVIOUS_PROTOCOL_VERSION: u32 = 3;
 
 // The production envelope carries no protocol version and has no negotiation
 // path. These reduced prior-version types pin the actual serde compatibility:
-// an old stable request remains readable, while each new operation is unknown
-// to an old decoder.
+// an old stable request remains readable, a request this protocol retired is
+// unknown to the current decoder, and each new operation is unknown to an old
+// decoder.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload")]
 enum PreviousBrokerRequest {
+    Hello {
+        #[serde(rename = "clientVersion")]
+        client_version: String,
+    },
     ValidateBundle,
 }
 
@@ -104,13 +109,32 @@ fn previous_client_request_decodes_under_current_protocol() {
     assert_eq!(PROTOCOL_VERSION, 6);
 
     let encoded = serde_json::to_vec(&PreviousBrokerRequestEnvelope {
-        request: PreviousBrokerRequest::ValidateBundle,
+        request: PreviousBrokerRequest::Hello {
+            client_version: "0.0.0-test".to_owned(),
+        },
     })
     .expect("previous request serializes");
     let decoded: BrokerRequestEnvelope =
         serde_json::from_slice(&encoded).expect("current broker decodes previous request");
 
-    assert!(matches!(decoded.request, BrokerRequest::ValidateBundle));
+    assert!(matches!(decoded.request, BrokerRequest::Hello(_)));
+}
+
+#[test]
+fn a_retired_previous_request_is_unknown_to_the_current_decoder() {
+    // The previous protocol carried `ValidateBundle` and this one retired it
+    // with its row, so a client that still sends it is refused as an unknown
+    // variant rather than served.
+    let encoded = serde_json::to_vec(&PreviousBrokerRequestEnvelope {
+        request: PreviousBrokerRequest::ValidateBundle,
+    })
+    .expect("previous request serializes");
+    let error = serde_json::from_slice::<BrokerRequestEnvelope>(&encoded)
+        .expect_err("the current broker must not decode a retired request");
+    assert!(
+        error.to_string().contains("unknown variant"),
+        "a retired request failed for an unexpected reason: {error}"
+    );
 }
 
 #[test]

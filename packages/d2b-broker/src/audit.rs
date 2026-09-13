@@ -2360,7 +2360,7 @@ mod tests {
             .expect("open typed export audit log");
         log.write_entry("Hello", 1000, "allowed", "operation", "success")
             .expect("write first record");
-        log.write_entry("ValidateBundle", 1000, "allowed", "bundle", "success")
+        log.write_entry("ExportBrokerAudit", 1000, "allowed", "audit-log", "success")
             .expect("write second record");
         let first = log
             .export_page(None, None, None, 1)
@@ -2871,10 +2871,10 @@ mod tests {
         log.write_entry("Hello", 1000, "allowed", "operation", "success")
             .expect("write info record");
         log.write_error_entry(
-            "ValidateBundle",
+            "ExportBrokerAudit",
             1000,
             "denied-policy",
-            "bundle",
+            "audit-log",
             "policy",
             "redacted",
         )

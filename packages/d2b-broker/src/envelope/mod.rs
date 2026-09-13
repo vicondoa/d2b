@@ -744,6 +744,7 @@ mod tests {
             owner: OperationOwner::BrokerGeneric,
             family: None,
             declaring_provider: None,
+            justification: Some("test row the broker owns"),
             profiles: &[BrokerProfileId::Host],
             w3: false,
             capabilities: false,
