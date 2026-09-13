@@ -122,6 +122,8 @@
           cp -r ${./packages/d2b-provider-shell-terminal} $out/packages/d2b-provider-shell-terminal
           cp -r ${./packages/d2b-provider-supervisor} $out/packages/d2b-provider-supervisor
           cp -r ${./packages/d2b-provider-system-core} $out/packages/d2b-provider-system-core
+          cp -r ${./packages/d2b-provider-telemetry-binding} $out/packages/d2b-provider-telemetry-binding
+          cp -r ${./packages/d2b-provider-telemetry-service} $out/packages/d2b-provider-telemetry-service
           cp -r ${./packages/d2b-provider-process-minijail} $out/packages/d2b-provider-process-minijail
           cp -r ${./packages/d2b-provider-process-systemd} $out/packages/d2b-provider-process-systemd
           cp -r ${./packages/d2b-provider-provider} $out/packages/d2b-provider-provider

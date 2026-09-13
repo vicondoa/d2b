@@ -48,6 +48,8 @@ members = [
   "d2b-provider-shell-terminal",
   "d2b-provider-supervisor",
   "d2b-provider-system-core",
+  "d2b-provider-telemetry-binding",
+  "d2b-provider-telemetry-service",
   "d2b-provider-process-minijail",
   "d2b-provider-process-systemd",
   "d2b-provider-provider",
