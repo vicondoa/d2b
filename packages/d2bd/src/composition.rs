@@ -157,7 +157,7 @@ pub use d2bd_runtime::public_read_model::{
     PublicArtifactFingerprint, PublicReadModelKind, PublicStatusReadModel,
     request_invalidates_public_status_model,
 };
-pub(crate) use d2bd_runtime::readiness::wait_for_readiness;
+pub(crate) use d2bd_runtime::readiness::{wait_for_readiness, wait_for_readiness_async};
 pub(crate) use d2bd_runtime::resource_api::resource_runtime_error_frame;
 use d2bd_runtime::supervisor::pidfd_table::{
     BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, PidfdTableError, WaitTermination,
@@ -3701,6 +3701,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                 d2bd_runtime::daemon_audit::ResourcePlaneAction::Start,
                                 d2bd_runtime::daemon_audit::ResourcePlaneResult::Ready,
                             )
+                            .await
                             .map_err(|error| {
                                 TypedError::InternalIo {
                                     context: "authoritative resource-plane start audit".to_owned(),
@@ -3839,6 +3840,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                     d2bd_runtime::daemon_audit::ResourcePlaneAction::Start,
                                     d2bd_runtime::daemon_audit::ResourcePlaneResult::Refused,
                                 )
+                                .await
                                 .map_err(|audit_error| {
                                     TypedError::InternalIo {
                                         context: "authoritative resource-plane refusal audit"
@@ -15903,6 +15905,7 @@ async fn open_resource_plane(
         }
     }
     compose_gateway_zone_links(state, &mut plane, &topology).await;
+    compose_guest_enrollment(state, &plane, &topology, resolver).await;
     if plane.ready_zone_count() == 0 {
         let _ = plane.shutdown().await;
         return Err(resource_runtime::ResourceRuntimeError::PlaneUnavailable);
@@ -16092,6 +16095,137 @@ async fn compose_gateway_zone_links(
     }
 }
 
+/// Compose and serve this Zone's guest-enrollment endpoints.
+///
+/// [`crate::zone_enrollment`] documents what declares an endpoint and how its
+/// expectation is composed; this function supplies the store and bundle reads
+/// and nothing else. It binds nothing when no child Zone declares an
+/// enrollment link, so a deployment that serves no guest enrollment is
+/// unchanged.
+async fn compose_guest_enrollment(
+    state: &ServerState,
+    plane: &resource_runtime::ResourcePlane,
+    topology: &CommittedZoneTopology,
+    resolver: &BundleResolver,
+) {
+    let Some(local_root) = topology.path(&topology.root) else {
+        return;
+    };
+    let Ok(socket_owner) = resolve_component_session_state_root_owner(state) else {
+        return;
+    };
+    let mut edges = Vec::new();
+    let mut endpoints = Vec::new();
+    for zone in plane.zone_ids() {
+        if zone == topology.root {
+            continue;
+        }
+        let Some(parent_zone) = topology.parent(&zone) else {
+            continue;
+        };
+        if parent_zone != &topology.root {
+            continue;
+        }
+        let (Some(parent_path), Some(child_path)) =
+            (topology.path(parent_zone), topology.path(&zone))
+        else {
+            continue;
+        };
+        let Ok(edge) = ZoneTreeEdge::new(parent_path, child_path) else {
+            continue;
+        };
+        edges.push(edge.clone());
+        let runtime = match plane.zone(&zone) {
+            Ok(runtime) => runtime,
+            Err(_) => continue,
+        };
+        let links = match runtime.committed_resources_of_type("ZoneLink").await {
+            Ok(links) => links,
+            Err(error) => {
+                tracing::warn!(
+                    zone = %zone.as_str(),
+                    error = ?error,
+                    "guest enrollment composition skipped: ZoneLink rows unavailable",
+                );
+                continue;
+            }
+        };
+        for link in links {
+            let Some(facts) = crate::zone_enrollment::declared_enrollment_link(&link, &zone) else {
+                continue;
+            };
+            match guest_enrollment_endpoint(state, resolver, &zone, &edge, &facts, socket_owner) {
+                Some(endpoint) => endpoints.push(endpoint),
+                None => tracing::debug!(
+                    zone = %zone.as_str(),
+                    guest = %facts.guest_name,
+                    "guest enrollment endpoint skipped: guest facts unavailable",
+                ),
+            }
+        }
+    }
+    if endpoints.is_empty() {
+        return;
+    }
+    let served = crate::zone_enrollment::serve_guest_enrollments(
+        local_root,
+        edges,
+        endpoints,
+        std::sync::Arc::new(unix_now_millis),
+    );
+    tracing::info!(
+        zone = %topology.root.as_str(),
+        endpoints = served,
+        "guest enrollment endpoints served",
+    );
+}
+
+/// Compose one enrollment endpoint from one link's declared facts and the
+/// guest facts the host published for it.
+///
+/// An endpoint exists only where both resolve: the trusted VM intent that
+/// yields the guest's vsock socket and the host-published session identity
+/// under that state root. A guest missing either gets no endpoint.
+fn guest_enrollment_endpoint(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    zone: &ZoneId,
+    edge: &ZoneTreeEdge,
+    facts: &crate::zone_enrollment::EnrollmentLinkFacts,
+    socket_owner: (u32, u32),
+) -> Option<crate::zone_enrollment::GuestEnrollmentEndpoint> {
+    let endpoint = resolve_component_session_endpoint(state, resolver, &facts.guest_name).ok()?;
+    let vsock_host_socket = endpoint.socket_path.clone();
+    let config =
+        d2bd_runtime::guest_component_session::GuestComponentSessionConfig::from_state_root(
+            endpoint.state_root.clone(),
+            endpoint,
+        )
+        .ok()?;
+    if config.identity.guest_ref().name().as_str() != facts.guest_name {
+        return None;
+    }
+    crate::zone_enrollment::GuestEnrollmentEndpoint::new(
+        zone.clone(),
+        facts.link_uid.clone(),
+        edge.clone(),
+        facts.controller_generation.clone(),
+        vsock_host_socket,
+        &config.identity,
+        config.guest_public,
+        socket_owner,
+    )
+    .inspect_err(|error| {
+        tracing::warn!(
+            zone = %zone.as_str(),
+            guest = %facts.guest_name,
+            reason = error.as_str(),
+            "guest enrollment placement refused",
+        );
+    })
+    .ok()
+}
+
 async fn gateway_guest_for_link(
     runtime: &resource_runtime::ZoneResourceRuntime,
     link: &Value,
@@ -16131,35 +16265,38 @@ fn is_gateway_zone_link(link: &Value) -> bool {
         == Some(d2b_provider_transport_azure_relay::PROVIDER_REF)
 }
 
-fn audit_resource_plane(
+async fn audit_resource_plane(
     state: &ServerState,
-    zone: &d2b_contracts_resource::v3::ZoneId,
+    zone: &d2bd_contracts_resource::v3::ZoneId,
     action: d2bd_runtime::daemon_audit::ResourcePlaneAction,
     result: d2bd_runtime::daemon_audit::ResourcePlaneResult,
 ) -> Result<(), std::io::Error> {
-    state.daemon_audit.write_event_with_authority(
-        &d2bd_runtime::daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
-            zone: zone.as_str().to_owned(),
-            action,
-            result,
-        },
-        d2bd_runtime::daemon_audit::DaemonAuditLog::authority_for(
+    state
+        .daemon_audit
+        .write_event_with_authority_async(
             &d2bd_runtime::daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
                 zone: zone.as_str().to_owned(),
                 action,
                 result,
             },
-        ),
-    )
+            d2bd_runtime::daemon_audit::DaemonAuditLog::authority_for(
+                &d2bd_runtime::daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
+                    zone: zone.as_str().to_owned(),
+                    action,
+                    result,
+                },
+            ),
+        )
+        .await
 }
 
-fn record_authoritative_resource_plane_audit(
+async fn record_authoritative_resource_plane_audit(
     state: &ServerState,
-    zone: &d2b_contracts_resource::v3::ZoneId,
+    zone: &d2bd_contracts_resource::v3::ZoneId,
     action: d2bd_runtime::daemon_audit::ResourcePlaneAction,
     result: d2bd_runtime::daemon_audit::ResourcePlaneResult,
 ) -> Result<(), std::io::Error> {
-    audit_resource_plane(state, zone, action, result)
+    audit_resource_plane(state, zone, action, result).await
 }
 
 async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Error> {
@@ -16178,7 +16315,8 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                         zone,
                         d2bd_runtime::daemon_audit::ResourcePlaneAction::Shutdown,
                         d2bd_runtime::daemon_audit::ResourcePlaneResult::Refused,
-                    )?;
+                    )
+                    .await?;
                 }
                 match state.resource_plane.lock() {
                     Ok(mut slot) => *slot = Some(Arc::new(plane)),
@@ -16193,7 +16331,8 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                             zone,
                             d2bd_runtime::daemon_audit::ResourcePlaneAction::Shutdown,
                             d2bd_runtime::daemon_audit::ResourcePlaneResult::Closed,
-                        )?;
+                        )
+                        .await?;
                     }
                 }
                 Err(resource_runtime::ResourceRuntimeError::LiveRequestOwners) => {
@@ -16203,7 +16342,8 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                             zone,
                             d2bd_runtime::daemon_audit::ResourcePlaneAction::Shutdown,
                             d2bd_runtime::daemon_audit::ResourcePlaneResult::Refused,
-                        )?;
+                        )
+                        .await?;
                     }
                     match state.resource_plane.lock() {
                         Ok(mut slot) => *slot = Some(Arc::new(plane)),
@@ -16218,7 +16358,8 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                             zone,
                             d2bd_runtime::daemon_audit::ResourcePlaneAction::Shutdown,
                             d2bd_runtime::daemon_audit::ResourcePlaneResult::Error,
-                        )?;
+                        )
+                        .await?;
                     }
                     tracing::warn!(error = %error, "resource plane shutdown failed");
                 }
@@ -16234,7 +16375,8 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                         zone,
                         d2bd_runtime::daemon_audit::ResourcePlaneAction::Shutdown,
                         d2bd_runtime::daemon_audit::ResourcePlaneResult::Refused,
-                    )?;
+                    )
+                    .await?;
                 }
                 tracing::warn!("resource plane still has live request owners during shutdown");
             }
@@ -16447,7 +16589,7 @@ impl VmStartRunner<'_> {
         }
     }
 
-    fn spawn_runner(
+    async fn spawn_runner(
         &self,
         vm: &str,
         node: &ProcessNode,
@@ -16516,7 +16658,7 @@ impl VmStartRunner<'_> {
                 .provider_runtime
                 .process_providers()
                 .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
-            block_on_future(providers.launch_node(vm, node, timeout))?;
+            providers.launch_node(vm, node, timeout).await?;
             return Ok(VmRunnerLaunch::Provider);
         }
         // U17: this launcher never spawns through the raw broker surface.
@@ -16658,13 +16800,14 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
             return Ok(());
         }
         if is_durable_wayland_process_node(node) {
-            return wait_for_readiness(node, readiness, budget.readiness, None);
+            return wait_for_readiness_async(node, readiness, budget.readiness, None).await;
         }
         // The authenticated Guest ComponentSession node is readiness-only but
         // needs daemon state (per-VM transport endpoint and peer credentials),
         // so it cannot go through the stateless
-        // `wait_for_readiness` path. Intercept it here; this also covers the
-        // `spawn_and_check_process_alive` fall-through, which delegates here.
+        // `wait_for_readiness_async` path. Intercept it here; this also covers
+        // the `spawn_and_check_process_alive` fall-through, which delegates
+        // here.
         if node.role == ProcessRole::ComponentSessionHealth {
             return self
                 .wait_for_guest_component_session(vm, node, budget)
@@ -16675,7 +16818,7 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
             // Provider/device-security-key controller. The legacy daemon
             // accept loop is not allowed to open a blanket hidraw device;
             // this legacy DAG node is readiness-only during the transition.
-            return wait_for_readiness(node, readiness, budget.readiness, None);
+            return wait_for_readiness_async(node, readiness, budget.readiness, None).await;
         }
         match vm_start_node_mode(&node.role) {
             VmStartNodeMode::ReadinessOnly => {
@@ -16684,17 +16827,17 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
                 }
                 // ReadinessOnly nodes spawn no long-lived runner, so there
                 // is no daemon-held pidfd to observe - no liveness probe.
-                wait_for_readiness(node, readiness, budget.readiness, None)
+                wait_for_readiness_async(node, readiness, budget.readiness, None).await
             }
             VmStartNodeMode::OneShot(_) => {
-                match self.spawn_runner(vm, node, budget.spawn)? {
+                match self.spawn_runner(vm, node, budget.spawn).await? {
                     VmRunnerLaunch::Provider => {
                         let providers = self
                             .state
                             .provider_runtime
                             .process_providers()
                             .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
-                        block_on_future(providers.wait_node(vm, node, budget.readiness))
+                        providers.wait_node(vm, node, budget.readiness).await
                     }
                     VmRunnerLaunch::ControllerOwned => {
                         Err("controller-owned-one-shot-process-invalid".to_owned())
@@ -16702,9 +16845,9 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
                 }
             }
             VmStartNodeMode::LongLived(_) => {
-                let launch = self.spawn_runner(vm, node, budget.spawn)?;
+                let launch = self.spawn_runner(vm, node, budget.spawn).await?;
                 if matches!(launch, VmRunnerLaunch::ControllerOwned) {
-                    return wait_for_readiness(node, readiness, budget.readiness, None);
+                    return wait_for_readiness_async(node, readiness, budget.readiness, None).await;
                 }
                 let providers = self
                     .state
@@ -16714,7 +16857,7 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
                 let liveness = process_provider_runtime::ProviderLivenessProbe::new(
                     providers, vm, node,
                 );
-                wait_for_readiness(node, readiness, budget.readiness, Some(&liveness))?;
+                wait_for_readiness_async(node, readiness, budget.readiness, Some(&liveness)).await?;
                 if node.role == ProcessRole::QemuMediaRunner {
                     self.boot_qemu_media(vm, node, budget.readiness)?;
                 }
@@ -16741,7 +16884,7 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
         }
         match vm_start_node_mode(&node.role) {
             VmStartNodeMode::LongLived(_) => {
-                let launch = self.spawn_runner(vm, node, budget.spawn)?;
+                let launch = self.spawn_runner(vm, node, budget.spawn).await?;
                 tracing::info!(
                     vm = %vm,
                     node = %node.id.0,
@@ -16769,7 +16912,7 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
             return d2bd_runtime::supervisor::dag::ApiReadyState::Yes;
         }
         if is_durable_wayland_process_node(node) {
-            return match wait_for_readiness(node, readiness, timeout, None) {
+            return match wait_for_readiness_async(node, readiness, timeout, None).await {
                 Ok(()) => d2bd_runtime::supervisor::dag::ApiReadyState::Yes,
                 Err(error) if error == format!("readiness-timeout:{}", node.id.0) => {
                     d2bd_runtime::supervisor::dag::ApiReadyState::Timeout
@@ -16803,7 +16946,7 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
                     );
                 &legacy_liveness
             };
-        match wait_for_readiness(node, readiness, timeout, Some(liveness)) {
+        match wait_for_readiness_async(node, readiness, timeout, Some(liveness)).await {
             Ok(()) => d2bd_runtime::supervisor::dag::ApiReadyState::Yes,
             Err(error) if error == format!("readiness-timeout:{}", node.id.0) => {
                 d2bd_runtime::supervisor::dag::ApiReadyState::Timeout

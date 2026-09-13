@@ -76,8 +76,6 @@ const ZONE_ENROLLMENT_SOCKET_MODE: u32 = 0o660;
 /// One guest's enrollment endpoint, composed from committed declarations.
 #[derive(Clone)]
 pub(crate) struct GuestEnrollmentEndpoint {
-    edge: ZoneTreeEdge,
-    controller_generation: ZoneLinkControllerGeneration,
     vsock_host_socket: PathBuf,
     expectation: ZoneEnrollmentExpectation,
     socket_owner: (u32, u32),
@@ -113,8 +111,6 @@ impl GuestEnrollmentEndpoint {
             profile.limits,
         )?;
         Ok(Self {
-            edge,
-            controller_generation,
             vsock_host_socket,
             expectation,
             socket_owner,

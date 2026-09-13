@@ -14,6 +14,7 @@ pub(crate) mod interaction_child_sources;
 /// The daemon-side half of the Guest target-control seam: the family crate
 /// owns the channel, this module offers it the authenticated session.
 pub(crate) mod guest_target_session;
+pub(crate) mod zone_enrollment;
 pub(crate) mod foundation_seed;
 pub(crate) mod forward_rendezvous;
 pub(crate) mod plane_port;
