@@ -396,7 +396,6 @@ nix_surface_test(
         "modules": [],
         "expression": "//packages/d2b-provider-observability-otel:nix/tests/default.nix",
         "files": [
-            "packages/d2b-provider-observability-otel/nix/default.nix",
             "packages/d2b-provider-observability-otel/nix/projection.nix",
         ],
         "package": "packages/d2b-provider-observability-otel",
