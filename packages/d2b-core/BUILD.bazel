@@ -272,6 +272,30 @@ rust_test(
 )
 
 rust_test(
+    name = "loader_worker",
+    srcs = ["tests/loader_worker.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "loader_worker_panic",
+    srcs = ["tests/loader_worker_panic.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "device_usbip_adapter",
     srcs = [
         "tests/device_usbip_adapter.rs",
