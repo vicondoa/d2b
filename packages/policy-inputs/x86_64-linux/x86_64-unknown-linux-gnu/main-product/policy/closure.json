@@ -96,7 +96,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "545b4339966667be22b37425d8283bdcef080a99e4273151c52eba82b175429d",
+  "lock_sha256": "d09e106521432d1692985ad595f89ba75b95300fdd674b3c20954b2f2f3e0768",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -4635,6 +4635,12 @@
       "target": null
     },
     {
+      "from": "d2b-core@0.0.0-bootstrap#path",
+      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
       "from": "d2b-host-activation-helper@0.0.0-bootstrap#path",
       "to": "libc@0.2.189#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
@@ -5207,6 +5213,18 @@
     {
       "from": "d2b-provider-config-nixos@0.0.0-bootstrap#path",
       "to": "sha2@0.10.9#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-config-nixos@0.0.0-bootstrap#path",
+      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "dev",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-config-nixos@0.0.0-bootstrap#path",
+      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -8813,7 +8831,7 @@
     {
       "from": "d2b-zone-routing@0.0.0-bootstrap#path",
       "to": "d2b-session@0.0.0-bootstrap#path",
-      "kind": "dev",
+      "kind": "normal",
       "target": null
     },
     {
@@ -8934,6 +8952,12 @@
       "from": "d2b@0.0.0-bootstrap#path",
       "to": "tempfile@3.27.0#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "dev",
+      "target": null
+    },
+    {
+      "from": "d2b@0.0.0-bootstrap#path",
+      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
       "target": null
     },
     {

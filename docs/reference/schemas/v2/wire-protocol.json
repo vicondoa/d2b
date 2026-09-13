@@ -8179,7 +8179,7 @@
       "additionalProperties": false
     },
     "OpenPidfdRequest": {
-      "description": "OpenPidfd daemon-side reconcile-and-adopt support. The daemon's `d2bd::supervisor::state::reconcile_and_adopt` loop sends this request for every snapshot the classifier returned `Adopt` for. The broker:\n\n1. Calls `pidfd_open(pid)`. 2. Reads `/proc/<pid>/stat` field 22 (start-time ticks). 3. Compares against `expected_start_time_ticks`. 4. On match: returns the pidfd via SCM_RIGHTS + the [`OpenPidfdResponse`] JSON body. 5. On mismatch (pid reuse race): closes the pidfd and surfaces a typed pidfd-race error (audit record carries the observed start-time so the operator can correlate).\n\nThis atomic open-AND-verify closes the critical pid-reuse issue: the daemon could otherwise re-adopt a pidfd that referred to a reused-pid unrelated process.",
+      "description": "OpenPidfd daemon-side reconcile-and-adopt support. The daemon's `d2bd_runtime::supervisor::state::reconcile_and_adopt` loop sends this request for every snapshot the classifier returned `Adopt` for. The broker:\n\n1. Calls `pidfd_open(pid)`. 2. Reads `/proc/<pid>/stat` field 22 (start-time ticks). 3. Compares against `expected_start_time_ticks`. 4. On match: returns the pidfd via SCM_RIGHTS + the [`OpenPidfdResponse`] JSON body. 5. On mismatch (pid reuse race): closes the pidfd and surfaces a typed pidfd-race error (audit record carries the observed start-time so the operator can correlate).\n\nThis atomic open-AND-verify closes the critical pid-reuse issue: the daemon could otherwise re-adopt a pidfd that referred to a reused-pid unrelated process.",
       "type": "object",
       "required": [
         "expectedStartTimeTicks",
@@ -8619,7 +8619,7 @@
       "additionalProperties": false
     },
     "PathClass": {
-      "description": "Path classifier for [`PrepareStateDir`] / [`PrepareRuntimeDir`]. The broker derives the concrete path from the bundle anchored by `vm_id` + `path_class`; the daemon never passes a raw path.\n\n[`PrepareStateDir`]: crate::broker_wire::BrokerRequest::PrepareStateDir [`PrepareRuntimeDir`]: crate::broker_wire::BrokerRequest::PrepareRuntimeDir",
+      "description": "Path classifier for the `PrepareStateDir` / `PrepareRuntimeDir` broker requests declared in `d2b-contracts-broker`'s `broker_wire` module. The broker derives the concrete path from the bundle anchored by `vm_id` + `path_class`; the daemon never passes a raw path.",
       "oneOf": [
         {
           "description": "Per-VM state directory under `/var/lib/d2b/vms/<vm>/`.",
@@ -10953,7 +10953,7 @@
           ]
         },
         {
-          "description": "vhost-device-sound audio sidecar. Broker invokes `d2b_provider_audio_pipewire::generate_audio_argv`.",
+          "description": "vhost-device-sound audio sidecar. Broker invokes `d2b_provider_audio_pipewire::argv`.",
           "type": "string",
           "enum": [
             "audio"
@@ -10997,7 +10997,7 @@
       ]
     },
     "RunnerSignal": {
-      "description": "Runner-signal broker envelope. The live daemon stop/restart path first delivers signals through `d2bd::supervisor::pidfd_table` after `SpawnRunner` pidfd registration; on pidfd `EPERM`, d2bd falls back to this broker-owned live caller via `stop_vm_pidfd_role`.",
+      "description": "Runner-signal broker envelope. The live daemon stop/restart path first delivers signals through `d2bd_runtime::supervisor::pidfd_table` after `SpawnRunner` pidfd registration; on pidfd `EPERM`, d2bd falls back to this broker-owned live caller via `stop_vm_pidfd_role`.",
       "type": "string",
       "enum": [
         "term",
