@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, HashSet};
 use serde_json::{Value, json};
 
 use crate::context::{
-    OutputMode, RequestDeadline, ZoneContext, parse_resource_ref, standard_resource_types,
+    OutputMode, RequestDeadline, ZoneContext, converted_resource_types, parse_resource_ref,
 };
 use crate::dispatch::GenericListArgs;
 use crate::print_stdout;
@@ -134,9 +134,12 @@ impl DebugReport {
             .is_some_and(|first| self.revisions.iter().any(|revision| revision != first))
     }
 
-    /// How many rows the node's subtree holds, the node included.
+    /// How many rows the node's subtree holds, the node included. A cycle
+    /// marker repeats a row already counted above it, so it contributes
+    /// nothing to the total.
     pub(crate) fn subtree_rows(node: &DebugNode) -> usize {
-        1 + node
+        let own = usize::from(!node.cycle);
+        own + node
             .children
             .iter()
             .map(DebugReport::subtree_rows)
@@ -153,11 +156,29 @@ impl DebugReport {
     }
 }
 
-/// Tally one subtree's phases, collapsed rows included.
+/// Tally one subtree's phases, collapsed rows included. A cycle marker
+/// repeats a row already tallied above it.
 fn count_phases(node: &DebugNode, counts: &mut BTreeMap<String, usize>) {
-    *counts.entry(node.row.phase.clone()).or_default() += 1;
+    if !node.cycle {
+        *counts.entry(node.row.phase.clone()).or_default() += 1;
+    }
     for child in &node.children {
         count_phases(child, counts);
+    }
+}
+
+/// The plane a row is served by, derived from its type.
+///
+/// The envelope carries no plane, and the registry is the authority for the
+/// mapping, so the renderer derives it rather than reading it.
+fn row_plane(reference: &str) -> &'static str {
+    let resource_type = reference
+        .split_once('/')
+        .map(|(resource_type, _)| resource_type)
+        .unwrap_or(reference);
+    match d2b_contracts::identity::resource_plane(resource_type) {
+        d2b_contracts::identity::ResourcePlane::Manager => "manager",
+        d2b_contracts::identity::ResourcePlane::Legacy => "legacy",
     }
 }
 
@@ -183,8 +204,9 @@ fn render_node(node: &DebugNode, out: &mut String, indent: usize, expand_all: bo
     let pad = "  ".repeat(indent);
     let row = &node.row;
     out.push_str(&format!(
-        "{pad}{} phase={} gen={} statusGen={}",
+        "{pad}{} plane={} phase={} gen={} statusGen={}",
         row.reference,
+        row_plane(&row.reference),
         row.phase,
         row.generation,
         row.status_generation
@@ -307,6 +329,7 @@ pub(crate) fn report_json(report: &DebugReport) -> Value {
         json!({
             "ref": node.row.reference,
             "uid": node.row.uid,
+            "plane": row_plane(&node.row.reference),
             "phase": node.row.phase,
             "generation": node.row.generation,
             "statusGeneration": node.row.status_generation,
@@ -510,7 +533,7 @@ pub(crate) fn read_zone(
 ) -> Result<ObservedZone, DebugReadError> {
     let mut budget = ROW_BUDGET;
     let mut zone = ObservedZone::default();
-    let mut types: Vec<String> = standard_resource_types()
+    let mut types: Vec<String> = converted_resource_types()
         .iter()
         .map(|resource_type| (*resource_type).to_owned())
         .collect();
@@ -552,11 +575,13 @@ pub(crate) fn read_zone(
 
 /// Compose the report from the observed rows: a pure function of the row set.
 pub(crate) fn compose(zone: &ObservedZone, zone_name: &str, selected: Option<&str>) -> DebugReport {
-    let by_uid: BTreeMap<&str, usize> = zone
+    // Ownership is stored as a `Type/name` reference, not a uid, so the
+    // index is keyed on the same reference the named-row lookup uses.
+    let by_ref: BTreeMap<&str, usize> = zone
         .rows
         .iter()
         .enumerate()
-        .map(|(index, row)| (row.uid.as_str(), index))
+        .map(|(index, row)| (row.reference.as_str(), index))
         .collect();
     let mut children_of: BTreeMap<Option<usize>, Vec<usize>> = BTreeMap::new();
     let mut owner_absent: HashSet<usize> = HashSet::new();
@@ -564,7 +589,7 @@ pub(crate) fn compose(zone: &ObservedZone, zone_name: &str, selected: Option<&st
         let owner = row
             .owner_ref
             .as_deref()
-            .and_then(|owner| by_uid.get(owner).copied());
+            .and_then(|owner| by_ref.get(owner).copied());
         if row.owner_ref.is_some() && owner.is_none() {
             owner_absent.insert(index);
         }
@@ -642,7 +667,7 @@ pub(crate) fn compose(zone: &ObservedZone, zone_name: &str, selected: Option<&st
         .filter(|(_, row)| {
             row.owner_ref
                 .as_deref()
-                .and_then(|owner| by_uid.get(owner).copied())
+                .and_then(|owner| by_ref.get(owner).copied())
                 .is_none()
         })
         .map(|(index, _)| index)
@@ -697,12 +722,13 @@ pub(crate) fn run(
     mode: OutputMode,
     deadline: RequestDeadline,
 ) -> Result<i32, crate::CliFailure> {
-    // The positional zone selects the route; disagreeing with the routed zone
-    // is an argument error, refused before any request.
-    if args.zone != context.zone_name() {
+    // The positional zone is the route's authority, so `d2b debug prod`
+    // connects to `prod`. An explicitly selected global zone that disagrees
+    // with it is a usage error, refused before any request.
+    if context.has_explicit_zone() && context.zone_name() != args.zone {
         return Err(context.failure(
             "ref-invalid",
-            "debug zone must match the routed zone",
+            "debug zone disagrees with the selected Zone",
             mode,
             2,
         ));
@@ -776,7 +802,7 @@ mod tests {
 
     #[test]
     fn a_failed_grandchild_keeps_its_ready_ancestors_expanded() {
-        let mut failed = row("Process/worker", "uid-3", Some("uid-2"), "Failed", 1, Some(1));
+        let mut failed = row("Process/worker", "uid-3", Some("Endpoint/api"), "Failed", 1, Some(1));
         failed.failure = Some(FailureSummary {
             code: "process-spec-invalid".to_owned(),
             operation: Some("Reconcile".to_owned()),
@@ -787,7 +813,7 @@ mod tests {
         });
         let observed = zone(vec![
             row("Guest/sandbox", "uid-1", None, "Ready", 1, Some(1)),
-            row("Endpoint/api", "uid-2", Some("uid-1"), "Ready", 1, Some(1)),
+            row("Endpoint/api", "uid-2", Some("Guest/sandbox"), "Ready", 1, Some(1)),
             failed,
         ]);
         let report = compose(&observed, "dev", None);
@@ -800,6 +826,11 @@ mod tests {
         assert!(human.contains("failure code=process-spec-invalid"), "{human}");
         assert!(human.contains("means:"), "the shared registry supplies the prose");
         assert!(
+            human.contains("Process/worker plane=manager"),
+            "every node names the plane it is served by: {human}"
+        );
+        assert_eq!(report_json(&report)["roots"][0]["plane"], "manager");
+        assert!(
             !human.contains("rows Ready)"),
             "nothing collapses on the path to the failure: {human}"
         );
@@ -809,7 +840,7 @@ mod tests {
     fn a_fully_settled_subtree_collapses_to_one_rollup() {
         let observed = zone(vec![
             row("Guest/healthy", "uid-1", None, "Ready", 1, Some(1)),
-            row("Endpoint/api", "uid-2", Some("uid-1"), "Ready", 1, Some(1)),
+            row("Endpoint/api", "uid-2", Some("Guest/healthy"), "Ready", 1, Some(1)),
         ]);
         let report = compose(&observed, "dev", None);
         let collapsed = render_human(&report, false);
@@ -831,7 +862,7 @@ mod tests {
         let observed = zone(vec![row(
             "Volume/orphan",
             "uid-9",
-            Some("uid-absent"),
+            Some("Volume/ghost"),
             "Ready",
             1,
             Some(1),
@@ -846,13 +877,13 @@ mod tests {
     #[test]
     fn an_ownership_cycle_terminates_and_is_marked() {
         let observed = zone(vec![
-            row("Volume/a", "uid-a", Some("uid-b"), "Ready", 1, Some(1)),
-            row("Volume/b", "uid-b", Some("uid-a"), "Ready", 1, Some(1)),
+            row("Volume/a", "uid-a", Some("Volume/b"), "Ready", 1, Some(1)),
+            row("Volume/b", "uid-b", Some("Volume/a"), "Ready", 1, Some(1)),
         ]);
         let report = compose(&observed, "dev", None);
         let human = render_human(&report, true);
         assert!(human.contains("cycle"), "{human}");
-        assert_eq!(report.total_rows, 3, "the repeated node is rendered once more, marked");
+        assert_eq!(report.total_rows, 2, "the repeated node is marked, not counted twice");
     }
 
     #[test]
@@ -918,7 +949,7 @@ mod tests {
     fn the_named_form_renders_only_the_named_subtree() {
         let observed = zone(vec![
             row("Guest/sandbox", "uid-1", None, "Ready", 1, Some(1)),
-            row("Process/worker", "uid-2", Some("uid-1"), "Failed", 1, Some(1)),
+            row("Process/worker", "uid-2", Some("Guest/sandbox"), "Failed", 1, Some(1)),
             row("Guest/other", "uid-3", None, "Ready", 1, Some(1)),
         ]);
         let report = compose(&observed, "dev", Some("Guest/sandbox"));

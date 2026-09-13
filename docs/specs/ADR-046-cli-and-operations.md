@@ -2204,6 +2204,7 @@ All error class strings are stable lower-kebab-case machine values.
 | `bundle-integrity-failure` | Zone resource bundle SHA256 pin mismatch |
 | `bundle-generation-replay` | Submitted bundleGeneration ≤ last applied generation |
 | `bundle-schema-mismatch` | Bundle resourceTypeSchemaDigests do not match installed schemas |
+| `debug-read-exhausted` | The debug report's read budget was exhausted before every selected type was read |
 | `resource-pending-cleanup` | Resource has outstanding deletion that must complete or be force-removed |
 
 ### Stable exit codes

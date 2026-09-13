@@ -941,6 +941,23 @@ fn routed_zone<'a>(cli: &'a ModernCli) -> Option<&'a str> {
     }
 }
 
+/// The zone named by an explicit `--zone` or `D2B_ZONE`, read from the raw
+/// arguments because clap hides it behind a positional argument.
+fn explicit_zone_argument(raw_args: &[OsString]) -> Option<String> {
+    let mut seen_zone_flag = false;
+    for argument in raw_args.iter().skip(1) {
+        let text = argument.to_string_lossy();
+        if let Some(value) = text.strip_prefix("--zone=") {
+            return Some(value.to_owned());
+        }
+        if seen_zone_flag {
+            return Some(text.into_owned());
+        }
+        seen_zone_flag = text == "--zone";
+    }
+    std::env::var("D2B_ZONE").ok().filter(|zone| !zone.is_empty())
+}
+
 pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
     let cli = match ModernCli::try_parse_from(raw_args.clone()) {
         Ok(cli) => cli,
@@ -978,6 +995,25 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
                 | host::HostCommand::Doctor(_)
         })
     ) || matches!(&cli.command, ModernCommand::Auth(_));
+    // `d2b debug` names its zone twice over. Clap binds the positional into
+    // the global `--zone` for this command, so an explicit `--zone` is not
+    // recoverable from the parsed struct; read it from the arguments, and
+    // refuse a disagreement before any connection.
+    if let ModernCommand::Debug(args) = &cli.command
+        && let Some(explicit) = explicit_zone_argument(&raw_args)
+        && explicit != args.zone
+    {
+        let mode = output_mode(cli.json, cli.human).unwrap_or(OutputMode::Json);
+        return report_dispatch_failure(
+            None,
+            &cli,
+            mode,
+            CliFailure::new(
+                2,
+                "ref-invalid: debug zone disagrees with the selected Zone",
+            ),
+        );
+    }
     let context = if local_host_command {
         ZoneContext::local_only_with_explicit_zone(
             cli.zone.is_some() || std::env::var_os("D2B_ZONE").is_some(),
