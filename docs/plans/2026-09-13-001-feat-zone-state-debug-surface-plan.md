@@ -72,7 +72,7 @@ Diagnosing the resource-runtime rewrite cost roughly 5 to 11 minutes per hypothe
 
 **Read scope and exit behavior**
 
-- R21. Zone scope covers the converted-type catalog the managed plane serves, read in batches within the read limits, with every batch accounted for in the report and the revision of each read captured for R23.
+- R21. Zone scope covers the converted-type catalog the managed plane serves, read in batches within the read limits, with every batch accounted for in the report and the revision of each read captured for R23. The named form reads the same scope, because a named row's children can carry a different resource type.
 - R22. A rendered report exits zero even when it contains unready rows. A named row that does not exist is a not-found refusal at exit one, and a positional zone that disagrees with the routed zone is refused at exit two without a daemon round trip.
 - R23. The report names the revision each read was taken at, in both output forms, and marks the report as composite when those revisions differ, so a composite assembled across reads is not presented as one moment.
 - R24. A read that cannot complete for a local reason, the row budget or the response byte bound, refuses at exit one under one named error class added to the CLI's stable-class allowlist, so the refusal is not reported as an internal error.
@@ -186,6 +186,7 @@ Diagnosing the resource-runtime rewrite cost roughly 5 to 11 minutes per hypothe
 ### Dependencies / Assumptions
 
 - The reading client holds the same authorization as the existing row read paths; the debug surface adds no new privilege and no new admission rule.
+- A row's plane is derived client-side from its resource type rather than read from the row, because the envelope carries no plane field; every type in the converted catalog resolves to the manager plane, so the column is informative but constant.
 - Row status lives in the daemon's runtime view rather than in the durable desired-spec store, so the status-generation comparison R8 requires is a wire change rather than a store read.
 - The daemon serves each read at its own snapshot revision, so a multi-request report is a composition across revisions rather than one moment. R23 governs what the report says about that, and R19 governs completeness: nothing is silently dropped.
 - The CLI and the daemon upgrade together. Adding a member to the closed status object means a strict reader from an adjacent build rejects every row read, and the repo documents no mixed-build support; the plan assumes none is required.
