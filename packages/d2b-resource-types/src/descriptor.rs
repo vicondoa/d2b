@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use d2b_resource_runtime::context::SpecDecoder;
 use d2b_resource_runtime::driver::ResourceDriverFactory;
+use d2b_resource_runtime::identity::ResourceTypeName;
+use d2b_resource_runtime::provider::DriverRegistration;
 
 use crate::{
     AllowedSources, ChildCreation, OperationDef, ServiceDecl, StartupStep, WellKnownType,
@@ -52,4 +54,38 @@ pub struct DriverDescriptor {
     pub decoder: Arc<dyn SpecDecoder>,
     /// The factory that builds this type's driver.
     pub factory: Arc<dyn ResourceDriverFactory>,
+}
+
+/// The registry's view of one descriptor, beside the type it serves.
+///
+/// The runtime registry cannot name this crate (the dependency runs the other
+/// way: this crate consumes the runtime's decoder and factory contracts), so
+/// the bridge between the declaration and the registry's view lives here. The
+/// view carries what registration enforces: one resource type per driver, the
+/// allowed-source mask predicate that gates when the driver may arrive, the
+/// canonical operation references the handler table indexes, and the decoder
+/// and factory the registry serves.
+impl DriverRegistration for DriverDescriptor {
+    fn resource_type(&self) -> ResourceTypeName {
+        self.resource_type.to_resource_type_name()
+    }
+
+    fn requires_plane_registration(&self) -> bool {
+        self.allowed_sources.requires_plane_registration()
+    }
+
+    fn operation_refs(&self) -> Vec<String> {
+        self.operations
+            .iter()
+            .map(|operation| operation.operation_ref.to_canonical_string())
+            .collect()
+    }
+
+    fn decoder(&self) -> Arc<dyn SpecDecoder> {
+        Arc::clone(&self.decoder)
+    }
+
+    fn factory(&self) -> Arc<dyn ResourceDriverFactory> {
+        Arc::clone(&self.factory)
+    }
 }

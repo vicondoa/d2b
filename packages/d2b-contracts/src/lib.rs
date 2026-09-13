@@ -14,6 +14,7 @@ pub mod contract_id;
 pub mod controller_config;
 pub mod error;
 pub mod foundation_effects;
+pub mod generated;
 pub mod identity;
 pub mod identity_config;
 pub mod ids;

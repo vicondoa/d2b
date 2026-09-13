@@ -76,6 +76,7 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
 use d2bd_runtime::target_runtime::DaemonMode;
 
 use crate::process_provider_runtime::{
@@ -1240,6 +1241,88 @@ impl ResourceDriverFactory for ProcessDriverFactory {
             mode: *mode,
         }))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Registration: the family's driver declarations
+// ---------------------------------------------------------------------------
+
+/// The resource verbs both Process-family types support.
+///
+/// Derived from the v3 resource plane's converted-type verb surface: the
+/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
+/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
+/// `Credential` type. Every converted type is served by the same manager
+/// verbs, and Role rules and the typed CLI nouns resolve their gating from
+/// this declaration.
+const PROCESS_FAMILY_VERBS: &[&str] = &[
+    "get",
+    "list",
+    "watch",
+    "create",
+    "update-spec",
+    "update-status",
+    "update-metadata",
+    "update-finalizers",
+    "delete",
+];
+
+/// The execution domains both Process-family types can be reconciled in.
+///
+/// Derived from the execution contract: a Process row's `executionRef` must
+/// name a `Host` or a `Guest` (`require_execution_ref` in
+/// `d2b-contracts-resource`), and the trusted bundle's runner intents bind
+/// the same pair, so both member types can execute in either domain. The
+/// labels are lowercase, matching the execution-domain vocabulary the
+/// contracts serialize.
+const PROCESS_FAMILY_EXECUTION_DOMAINS: &[&str] = &["host", "guest"];
+
+/// The resource types the Process-family driver reads while reconciling.
+///
+/// Derived from the driver's row reads: a serving worker resolves its owning
+/// `VolumeBinding` and that binding's `Volume`; a Device-owned worker reads
+/// its `Device` (GPU settings, TPM state volume); a guest-owned row resolves
+/// its owning `Guest`; and a controller row binds its committed `Provider`
+/// identity (KTD7).
+const PROCESS_FAMILY_READS: &[WellKnownType] = &[
+    WellKnownType::VOLUME_BINDING,
+    WellKnownType::VOLUME,
+    WellKnownType::DEVICE,
+    WellKnownType::GUEST,
+    WellKnownType::PROVIDER,
+];
+
+/// The family's driver declarations: one descriptor per member type, both
+/// over the family's shared decoder and factory.
+///
+/// `Process` and `EphemeralProcess` are `BUILTIN | STARTUP` (no RUNTIME bit):
+/// the plane cannot admit workloads without a process launcher, so both must
+/// be registered before the plane opens. Neither member type is exportable:
+/// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
+/// process can never be an export subject. The family serves no broker
+/// operations and creates no children through this declaration today; those
+/// land with the family's own crate.
+pub(crate) fn process_family_descriptors(args: ProcessDriverArgs) -> [DriverDescriptor; 2] {
+    let factory: Arc<dyn ResourceDriverFactory> = Arc::new(ProcessDriverFactory::new(args));
+    let decoder = process_spec_decoder();
+    let descriptor = |resource_type: WellKnownType| DriverDescriptor {
+        resource_type,
+        allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+        verbs: PROCESS_FAMILY_VERBS,
+        execution: PROCESS_FAMILY_EXECUTION_DOMAINS,
+        exportable: false,
+        reads: PROCESS_FAMILY_READS,
+        operations: &[],
+        creations: &[],
+        startup: &[],
+        services: &[],
+        decoder: Arc::clone(&decoder),
+        factory: Arc::clone(&factory),
+    };
+    [
+        descriptor(WellKnownType::PROCESS),
+        descriptor(WellKnownType::EPHEMERAL_PROCESS),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -2667,7 +2750,9 @@ mod tests {
     use d2b_resource_runtime::error::{
         DriverFailure, DriverOp, FailureClass, FailureKinds, ResourceError,
     };
-    use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
+    use d2b_resource_runtime::identity::{
+        ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource,
+    };
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
     use d2bd_runtime::target_runtime::DaemonMode;
@@ -2675,8 +2760,9 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::{
-        DeviceWorkerLaunch, ProcessDriver, ProcessDriverArgs, ProcessDriverErrorKind,
-        ProcessDriverFactory, ProcessDriverStatus, process_spec_decoder,
+        AllowedSources, DeviceWorkerLaunch, EPHEMERAL_PROCESS_TYPE_NAME, PROCESS_TYPE_NAME,
+        ProcessDriver, ProcessDriverArgs, ProcessDriverErrorKind, ProcessDriverFactory,
+        ProcessDriverStatus, process_family_descriptors, process_spec_decoder,
     };
 
     // -- fake effect port ----------------------------------------------------
@@ -4065,6 +4151,31 @@ mod tests {
         let _erased = factory.create(&process_key).await;
         let ephemeral_key = ResourceKey::new("work", "EphemeralProcess", "runner");
         let _erased = factory.create(&ephemeral_key).await;
+    }
+
+    /// One descriptor per member type: both register through the runtime
+    /// registry the plane assembles even though the two descriptors share one
+    /// factory, which claims both types.
+    #[test]
+    fn family_descriptors_register_both_member_types() {
+        let args = driver_args(Arc::new(FakeEffects::new(FakeEffectsConfig::default())));
+        let descriptors = process_family_descriptors(args);
+        let mut registry = d2b_resource_runtime::provider::ProviderDirectory::new();
+        for descriptor in &descriptors {
+            registry.register_driver(descriptor).expect("register");
+            assert!(descriptor.allowed_sources.contains(AllowedSources::BUILTIN));
+            assert!(descriptor.allowed_sources.contains(AllowedSources::STARTUP));
+            assert!(!descriptor.allowed_sources.contains(AllowedSources::RUNTIME));
+            assert!(!descriptor.exportable);
+        }
+        assert_eq!(
+            registry.registered_types(),
+            vec![
+                ResourceTypeName::new(EPHEMERAL_PROCESS_TYPE_NAME),
+                ResourceTypeName::new(PROCESS_TYPE_NAME),
+            ]
+        );
+        assert_eq!(registry.decoders().len(), 2);
     }
 
     // -- one-shot EphemeralProcess arm (KTD13) -------------------------------

@@ -12,7 +12,7 @@
   ],
   "default_features": false,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "dd00d2e8806f6e6e1ff4abb0ac32fe59a28bd4d78e68e44133f3b79f2224e09f",
+  "lock_sha256": "4cdb4ab96164179130613e9f182f9f15b8915167f2422e78389fd66cb6f24de9",
   "packages": [
     {
       "id": "aho-corasick@1.1.5#registry+https://github.com/rust-lang/crates.io-index",

@@ -37,6 +37,7 @@ mod bazel_evidence;
 mod changelog;
 mod delivery;
 mod gen_resource_schemas;
+mod gen_resource_type_catalog;
 mod inventory;
 mod production_closure;
 mod provider_crate_policy;
@@ -111,6 +112,23 @@ fn main() -> std::process::ExitCode {
         [command] if command == "gen-resource-schemas" => run_task("gen-resource-schemas", || {
             gen_resource_schemas::generate(repo_root()?)
         }),
+        [command, rest @ ..] if command == "gen-resource-type-catalog" => {
+            let result = repo_root()
+                .map_err(|error| error.to_string())
+                .and_then(|root| gen_resource_type_catalog::run_cli(root, rest));
+            match result {
+                Ok(paths) => {
+                    for path in paths {
+                        println!("{}", path.display());
+                    }
+                    std::process::ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("gen-resource-type-catalog failed: {error}");
+                    std::process::ExitCode::FAILURE
+                }
+            }
+        }
         [command] if command == "gen-error-codes" => run_task("gen-error-codes", gen_error_codes),
         [command] if command == "gen-provider-packaging" => {
             run_task("gen-provider-packaging", || {
@@ -170,7 +188,7 @@ fn main() -> std::process::ExitCode {
         [command] if command == "check-provider-layout" => run_provider_layout(),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-resource-type-catalog [--check|--write]|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
             );
             std::process::ExitCode::FAILURE
         }

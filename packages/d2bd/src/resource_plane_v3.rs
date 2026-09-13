@@ -28,7 +28,7 @@
 //! its handover.
 
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
@@ -81,8 +81,8 @@ use crate::credential_driver::{
 };
 use crate::endpoint_driver::{AsyncSocketEffect, EndpointDriverArgs, EndpointDriverFactory, endpoint_spec_decoder};
 use crate::process_driver::{
-    GuestOwnerIdentitySource, ProcessDriverArgs, ProcessDriverFactory,
-    ProductionProcessDriverEffects, process_spec_decoder,
+    GuestOwnerIdentitySource, ProcessDriverArgs, ProductionProcessDriverEffects,
+    process_family_descriptors,
 };
 use crate::semantic_binding_resource_runtime::{
     TELEMETRY_BINDING_TYPE, TELEMETRY_SERVICE_TYPE, TelemetryDriverFactory,
@@ -1622,6 +1622,40 @@ impl SpecDecoder for PassthroughDecoder {
     }
 }
 
+/// Compare the registry's registered types against the generated
+/// converted-type catalog (R4) and fail startup when either side names a type
+/// the other does not.
+///
+/// The catalog is the authority on which types the manager plane serves, so
+/// the comparison is exact: a cataloged type with no registered driver is a
+/// driver that never arrived (the presence obligation for a mask without
+/// RUNTIME), and a registered type the catalog does not list is a driver
+/// serving a type outside the plane's partition. Both sides are named, sorted.
+fn check_registry_catalog(
+    registered: Vec<ResourceTypeName>,
+    catalog: &[&str],
+) -> Result<(), PlaneError> {
+    let registered = registered
+        .into_iter()
+        .map(|type_name| type_name.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let listed = catalog.iter().copied().collect::<BTreeSet<_>>();
+    let missing = listed
+        .iter()
+        .filter(|entry| !registered.contains(**entry))
+        .map(|entry| (*entry).to_owned())
+        .collect::<Vec<_>>();
+    let unexpected = registered
+        .iter()
+        .filter(|entry| !listed.contains(&entry.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() && unexpected.is_empty() {
+        return Ok(());
+    }
+    Err(PlaneError::RegistryCatalogMismatch { missing, unexpected })
+}
+
 // ---------------------------------------------------------------------------
 // ResourcePlaneV3: the per-zone new plane (U9)
 // ---------------------------------------------------------------------------
@@ -1635,6 +1669,19 @@ pub enum PlaneError {
     ProviderRegistration(
         #[from] d2b_resource_runtime::provider::ProviderDirectoryError,
     ),
+    /// The registry and the generated converted-type catalog disagree (R4).
+    /// Both sides are named: the catalog types with no registered driver, and
+    /// the registered types the catalog does not list.
+    #[error(
+        "driver registry does not match the converted-type catalog: \
+         in-catalog-but-not-registered {missing:?}, registered-but-not-in-catalog {unexpected:?}"
+    )]
+    RegistryCatalogMismatch {
+        /// Catalog types no driver is registered for.
+        missing: Vec<String>,
+        /// Registered types the catalog does not list.
+        unexpected: Vec<String>,
+    },
     #[error("manager spawn failed: {0}")]
     ManagerSpawn(String),
     #[error("manager rpc failed: {0}")]
@@ -1701,7 +1748,11 @@ impl ResourcePlaneV3 {
 
     fn build_providers(inputs: &ConstructionInputs) -> Result<ProviderDirectory, PlaneError> {
         let mut providers = ProviderDirectory::new();
-        providers.register(Arc::new(ProcessDriverFactory::new(ProcessDriverArgs {
+        // The Process family registers through its driver declarations: one
+        // descriptor per member type, both over the family's shared decoder
+        // and factory. The family's verbs, execution domains, exportability,
+        // and reads travel on the descriptor.
+        for descriptor in process_family_descriptors(ProcessDriverArgs {
             zone: inputs.zone.clone(),
             effects: Arc::clone(&inputs.process_effects),
             zone_uid: inputs.authority.zone_uid.clone(),
@@ -1710,7 +1761,9 @@ impl ResourcePlaneV3 {
             controller_generation: inputs.authority.controller_generation,
             guest_execution: inputs.authority.guest_execution.clone(),
             mode: inputs.authority.mode,
-        })))?;
+        }) {
+            providers.register_driver(&descriptor)?;
+        }
         providers.register(Arc::new(crate::volume_driver::VolumeDriverFactory::new(
             VolumeDriverArgs {
                 zone: inputs.zone.as_str().to_owned(),
@@ -1761,15 +1814,11 @@ impl ResourcePlaneV3 {
         Ok(providers)
     }
 
-    fn decoders() -> HashMap<ResourceTypeName, Arc<dyn SpecDecoder>> {
-        let mut decoders = HashMap::new();
-        decoders.insert(ResourceTypeName::new("Process"), process_spec_decoder());
-        // U12: the one-shot Process family member shares the Process driver's
-        // type-agnostic envelope decoder.
-        decoders.insert(
-            ResourceTypeName::new("EphemeralProcess"),
-            process_spec_decoder(),
-        );
+    /// The manager's per-type decode hooks: the registered drivers'
+    /// decoders first (the Process family rides its descriptors), then the
+    /// families whose builders this plane still wires directly.
+    fn decoders(providers: &ProviderDirectory) -> HashMap<ResourceTypeName, Arc<dyn SpecDecoder>> {
+        let mut decoders = providers.decoders();
         decoders.insert(ResourceTypeName::new("Volume"), volume_spec_decoder());
         decoders.insert(ResourceTypeName::new("VolumeBinding"), binding_spec_decoder());
         decoders.insert(ResourceTypeName::new("Endpoint"), endpoint_spec_decoder());
@@ -1857,8 +1906,16 @@ impl ResourcePlaneV3 {
                 .register_committed_provider_identity(provider_ref, uid.clone(), *generation);
         }
         readiness.set_spec_store_ready(true);
-        // Stage 2: provider directory with production effects wired.
-        let providers = Self::build_providers(&inputs)?;
+        // Stage 2: provider directory with production effects wired. The
+        // registry closes for late required registration at plane open (R4),
+        // and the registered set is cross-checked against the generated
+        // converted-type catalog before the manager spawns.
+        let mut providers = Self::build_providers(&inputs)?;
+        providers.mark_plane_open();
+        check_registry_catalog(
+            providers.registered_types(),
+            &d2b_contracts::generated::resource_type_catalog::CONVERTED_RESOURCE_TYPES,
+        )?;
         readiness.set_providers_registered(true);
         // Stage 3: per-zone manager spawn (KTD5), with the target layer
         // wired (U13): the directory is owned here, the composition registers
@@ -1868,13 +1925,14 @@ impl ResourcePlaneV3 {
         let targets = Arc::new(TargetDirectory::new());
         let host_target = TargetRef::host(CORE_HOST_TARGET_NAME)
             .map_err(|error| PlaneError::Target(error.to_string()))?;
+        let decoders = Self::decoders(&providers);
         let args = ResourceManagerArgs {
             zone: inputs.zone.as_str().to_owned(),
             store: Arc::clone(&store),
             providers,
             hub: Arc::clone(&hub),
             admission: Arc::new(AllowAll),
-            decoders: Self::decoders(),
+            decoders,
             default_decoder: Arc::new(PassthroughDecoder),
             targets: Arc::clone(&targets),
             host_target,
@@ -2677,6 +2735,39 @@ mod tests {
         )
     }
 
+
+    /// The production assembly registers exactly the generated converted-type
+    /// catalog: no cataloged type is missing a driver, and no driver serves a
+    /// type outside the catalog.
+    #[test]
+    fn build_providers_covers_the_generated_catalog() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let providers = ResourcePlaneV3::build_providers(&inputs).expect("providers");
+        check_registry_catalog(
+            providers.registered_types(),
+            &d2b_contracts::generated::resource_type_catalog::CONVERTED_RESOURCE_TYPES,
+        )
+        .expect("the assembled registry covers the generated catalog");
+    }
+
+    /// The startup cross-check fails when the registry and the catalog
+    /// disagree, naming both sides: the catalog type with no registered
+    /// driver and the registered type the catalog does not list.
+    #[test]
+    fn registry_catalog_mismatch_names_both_sides() {
+        let registered = vec![
+            ResourceTypeName::new("Process"),
+            ResourceTypeName::new("Endpoint"),
+        ];
+        let error = check_registry_catalog(registered, &["Process", "Volume"]).unwrap_err();
+        match error {
+            PlaneError::RegistryCatalogMismatch { missing, unexpected } => {
+                assert_eq!(missing, vec!["Volume".to_owned()]);
+                assert_eq!(unexpected, vec!["Endpoint".to_owned()]);
+            }
+            other => panic!("wrong failure: {other}"),
+        }
+    }
 
     /// KTD7: the committed Provider identities the composition resolves are
     /// published into the registry the production Process effects consult

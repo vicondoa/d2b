@@ -8,6 +8,7 @@ GENERATED_ARTIFACT_COMMANDS = [
     "gen-zone-schemas",
     "gen-zone-nix-options",
     "gen-resource-schemas",
+    "gen-resource-type-catalog",
     "gen-error-codes",
     "gen-provider-packaging",
     "gen-semantic-service-schemas",

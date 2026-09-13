@@ -1207,6 +1207,18 @@ impl From<crate::provider::ProviderDirectoryError> for ResourceError {
             crate::provider::ProviderDirectoryError::DuplicateType(type_name) => {
                 Self::Provider { type_name: type_name.to_string(), message: "duplicate provider registration".to_string() }
             }
+            crate::provider::ProviderDirectoryError::ForeignOperation { operation_ref, owner } => {
+                Self::Provider {
+                    type_name: owner.to_string(),
+                    message: format!("operation reference {operation_ref} is already registered"),
+                }
+            }
+            crate::provider::ProviderDirectoryError::RequiredBeforeOpen { type_name } => {
+                Self::Provider {
+                    type_name: type_name.to_string(),
+                    message: "driver must be registered before the plane opens".to_string(),
+                }
+            }
         }
     }
 }

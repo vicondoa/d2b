@@ -1861,6 +1861,7 @@ dependencies = [
  "d2b-provider-volume-virtiofs",
  "d2b-resource-api",
  "d2b-resource-runtime",
+ "d2b-resource-types",
  "d2b-session",
  "d2b-session-unix",
  "d2b-zone-routing",

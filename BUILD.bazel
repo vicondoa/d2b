@@ -429,6 +429,12 @@ filegroup(
 )
 
 filegroup(
+    name = "generated_resource_type_catalog",
+    srcs = glob(["packages/d2b-contracts/src/generated/*.rs"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
     name = "generated_semantic_service_schemas",
     srcs = glob([
         "docs/reference/schemas/v3/audio.d2bus.org_*.schema.json",
