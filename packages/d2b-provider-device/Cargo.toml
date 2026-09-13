@@ -25,4 +25,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"
 
 [[test]]
 name = "device_family"
+path = "tests/device_family.rs"
+
+[[test]]
+name = "device_family_integration"
 path = "integration/device_family.rs"

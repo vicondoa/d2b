@@ -1612,7 +1612,7 @@ mod tests {
         let entries = log.lock().clone();
         let finalize_at = entries
             .iter()
-            .position(|entry| entry == "finalize:fixture-one")
+            .position(|entry| entry == "finalize:one")
             .expect("teardown ran");
         let endpoint_at = entries
             .iter()

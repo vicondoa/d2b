@@ -73,7 +73,7 @@ impl ManagerEndpoint for DeadManager {
         _parent: &ResourceKey,
         _child: ChildEnsure,
     ) -> Result<EnsureOutcome, ResourceError> {
-        Err(ResourceError::ManagerUnavailable)
+        Err(ResourceError::ManagerRpc("manager unavailable".to_owned()))
     }
 
     async fn get(&self, _key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
