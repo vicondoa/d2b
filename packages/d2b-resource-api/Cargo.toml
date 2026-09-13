@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+d2b-provider-role = { path = "../d2b-provider-role", version = "0.0.0-bootstrap" }
 tracing = "0.1"
 async-trait = "0.1"
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }

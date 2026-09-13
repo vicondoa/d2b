@@ -107,7 +107,20 @@ use crate::guest_driver::{
 use crate::guest_effects::ProductionGuestDriverEffects;
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
 use crate::system_core_driver::{SystemCoreDriverFactory, system_core_spec_decoder};
-use crate::core_driver::{CoreDriverEffects, CoreResourceDriverFactory, CORE_RESOURCE_TYPES, core_spec_decoder};
+use d2b_provider_command::command_descriptor;
+use d2b_provider_emergency_policy::emergency_policy_descriptor;
+use d2b_provider_operation::operation_descriptor;
+use d2b_provider_provider::{
+    ProviderDriverArgs, ProviderDriverEffects, provider_descriptor,
+};
+use d2b_provider_quota::quota_descriptor;
+use d2b_provider_resource_export::resource_export_descriptor;
+use d2b_provider_resource_import::resource_import_descriptor;
+use d2b_provider_role::role_descriptor;
+use d2b_provider_role_binding::role_binding_descriptor;
+use d2b_provider_seccomp_profile::seccomp_profile_descriptor;
+use d2b_provider_zone::zone_descriptor;
+use d2b_provider_zone_link::zone_link_descriptor;
 use crate::interaction_driver::{
     InteractionDriverArgs, InteractionDriverEffects, InteractionDriverFactory,
     interaction_spec_decoder,
@@ -1347,7 +1360,7 @@ pub struct ConstructionInputs {
     /// controller-session coordinator (the same seam the G5 reader bridge
     /// uses); the default fails closed, exactly as the old handler did for a
     /// controller row without session evidence.
-    pub core_effects: Arc<dyn CoreDriverEffects>,
+    pub provider_effects: Arc<dyn ProviderDriverEffects>,
     pub process_effects: Arc<dyn ProcessDriverEffects>,
     pub volume_effects: Arc<dyn VolumeDriverEffects>,
     pub binding_effects: Arc<dyn BindingDriverEffects>,
@@ -1434,7 +1447,7 @@ impl ConstructionInputs {
             },
             committed_provider_identities,
             registry: Arc::clone(&registry),
-            core_effects: Arc::new(crate::core_driver::FailClosedCoreDriverEffects),
+            provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
             process_effects: Arc::new(
                 ProductionProcessDriverEffects::new(process_providers)
                     .with_committed_provider_identities(registry_source)
@@ -1798,9 +1811,27 @@ impl ResourcePlaneV3 {
             effects: Arc::clone(&inputs.guest_effects),
         })))?;
         providers.register(Arc::new(SystemCoreDriverFactory::new()))?;
-        providers.register(Arc::new(CoreResourceDriverFactory::with_effects(
-            Arc::clone(&inputs.core_effects),
-        )))?;
+        // The controller family registers through its per-type declarations:
+        // each crate serves exactly one type, and the registry resolves that
+        // type's decoder, factory, verbs, execution domains, exportability,
+        // and reads from the declaration.
+        providers.register_driver(&zone_descriptor())?;
+        providers.register_driver(&zone_link_descriptor())?;
+        providers.register_driver(&provider_descriptor(ProviderDriverArgs {
+            effects: Arc::clone(&inputs.provider_effects),
+        }))?;
+        providers.register_driver(&role_descriptor())?;
+        providers.register_driver(&role_binding_descriptor())?;
+        providers.register_driver(&quota_descriptor())?;
+        providers.register_driver(&emergency_policy_descriptor())?;
+        providers.register_driver(&resource_export_descriptor())?;
+        providers.register_driver(&resource_import_descriptor())?;
+        // The policy types are declared with their drivers; their rows commit
+        // with the committed policy rows, and the presence obligation is what
+        // keeps a plane from opening without their drivers.
+        providers.register_driver(&command_descriptor())?;
+        providers.register_driver(&operation_descriptor())?;
+        providers.register_driver(&seccomp_profile_descriptor())?;
         providers.register(Arc::new(InteractionDriverFactory::new(InteractionDriverArgs {
             zone: inputs.zone.as_str().to_owned(),
             controller_generation: inputs.authority.controller_generation,
@@ -1855,11 +1886,6 @@ impl ResourcePlaneV3 {
                 ResourceTypeName::new(resource_type),
                 interaction_spec_decoder(),
             );
-        }
-        // U12: the nine fixed Core controller-family types (the core spec
-        // decoder is the JSON-object envelope every core row stores).
-        for resource_type in CORE_RESOURCE_TYPES {
-            decoders.insert(ResourceTypeName::new(resource_type), core_spec_decoder());
         }
         decoders
     }
@@ -2730,7 +2756,7 @@ mod tests {
                 },
                 committed_provider_identities: BTreeMap::new(),
                 registry: Arc::new(PlaneResourceRegistry::new()),
-                core_effects: Arc::new(crate::core_driver::FailClosedCoreDriverEffects),
+                provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
                 process_effects: Arc::new(FakeProcessEffects::new()),
                 volume_effects: Arc::new(FakeVolumeEffects),
                 binding_effects: Arc::new(FakeBindingEffects),

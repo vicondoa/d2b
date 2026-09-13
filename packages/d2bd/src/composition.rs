@@ -105,11 +105,11 @@ use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPred
 #[cfg(test)]
 use d2b_contracts_resource::v3::network::NetworkSpec;
 use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
-use d2b_core_controller::zone_links::{
+use d2b_provider_zone_link::zone_links::{
     BootstrapPsk, SealedEnrollment, ZoneLinkEffect, ZoneLinkError, ZoneLinkEvent,
     ZoneLinkKeyPolicy, ZoneLinkLimits, ZoneLinkRecord, ZoneLinkRouteBinding,
 };
-use d2b_core_controller::zonelink::{ZoneLinkController, ZoneLinkOwnerProof};
+use d2b_provider_zone_link::zonelink::{ZoneLinkController, ZoneLinkOwnerProof};
 use d2b_host::ssh_keygen;
 use d2b_provider_network_local::broker::resolve_tap_identity;
 use d2b_provider_network_local::controller::NetworkAdmissionProof;
@@ -951,7 +951,7 @@ impl ZoneLinkGatewayComposition {
     }
 
     /// Return the child-local controller session state.
-    fn session_state(&self) -> d2b_core_controller::zone_links::ZoneLinkSessionState {
+    fn session_state(&self) -> d2b_provider_zone_link::zone_links::ZoneLinkSessionState {
         self.controller
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -962,7 +962,7 @@ impl ZoneLinkGatewayComposition {
     /// Apply one committed child-local controller event and release effects.
     fn apply_event(
         &self,
-        event: d2b_core_controller::zone_links::ZoneLinkEvent,
+        event: d2b_provider_zone_link::zone_links::ZoneLinkEvent,
     ) -> Result<Vec<ZoneLinkEffect>, ZoneLinkError> {
         let mut controller = self
             .controller
@@ -990,8 +990,8 @@ impl ZoneLinkGatewayComposition {
     #[cfg(test)]
     fn adopt_cursor(
         &self,
-        observation: d2b_core_controller::zonelink::ZoneLinkCursorRecord,
-    ) -> d2b_core_controller::zonelink::ZoneLinkAdoption {
+        observation: d2b_provider_zone_link::zonelink::ZoneLinkCursorRecord,
+    ) -> d2b_provider_zone_link::zonelink::ZoneLinkAdoption {
         self.controller
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1122,7 +1122,7 @@ impl ZoneLinkGatewayComposition {
         }
         let state = self.session_state();
         match state {
-            d2b_core_controller::zone_links::ZoneLinkSessionState::Unenrolled => {
+            d2b_provider_zone_link::zone_links::ZoneLinkSessionState::Unenrolled => {
                 let issued_at = unix_now_millis();
                 let psk = BootstrapPsk::issue(
                     self.controller_generation.clone(),
@@ -1146,23 +1146,23 @@ impl ZoneLinkGatewayComposition {
                 self.apply_event(ZoneLinkEvent::BeginEnrolledHandshake)
                     .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
             }
-            d2b_core_controller::zone_links::ZoneLinkSessionState::EnrollmentCommitted => {
+            d2b_provider_zone_link::zone_links::ZoneLinkSessionState::EnrollmentCommitted => {
                 self.apply_event(ZoneLinkEvent::BeginEnrolledHandshake)
                     .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
             }
-            d2b_core_controller::zone_links::ZoneLinkSessionState::Kk => {}
-            d2b_core_controller::zone_links::ZoneLinkSessionState::Ready => {}
-            d2b_core_controller::zone_links::ZoneLinkSessionState::IKpsk2 => {
+            d2b_provider_zone_link::zone_links::ZoneLinkSessionState::Kk => {}
+            d2b_provider_zone_link::zone_links::ZoneLinkSessionState::Ready => {}
+            d2b_provider_zone_link::zone_links::ZoneLinkSessionState::IKpsk2 => {
                 return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
             }
         }
-        if self.session_state() == d2b_core_controller::zone_links::ZoneLinkSessionState::Kk {
+        if self.session_state() == d2b_provider_zone_link::zone_links::ZoneLinkSessionState::Kk {
             self.apply_event(ZoneLinkEvent::EnrolledSessionEstablished {
                 peer_key_fingerprint: peer_key_fingerprint.clone(),
             })
             .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
         }
-        if self.session_state() != d2b_core_controller::zone_links::ZoneLinkSessionState::Ready {
+        if self.session_state() != d2b_provider_zone_link::zone_links::ZoneLinkSessionState::Ready {
             return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
         }
         let mut controller = self
@@ -1172,7 +1172,7 @@ impl ZoneLinkGatewayComposition {
         if !controller.cursor_authority().adoption().is_adopted() {
             let cursor = controller.handler().record().cursor();
             if !controller
-                .adopt_cursor([d2b_core_controller::zonelink::ZoneLinkCursorRecord::new(
+                .adopt_cursor([d2b_provider_zone_link::zonelink::ZoneLinkCursorRecord::new(
                     self.cursor_owner.clone(),
                     cursor,
                 )])
@@ -1217,7 +1217,7 @@ impl ZoneLinkGatewayComposition {
             .take()
             .is_some();
         if had_session
-            && self.session_state() == d2b_core_controller::zone_links::ZoneLinkSessionState::Ready
+            && self.session_state() == d2b_provider_zone_link::zone_links::ZoneLinkSessionState::Ready
         {
             if let Err(error) = self.apply_event(ZoneLinkEvent::SessionDisconnected) {
                 tracing::warn!(
@@ -1387,10 +1387,10 @@ fn unix_now_seconds() -> u64 {
 #[cfg(test)]
 mod zone_link_gateway_composition_tests {
     use super::*;
-    use d2b_core_controller::zone_links::{
+    use d2b_provider_zone_link::zone_links::{
         BootstrapPsk, SealedEnrollment, ZoneLinkCursor, ZoneLinkEvent, ZoneLinkSessionState,
     };
-    use d2b_core_controller::zonelink::{ZoneLinkCursorRecord, ZoneLinkOwnerProof};
+    use d2b_provider_zone_link::zonelink::{ZoneLinkCursorRecord, ZoneLinkOwnerProof};
 
     fn uid(digit: char) -> ResourceUid {
         ResourceUid::parse(format!(
@@ -16109,10 +16109,10 @@ async fn open_resource_plane(
                 resource_runtime::ResourceRuntimeError::HandlerNotReady
             })?;
             inputs.zone = _zone.clone();
-            // U12: the Core-family driver reads the zone's live
-            // controller-session evidence (the same seam the G5 reader
-            // bridge uses), never a durable status copy.
-            inputs.core_effects = runtime.core_driver_effects();
+            // The Provider driver reads the zone's live controller-session
+            // evidence (the same seam the G5 reader bridge uses), never a
+            // durable status copy.
+            inputs.provider_effects = runtime.provider_driver_effects();
             let plane_v3 = crate::resource_plane_v3::ResourcePlaneV3::open(inputs).await.map_err(|error| {
                 tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 resource plane open failed");
                 resource_runtime::ResourceRuntimeError::HandlerNotReady

@@ -70,6 +70,18 @@ test_suite(
         "//packages/d2bd-runtime:all-tests",
         "//packages/xtask:all-tests",
         "//packages/d2b-provider-endpoint:all-tests",
+        "//packages/d2b-provider-zone:all-tests",
+        "//packages/d2b-provider-zone-link:all-tests",
+        "//packages/d2b-provider-provider:all-tests",
+        "//packages/d2b-provider-role:all-tests",
+        "//packages/d2b-provider-role-binding:all-tests",
+        "//packages/d2b-provider-quota:all-tests",
+        "//packages/d2b-provider-emergency-policy:all-tests",
+        "//packages/d2b-provider-resource-export:all-tests",
+        "//packages/d2b-provider-resource-import:all-tests",
+        "//packages/d2b-provider-command:all-tests",
+        "//packages/d2b-provider-operation:all-tests",
+        "//packages/d2b-provider-seccomp-profile:all-tests",
     ],
 )
 

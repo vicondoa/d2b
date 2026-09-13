@@ -66,6 +66,18 @@ members = [
     "packages/d2b-broker",
     "packages/d2b-guest-shell-runner",
     "packages/d2b-provider-endpoint",
+    "packages/d2b-provider-zone",
+    "packages/d2b-provider-zone-link",
+    "packages/d2b-provider-provider",
+    "packages/d2b-provider-role",
+    "packages/d2b-provider-role-binding",
+    "packages/d2b-provider-quota",
+    "packages/d2b-provider-emergency-policy",
+    "packages/d2b-provider-resource-export",
+    "packages/d2b-provider-resource-import",
+    "packages/d2b-provider-command",
+    "packages/d2b-provider-operation",
+    "packages/d2b-provider-seccomp-profile",
 ]
 
 [workspace.package]

@@ -1,0 +1,63 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = d2b_provider_command,
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "registration",
+    srcs = ["tests/registration.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
+        ":d2b_provider_command",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "integration/**/*",
+            "nix/**/*",
+            "README.md",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = d2b_provider_command_doc_test,
+    crate = "//packages/d2b-provider-command:d2b_provider_command",
+)
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

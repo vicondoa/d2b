@@ -147,7 +147,7 @@ mod tests {
     fn catalog_source_projects_the_authority_list() {
         let source = catalog_source();
         assert!(source.starts_with("// @generated"), "generated header first");
-        assert!(source.contains("\npub const CONVERTED_RESOURCE_TYPES: [&str; 33] = [\n"));
+        assert!(source.contains("\npub const CONVERTED_RESOURCE_TYPES: [&str; 36] = [\n"));
         let mut expected_body = String::new();
         for resource_type in d2b_contracts::identity::V3_CONVERTED_RESOURCE_TYPES {
             expected_body.push_str(&format!("    \"{resource_type}\",\n"));

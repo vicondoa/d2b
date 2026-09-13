@@ -7,6 +7,10 @@ use d2b_contracts_resource::v3::{ResourceRef, SchemaFingerprint};
 use d2b_contracts_zone_session::v3::ZoneStatusResource;
 use d2b_controller_toolkit::{DependencySnapshot, ResourceKey, ResourceSnapshot};
 
+use crate::driver::{
+    SYSTEM_CORE_HOST_REF, SYSTEM_CORE_PROVIDER_REF, SYSTEM_MINIJAIL_PROVIDER_REF,
+};
+
 /// Provider lifecycle phase derived from exact child observations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderPhase {
@@ -328,16 +332,11 @@ fn provider_process_session_ready(
             == Some(true)
 }
 
-const SYSTEM_CORE_PROVIDER_REF: &str = "Provider/system-core";
-const SYSTEM_MINIJAIL_PROVIDER_REF: &str = "Provider/system-minijail";
-const SYSTEM_CORE_HOST_REF: &str = "Host/host-system";
-
 /// Whether the fixed system-core handlers are ready, read from the `Zone`
 /// dependency of the `Provider/system-core` row.
 ///
-/// Public with `provider_observation`: the v3 Core driver (U12) applies the
-/// same predicate over manager-served dependency rows, so the policy has one
-/// home.
+/// Public with `provider_observation`: this crate's driver applies the same
+/// predicate over manager-served dependency rows, so the policy has one home.
 pub fn fixed_system_core_handlers_ready(dependencies: &[DependencySnapshot]) -> bool {
     dependencies.iter().any(|dependency| {
         let resource = dependency.resource();

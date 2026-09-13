@@ -43,7 +43,6 @@ use d2b_contracts_zone_session::v3::{
     role_binding::RoleBindingSpec,
 };
 use d2b_core_controller::{
-    authority::HostGlobalAuthorityIndex,
     controller_assignment::ControllerAssignmentRegistry,
     controllers::{CoreHandlerKind, HandlerOutcome, HandlerPhase, HandlerStatus},
     main::{
@@ -51,6 +50,7 @@ use d2b_core_controller::{
         StartupStage,
     },
 };
+use d2b_core_controller::authority::HostGlobalAuthorityIndex;
 
 /// Provider-neutral Core assignment registry shared by Resource API and bus
 /// admission for one Zone runtime.

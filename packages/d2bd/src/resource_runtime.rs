@@ -67,7 +67,7 @@ use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupStage,
 };
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;
-use d2b_core_controller::zone_status::{
+use d2b_provider_zone::zone_status::{
     SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
 };
 use d2b_provider_clipboard_wayland::Policy as ClipboardPolicy;
@@ -4410,10 +4410,12 @@ impl ZoneResourceRuntime {
         committed_policy_resources(plane.as_ref()).await
     }
 
-    /// The production Core-driver effects port (U12): this zone's live
+    /// The production Provider-driver effects port: this zone's live
     /// controller-session coordinator, the same seam the G5 reader bridge
-    /// uses. The plane wires it into its Core resource driver factory.
-    pub(crate) fn core_driver_effects(&self) -> Arc<dyn crate::core_driver::CoreDriverEffects> {
+    /// uses. The plane wires it into the Provider type's driver factory.
+    pub(crate) fn provider_driver_effects(
+        &self,
+    ) -> Arc<dyn d2b_provider_provider::ProviderDriverEffects> {
         self.controller_session_coordinator()
     }
 
@@ -9941,10 +9943,10 @@ fn controller_plane_resource_matches(
         && process.execution().execution_ref() == context.execution_ref()
 }
 
-/// U12: the same live controller-session evidence, exposed under the v3 Core
-/// driver's effects trait, so the plane's `Provider` observation and drain
-/// read the authoritative session (never a durable status copy).
-impl crate::core_driver::CoreDriverEffects for ControllerSessionCoordinator {
+/// The same live controller-session evidence, exposed under the Provider
+/// type's effects trait, so the plane's `Provider` observation and drain read
+/// the authoritative session (never a durable status copy).
+impl d2b_provider_provider::ProviderDriverEffects for ControllerSessionCoordinator {
     fn controller_session_evidence(
         &self,
         process_ref: &ResourceRef,

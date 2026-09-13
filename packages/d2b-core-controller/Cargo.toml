@@ -23,7 +23,6 @@ d2b-controller-toolkit = { path = "../d2b-controller-toolkit", version = "0.0.0-
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-tracing = "0.1"
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]
