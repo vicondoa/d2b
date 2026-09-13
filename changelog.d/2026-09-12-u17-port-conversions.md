@@ -57,20 +57,3 @@
   `find_runner_intent_for_process_in_vm`, and the `gpu_processes` /
   `gpu_opened_devices` per-resource state maps with their take/retain
   helpers.
-
-### Known gap (reported, not worked around)
-
-- Both converted families launch with the trusted template's pinned argv
-  (`argv[0]` only): the parameters their generators need are host paths no
-  typed row carries (`generate_swtpm_argv`: state dir + ctrl/server sockets;
-  `generate_gpu_argv`/`generate_video_argv`: crosvm socket + Wayland socket),
-  and the Process spec is argv-free while the declared rows are path-free by
-  contract. The `launch_args` channel exists end to end, but its only
-  composition point is the daemon's provider runtime, which has no typed
-  source for those values. Closing it needs a typed device-worker launch
-  parameterization; until then the declared rows launch bare and fail closed
-  on their readiness/endpoint gates.
-- The one-shot flush's exit is not observable through the row contract: the
-  Process driver records the completion in memory and both a clean exit and a
-  failed one leave the row `Ready` for its retention TTL, so the port reports
-  the flush complete when the declared row leaves `Pending`.

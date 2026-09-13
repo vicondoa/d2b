@@ -1976,10 +1976,12 @@ because the U14 acceptance asked for both vmChecks and only the activation one
 proves the store removal. The broker's zone-store handover still
 exists: `BrokerRequest::OpenZoneStore` and its handler
 (`packages/d2b-broker/src/runtime.rs`, `src/ops/zone_store.rs`,
-`packages/d2b-contracts-broker/src/broker_wire.rs`) plus the now-consumerless
+`packages/d2b-contracts-broker/src/broker_wire.rs`) plus
 `packages/d2bd-runtime/src/resource_store_runtime.rs` (`OpenedZoneStore`,
-`MAX_ZONE_RUNTIMES`); the daemon no longer sends the op, so retiring it is a
-broker-wire decision (it is named in the broker profile fixtures
+`MAX_ZONE_RUNTIMES`) - deleted in U14's follow-through (the module and its
+`lib.rs` export are gone at `17976bbc0`); the daemon no longer sends the op, so
+retiring the broker side is a broker-wire decision (it is named in the broker
+profile fixtures
 `packages/d2b-broker/tests/{host,guest}_profile.rs`) rather than a store
 cutover. The Phase A type partition is down to its vocabulary:
 `d2b-contracts/src/identity.rs`'s `ResourcePlane`/`WrongPlane` are still live
@@ -2028,6 +2030,26 @@ list them, flagged for the same follow-up.
   - grep gate: zero direct spawn callers remain outside the Process family.
   - the owning controller's delete tears the process down through the Process resource (no orphaned children).
 - **Verification:** `make check`; `make test-host-integration` lane green; grep gate clean; no fixture assertion weakened to get there.
+
+**Status (2026-09-12, final): complete - every process launch goes through the
+Process controller, and the grep gate is clean.** The wave landed as
+`17976bbc0` and closed the two gaps this section had recorded (the typed
+device-worker launch parameters and the VM proof): the compiler projects the
+declared Device worker rows, the resolver mints their trusted intents from the
+one closed posture table, the supervisor resolves a Device-owned ticket through
+the exact declared row, both ports consume the declared rows, the launch
+parameters are typed values the Process controller derives, and
+`tests/host-integration/device-worker-launch.nix` proves the TPM worker end to
+end plus the GPU rows failing by name. The unit's test scenarios are discharged
+by the fixture and the gate: the worker exists as a `Process` row owned by its
+Device and lives under the Process controller's restart/adoption policy; the
+grep gate below finds no direct spawn caller outside the Process family; and
+`d2b delete Device/...` retires the declared rows children-first with no worker
+left behind. Gates recorded for the wave: `make check` 453/453 and the
+host-integration lane green with all eleven vmChecks - the nine pre-existing
+fixtures plus the new `device-worker-launch` (recorded PASS 73s) and
+`state-posture-contract`, with `runtime-cloud-hypervisor-guest-preflight`
+re-recorded PASS 179s on the same tree.
 
 **Status (2026-09-11): in progress - the launch path for
 provider-controller-committed Processes landed; the GPU/TPM launcher sweep
@@ -2121,41 +2143,51 @@ are converted; no direct broker `SpawnRunner` site remains in the daemon.
   plus the broker's render-node pre-open), so the fd-inheritance channel and
   the `gpu_opened_devices`/`gpu_processes` state maps are deleted.
 
-**Remaining gap (reported, not worked around): launch parameterization.**
-Both converted families launch with the trusted template's pinned argv -
-`argv[0]` only - because the parameters their generators need are host paths
-that no typed row carries: `generate_swtpm_argv` wants the state directory
-and the ctrl/server socket paths (`d2b-provider-device-tpm/src/swtpm_argv.rs:40-105`),
-and `generate_gpu_argv`/`generate_video_argv` want the crosvm socket and the
-Wayland socket (`d2b-provider-device-gpu/src/gpu_argv.rs:77-96`). The
-sanctioned `launch_args` channel exists end to end
-(`d2b-process-conformance/src/ticket.rs:916` -> supervisor
-`broker.rs:1010-1017` -> broker `runtime.rs:4266-4273`), but its only
-composition point is the daemon's provider runtime
-(`process_provider_runtime.rs:1255-1265`, fed by the Process driver's
-`serving_worker_launch`), and the Process spec is argv-free by contract while
-the declared rows are path-free by contract
-(`resources.rs:29-37`), so the values have no typed carrier. Closing it needs
-a typed device-worker launch parameterization (the driver deriving the
-parameters from the owning Device row plus the daemon's runtime paths and the
-provider composing the argv), which is not a `packages/d2bd/src`-local
-change. Until then the declared rows launch bare and fail closed on their own
-readiness/endpoint gates; no side channel is invented.
+**Typed device-worker launch parameters (slice 3, 2026-09-12): the recorded
+gap is closed.** The parameters travel as typed values from the owning row to
+the provider's argv. `DeviceWorkerLaunch`
+(`process_provider_runtime.rs:458-470`) is the closed enum over the four
+declared families (`Swtpm`, `SwtpmFlush`, `Gpu`, `Video`) with one params
+struct each; the Process driver derives it per declared row from the trusted
+template, the owning Device row and the daemon's runtime paths
+(`process_driver.rs:1089-1268`, attached to the launch identity at
+`:1835-1839`), and the provider runtime renders the generator's argv from it
+and hands it to the ticket as `launch_args`
+(`process_provider_runtime.rs:1368-1383`, `device_worker_launch_args`
+`:3746-3818`). The Wayland socket the GPU/video argv needs comes from the
+projected `site.json` (`process_driver.rs:1229`, `d2b-core/src/site.rs`,
+`nixos-modules/site-json.nix`). The Process spec stays argv-free and the
+declared rows stay path-free by contract - the parameters are derived, never
+authored into either - and no side channel is invented. The one-shot flush's
+outcome is carried the same way: the driver publishes
+`{"ephemeral": {"state": "succeeded" | "failed", "code": "..."}}` as the row's
+status projection (`process_driver.rs:2403-2409`), and the TPM effect port's
+`gate_flush_outcome` reads that projection instead of the phase
+(`tpm_effect_port.rs:96-105`), so a failed flush fails the device path
+(regression test
+`the_flush_gate_reads_the_one_shot_outcome_not_only_the_phase`,
+`tpm_effect_port.rs:986`).
 
-**Grep gate (2026-09-12).** Sanctioned funnel: the Process family reaches the
-broker through `BrokerProcessBackend::request_with_fds` behind
-`impl ProcessLaunchEffectPort for ProviderSupervisor`
+**Grep gate (2026-09-12, final): clean.** Sanctioned funnel: the Process
+family reaches the broker through `BrokerProcessBackend::request_with_fds`
+behind `impl ProcessLaunchEffectPort for ProviderSupervisor`
 (`d2b-provider-supervisor`, outside the daemon). Gate greps over
 `packages/d2bd/src`:
-`grep -rn 'BrokerRequest::SpawnRunner'` -> no hits outside the retained
-legacy dispatch simulation in `composition.rs`, which carries the fail-closed
-`NoManagerChildSurface` and no longer reaches a spawn;
+`grep -rn 'BrokerRequest::SpawnRunner'` -> no production caller; the only hits
+are test-side envelope readers in the composition test module
+(`composition.rs:27609` in `vm_start_registers_pidfd_table_entry_from_broker_fd`
+and `:27885` in `vm_start_drives_supervisor_dag_in_topo_order`, both inside the
+`#[cfg(test)]` module at `:25873`) plus the `#[cfg(test)]` Device-TPM reconcile
+simulation that still carries the fail-closed `NoManagerChildSurface`
+(`composition.rs:8341-8463`, `tpm_effect_port.rs:669-674`);
 `grep -rn 'SpawnRunnerRequest {'` -> no hits; `grep -rn
 'minijail\.launch\|systemd\.launch'` -> only `process_provider_runtime.rs`
-(the sanctioned provider composition) plus the supervisor's `ProcessEffect`
-calls; `grep -rn 'BrokerPerEnvUsbipdSpawner\|VmRunnerLaunch::Legacy'` -> no
-hits, and the only `vm-start-node-not-provider-managed` hit is the refusal
-itself.
+(the sanctioned provider composition: `:1313`, `:1445-1447`, `:1617`, `:1684`)
+plus the supervisor's `ProcessEffect` calls; `grep -rn
+'BrokerPerEnvUsbipdSpawner\|VmRunnerLaunch::Legacy'` -> no hits (`VmRunnerLaunch`
+is down to `Provider`/`ControllerOwned`, `composition.rs:16602-16605`), and the
+only `vm-start-node-not-provider-managed` hit is the refusal itself
+(`composition.rs:16876`).
 
 **Validation (2026-09-12):** `cargo check -p d2bd --all-targets` clean
 (the `-D warnings` build also proves no dead residue from the deletions);
@@ -2248,34 +2280,43 @@ d2b-provider-device-gpu` green (including the extended
 declared flush posture and the `0007` umask). Not run: `make check`, the VM
 lane (slice 3), and the workspace-wide check (sibling crates mid-flight).
 
-*Slice 2 landed (2026-09-12), slice 3 remains.* Slice 2 converted both ports
-onto the declared rows (see the port-conversion block above): the TPM effect
-port reads/retires the declared `Process/swtpm-<device>` /
-`EphemeralProcess/swtpm-flush-<device>` / `Endpoint/tpm-<device>` rows and
+*Slice 3 landed (2026-09-12): U17 is complete and the VM proof exists.* Slice 2
+converted both ports onto the declared rows (see the port-conversion block
+above): the TPM effect port reads/retires the declared `Process/swtpm-<device>`
+/ `EphemeralProcess/swtpm-flush-<device>` / `Endpoint/tpm-<device>` rows and
 ensures the controller-owned state Volume child, the GPU lifecycle port reads
 `Process/gpu-<device>` / `Process/video-<device>` and derives the worker
 identity from the row's durable uid + generation, and both observe the phases
-their Process controllers publish. Two pieces did NOT land in slice 2 and are
-recorded as gaps rather than worked around:
+their Process controllers publish. The two gaps slice 2 recorded are closed by
+slice 3 (the typed launch parameters and the one-shot outcome, above). The
+ticket builder still needs no Device branch of its own: the supervisor already
+resolves a Device-owned ticket through the declared row
+(`BundleBackedLaunchResolver::resolve_intent`), which is where slice 1 put the
+branch; the `render-node-worker` name and the 32-hex alignment landed in slice 1
+with the identity decision.
 
-- the launch parameterization (argv). Both families launch with the trusted
-  template's pinned `argv[0]` only: the parameters their generators need are
-  host paths (`generate_swtpm_argv`: state dir + ctrl/server sockets;
-  `generate_gpu_argv`/`generate_video_argv`: crosvm socket + Wayland socket)
-  that no typed row carries, and the Process spec is argv-free while the
-  declared rows are path-free by contract, so the `launch_args` channel has no
-  typed source at its composition point (the daemon's provider runtime). It
-  needs a typed device-worker launch parameterization;
-- the ticket builder does not need a Device branch of its own: the supervisor
-  already resolves a Device-owned ticket through the declared row
-  (`BundleBackedLaunchResolver::resolve_intent`), which is where slice 1 put
-  the branch. The `render-node-worker` name and the 32-hex alignment landed in
-  slice 1 with the identity decision.
-
-Slice 3 is the VM proof: no TPM/GPU fixture exists in
-`tests/host-integration/**`, so a new fixture (and an artifact that packages
-`swtpm`, `swtpm-ioctl`, and `crosvm` in `bin/`) is the only end-to-end
-evidence for either conversion.
+*The VM proof (`tests/host-integration/device-worker-launch.nix`).* The fixture
+is auto-discovered by the flake like every other vmCheck; it packages its own
+signed Provider artifact (`swtpm`/`swtpm-ioctl` are the real binaries, the GPU
+artifact's `crosvm` is an ELF shim that records its argv and refuses a launch)
+and asserts, on a live host: the compiled zone bundle carries the declared rows
+and their digest-pinned `launchArgs: true` bindings (`bundle-projection`); the
+rows reach the manager with their Device owners, v4 uids and declared templates
+(`rows-ingested`); the swtpm worker really runs with the argv the Process
+controller composed - `swtpm socket` carrying `--tpm2`, `--ctrl`, `--server`,
+`--tpmstate` and the socket principal, with the ctrl/server sockets present
+(`tpm-worker`); the flush publishes `{"ephemeral": {"state": "succeeded",
+"code": "process-exited"}}` on `EphemeralProcess/swtpm-flush-tpm0`
+(`tpm-flush`); the two GPU rows never report `Ready` and end `Failed` with a
+named driver failure (`gpu-launch`); and `d2b delete Device/tpm0` retires the
+declared rows and leaves no swtpm process (`tpm-teardown`). Recorded run:
+`device-worker-launch` PASS 73s with every strict stage reached, the live socket
+owned by the worker principal (`660 d2b-work-tpm0-swtpm:d2b-work-tpm0-swtpm`),
+and both GPU rows `Failed` with `process-start-budget-exhausted`. What the
+fixture does not prove is stated in its own header: the GPU half pins the launch
+path and the named refusal (the VM has no render node, and `crosvm` is a
+stand-in), and the video-worker / gpu-render-node rows are not declared because
+their templates need Provider settings schemas a node eval does not import.
 
 ---
 
@@ -2314,10 +2355,12 @@ status above.**
 - Cleanup: no commented-out old-runtime code, no unused imports from deleted crates, no orphaned BUILD.bazel targets; the handoff specification is copied into the repo (e.g. `docs/` or the plan's directory) so the authority document is self-contained.
 - Ship tail: the PR with the full change set is merged to v3, and host-integration plus `make check` are green on the merged v3 (R38, U16).
 
-### Definition of Done audit (2026-09-11)
+### Definition of Done audit (2026-09-11; updated 2026-09-12 for wave `17976bbc0`)
 
 The five DoD items against the current tree; each verdict cites the tree or
-this session's verification runs.
+this session's verification runs. The 2026-09-11 text is kept as history where
+the wave did not change the verdict; the dated updates carry the wave's state,
+and the open items at the end are the current list.
 
 - **Global: open.** `make check` is green on the current tree - the last
   two full runs both exited 0 (`Executed 47 out of 468 tests: 468 tests
@@ -2333,11 +2376,22 @@ this session's verification runs.
   store-view Volume; see U11). R29 does not hold yet - two execution
   models coexist (U14 not landed; `d2b-resource-store`, `-redb` and the
   controller-toolkit runner machinery are still in the Bazel graph). No
-  claim of R1-R38 completeness. **Update (2026-09-12): U14 has since landed
-  - the two crates and the runner machinery are deleted, one execution model
-  remains and `make check` is green (453/453); see the U14 status above for
-  the deletions, the deliberate semantic reductions and the one lane
-  failure that is still open.**
+  claim of R1-R38 completeness. **Update (2026-09-12, wave `17976bbc0`): U14
+  has landed - the two store crates and the runner machinery are deleted, one
+  execution model remains (R29) and `make check` is recorded green (453/453,
+  `Executed 55 out of 453 tests: 453 tests pass.`; see the U14 status above
+  for the deletions and the deliberate semantic reductions). The
+  host-integration lane is green too: all eleven vmChecks pass on the wave's
+  tree - the nine pre-existing fixtures plus the new `device-worker-launch`
+  (recorded PASS 73s) and `state-posture-contract` - and the
+  `runtime-cloud-hypervisor-guest-preflight` failure the U14 status recorded at
+  `nested-vmm-api-socket` is closed (recorded PASS 179s on the wave's tree).
+  One input caveat, not a code failure: `tests/tools/tier0-first-pass.sh`
+  scans every file git reports - tracked or not - so the personal agent-config
+  file `.cursor/rules/caveman.mdc` (U+2014 at line 2) is the single red the U17
+  slice-2 run recorded at 452/453; it must stay untracked and locally excluded
+  (Cleanup below). No claim of R1-R38 completeness yet - the open unit work is
+  listed at the end of this audit.**
 - **Phase A exit: satisfied.** AE7's two fixtures pass on a real host: the
   Process slice (`resource-operator-activation`, green on every run this
   session) and the Volume-with-owned-children slice
@@ -2355,14 +2409,34 @@ this session's verification runs.
   `2026-09-11-u12-guest-family.md`,
   `2026-09-11-manager-finalize-ordering.md` and
   `2026-09-11-manager-row-reads-and-publication.md` (the endpoint slice
-  already carries `2026-09-11-ch-api-endpoint-realization.md`). U17 is in
-  flight and still needs its own fragment at landing.
+  already carries `2026-09-11-ch-api-endpoint-realization.md`). **Update
+  (2026-09-12, wave `17976bbc0`): U17 landed and carries its own fragments** -
+  `2026-09-12-u17-device-worker-rows.md` (the declared rows, the closed posture
+  table, the compiler projection, the launch fences),
+  `2026-09-12-u17-launcher-sweep.md` (the sweep and its deletions),
+  `2026-09-12-u17-port-conversions.md` (both ports onto the declared rows),
+  `2026-09-12-u17-wayland-projection.md` (the site Wayland projection), and this
+  pass adds `2026-09-12-u17-launch-completion.md` (typed launch parameters, the
+  one-shot outcome, the clean grep gate, the `device-worker-launch` fixture).
+  The wave's other concerns carry fragments as well: #512
+  (`2026-09-12-state-posture-contract.md`), the device-path fixes
+  (`2026-09-12-device-path-fixes.md`,
+  `2026-09-12-gpu-worker-launch-refusal.md`), the review fixes
+  (`2026-09-12-review-fixes-observable.md`,
+  `2026-09-12-u6-process-durable-observation.md`,
+  `2026-09-12-relist-owner-scope-audio-dependency-retry.md`,
+  `fix-provider-supervisor-heartbeat.md`), the provider declarations
+  (`2026-09-12-provider-declaration-corrections.md`) and U14
+  (`2026-09-12-u14-store-removal.md`). One committed fragment was structurally
+  invalid: `2026-09-12-u17-port-conversions.md` carried a
+  `### Known gap (reported, not worked around)` section, which the fold rejects
+  as an unknown section; this pass removes it - the two gaps it recorded are
+  closed and stated in the completion fragment and the U17 status.
   Abandoned-attempt code: the Guest/lane sweeps removed their diagnostics
   (byte-identical revert recorded for `volume_driver.rs`; the `diag:` grep
-  is empty), but the applied-then-superseded `handoff/u13-target-layer/`
-  patch directory (whose README says "delete after applying") and three
-  untracked agent-config directories (`.clinerules/`, `.cursor/`,
-  `.windsurf/`) still sit in the tree.
+  is empty), but the parked `handoff/u13-target-layer/` patch directory
+  (whose README says "delete after applying") is still tracked. Personal
+  agent-config files are the Cleanup item below.
 - **Cleanup: spec copy satisfied; the rest open.** The handoff
   specification is now in-repo at
   `docs/plans/2026-09-09-000-v3-ractor-resource-runtime-rewrite-spec.md`
@@ -2370,9 +2444,56 @@ this session's verification runs.
   from deleted crates and orphaned Bazel targets belong to U14's cutover
   and cannot be assessed before it lands; the old store crates and
   controller-toolkit are still live entries in `bazel/checks/BUILD.bazel`.
+  **Update (2026-09-12, wave `17976bbc0`):** U14's cutover is in the tree -
+  `packages/d2b-resource-store` and `-redb` are gone and
+  `bazel/checks/BUILD.bazel` no longer names them;
+  `packages/d2b-controller-toolkit` survives trimmed by design (its
+  `//packages/d2b-controller-toolkit:all-tests` entry is still there), and the
+  dead `packages/d2bd-runtime/src/resource_store_runtime.rs` module and its
+  `lib.rs` export were deleted in the wave's follow-through. Personal
+  editor/agent config must not be tracked: the wave's `git add -A` re-added
+  `.clinerules/`, `.cursor/` and `.windsurf/` after the earlier untrack, which
+  also put them back into the tier0 source-hygiene scan
+  (`.cursor/rules/caveman.mdc:2` carries U+2014); fixed by untracking them again
+  and adding them to the machine-local `.git/info/exclude` - no repo
+  `.gitignore` change.
 - **Ship tail: open.** No PR exists and the branch is unpushed (U16
   reconnaissance); U14 and U15 have not landed; U17 is in flight; the
-  host-integration lane is red (R38, U16).
+  host-integration lane is red (R38, U16). **Update (2026-09-12):** U14, U17 and
+  U15's runtime half have landed and the branch's lane is green, but the branch
+  is still unpushed and no PR exists, so U16 - fold the fragments, open the PR
+  against v3, let PR CI run, merge, then `make check` and the lane on the merged
+  v3 - remains the ship tail.
+
+**Open at `17976bbc0`.** The DoD items that are not closed, each with the unit
+it belongs to:
+
+- **U15's daemon/fixture half.** The runtime-crate half landed with the wave
+  (`packages/d2b-resource-runtime`: §36 mapped 48/48 rows, nine tests added),
+  and the rows that need daemon or VM evidence are deferred with their named
+  dependency: real process/VM/volume adoption and recreation (needs the d2bd
+  drivers plus the `runtime-cloud-hypervisor-guest-preflight` and
+  `virtiofsd-volume-runtime` fixtures), the ZoneLink product rows, the shared
+  provider restart rows, the shared-backend limit, and the runtime-level child
+  re-parent guard (the ownership-integrity finding that half reported).
+- **U16's PR and merge.** No PR exists and the branch is unpushed; the merge,
+  PR CI, and the post-merge `make check` plus lane on v3 are the ship tail.
+- **The two consistency items.** The duplicated predicates the pre-PR review
+  left behind - the serving-worker condition's provider literal in
+  `packages/d2b-core/src/bundle_resolver.rs` and the binding-worker lookup in
+  `packages/d2bd/src/process_resource_runtime.rs`. They are in flight in this
+  session, not part of the landed wave.
+- **The store-preflight declaration decision.**
+  `packages/d2b-provider-volume-virtiofs/nix/default.nix` still declares the
+  legacy Guest-owned `EphemeralProcess/store-preflight-<guest>` row (a pre-v3
+  VM-DAG preflight intent that the EphemeralProcess conversion made
+  manager-served). Keep the declaration - the row now converges through the
+  terminal classification of `guest-process-not-vmm` - or delete it as dead
+  intent; the decision is open.
+
+U14's own open items (the broker's consumerless `OpenZoneStore` handover and the
+toolkit's now-orphan helpers) are recorded in the U14 status above and are not
+DoD blockers.
 
 ---
 

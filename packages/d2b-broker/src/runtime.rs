@@ -2318,11 +2318,14 @@ fn request_accepts_fd(request: &BrokerRequest) -> bool {
 /// decision cannot be omitted at one site while the others agree.
 ///
 /// The resolver mints the same template from its own spelling of the
-/// predicate (`TemplateIntentShape::of`, where the shape also selects the
-/// ADR-0021 user namespace) and the daemon classifies a binding-owned worker
-/// from its owner type: those are separate, cross-crate decisions the broker
-/// only *reads*, and the broker must never re-derive them from request
-/// fields.
+/// predicate (`is_serving_worker_template` in `d2b_core::bundle_resolver`,
+/// where the shape also selects the ADR-0021 user namespace), and the daemon
+/// classifies a binding-owned worker from that same declared template under
+/// its `VolumeBinding` owner (`resolve_launch_identity` in
+/// `d2bd::process_resource_runtime`, keyed on
+/// `d2b_provider_volume_virtiofs::WORKER_TEMPLATE`): those are separate,
+/// cross-crate decisions the broker only *reads*, and the broker must never
+/// re-derive them from request fields.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn intent_is_serving_worker_template(
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,

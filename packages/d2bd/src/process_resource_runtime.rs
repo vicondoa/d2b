@@ -16,6 +16,7 @@
 
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_process_conformance::{LaunchIdentity, LaunchIdentityError};
+use d2b_provider_volume_virtiofs::WORKER_TEMPLATE;
 
 pub(crate) const PROCESS_RESTART_ANNOTATION: &str = "d2b.d2bus.org/restart-generation";
 const GUEST_RUNTIME_PROCESS_TEMPLATES: &[(&str, &str)] = &[
@@ -108,6 +109,12 @@ pub(crate) struct LaunchRow<'a> {
 ///   rule), because its signed template executes on the Host while its launch
 ///   intent is minted for the Guest.
 ///
+/// The binding-owned serving-worker split
+/// ([`LaunchIdentity::is_binding_worker`]) is derived here too, from the
+/// row's declared template under its `VolumeBinding` owner
+/// ([`WORKER_TEMPLATE`]) - the same declared fact the launch path resolves
+/// the trusted serving intent through - never from the owner kind alone.
+///
 /// A row whose launch cannot be named completely fails here, once, naming the
 /// missing input ([`LaunchIdentityError`]).
 pub(crate) fn resolve_launch_identity(
@@ -138,7 +145,22 @@ pub(crate) fn resolve_launch_identity(
     } else {
         None
     };
-    let binding_worker = owner.is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding");
+    // The serving-worker split keys on the trusted declaration, never on the
+    // owner kind alone: a binding-owned row counts only when it declares the
+    // serving template (`d2b_provider_volume_virtiofs::WORKER_TEMPLATE`) -
+    // the same declared fact the rest of the launch path reads
+    // (`process_provider_runtime::resource_ticket` re-checks it as
+    // `provider-ticket:template-not-found` and `process_driver::serving_worker_launch`
+    // checks it before deriving the worker's arguments, both against
+    // `find_volume_binding_worker_intent`, which matches the trusted intent by
+    // this template). A `VolumeBinding`-owned row with any other template
+    // keeps an ordinary launch instead of the worker's host-exec/guest-target
+    // split. `LaunchTicket`'s owner setter normalizes the carried flag back to
+    // the owner kind; the two rules agree on every row the binding driver
+    // mints, which declares exactly the serving template.
+    let binding_worker =
+        owner.is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding")
+            && row.template == WORKER_TEMPLATE;
     LaunchIdentity::new(
         owner.cloned(),
         row.owner_uid.clone(),
@@ -246,7 +268,8 @@ mod tests {
     /// One row shape -> complete canonical identity or a named construction
     /// error. The shapes are the four owner kinds a Process row takes
     /// (host-owned worker, Guest-owned guest-runtime child, binding-owned
-    /// serving worker, Provider-owned controller) plus one incomplete row.
+    /// serving worker, Provider-owned controller) plus a binding-owned row
+    /// that declares no serving template, and one incomplete row.
     #[test]
     fn launch_identity_table_covers_owner_shapes() {
         let guest_ref = || ResourceRef::parse("Guest/acceptance-guest").expect("guest ref");
@@ -317,6 +340,26 @@ mod tests {
                     vm: Some("acceptance-guest"),
                     launch_vm: "host-system",
                     binding_worker: true,
+                },
+            },
+            // The owner kind alone never makes a serving worker: a
+            // binding-owned row that declares another template keeps the
+            // ordinary VM scope (the attachment Guest it targets) and the
+            // ordinary launch path, exactly as `serving_worker_launch` and
+            // `find_volume_binding_worker_intent` key on the template.
+            Case {
+                label: "binding-owned row declaring another template",
+                owner_ref: Some(binding_ref()),
+                owner_uid: None,
+                execution_ref: "Host/host-system",
+                process_name: "vol-probe-deadbeef",
+                template: "virtiofsd-attachment-probe",
+                declared_target: Some((guest_ref(), binding_ref())),
+                expected: Expected::Complete {
+                    target_ref: Some(guest_ref()),
+                    vm: Some("acceptance-guest"),
+                    launch_vm: "acceptance-guest",
+                    binding_worker: false,
                 },
             },
             Case {

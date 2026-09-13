@@ -635,7 +635,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/d2b-resource-store-redb/src/revision_log.rs`
 - `packages/d2b-resource-store-redb/src/tests.rs`
 - `packages/d2bd-runtime/src/resource_api.rs`
-- `packages/d2bd-runtime/src/resource_store_runtime.rs`
+- `packages/d2bd-runtime/src/resource_store_runtime.rs` - deleted in U14's follow-through (`17976bbc0`)
 - `packages/d2bd-runtime/src/resource_runtime_support.rs`
 - `packages/d2bd/src/resource_runtime.rs`
 - `packages/d2bd/tests/zone_provider_acceptance.rs`

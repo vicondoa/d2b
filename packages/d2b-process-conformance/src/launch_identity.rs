@@ -195,9 +195,19 @@ impl LaunchIdentity {
 
     /// Attach the exact semantic owner.
     ///
-    /// The binding-owned serving-worker split follows the owner kind: a
+    /// The binding-owned serving-worker split follows the owner kind here: a
     /// `VolumeBinding`-owned launch is the virtiofsd worker whose attachment
     /// Guest is only its target.
+    ///
+    /// The one producer that resolves a launch identity from its durable row
+    /// (`d2bd::process_resource_runtime::resolve_launch_identity`) settles the
+    /// same split from the row's declared template
+    /// (`d2b_provider_volume_virtiofs::WORKER_TEMPLATE`) under that owner
+    /// kind. The two agree on every row the binding driver mints, which
+    /// declares exactly that template; a `VolumeBinding`-owned row declaring
+    /// any other template is raised to the worker split here whenever a ticket
+    /// is built for it, and then resolves no serving intent, so such a launch
+    /// is refused rather than downgraded to an ordinary one.
     pub fn with_owner(mut self, owner_ref: ResourceRef) -> Result<Self, LaunchIdentityError> {
         self.binding_worker = owner_ref.resource_type().as_str() == "VolumeBinding";
         self.owner_ref = Some(owner_ref);

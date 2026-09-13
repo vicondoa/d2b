@@ -2411,6 +2411,11 @@ impl BundleResolver {
     /// ticket pins the template to the resolved intent's role id, so the
     /// lookup accepts either that exact role id or the serving template
     /// name, and refuses ambiguity.
+    ///
+    /// The owner is the one serving provider
+    /// ([`SERVING_WORKER_PROVIDER_REF`]) the mint classifies with
+    /// [`is_serving_worker_template`]; the template is the caller's ticket
+    /// template, matched against the intent's role id or profile id.
     pub fn find_volume_binding_worker_intent(
         &self,
         execution_ref: &str,
@@ -2420,7 +2425,7 @@ impl BundleResolver {
     ) -> Option<&ResolvedRunnerIntent> {
         let mut matches = self.runner_intents.values().filter(|intent| {
             intent.role == ProcessRole::ProviderController
-                && intent.owner_ref.as_deref() == Some("Provider/volume-virtiofs")
+                && intent.owner_ref.as_deref() == Some(SERVING_WORKER_PROVIDER_REF)
                 && intent.execution_ref == execution_ref
                 && intent.execution_domain == execution_domain
                 && intent.user_ref.as_deref() == user_ref
@@ -4711,6 +4716,39 @@ pub const fn is_device_worker_role(role: &ProcessRole) -> bool {
     )
 }
 
+/// Provider reference of the volume-virtiofs serving Provider: the owner of
+/// the binding-owned virtiofsd worker template.
+pub const SERVING_WORKER_PROVIDER_REF: &str = "Provider/volume-virtiofs";
+/// The signed Process template every binding-owned virtiofsd worker declares.
+pub const SERVING_WORKER_TEMPLATE: &str = "virtiofsd-worker";
+
+/// Whether one `(provider, template)` pair is the binding-owned serving
+/// worker template: the signed `virtiofsd-worker` profile under
+/// `Provider/volume-virtiofs`.
+///
+/// This is the one spelling of the condition in d2b-core. The mint
+/// (`TemplateIntentShape::of`) classifies a private template binding with it,
+/// and the lookup ([`BundleResolver::find_volume_binding_worker_intent`])
+/// matches the same provider ([`SERVING_WORKER_PROVIDER_REF`]) for the
+/// template the launch ticket names.
+///
+/// The broker spells the condition once more, over the *resolved* intent this
+/// mint produces: `intent_is_serving_worker_template` in
+/// `packages/d2b-broker/src/runtime.rs` reads `role == ProviderController`,
+/// `profile_id == template`, and `owner_ref == provider`. It cannot call this
+/// function (the dependency runs broker -> core, never back) and holds no
+/// template binding, so the two spellings must agree by construction: the
+/// broker turns its answer into the launch posture - serving worker: no
+/// controller escrow descriptor, per-runner ACLs opened to the intent's
+/// principal; otherwise controller escrow - and admits only the inherited
+/// descriptor shape that posture declares, so a disagreement refuses the
+/// launch or picks the wrong access posture for it.
+/// `serving_worker_condition_agrees_with_the_broker_spelling` in this
+/// module's tests pins the agreement over a case table.
+pub fn is_serving_worker_template(provider_ref: &str, template: &str) -> bool {
+    provider_ref == SERVING_WORKER_PROVIDER_REF && template == SERVING_WORKER_TEMPLATE
+}
+
 /// The private sandbox shape one template intent is minted with.
 enum TemplateIntentShape {
     /// A Provider controller: the static signed controller template, the
@@ -4733,8 +4771,8 @@ impl TemplateIntentShape {
                 // host capabilities. The broker daemon binds the launch's
                 // sandbox plan to this trusted profile, so the serving
                 // template must mint it here.
-                let serving_worker = provider_ref == "Provider/volume-virtiofs"
-                    && binding.template().as_str() == "virtiofsd-worker";
+                let serving_worker =
+                    is_serving_worker_template(&provider_ref, binding.template().as_str());
                 Self::ProviderController { serving_worker }
             }
         }
@@ -6930,11 +6968,94 @@ mod tests {
         assert_eq!(video.device_binds(), &["/dev/dri/renderD128"] as &[&str]);
 
         assert!(device_worker_posture(DEVICE_TPM_PROVIDER_REF, "gpu-worker").is_none());
-        assert!(device_worker_posture("Provider/volume-virtiofs", "virtiofsd-worker").is_none());
+        assert!(
+            device_worker_posture(SERVING_WORKER_PROVIDER_REF, SERVING_WORKER_TEMPLATE).is_none()
+        );
         // The retired Rust template name is not a template: the declared row
         // template is `gpu-render-node`.
         assert!(device_worker_posture(DEVICE_GPU_PROVIDER_REF, "render-node-worker").is_none());
         assert!(device_worker_posture("Provider/device-tpm", "swtpm").is_none());
+    }
+
+    /// The serving-worker condition is spelled in this crate
+    /// ([`is_serving_worker_template`], over the private template binding) and
+    /// once more in the broker, over the *resolved* intent
+    /// (`intent_is_serving_worker_template`, `packages/d2b-broker/src/runtime.rs`).
+    /// d2b-core cannot call the broker's copy - the dependency runs broker ->
+    /// core, never back - so the predicate is restated verbatim below and the
+    /// case table is fed to both spellings through the production mint path:
+    /// the role, profile id, and owner ref the broker reads are taken off the
+    /// intent the resolver mints, never re-spelled for the assertion. A
+    /// template that starts minting a different triple, or one pair the two
+    /// spellings classify differently, fails here.
+    #[test]
+    fn serving_worker_condition_agrees_with_the_broker_spelling() {
+        // Verbatim `intent_is_serving_worker_template`. The broker reads the
+        // resolved intent because it holds no template binding.
+        fn broker_reads_serving_worker(intent: &ResolvedRunnerIntent) -> bool {
+            intent.role == ProcessRole::ProviderController
+                && intent.profile_id == "virtiofsd-worker"
+                && intent.owner_ref.as_deref() == Some("Provider/volume-virtiofs")
+        }
+
+        let binding = |owner_ref: &str, template: &str| {
+            serde_json::from_value::<ProcessTemplateBinding>(serde_json::json!({
+                "processRef": format!("Process/{template}-row"),
+                "ownerRef": owner_ref,
+                "executionRef": "Host/dev-host",
+                "template": template,
+                "artifactId": "test-artifact",
+                "binaryRef": "d2b-worker",
+                "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+                "binaryPath": "/nix/store/test-artifact/bin/d2b-worker",
+            }))
+            .expect("template binding")
+        };
+
+        let cases = [
+            (SERVING_WORKER_PROVIDER_REF, SERVING_WORKER_TEMPLATE, true),
+            // The serving provider without the serving template.
+            (SERVING_WORKER_PROVIDER_REF, "virtiofsd-terminate", false),
+            // The serving template under any other provider.
+            ("Provider/other-virtiofs", SERVING_WORKER_TEMPLATE, false),
+            // An ordinary signed Provider controller template.
+            (
+                "Provider/runtime-cloud-hypervisor",
+                "runtime-cloud-hypervisor-controller",
+                false,
+            ),
+            // A Device-owned worker template: the posture table answers first.
+            (DEVICE_TPM_PROVIDER_REF, "swtpm-socket", false),
+        ];
+        for (owner_ref, template, expected) in cases {
+            let binding = binding(owner_ref, template);
+            let shape = TemplateIntentShape::of(&binding);
+            let serving_worker = matches!(
+                shape,
+                TemplateIntentShape::ProviderController {
+                    serving_worker: true
+                }
+            );
+            let intent = mint_template_intent(&binding, shape);
+            assert_eq!(
+                is_serving_worker_template(owner_ref, template),
+                expected,
+                "{owner_ref}/{template}: core spelling"
+            );
+            assert_eq!(
+                serving_worker, expected,
+                "{owner_ref}/{template}: minted shape"
+            );
+            assert_eq!(
+                broker_reads_serving_worker(&intent),
+                expected,
+                "{owner_ref}/{template}: broker spelling over the minted intent \
+                 (role {:?}, profile {:?}, owner {:?})",
+                intent.role,
+                intent.profile_id,
+                intent.owner_ref
+            );
+        }
     }
 
     #[test]
