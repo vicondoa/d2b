@@ -1305,6 +1305,32 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         audit_join: None,
     },
     BrokerOperationRow {
+        operation: "inspect-process-family",
+        wire_variant: None,
+        owner: OperationOwner::Family,
+        family: Some("process"),
+        declaring_provider: Some("d2b-provider-process"),
+        profiles: &[BrokerProfileId::Host],
+        w3: false,
+        capabilities: false,
+        disposition: "callable-read-only",
+        stub_target: None,
+        audit_fields: &[],
+        authz: BrokerAuthzFacets {
+            subject: "process",
+            scope: "per-type",
+            allowed_groups: &["d2bd", "d2b-admin"],
+            destructive: false,
+            secret_access: "None",
+            broker_required: "Yes",
+            audit_mode: "Yes",
+        },
+        payload_provenance: PayloadProvenance::Request,
+        payload_fields: &["resourceType"],
+        payload_required: &["resourceType"],
+        audit_join: Some(&["resourceType"]),
+    },
+    BrokerOperationRow {
         operation: "PipeWireAudio",
         wire_variant: Some("PipeWireAudio"),
         owner: OperationOwner::Family,
@@ -2295,4 +2321,4 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
 ];
 
 /// The number of committed operation rows.
-pub const BROKER_OPERATION_COUNT: usize = 88;
+pub const BROKER_OPERATION_COUNT: usize = 89;

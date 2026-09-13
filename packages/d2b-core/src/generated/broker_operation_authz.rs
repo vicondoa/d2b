@@ -506,6 +506,16 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "inspect-process-family",
+        "process",
+        "per-type",
+        &["d2bd", "d2b-admin"],
+        false,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
         "PipeWireAudio",
         "audio",
         "per-VM/role/channel",

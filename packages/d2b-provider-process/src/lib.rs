@@ -15,6 +15,7 @@ pub mod effects;
 pub mod execution;
 pub mod identity;
 pub mod launch_identity;
+pub mod operations;
 pub mod worker_launch;
 
 pub use backend::{
@@ -30,6 +31,7 @@ pub use effects::{ProcessDriverEffects, ProviderAdoption, ProviderLiveness};
 pub use execution::{ExecutionMode, execution_target_allowed};
 pub use identity::{ProcessFamilySpec, ProcessResourceIdentity, decode_metadata_owner_ref};
 pub use launch_identity::{LaunchRow, resolve_launch_identity};
+pub use operations::{INSPECT_PROCESS_FAMILY, INVALID_PROCESS_TYPE, process_family_operations};
 pub use worker_launch::{
     DeviceWorkerLaunch, GpuWorkerParams, ServingWorkerLaunch, ServingWorkerRoot, SwtpmFlushParams,
     SwtpmWorkerParams, VideoWorkerParams,

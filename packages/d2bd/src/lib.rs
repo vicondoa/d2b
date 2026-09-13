@@ -15,6 +15,7 @@ pub(crate) mod interaction_child_sources;
 /// owns the channel, this module offers it the authenticated session.
 pub(crate) mod guest_target_session;
 pub(crate) mod foundation_seed;
+pub(crate) mod forward_rendezvous;
 pub(crate) mod plane_port;
 pub mod principal_allocation;
 pub(crate) mod provider_lifecycle;

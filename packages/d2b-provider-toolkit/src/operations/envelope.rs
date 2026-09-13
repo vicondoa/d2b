@@ -214,6 +214,11 @@ impl OperationEnvelope {
 
     /// Invoke one operation through the envelope.
     ///
+    /// The envelope names the invocation: it mints the identifier the
+    /// handler's context carries. A caller that already owns an invocation
+    /// identifier - the broker-forwarded path - states it through
+    /// [`OperationEnvelope::invoke_named`] instead.
+    ///
     /// The returned failure is the handler's own when the invocation reached
     /// it, and one of [`ENVELOPE_REFUSALS`] when it did not.
     pub async fn call(
@@ -230,16 +235,62 @@ impl OperationEnvelope {
             self.audit(operation, ProviderAgentAuditOutcome::Denied);
             return Err(OperationFailure::new(UNCOMMITTED_OPERATION));
         };
+        let invocation_id = self.next_invocation_id();
+        self.run(&invocation_id, caller, entry, payload).await
+    }
+
+    /// Whether a declared handler serves this operation name.
+    pub fn declares(&self, operation: &str) -> bool {
+        self.handlers
+            .iter()
+            .any(|entry| entry.operation.name().as_str() == operation)
+    }
+
+    /// Run one operation a bare operation name selects, under an invocation
+    /// identifier the caller already owns.
+    ///
+    /// This is the service surface a forwarded call arrives on: the caller
+    /// names the operation the way the committed row spells it, and the
+    /// identifier is the one the broker's record already carries, so the
+    /// provider-side record and the broker's record name one invocation. A
+    /// name no declared handler serves is refused with
+    /// [`UNCOMMITTED_OPERATION`] and audited, exactly as an undeclared
+    /// reference is.
+    pub async fn invoke_named(
+        &self,
+        operation: &str,
+        invocation_id: &str,
+        caller: &ResourceRef,
+        payload: CanonicalJsonObject,
+    ) -> Result<OperationResult, OperationFailure> {
+        let Some(entry) = self
+            .handlers
+            .iter()
+            .find(|entry| entry.operation.name().as_str() == operation)
+        else {
+            self.audit_named(operation, ProviderAgentAuditOutcome::Denied);
+            return Err(OperationFailure::new(UNCOMMITTED_OPERATION));
+        };
+        self.run(invocation_id, caller, entry, payload).await
+    }
+
+    async fn run(
+        &self,
+        invocation_id: &str,
+        caller: &ResourceRef,
+        entry: &HandlerEntry,
+        payload: CanonicalJsonObject,
+    ) -> Result<OperationResult, OperationFailure> {
+        let operation = &entry.operation;
         if !self.is_granted(caller, operation) {
             self.audit(operation, ProviderAgentAuditOutcome::Denied);
             return Err(OperationFailure::new(UNGRANTED_CALLER));
         }
-        let invocation_id = self.next_invocation_id();
         let ctx = OperationCtx {
             zone: &self.zone,
             caller,
             operation,
-            invocation_id: &invocation_id,
+            invocation_id,
         };
         let result = entry
             .handler
@@ -261,7 +312,11 @@ impl OperationEnvelope {
     }
 
     fn audit(&self, operation: &ResourceRef, outcome: ProviderAgentAuditOutcome) {
-        let Ok(method) = BoundedToken::parse(operation.name().as_str()) else {
+        self.audit_named(operation.name().as_str(), outcome);
+    }
+
+    fn audit_named(&self, operation: &str, outcome: ProviderAgentAuditOutcome) {
+        let Ok(method) = BoundedToken::parse(operation) else {
             return;
         };
         if let Ok(mut audit) = self.audit.lock() {

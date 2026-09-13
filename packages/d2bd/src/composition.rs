@@ -3498,6 +3498,22 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         "d2bd public socket bound; restoring state",
     );
 
+    // The forwarding rendezvous: the endpoint the broker dials for every
+    // forwarded operation. It binds only when the environment names a path,
+    // mirroring the broker's own no-default stance, so a deployment with no
+    // forwarding peer binds nothing and both ends refuse forwarded calls.
+    let forward_rendezvous =
+        std::sync::Arc::new(crate::forward_rendezvous::ForwardRendezvous::new());
+    if let Some(path) = crate::forward_rendezvous::configured_socket() {
+        let listener = crate::forward_rendezvous::bind(&path, &runtime_identity)?;
+        crate::forward_rendezvous::spawn_server(
+            std::sync::Arc::clone(&forward_rendezvous),
+            listener,
+            tokio::runtime::Handle::current(),
+        )?;
+        tracing::info!(socket = %path.display(), "d2bd forward rendezvous ready");
+    }
+
     // Write /run/d2b/version on daemon startup so the CLI's
     // [pending restart] machinery has
     // an authoritative version + binary-path snapshot. Failures are
@@ -3676,7 +3692,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 );
             } else {
                 restore_configuration_staging_on_startup(&state);
-                match open_resource_plane(&state, &resolver, provider_ready).await {
+                match open_resource_plane(&state, &resolver, provider_ready, &forward_rendezvous).await
+                {
                     Ok(plane) => {
                         for zone in plane.zone_ids() {
                             audit_resource_plane(
@@ -15887,6 +15904,7 @@ async fn open_resource_plane(
     state: &ServerState,
     resolver: &BundleResolver,
     provider_ready: bool,
+    rendezvous: &Arc<crate::forward_rendezvous::ForwardRendezvous>,
 ) -> Result<Arc<resource_runtime::ResourcePlane>, resource_runtime::ResourceRuntimeError> {
     if !provider_ready {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
@@ -16192,7 +16210,9 @@ async fn open_resource_plane(
             );
             plane_v3
         };
-        v3_planes.insert(_zone.as_str().to_owned(), std::sync::Arc::new(plane_v3));
+        let plane_v3 = std::sync::Arc::new(plane_v3);
+        rendezvous.publish(_zone.as_str(), plane_v3.provider_runtime());
+        v3_planes.insert(_zone.as_str().to_owned(), plane_v3);
     }
     // U14: publish the complete table before any Zone activates; the
     // manager-backed API service resolves the Zone's client + watch hub here.

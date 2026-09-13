@@ -25,11 +25,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::ZoneId;
+use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
 use d2b_provider_toolkit::{
     AttachError, Cardinality, DEFAULT_DRAIN_BUDGET_MS, DrainDeadline, DrainError,
-    DriverDescriptor, IsolationPosture, Lifecycle, ProviderBase, ProviderDeclaration,
-    ZonePlaneHandle,
+    DriverDescriptor, IsolationPosture, Lifecycle, OperationEnvelope, OperationFailure,
+    OperationResult, ProviderAgentAuditLog, ProviderBase, ProviderDeclaration, ZonePlaneHandle,
 };
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 
@@ -79,6 +79,12 @@ pub(crate) enum ProviderStartupError {
         provider_ref: &'static str,
         code: &'static str,
     },
+    /// The provider's declared operations could not be assembled into the
+    /// envelope that serves them.
+    OperationSurface {
+        provider_ref: &'static str,
+        reason: &'static str,
+    },
 }
 
 impl ProviderStartupError {
@@ -92,6 +98,7 @@ impl ProviderStartupError {
             Self::Plane(refusal) => refusal.reason,
             Self::Attach { .. } => "attach-refused",
             Self::Drain { code, .. } => code,
+            Self::OperationSurface { .. } => "operation-surface-refused",
         }
     }
 
@@ -102,7 +109,8 @@ impl ProviderStartupError {
             Self::Duplicate { provider_ref }
             | Self::Registration { provider_ref, .. }
             | Self::Attach { provider_ref }
-            | Self::Drain { provider_ref, .. } => provider_ref,
+            | Self::Drain { provider_ref, .. }
+            | Self::OperationSurface { provider_ref, .. } => provider_ref,
             Self::Plane(refusal) => refusal.provider_ref,
         }
     }
@@ -115,6 +123,10 @@ impl ProviderStartupError {
                 format!("{}:{}", self.code(), provider_ref)
             }
             Self::Registration {
+                provider_ref,
+                reason,
+            } => format!("{}:{}:{}", self.code(), provider_ref, reason),
+            Self::OperationSurface {
                 provider_ref,
                 reason,
             } => format!("{}:{}:{}", self.code(), provider_ref, reason),
@@ -262,6 +274,75 @@ impl ProviderBase for ZoneProvider {
     }
 }
 
+/// One started provider's declared operations, behind the toolkit envelope.
+///
+/// The envelope is built from the provider's own descriptor table, and the
+/// only grant it carries is the provider's own declared operations: the
+/// forwarded channel's authority is the broker's first-hop authorization
+/// against the committed rows, so the provider-side envelope states the one
+/// local fact this process owns - this provider may run the handlers it
+/// declared - and nothing else. A call that names no declared operation is
+/// refused by the envelope before any handler runs.
+pub(crate) struct ProviderOperations {
+    caller: ResourceRef,
+    envelope: Arc<OperationEnvelope>,
+}
+
+impl ProviderOperations {
+    /// Assemble one provider's declared operations, when it declares any.
+    fn over(
+        zone: &ZoneId,
+        provider: &ZoneProvider,
+        audit: &Arc<Mutex<ProviderAgentAuditLog>>,
+    ) -> Result<Option<Self>, ProviderStartupError> {
+        if provider.drivers.iter().all(|driver| driver.operations.is_empty()) {
+            return Ok(None);
+        }
+        let caller = ResourceRef::parse(&format!("Provider/{}", provider.provider_ref())).map_err(
+            |_| ProviderStartupError::OperationSurface {
+                provider_ref: provider.provider_ref(),
+                reason: "provider-ref-invalid",
+            },
+        )?;
+        let envelope = OperationEnvelope::over(
+            zone.clone(),
+            caller.clone(),
+            &provider.drivers,
+            Arc::clone(audit),
+        )
+        .map_err(|_| ProviderStartupError::OperationSurface {
+            provider_ref: provider.provider_ref(),
+            reason: "envelope-refused",
+        })?;
+        for driver in provider.drivers.iter() {
+            for declaration in driver.operations {
+                envelope.commit_grant(&caller, &declaration.operation_ref);
+            }
+        }
+        Ok(Some(Self {
+            caller,
+            envelope: Arc::new(envelope),
+        }))
+    }
+
+    /// Whether this provider declared the operation.
+    fn declares(&self, operation: &str) -> bool {
+        self.envelope.declares(operation)
+    }
+
+    /// Run one forwarded invocation under the identifier the broker minted.
+    pub(crate) async fn invoke(
+        &self,
+        operation: &str,
+        invocation_id: &str,
+        payload: CanonicalJsonObject,
+    ) -> Result<OperationResult, OperationFailure> {
+        self.envelope
+            .invoke_named(operation, invocation_id, &self.caller, payload)
+            .await
+    }
+}
+
 /// The providers one plane starts, in the order they start.
 pub(crate) struct ProviderSet {
     zone: ZoneId,
@@ -321,8 +402,10 @@ impl ProviderSet {
         ));
         let port_handle: Arc<dyn d2b_provider_toolkit::ZonePlanePort> = port.clone();
         let registrations = Arc::new(DriverRegistrations::default());
+        let audit = Arc::new(Mutex::new(ProviderAgentAuditLog::new()));
         let mut providers = Vec::with_capacity(declarations.len());
         let mut startup_order = Vec::with_capacity(declarations.len());
+        let mut operations = Vec::new();
         for (declaration, drivers) in declarations {
             let provider = ZoneProvider {
                 declaration,
@@ -348,6 +431,9 @@ impl ProviderSet {
                     },
                 ),
             })?;
+            if let Some(surface) = ProviderOperations::over(&zone, &provider, &audit)? {
+                operations.push(surface);
+            }
             startup_order.push(provider.provider_ref());
             providers.push(provider);
         }
@@ -357,6 +443,7 @@ impl ProviderSet {
             startup_order,
             drain_order: Mutex::new(Vec::new()),
             directory: registrations.take_directory(),
+            operations,
         })
     }
 }
@@ -368,6 +455,8 @@ pub(crate) struct ProviderRuntime {
     startup_order: Vec<&'static str>,
     drain_order: Mutex<Vec<&'static str>>,
     directory: ProviderDirectory,
+    /// The operation surfaces of the providers that declared operations.
+    operations: Vec<ProviderOperations>,
 }
 
 impl core::fmt::Debug for ProviderRuntime {
@@ -411,6 +500,17 @@ impl ProviderRuntime {
     /// Take the assembled driver registry.
     pub(crate) fn take_directory(&mut self) -> ProviderDirectory {
         std::mem::take(&mut self.directory)
+    }
+
+    /// The provider that declares one operation, when one does.
+    ///
+    /// The handler table is the started providers' own descriptor tables, so
+    /// the lookup can only answer for an operation a provider actually
+    /// declared - there is no second registration step to fall out of sync.
+    pub(crate) fn declaring_provider(&self, operation: &str) -> Option<&ProviderOperations> {
+        self.operations
+            .iter()
+            .find(|provider| provider.declares(operation))
     }
 
     /// Drain every provider, in the reverse of the order they started.

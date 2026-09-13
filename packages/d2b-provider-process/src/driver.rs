@@ -45,6 +45,7 @@ use d2b_contracts_resource::v3::{
 use crate::effects::{ProcessDriverEffects, ProviderAdoption, ProviderLiveness};
 use crate::identity::{ProcessFamilySpec, ProcessResourceIdentity};
 use crate::launch_identity::{LaunchRow, resolve_launch_identity};
+use crate::operations::process_family_operations;
 use crate::execution::{ExecutionMode, execution_target_allowed};
 use crate::worker_launch::{ServingWorkerLaunch, ServingWorkerRoot};
 use d2b_process_conformance::{GuestExecutionBinding, ProcessStatusReport};
@@ -59,7 +60,7 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, DriverDescriptor, OperationDef, WellKnownType};
 
 /// The durable Process resource type this factory serves (KTD4 Phase A).
 pub(crate) const PROCESS_TYPE_NAME: &str = "Process";
@@ -578,7 +579,7 @@ impl ResourceDriverFactory for ProcessDriverFactory {
 /// `Credential` type. Every converted type is served by the same manager
 /// verbs, and Role rules and the typed CLI nouns resolve their gating from
 /// this declaration.
-const PROCESS_FAMILY_VERBS: &[&str] = &[
+pub(crate) const PROCESS_FAMILY_VERBS: &[&str] = &[
     "get",
     "list",
     "watch",
@@ -598,7 +599,7 @@ const PROCESS_FAMILY_VERBS: &[&str] = &[
 /// the same pair, so both member types can execute in either domain. The
 /// labels are lowercase, matching the execution-domain vocabulary the
 /// contracts serialize.
-const PROCESS_FAMILY_EXECUTION_DOMAINS: &[&str] = &["host", "guest"];
+pub(crate) const PROCESS_FAMILY_EXECUTION_DOMAINS: &[&str] = &["host", "guest"];
 
 /// The resource types the Process-family driver reads while reconciling.
 ///
@@ -607,7 +608,7 @@ const PROCESS_FAMILY_EXECUTION_DOMAINS: &[&str] = &["host", "guest"];
 /// its `Device` (GPU settings, TPM state volume); a guest-owned row resolves
 /// its owning `Guest`; and a controller row binds its committed `Provider`
 /// identity (KTD7).
-const PROCESS_FAMILY_READS: &[WellKnownType] = &[
+pub(crate) const PROCESS_FAMILY_READS: &[WellKnownType] = &[
     WellKnownType::VOLUME_BINDING,
     WellKnownType::VOLUME,
     WellKnownType::DEVICE,
@@ -622,29 +623,37 @@ const PROCESS_FAMILY_READS: &[WellKnownType] = &[
 /// the plane cannot admit workloads without a process launcher, so both must
 /// be registered before the plane opens. Neither member type is exportable:
 /// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
-/// process can never be an export subject. The family serves no broker
-/// operations and creates no children through this declaration today; those
-/// land with the family's own crate.
+/// process can never be an export subject.
+///
+/// The family's declared operations ride on the `Process` descriptor alone:
+/// the registry gives one operation reference exactly one owning type (a
+/// second declaring driver is refused as foreign), and the declaration
+/// inspection is a family operation, not a per-member one. The family creates
+/// no children through this declaration today.
 pub fn process_family_descriptors(args: ProcessDriverArgs) -> [DriverDescriptor; 2] {
     let factory: Arc<dyn ResourceDriverFactory> = Arc::new(ProcessDriverFactory::new(args));
     let decoder = process_spec_decoder();
-    let descriptor = |resource_type: WellKnownType| DriverDescriptor {
-        resource_type,
-        allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
-        verbs: PROCESS_FAMILY_VERBS,
-        execution: PROCESS_FAMILY_EXECUTION_DOMAINS,
-        exportable: false,
-        reads: PROCESS_FAMILY_READS,
-        operations: &[],
-        creations: &[],
-        startup: &[],
-        services: &[],
-        decoder: Arc::clone(&decoder),
-        factory: Arc::clone(&factory),
+    let descriptor = |resource_type: WellKnownType,
+                      operations: &'static [OperationDef]|
+     -> DriverDescriptor {
+        DriverDescriptor {
+            resource_type,
+            allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+            verbs: PROCESS_FAMILY_VERBS,
+            execution: PROCESS_FAMILY_EXECUTION_DOMAINS,
+            exportable: false,
+            reads: PROCESS_FAMILY_READS,
+            operations,
+            creations: &[],
+            startup: &[],
+            services: &[],
+            decoder: Arc::clone(&decoder),
+            factory: Arc::clone(&factory),
+        }
     };
     [
-        descriptor(WellKnownType::PROCESS),
-        descriptor(WellKnownType::EPHEMERAL_PROCESS),
+        descriptor(WellKnownType::PROCESS, process_family_operations()),
+        descriptor(WellKnownType::EPHEMERAL_PROCESS, &[]),
     ]
 }
 

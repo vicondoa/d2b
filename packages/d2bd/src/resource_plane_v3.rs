@@ -2234,6 +2234,15 @@ impl ResourcePlaneV3 {
         &self.providers
     }
 
+    /// The providers this zone started, behind a shared handle.
+    ///
+    /// The forwarding rendezvous holds this handle so a forwarded call
+    /// resolves against the providers that are actually started, not against
+    /// a copy taken when the plane opened.
+    pub(crate) fn provider_runtime(&self) -> Arc<ProviderRuntime> {
+        Arc::clone(&self.providers)
+    }
+
     /// Drain the zone's providers in the reverse of the order they started.
     ///
     /// The daemon runs this once on shutdown, after the interaction

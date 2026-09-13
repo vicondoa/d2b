@@ -18,7 +18,7 @@ no resource family.
 - `transport-excluded` - the name is a transport-layer concern the
 operation envelope does not carry.
 
-Counts: 77 family-owned, 9 broker-generic, 2 transport-excluded (87 rows carry a wire discriminant, 1 rows do not).
+Counts: 78 family-owned, 9 broker-generic, 2 transport-excluded (87 rows carry a wire discriminant, 2 rows do not).
 
 | Operation | Owner | Family | Declaring provider | Profiles | Disposition | Target |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -72,6 +72,7 @@ Counts: 77 family-owned, 9 broker-generic, 2 transport-excluded (87 rows carry a
 | QemuMediaAttach | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker |
 | QemuMediaDetach | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker |
 | ConsumeLifecycleLease | family | process | d2b-provider-process | host | untriaged | broker-generic row |
+| inspect-process-family | family | process | d2b-provider-process | host | callable-read-only | live read-only callable |
 | PipeWireAudio | family | audio | d2b-provider-audio-service | host | promoted-live | live in production broker |
 | OpenVhostNet | family | device | d2b-provider-device | host | promoted-live | live in production broker |
 | PauseBroker | broker-generic | - | - | host | stubbed-unimplemented | future work |
