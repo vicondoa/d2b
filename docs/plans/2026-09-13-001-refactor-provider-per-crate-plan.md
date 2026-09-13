@@ -461,14 +461,15 @@ literals, doc drift, and cosmetic duplication are out of scope for this extensio
 - **Test scenarios:** a guest enrolls end to end; absent/consumed/expired admission and a revoked authority refuse named; a refused bootstrap leaves no tracked link.
 - **Verification:** gates green; no guest-side hand-rolled enrollment remains.
 
-### U25. Remove the unsafe-local shell route; the capability belongs to the shell family
-- **Goal:** one shell implementation, no unsafe-local route.
-- **Decision (operator):** the unsafe-local shell path is **removed**, not migrated; whatever capability it provided becomes part of the shell family.
+### U25. Delete the unsafe-local shell route
+- **Goal:** one shell implementation; the capability lives in the shell family.
+- **Decision (operator):** the unsafe-local shell route is removed, not migrated; whatever it provided becomes part of the shell family.
 - **Requirements:** R1, R12. **Dependencies:** U21, U22.
-- **Files:** `packages/d2b-unsafe-local-helper/src/shell_*`, `packages/d2b-contracts-control/src/{unsafe_local_wire,public_wire}.rs` (shell shapes), `packages/d2bd-runtime/src/shell_backend.rs` (the legacy backend and its selection), `packages/d2bd/src/composition.rs` (the `HelperShellRequest` path and the posture-based route choice), the shell family's declarations.
-- **Approach:** enumerate every behavior the legacy route served - session persistence and lifetime, attach/list/detach/kill semantics, posture marking and the CLI's non-isolation warning, policy and account handling - re-home each into the shell family's declared services, roles, and handlers (extending them where the legacy route did something the family does not yet declare), then delete the route: the helper's shell supervisor and its hidden subcommand, the helper's shell wire shapes, the legacy backend and its route selection, and the daemon's helper request path. The orphaned `public_wire` shell shapes move to the generated catalog or die with the route.
-- **Test scenarios:** every enumerated behavior has a shell-family test after the move; the deleted route has no caller; the CLI shell behavior for the formerly unsafe-local posture is indistinguishable from the family-served posture except for the posture marking the CLI already renders.
-- **Verification:** gates green; no unsafe-local shell surface remains anywhere in the tree.
+- **Files (deletion surface, verified):** the helper's shell modules (`packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor,tty_exec}.rs` and the shell dispatch inside `runtime.rs`, plus the hidden `ShellSupervisor` subcommand in `main.rs`); `packages/d2b-contracts-control/src/unsafe_local_wire.rs` shell shapes and terminal frames; `packages/d2bd-runtime/src/unsafe_local_terminal.rs` and the shell parts of `unsafe_local_helper.rs`; `packages/d2bd-runtime/src/shell_backend.rs`'s unsafe terminal backend and its route selection; `packages/d2bd/src/composition.rs`'s `HelperShellRequest` arms and error/audit mapping.
+- **Not in scope:** the helper crate itself - it survives for launcher-scope launches; and the shared `public_wire` result shapes, which are the daemon's reply vocabulary rather than route-specific.
+- **Approach:** the shell family already declares the pieces these behaviors need (pool spec with Host|Guest target, workload user and login-shell artifact; host rules with the posture predicate; the user-domain supervisor Process lifecycle; verified restart adoption). Confirm parity behavior by behavior - PTY realization, session persistence and lifetime, attach/detach/list/kill semantics, terminal ring, account handling, posture marking, teardown - extend the family's declarations where a behavior has no home yet, and only then delete the route in one cut. Note the route is already config-dead in Nix-deployed setups (the helper socket is hardcoded null), so no operator loses a working feature.
+- **Test scenarios:** every parity behavior has a family-level test after the move; the deleted modules have no caller; the CLI shell verbs behave identically for the formerly routed posture, including the no-isolation warning.
+- **Verification:** gates green; no unsafe-local shell surface remains; the helper crate still serves launcher scope.
 
 ### U26. Broker-owned rows and dead control-plane surfaces
 - **Goal:** every committed row is provider-owned or explicitly broker/transport-owned; dead surfaces are gone.
