@@ -42,6 +42,16 @@ pub trait DriverRegistration: Send + Sync {
     /// one owner: a second registration naming the same reference is refused.
     fn operation_refs(&self) -> Vec<String>;
 
+    /// The resource verbs this type supports, in the declaration's spelling.
+    ///
+    /// The seed constrains committed Role rules to this set: a rule that
+    /// grants a verb the type does not declare is refused before the plane
+    /// opens. The default keeps registrations that carry no verbs (fixtures,
+    /// factory-only paths) working; a declared set is empty, never inferred.
+    fn declared_verbs(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// The spec decoder for this type's stored desired rows.
     fn decoder(&self) -> Arc<dyn SpecDecoder>;
 
@@ -105,6 +115,7 @@ pub struct ProviderDirectory {
     factories: HashMap<ResourceTypeName, Arc<dyn ResourceDriverFactory>>,
     decoders: HashMap<ResourceTypeName, Arc<dyn SpecDecoder>>,
     operation_refs: HashMap<String, ResourceTypeName>,
+    declared_verbs: HashMap<ResourceTypeName, Vec<String>>,
     /// Set by [`ProviderDirectory::mark_plane_open`].
     plane_open: bool,
 }
@@ -169,6 +180,8 @@ impl ProviderDirectory {
         self.factories.insert(type_name.clone(), driver.factory());
         self.decoders
             .insert(type_name.clone(), driver.decoder());
+        self.declared_verbs
+            .insert(type_name.clone(), driver.declared_verbs());
         for operation_ref in operation_refs {
             self.operation_refs.insert(operation_ref, type_name.clone());
         }
@@ -194,6 +207,13 @@ impl ProviderDirectory {
     /// populates this; the factory-only path leaves a type without one.
     pub fn decoders(&self) -> HashMap<ResourceTypeName, Arc<dyn SpecDecoder>> {
         self.decoders.clone()
+    }
+
+    /// The resource verbs one registered type declares, when it is
+    /// registered. The seed's Role-rule check reads this: a rule may only
+    /// grant verbs the type's own declaration carries.
+    pub fn declared_verbs(&self, type_name: &ResourceTypeName) -> Option<&[String]> {
+        self.declared_verbs.get(type_name).map(Vec::as_slice)
     }
 
     /// Mark the plane open: from here on a driver whose allowed-source mask

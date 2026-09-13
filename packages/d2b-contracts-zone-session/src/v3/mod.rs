@@ -45,12 +45,12 @@ pub use generation_bundle::*;
 pub use resource_export::*;
 pub use resource_import::*;
 pub use role::{
-    RoleConditionType, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec, RoleStatus,
-    RoleStatusResource,
+    PrincipalRef, RoleConditionType, RoleMount, RoleMountPath, RoleNamespaces, RolePosture,
+    RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec, RoleStatus, RoleStatusResource,
 };
 pub use role_binding::{
-    ExternalPrincipalSelector, RoleBindingConditionType, RoleBindingSpec, RoleBindingStatus,
-    RoleBindingStatusResource, ScopeNarrowing,
+    ExternalPrincipalSelector, RelayAuthority, RoleBindingConditionType, RoleBindingSpec,
+    RoleBindingStatus, RoleBindingStatusResource, ScopeNarrowing,
 };
 pub use services::*;
 pub use zone::*;

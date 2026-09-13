@@ -81,6 +81,10 @@ impl DriverRegistration for DriverDescriptor {
             .collect()
     }
 
+    fn declared_verbs(&self) -> Vec<String> {
+        self.verbs.iter().map(|verb| (*verb).to_owned()).collect()
+    }
+
     fn decoder(&self) -> Arc<dyn SpecDecoder> {
         Arc::clone(&self.decoder)
     }
