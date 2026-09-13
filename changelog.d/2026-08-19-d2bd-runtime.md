@@ -1,1 +1,0 @@
-- Extract provider-neutral daemon runtime ownership into `d2bd-runtime` while preserving the `d2bd` process topology and in-process provider composition.

@@ -1,1 +1,0 @@
-- Add the durable SQLite spec store to `d2b-resource-runtime`: single-writer connection owned by a dedicated store task, WAL + `busy_timeout`, IMMEDIATE transactions with commit-before-return Ensure semantics, envelope-minus-status rows with provenance and deleting marks, a same-transaction durable-mutation audit log, and embedded `rusqlite_migration` schema migrations.
