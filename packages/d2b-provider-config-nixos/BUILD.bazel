@@ -48,6 +48,15 @@ rust_doc_test(
     crate = ":d2b_provider_config_nixos",
 )
 
+rust_test(
+    name = "d2b_provider_config_nixos_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_provider_config_nixos",
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 filegroup(
     name = "cargo_workspace_sources",
     srcs = glob(
@@ -65,4 +74,12 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-test_suite(name = "all-tests", tests = [":service_contract", ":config_lifecycle", ":redaction"])
+test_suite(
+    name = "all-tests",
+    tests = [
+        ":service_contract",
+        ":config_lifecycle",
+        ":redaction",
+        ":d2b_provider_config_nixos_test",
+    ],
+)
