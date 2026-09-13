@@ -114,7 +114,7 @@ pub async fn serve_authenticated_route(
         .map_err(|_| ProviderRuntimeError::SessionLoopFailed);
     let _ = driver.close(CloseReason::Normal, Remediation::None).await;
     drop(registration);
-    if !entrypoint.drain(SERVICE_LOOP_DRAIN_BUDGET) {
+    if !entrypoint.drain(SERVICE_LOOP_DRAIN_BUDGET).await {
         return Err(ProviderRuntimeError::SessionLoopFailed);
     }
     result

@@ -8,7 +8,7 @@ use std::{
     fmt,
     io::{self, Write},
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Mutex,
         atomic::{AtomicU8, Ordering},
     },
     time::Duration,
@@ -25,6 +25,7 @@ use d2b_provider::{
     OperationLedger, OperationLedgerAdmission, OperationLedgerError, OperationLedgerRow,
 };
 use d2b_session::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
+use tokio::sync::Notify;
 use tracing::{debug, error, warn};
 
 const STARTING: u8 = 0;
@@ -109,7 +110,7 @@ pub struct ProviderEntrypoint {
     controller_generation: Option<ControllerGeneration>,
     service: Option<&'static str>,
     lifecycle: AtomicU8,
-    state: Arc<(Mutex<RuntimeState>, Condvar)>,
+    state: Arc<(Mutex<RuntimeState>, Notify)>,
 }
 
 /// A non-authorizing admission proof derived from one authenticated
@@ -255,7 +256,7 @@ impl ProviderEntrypoint {
                     admitted: 0,
                     ready_route: None,
                 }),
-                Condvar::new(),
+                Notify::new(),
             )),
         })
     }
@@ -667,31 +668,47 @@ impl ProviderEntrypoint {
     }
 
     /// Stop accepting registrations and wait for local registrations to drain.
-    pub fn drain(&self, timeout: Duration) -> bool {
-        let (lock, idle) = &*self.state;
-        let guard = lock.lock();
-        let Ok(mut state) = guard else {
-            warn!(name = self.name, provider = ?self.provider_ref, "drain failed: runtime state lock poisoned");
-            return false;
-        };
+    ///
+    /// The wait arms the idle `Notify` future before it checks the admitted
+    /// count and bounds the whole wait with a tokio timer, the same shape the
+    /// generated server uses for its own drain. A blocking condition-variable
+    /// wait cannot be used here: the last registration is released by a `Drop`
+    /// that may run on the same single-threaded runtime that polls this task,
+    /// so parking the worker would prevent the release the wait is waiting for.
+    pub async fn drain(&self, timeout: Duration) -> bool {
         let prior = self.lifecycle.swap(DRAINING, Ordering::AcqRel);
         if prior == STOPPED {
             return true;
         }
-        let result = idle
-            .wait_timeout_while(state, timeout, |state| state.admitted != 0)
-            .ok();
-        let Some((new_state, wait)) = result else {
-            warn!(name = self.name, provider = ?self.provider_ref, "drain failed: runtime state lock poisoned during wait");
-            return false;
+        let drained = tokio::time::timeout(timeout, async {
+            loop {
+                let notified = self.state.1.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                match self.state.0.lock() {
+                    Ok(state) if state.admitted == 0 => return true,
+                    Ok(_) => {}
+                    Err(_) => {
+                        warn!(name = self.name, provider = ?self.provider_ref, "drain failed: runtime state lock poisoned during wait");
+                        return false;
+                    }
+                }
+                notified.as_mut().await;
+            }
+        })
+        .await;
+        let drained = match drained {
+            Ok(drained) => drained,
+            Err(_) => {
+                debug!(name = self.name, provider = ?self.provider_ref, "drain incomplete: registrations still admitted or wait timed out");
+                false
+            }
         };
-        state = new_state;
-        let drained = state.admitted == 0 && !wait.timed_out();
         if drained {
             self.lifecycle.store(STOPPED, Ordering::Release);
-            state.ready_route = None;
-        } else {
-            debug!(name = self.name, provider = ?self.provider_ref, "drain incomplete: registrations still admitted or wait timed out");
+            if let Ok(mut state) = self.state.0.lock() {
+                state.ready_route = None;
+            }
         }
         drained
     }
@@ -726,7 +743,7 @@ fn is_zero_digest(value: &str) -> bool {
 
 /// One local registration held until its service is fully drained.
 pub struct ProviderAdmission {
-    state: Arc<(Mutex<RuntimeState>, Condvar)>,
+    state: Arc<(Mutex<RuntimeState>, Notify)>,
 }
 
 impl fmt::Debug for ProviderAdmission {
@@ -741,7 +758,7 @@ impl Drop for ProviderAdmission {
         if let Ok(mut state) = lock.lock() {
             state.admitted = state.admitted.saturating_sub(1);
             if state.admitted == 0 {
-                idle.notify_all();
+                idle.notify_waiters();
             }
         }
     }
@@ -797,8 +814,8 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn readiness_is_not_published_before_registration() {
+    #[tokio::test]
+    async fn readiness_is_not_published_before_registration() {
         let runtime = ProviderEntrypoint::new("Provider/test").unwrap();
         assert_eq!(runtime.lifecycle(), ProviderLifecycle::Starting);
         let admission = runtime.admit().unwrap();
@@ -806,7 +823,7 @@ mod tests {
         assert_eq!(runtime.lifecycle(), ProviderLifecycle::Ready);
         assert!(!runtime.is_controller_ready());
         drop(admission);
-        assert!(runtime.drain(Duration::from_millis(10)));
+        assert!(runtime.drain(Duration::from_millis(10)).await);
         assert_eq!(runtime.lifecycle(), ProviderLifecycle::Stopped);
     }
 
@@ -834,18 +851,32 @@ mod tests {
         assert_eq!(runtime.lifecycle(), ProviderLifecycle::Starting);
     }
 
-    #[test]
-    fn draining_refuses_new_registration() {
+    #[tokio::test]
+    async fn draining_refuses_new_registration() {
         let runtime = ProviderEntrypoint::new("Provider/test").unwrap();
         let admission = runtime.admit().unwrap();
         runtime.publish_ready().unwrap();
-        assert!(!runtime.drain(Duration::from_millis(10)));
+        assert!(!runtime.drain(Duration::from_millis(10)).await);
         assert_eq!(
             runtime.admit().unwrap_err().to_string(),
             "provider-runtime-not-accepting"
         );
         drop(admission);
-        assert!(runtime.drain(Duration::from_millis(10)));
+        assert!(runtime.drain(Duration::from_millis(10)).await);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn drain_completes_when_the_last_registration_is_released_on_the_polling_runtime() {
+        // Several providers run single-threaded. The registration is released
+        // by a task on the same runtime that polls the drain, so a wait that
+        // parks the worker can never observe the release.
+        let runtime = ProviderEntrypoint::new("Provider/test").unwrap();
+        let admission = runtime.admit().unwrap();
+        runtime.publish_ready().unwrap();
+        let released = tokio::spawn(async move { drop(admission) });
+        assert!(runtime.drain(Duration::from_secs(1)).await);
+        assert_eq!(runtime.lifecycle(), ProviderLifecycle::Stopped);
+        released.await.unwrap();
     }
 
     #[test]

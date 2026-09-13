@@ -383,7 +383,7 @@ where
         _ = cancellation.cancelled() => Ok(()),
     };
     drop(registration);
-    if !entrypoint.drain(Duration::from_secs(5)) {
+    if !entrypoint.drain(Duration::from_secs(5)).await {
         return Err(ProviderRuntimeError::SessionLoopFailed);
     }
     result
