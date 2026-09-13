@@ -7,7 +7,6 @@ const REQUIRED_AGGREGATE_JOBS: &[&str] = &[
     "policy-tooling",
     "rust-main",
     "rust-broker",
-    "rust-guest",
     "nix-eval",
     "nix-unit",
     "nix-realized",

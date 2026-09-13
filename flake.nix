@@ -388,51 +388,6 @@
               fi
             '';
           };
-        guestShellRunnerStatic =
-          pkgs.pkgsStatic.rustPlatform.buildRustPackage {
-            pname = "d2b-guest-shell-runner-static";
-            version = "0.0.0-bootstrap";
-            src = rustPackagesSrc;
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-              outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-            };
-            sourceRoot = "d2b-rust-src";
-            cargoBuildFlags = [
-              "--package" "d2b-guest-shell-runner"
-              "--features" "real-libshpool"
-            ];
-            doCheck = false;
-            RUSTC_WRAPPER = "";
-            SCCACHE_DIR = "";
-            nativeBuildInputs = [
-              pkgs.pkgsStatic.binutils
-              pkgs.pkgsStatic.rustPlatform.bindgenHook
-            ];
-            postInstall = ''
-              readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
-              bin="$out/bin/d2b-guest-shell-runner"
-              test -x "$bin"
-              "$readelf" -h "$bin" >/dev/null
-              "$readelf" -l "$bin" > "$TMPDIR/d2b-guest-shell-runner.program-headers"
-              if grep -q 'Requesting program interpreter' "$TMPDIR/d2b-guest-shell-runner.program-headers"; then
-                echo "d2b-guest-shell-runner: unexpected ELF interpreter" >&2
-                cat "$TMPDIR/d2b-guest-shell-runner.program-headers" >&2
-                exit 1
-              fi
-              if "$readelf" -d "$bin" > "$TMPDIR/d2b-guest-shell-runner.dynamic" 2> "$TMPDIR/d2b-guest-shell-runner.dynamic.err"; then
-                if grep -q '(NEEDED)' "$TMPDIR/d2b-guest-shell-runner.dynamic"; then
-                  echo "d2b-guest-shell-runner: unexpected dynamic dependency" >&2
-                  cat "$TMPDIR/d2b-guest-shell-runner.dynamic" >&2
-                  exit 1
-                fi
-              elif ! grep -qi 'no dynamic section' "$TMPDIR/d2b-guest-shell-runner.dynamic.err"; then
-                echo "d2b-guest-shell-runner: readelf -d failed unexpectedly" >&2
-                cat "$TMPDIR/d2b-guest-shell-runner.dynamic.err" >&2
-                exit 1
-              fi
-            '';
-          };
         providerArtifact = import ./nix/provider-artifact.nix {
           inherit pkgs;
         };
@@ -499,7 +454,6 @@
           guestStaticPackage "d2b-broker" "d2b-broker";
         d2b-sk-frontend-static =
           guestStaticPackage "d2b-sk-frontend" "d2b-sk-frontend";
-        d2b-guest-shell-runner-static = guestShellRunnerStatic;
         d2b-clipd = rustWorkspace {
           pname = "d2b-provider-clipboard-wayland";
           cargoBuildFlags = [
@@ -520,17 +474,6 @@
           ];
           doCheck = false;
           meta.mainProgram = "d2b-wayland-proxy";
-        };
-        d2b-sk-waybar-helper = rustWorkspace {
-          pname = "d2b-provider-notification-desktop";
-          cargoBuildFlags = [
-            "--package"
-            "d2b-provider-notification-desktop"
-            "--bin"
-            "d2b-sk-waybar-helper"
-          ];
-          doCheck = false;
-          meta.mainProgram = "d2b-sk-waybar-helper";
         };
         d2b-unsafe-local-helper = rustWorkspace {
           pname = "d2b-unsafe-local-helper";
@@ -1414,20 +1357,6 @@
             echo ok > "$out"
           '';
 
-        guest-shell-runner-static-dependency-policy =
-          pkgs.runCommand "d2b-guest-shell-runner-static-dependency-policy" { } ''
-            lock=${./Cargo.lock}
-            if grep -E 'name = "(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2)"' "$lock"; then
-              echo "guest shell runner lock contains a forbidden dynamic/PAM/systemd dependency" >&2
-              exit 1
-            fi
-            if ! grep -A6 'name = "motd"' "$lock" | grep -F 'version = "0.2.2"' >/dev/null; then
-              echo "guest shell runner lock must pin the expected PAM-free motd dependency posture" >&2
-              exit 1
-            fi
-            echo ok > "$out"
-          '';
-
         harness-ubuntu-skeleton = (import ./harness/ubuntu/default.nix) {
           pkgs = nixpkgsFor.${system};
         };
@@ -1483,8 +1412,6 @@
             guestTools = {
               broker = self.packages.${system}.d2b-broker-guest-static;
               d2bd = self.packages.${system}.d2bd-guest-static;
-              d2b-guest-shell-runner-static =
-                self.packages.${system}.d2b-guest-shell-runner-static;
             };
             evaluator = (import ./nixos-modules/vm-evaluator.nix {
               inputs = guestInputs;

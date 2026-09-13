@@ -8,7 +8,6 @@ fixture-smoke
 guest-control-vsock
 guest-exec-policy
 guest-rust-deny
-guest-shell-runner-static-dependency-policy
 guest-static-consumption
 guest-static-dependency-policy
 guest-static-elf

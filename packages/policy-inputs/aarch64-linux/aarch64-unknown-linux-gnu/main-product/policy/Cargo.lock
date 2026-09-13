@@ -570,7 +570,7 @@ dependencies = [
  "find-msvc-tools",
  "jobserver",
  "libc",
- "shlex 2.0.1",
+ "shlex",
 ]
 
 
@@ -1072,11 +1072,9 @@ dependencies = [
 name = "d2b-provider"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-bus",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-zone-routing",
  "tokio",
 ]
 
@@ -1179,11 +1177,7 @@ dependencies = [
 name = "d2b-provider-command"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-resource-runtime",
  "d2b-resource-types",
- "serde_json",
  "tokio",
 ]
 
@@ -1321,7 +1315,6 @@ dependencies = [
  "d2b-resource-types",
  "nix 0.29.0",
  "parking_lot",
- "serde",
  "serde_json",
  "tokio",
  "tracing",
@@ -1394,11 +1387,7 @@ dependencies = [
 name = "d2b-provider-emergency-policy"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-resource-runtime",
  "d2b-resource-types",
- "serde_json",
  "tokio",
 ]
 
@@ -1443,7 +1432,6 @@ name = "d2b-provider-guest-azure-container-apps"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "serde",
@@ -1461,6 +1449,7 @@ dependencies = [
  "async-trait",
  "base64",
  "d2b-contracts",
+ "d2b-provider-toolkit",
  "serde",
  "serde_json",
  "sha2",
@@ -1552,7 +1541,6 @@ dependencies = [
  "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
  "getrandom 0.2.17",
- "schemars",
  "serde",
  "serde_json",
  "sha2",
@@ -1580,11 +1568,7 @@ dependencies = [
 name = "d2b-provider-operation"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-resource-runtime",
  "d2b-resource-types",
- "serde_json",
  "tokio",
 ]
 
@@ -1659,11 +1643,7 @@ dependencies = [
 name = "d2b-provider-quota"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-resource-runtime",
  "d2b-resource-types",
- "serde_json",
  "tokio",
 ]
 
@@ -1672,11 +1652,7 @@ dependencies = [
 name = "d2b-provider-resource-export"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-resource-runtime",
  "d2b-resource-types",
- "serde_json",
  "tokio",
 ]
 
@@ -1685,11 +1661,7 @@ dependencies = [
 name = "d2b-provider-resource-import"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-resource-runtime",
  "d2b-resource-types",
- "serde_json",
  "tokio",
 ]
 
@@ -1698,11 +1670,8 @@ dependencies = [
 name = "d2b-provider-role"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
  "d2b-contracts-resource",
- "d2b-resource-runtime",
  "d2b-resource-types",
- "serde_json",
  "tokio",
 ]
 
@@ -1711,11 +1680,7 @@ dependencies = [
 name = "d2b-provider-role-binding"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-resource-runtime",
  "d2b-resource-types",
- "serde_json",
  "tokio",
 ]
 
@@ -1724,11 +1689,7 @@ dependencies = [
 name = "d2b-provider-seccomp-profile"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-resource-runtime",
  "d2b-resource-types",
- "serde_json",
  "tokio",
 ]
 
@@ -1767,7 +1728,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-process-conformance",
  "tracing",
 ]
 
@@ -1785,7 +1745,6 @@ dependencies = [
  "d2b-provider-process",
  "d2b-provider-process-minijail",
  "d2b-provider-process-systemd",
- "d2b-telemetry",
  "rustix 0.38.44",
  "serde_json",
  "sha2",
@@ -1801,10 +1760,8 @@ name = "d2b-provider-system-core"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "serde",
  "serde_json",
- "sha2",
  "tracing",
 ]
 
@@ -1890,7 +1847,6 @@ dependencies = [
  "d2b-contracts-zone-session",
  "d2b-session",
  "futures-util",
- "getrandom 0.2.17",
  "hmac",
  "libc",
  "rustls",
@@ -1991,7 +1947,6 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core",
  "serde",
  "serde_json",
@@ -2051,12 +2006,9 @@ dependencies = [
 name = "d2b-provider-zone"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-resource-runtime",
  "d2b-resource-types",
- "serde_json",
  "tokio",
 ]
 
@@ -2065,10 +2017,8 @@ dependencies = [
 name = "d2b-provider-zone-link"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-resource-runtime",
  "d2b-resource-types",
  "serde",
  "serde_json",
@@ -2087,7 +2037,6 @@ dependencies = [
  "d2b-core-controller",
  "d2b-provider-role",
  "d2b-resource-runtime",
- "d2b-telemetry",
  "protobuf",
  "ractor",
  "serde_json",
@@ -2889,7 +2838,7 @@ dependencies = [
  "html5ever",
  "tendril",
  "thiserror 2.0.20",
- "unicode-width 0.2.2",
+ "unicode-width",
 ]
 
 
@@ -3231,7 +3180,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30d65c71f1ce40ab09135ce117d742b9f8a19ff91a41a8b57ed50bc2de59c427"
 dependencies = [
  "libc",
- "log",
  "wasi",
  "windows-sys 0.61.2",
 ]
@@ -3718,7 +3666,7 @@ dependencies = [
  "protobuf-support",
  "tempfile",
  "thiserror 1.0.69",
- "which 4.4.2",
+ "which",
 ]
 
 
@@ -3980,7 +3928,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154"
 dependencies = [
  "bitflags 2.13.1",
- "errno 0.3.14",
+ "errno",
  "itoa",
  "libc",
  "linux-raw-sys 0.4.15",
@@ -3995,7 +3943,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
 dependencies = [
  "bitflags 2.13.1",
- "errno 0.3.14",
+ "errno",
  "libc",
  "linux-raw-sys 0.12.1",
  "windows-sys 0.61.2",
@@ -4197,7 +4145,7 @@ version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
- "errno 0.3.14",
+ "errno",
  "libc",
 ]
 

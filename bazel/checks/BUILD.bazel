@@ -4,8 +4,8 @@ package(default_visibility = ["//visibility:public"])
 # graph. An empty native test_suite includes every non-manual test in its
 # package, while its negative tags remove local-only leaves from the main
 # suite. Public Make aliases forward only an optional profile override; the
-# nested suite graph owns the remaining target selection. Broker and
-# guest-shell-runner stay in their dedicated suites below.
+# nested suite graph owns the remaining target selection. Broker stays in
+# its dedicated suite below.
 test_suite(
     name = "rust-main-packages",
     tests = [
@@ -111,16 +111,10 @@ test_suite(
 )
 
 test_suite(
-    name = "test-rust-guest-shell-runner",
-    tests = ["//bazel/checks/rust:portable_rust_guest"],
-)
-
-test_suite(
     name = "test-rust",
     tests = [
         ":test-rust-main",
         ":test-rust-broker",
-        ":test-rust-guest-shell-runner",
     ],
 )
 
@@ -152,11 +146,6 @@ test_suite(
 test_suite(
     name = "test-rust-leaf-broker",
     tests = [":test-rust-broker"],
-)
-
-test_suite(
-    name = "test-rust-leaf-guest-shell-runner",
-    tests = [":test-rust-guest-shell-runner"],
 )
 
 test_suite(

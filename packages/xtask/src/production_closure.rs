@@ -29,7 +29,6 @@ const PROTECTED_CODEOWNERS_RULES: &[&str] = &[
     "/Cargo.lock @vicondoa",
     "/packages/Cargo.guest.lock @vicondoa",
     "/packages/d2b-broker/Cargo.toml @vicondoa",
-    "/packages/d2b-guest-shell-runner/Cargo.toml @vicondoa",
     "/packages/policy-inputs/** @vicondoa",
     "/packages/policy-inputs/advisory-policy.json @vicondoa",
     "/packages/xtask/Cargo.toml @vicondoa",
@@ -175,7 +174,7 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
         .iter()
         .filter_map(|package| package.get("name").and_then(Value::as_str))
         .filter(|name| {
-            !matches!(*name, "d2b-broker" | "d2b-guest-shell-runner" | "xtask")
+            !matches!(*name, "d2b-broker" | "xtask")
                 && (*name == "d2b" || name.starts_with("d2b-"))
         })
         .map(str::to_owned)
@@ -226,16 +225,6 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
                 lock_path: PRODUCT_LOCK.to_owned(),
             });
         }
-        contexts.push(ContextSpec {
-            system: system.to_owned(),
-            target: musl.clone(),
-            name: "guest-shell-runner-static".to_owned(),
-            roots: vec!["d2b-guest-shell-runner".to_owned()],
-            features: vec!["real-libshpool".to_owned()],
-            default_features: false,
-            source_authority: "Cargo.lock".to_owned(),
-            lock_path: PRODUCT_LOCK.to_owned(),
-        });
         contexts.push(ContextSpec {
             system: system.to_owned(),
             target: musl,

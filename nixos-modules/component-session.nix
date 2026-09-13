@@ -42,7 +42,6 @@ let
     key = "d2bd";
     fallback = d2bdSourcePackage;
   };
-  shellRunnerPackage = packageFrom "d2b-guest-shell-runner-static";
   guestUidDefault =
     let
       digest = builtins.hashString "sha256" "d2b-guest/${name}";
@@ -173,66 +172,12 @@ in
       default = "/var/lib/d2b/component-session/parent.pub";
       internal = true;
     };
-    shell = {
-      enable = lib.mkOption {
-        type = lib.types.bool;
-        internal = true;
-        readOnly = true;
-        description = "Host-owned persistent shell policy enable bit.";
-      };
-
-      defaultName = lib.mkOption {
-        type = lib.types.strMatching "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$";
-        internal = true;
-        readOnly = true;
-        description = "Host-owned default persistent shell session name.";
-      };
-
-      maxSessions = lib.mkOption {
-        type = lib.types.ints.between 1 256;
-        internal = true;
-        readOnly = true;
-        description = "Host-owned maximum persistent shell sessions per VM.";
-      };
-
-      maxAttached = lib.mkOption {
-        type = lib.types.ints.between 1 64;
-        internal = true;
-        readOnly = true;
-        description = "Host-owned maximum attached persistent shell clients per VM.";
-      };
-    };
   };
 
   config = {
     _module.args.d2bHostToolOverrides = lib.mkDefault null;
 
     assertions = [
-      {
-        assertion = !cfg.shell.enable || cfg.enable;
-        message = ''
-          d2b.componentSession.shell.enable requires d2b.componentSession.enable.
-          Set d2b.vms.<vm>.guest.componentSession.enable = true on the host-side VM
-          option before enabling persistent shell policy.
-        '';
-      }
-      {
-        assertion =
-          !cfg.shell.enable
-          || (config.d2b.sshUser != null && config.d2b.sshUser != "root");
-        message = ''
-          d2b.componentSession.shell.enable requires a configured non-root workload user.
-          Set d2b.vms.<vm>.ssh.user to a non-root account so d2b.sshUser is populated
-          before enabling persistent shell policy.
-        '';
-      }
-      {
-        assertion = cfg.shell.maxAttached <= cfg.shell.maxSessions;
-        message = ''
-          d2b.componentSession.shell.maxAttached must be less than or equal to
-          d2b.componentSession.shell.maxSessions.
-        '';
-      }
       {
         assertion = runtimePath cfg.brokerSocketPath
           && runtimePath cfg.stateDir
@@ -246,15 +191,7 @@ in
       }
     ];
 
-    environment.systemPackages =
-      [ d2bdPackage ]
-      ++ lib.optional cfg.shell.enable shellRunnerPackage;
-
-    environment.etc."shpool/config.toml" = lib.mkIf cfg.shell.enable {
-      text = ''
-        prompt_prefix = ""
-      '';
-    };
+    environment.systemPackages = [ d2bdPackage ];
 
     systemd.services = {
       d2bd-guest = lib.mkIf cfg.enable {
@@ -308,45 +245,6 @@ in
         };
         restartIfChanged = false;
       };
-
-      d2b-shpool-daemon = lib.mkIf (cfg.shell.enable && config.d2b.sshUser != null) {
-        description = "d2b persistent shell pool daemon";
-        serviceConfig = {
-          Type = "exec";
-          User = config.d2b.sshUser;
-          PAMName = "d2b-shpool-daemon";
-          ExecStart =
-            let
-              daemonScript = pkgs.writeShellScript "d2b-shpool-daemon-start" ''
-                set -eu
-                uid="$(${pkgs.coreutils}/bin/id -u)"
-                home="$HOME"
-                export XDG_RUNTIME_DIR="/run/user/$uid"
-                export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-                exec ${shellRunnerPackage}/bin/d2b-guest-shell-runner daemon \
-                  --socket "$XDG_RUNTIME_DIR/d2b-shpool.sock" \
-                  --home "$home"
-              '';
-            in
-            "${daemonScript}";
-          WorkingDirectory = "~";
-          KillMode = "control-group";
-          Delegate = true;
-        };
-      };
-    };
-
-    security.pam.services.d2b-shpool-daemon = lib.mkIf (cfg.shell.enable && config.d2b.sshUser != null) {
-      # Do not start a pam_systemd session here: it migrates the daemon out of
-      # the delegated system service cgroup. Linger keeps /run/user/<uid>
-      # available while the daemon stays under systemd's service authority.
-      startSession = false;
-      setEnvironment = true;
-      setLoginUid = true;
-    };
-
-    users.users = lib.mkIf (cfg.shell.enable && config.d2b.sshUser != null) {
-      ${config.d2b.sshUser}.linger = true;
     };
 
     # Guest target state is boot-scoped. The ComponentSession key files are

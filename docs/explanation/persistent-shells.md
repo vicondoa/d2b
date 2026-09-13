@@ -67,10 +67,9 @@ Ambiguous metadata is reported degraded and never triggers a broad kill.
 
 ## Same-UID AF_UNIX boundary
 
-Inside a guest, shpool exposes an AF_UNIX socket under the workload user's
-runtime directory. Unsafe-local supervisors use the authenticated host user's
-runtime directory for the equivalent reconnect boundary. Helpers that connect
-to either socket run as the workload UID.
+Unsafe-local supervisors use the authenticated host user's
+runtime directory for the reconnect boundary. Helpers that connect
+to that socket run as the workload UID.
 The socket is a same-UID IPC boundary, not a cryptographic separation boundary:
 code already running as that workload user can potentially interact with the
 same shell pool.

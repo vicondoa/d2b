@@ -96,7 +96,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "2a65ff81c08ec2dbed6df7bc0f4b58349c1775c84ba5aa995d5f50b086764d14",
+  "lock_sha256": "545b4339966667be22b37425d8283bdcef080a99e4273151c52eba82b175429d",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -5152,31 +5152,7 @@
     },
     {
       "from": "d2b-provider-command@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-command@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-command@0.0.0-bootstrap#path",
-      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-command@0.0.0-bootstrap#path",
       "to": "d2b-resource-types@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-command@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -5363,7 +5339,7 @@
     {
       "from": "d2b-provider-credential-secret-service@0.0.0-bootstrap#path",
       "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
-      "kind": "normal",
+      "kind": "dev",
       "target": null
     },
     {
@@ -5586,18 +5562,6 @@
       "from": "d2b-provider-device-security-key@0.0.0-bootstrap#path",
       "to": "parking_lot@0.12.5#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-device-security-key@0.0.0-bootstrap#path",
-      "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-device-security-key@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
       "target": null
     },
     {
@@ -5950,31 +5914,7 @@
     },
     {
       "from": "d2b-provider-emergency-policy@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-emergency-policy@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-emergency-policy@0.0.0-bootstrap#path",
-      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-emergency-policy@0.0.0-bootstrap#path",
       "to": "d2b-resource-types@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-emergency-policy@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -6046,12 +5986,6 @@
     },
     {
       "from": "d2b-provider-guest-azure-container-apps@0.0.0-bootstrap#path",
-      "to": "d2b-contracts@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-guest-azure-container-apps@0.0.0-bootstrap#path",
       "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -6059,7 +5993,7 @@
     {
       "from": "d2b-provider-guest-azure-container-apps@0.0.0-bootstrap#path",
       "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
+      "kind": "dev",
       "target": null
     },
     {
@@ -6106,6 +6040,12 @@
     },
     {
       "from": "d2b-provider-guest-azure-virtual-machine@0.0.0-bootstrap#path",
+      "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-guest-azure-virtual-machine@0.0.0-bootstrap#path",
       "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -6113,7 +6053,7 @@
     {
       "from": "d2b-provider-guest-azure-virtual-machine@0.0.0-bootstrap#path",
       "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
+      "kind": "dev",
       "target": null
     },
     {
@@ -6538,12 +6478,6 @@
     },
     {
       "from": "d2b-provider-notification-desktop@0.0.0-bootstrap#path",
-      "to": "schemars@0.8.22#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-notification-desktop@0.0.0-bootstrap#path",
       "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -6622,31 +6556,7 @@
     },
     {
       "from": "d2b-provider-operation@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-operation@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-operation@0.0.0-bootstrap#path",
-      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-operation@0.0.0-bootstrap#path",
       "to": "d2b-resource-types@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-operation@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -6892,31 +6802,7 @@
     },
     {
       "from": "d2b-provider-quota@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-quota@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-quota@0.0.0-bootstrap#path",
-      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-quota@0.0.0-bootstrap#path",
       "to": "d2b-resource-types@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-quota@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -6928,31 +6814,7 @@
     },
     {
       "from": "d2b-provider-resource-export@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-resource-export@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-resource-export@0.0.0-bootstrap#path",
-      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-resource-export@0.0.0-bootstrap#path",
       "to": "d2b-resource-types@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-resource-export@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -6964,31 +6826,7 @@
     },
     {
       "from": "d2b-provider-resource-import@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-resource-import@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-resource-import@0.0.0-bootstrap#path",
-      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-resource-import@0.0.0-bootstrap#path",
       "to": "d2b-resource-types@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-resource-import@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -7000,31 +6838,7 @@
     },
     {
       "from": "d2b-provider-role-binding@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-role-binding@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-role-binding@0.0.0-bootstrap#path",
-      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-role-binding@0.0.0-bootstrap#path",
       "to": "d2b-resource-types@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-role-binding@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -7036,31 +6850,13 @@
     },
     {
       "from": "d2b-provider-role@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-role@0.0.0-bootstrap#path",
       "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
     {
       "from": "d2b-provider-role@0.0.0-bootstrap#path",
-      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-role@0.0.0-bootstrap#path",
       "to": "d2b-resource-types@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-role@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -7072,31 +6868,7 @@
     },
     {
       "from": "d2b-provider-seccomp-profile@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-seccomp-profile@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-seccomp-profile@0.0.0-bootstrap#path",
-      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-seccomp-profile@0.0.0-bootstrap#path",
       "to": "d2b-resource-types@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-seccomp-profile@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -7211,12 +6983,6 @@
     {
       "from": "d2b-provider-shell-terminal@0.0.0-bootstrap#path",
       "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-shell-terminal@0.0.0-bootstrap#path",
-      "to": "d2b-process-conformance@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -7282,12 +7048,6 @@
     },
     {
       "from": "d2b-provider-supervisor@0.0.0-bootstrap#path",
-      "to": "d2b-telemetry@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-supervisor@0.0.0-bootstrap#path",
       "to": "rustix@0.38.44#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -7336,12 +7096,6 @@
     },
     {
       "from": "d2b-provider-system-core@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-system-core@0.0.0-bootstrap#path",
       "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -7349,12 +7103,6 @@
     {
       "from": "d2b-provider-system-core@0.0.0-bootstrap#path",
       "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-system-core@0.0.0-bootstrap#path",
-      "to": "sha2@0.10.9#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -7678,12 +7426,6 @@
     },
     {
       "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
-      "to": "getrandom@0.2.17#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
       "to": "hmac@0.12.1#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -7984,12 +7726,6 @@
     },
     {
       "from": "d2b-provider-volume-local@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-volume-local@0.0.0-bootstrap#path",
       "to": "d2b-contracts@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -8236,12 +7972,6 @@
     },
     {
       "from": "d2b-provider-zone-link@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-zone-link@0.0.0-bootstrap#path",
       "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -8249,12 +7979,6 @@
     {
       "from": "d2b-provider-zone-link@0.0.0-bootstrap#path",
       "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-zone-link@0.0.0-bootstrap#path",
-      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -8284,12 +8008,6 @@
     },
     {
       "from": "d2b-provider-zone@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-zone@0.0.0-bootstrap#path",
       "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -8302,31 +8020,13 @@
     },
     {
       "from": "d2b-provider-zone@0.0.0-bootstrap#path",
-      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-zone@0.0.0-bootstrap#path",
       "to": "d2b-resource-types@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
     {
       "from": "d2b-provider-zone@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-zone@0.0.0-bootstrap#path",
       "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider@0.0.0-bootstrap#path",
-      "to": "d2b-bus@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -8345,18 +8045,6 @@
     {
       "from": "d2b-provider@0.0.0-bootstrap#path",
       "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider@0.0.0-bootstrap#path",
-      "to": "d2b-zone-routing@0.0.0-bootstrap#path",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-provider@0.0.0-bootstrap#path",
-      "to": "d2b-zone-routing@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -8411,12 +8099,6 @@
     {
       "from": "d2b-resource-api@0.0.0-bootstrap#path",
       "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-api@0.0.0-bootstrap#path",
-      "to": "d2b-telemetry@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },

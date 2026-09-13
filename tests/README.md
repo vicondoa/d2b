@@ -190,7 +190,7 @@ graph with the local profile.
 Individual labels remain available for focused reruns.
 
 `bazel/checks/BUILD.bazel` is the public suite facade. Its fixed package-suite
-list owns the package-wide main graph; the broker, guest-shell-runner, and
+list owns the package-wide main graph; the broker and
 local Rust suites remain separate components. `make test-rust-main` excludes
 `local` and `no-remote-exec` leaves by tag, while `make test-rust-local`
 executes the audited local suite.
