@@ -2,7 +2,7 @@
   "authority": "cargo-locked-metadata",
   "defaultFeatures": false,
   "features": [],
-  "lockSha256": "4cdb4ab96164179130613e9f182f9f15b8915167f2422e78389fd66cb6f24de9",
+  "lockSha256": "f4d16ef5ab123ac9af9decba7b0fdd469ac6b6e85d85001231f160eada406d57",
   "policyPackageCount": 162,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -169,7 +169,7 @@
     "zvariant_utils@4.2.0#registry+https://github.com/rust-lang/crates.io-index"
   ],
   "productionPackageCount": 131,
-  "resolveNodeCount": 394,
+  "resolveNodeCount": 395,
   "roots": [
     "d2b-broker"
   ],

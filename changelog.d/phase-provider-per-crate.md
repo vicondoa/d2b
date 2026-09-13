@@ -18,12 +18,11 @@
   exemption list in the policy crate, and a new driver outside a provider
   crate fails with its module path. The integration-scenario ratchet records
   the crates whose integration surface is still a scaffold.
-- The Process provider effect port now lives in the `d2b-process` crate
-  together with the Process-family spec, row-identity, and typed worker
-  launch-parameter types it exchanges; the daemon keeps the production
-  effect implementation and the driver consumes the port from its new home.
-  Device-worker launch parameters cross that boundary as canonical JSON
-  instead of a provider-crate Rust type, so no family crate depends on a
-  realizer crate. The `system-minijail` and `system-systemd` crates export
-  their canonical `Provider/...` references, and the Process driver consumes
-  them instead of restating the provider strings locally.
+- The Endpoint resource driver now lives in its own `d2b-provider-endpoint`
+  crate together with its spec decoder, its effect port, and the driver
+  declaration the resource plane registers the type by. The daemon keeps the
+  production effect implementation behind the port, so the driver depends on
+  no provider crate, and the registry serves the type's decoder and factory
+  from the declaration instead of a daemon-side table. Operator-visible
+  behavior is unchanged: the same endpoint shapes are admitted, and the same
+  validate, recover, reconcile, finalize, and delete verbs run.
