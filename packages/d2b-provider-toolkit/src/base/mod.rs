@@ -520,6 +520,7 @@ async fn serve_guest<A: GuestAgent, E: GuestEnrollment>(
 }
 
 /// The one declared service a supervised route binds.
+#[cfg(feature = "unix-transport")]
 fn declared_service<P: SupervisedProvider>(provider: &P) -> Result<&'static str, ProviderRunError> {
     let mut declared = provider
         .drivers()

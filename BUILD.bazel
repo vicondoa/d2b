@@ -430,7 +430,7 @@ filegroup(
 
 filegroup(
     name = "generated_resource_type_catalog",
-    srcs = glob(["packages/d2b-contracts/src/generated/*.rs"]),
+    srcs = ["//packages/d2b-contracts:generated_resource_type_catalog"],
     visibility = ["//visibility:public"],
 )
 

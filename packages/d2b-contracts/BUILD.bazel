@@ -15,6 +15,15 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# The generated converted-type catalog the drift check compares against the
+# generator's output. It lives in this package because a root-package glob
+# cannot reach across the package boundary.
+filegroup(
+    name = "generated_resource_type_catalog",
+    srcs = glob(["src/generated/*.rs"]),
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_contracts",
     srcs = d2b_contracts_srcs,
