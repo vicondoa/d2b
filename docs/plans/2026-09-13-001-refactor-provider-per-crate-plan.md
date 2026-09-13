@@ -543,6 +543,14 @@ that touches a file another lane holds waits for that lane, or hands the edit to
 - **Test scenarios:** a forwarded call crosses a real socket and reaches a registered handler (the test must fail if the carrier does not actually cross the socket); an undeclared operation is refused by name; the pilot family's operation answers through the generic path with no typed arm involved.
 - **Verification:** gates green; the pilot operation reachable end to end from the broker lane's entry point.
 
+### U31. Migrate the daemon's typed broker call sites onto the generic path
+- **Goal:** the daemon stops constructing typed broker requests, so the typed arms can retire family by family afterwards with nothing left calling them.
+- **Requirements:** R17, KTD8.
+- **Dependencies:** U30 complete (the forwarding endpoint and the first provider operation surface are live), and the per-family caller audit recorded with the retirement unit.
+- **Files:** the daemon and host call sites that construct broker requests - the composition modules that dominate the set, the host preparation DAG, the network effect port, the supervisor's broker client, and the usbip, activation, and security-key effect ports, in that order of size.
+- **Approach:** begin with the audit, not with edits. For one family, enumerate every construction site, record what each needs from the trusted bundle (resolved intents, paths, ownership), and decide whether the generic invocation path can express it. Migrate only the sites the audit clears; where a site needs bundle resolution the generic payload cannot carry, stop and record the missing capability rather than moving resolution into the daemon by accident - that is the change the deferred retirement was waiting on, and the reason this unit exists separately from it. One family per commit, with that family's provider-side operation served through the rendezvous first, so the migration is proven reachable before its callers move.
+- **Test scenarios:** each migrated family's operation answers through the generic path end to end, and the daemon no longer constructs that family's typed request - a workspace-wide check proves the symbol is unreachable from the daemon.
+- **Verification:** gates green per family; the audit's retirement list for that family handed to the arm-retirement unit, which retires exactly the arms on it.
 ### Review gate (applies to every unit in this extension
 Every unit in this extension - and every unit landed before it - receives independent review in a separate clean context before signoff; findings are fixed or recorded as accepted residuals, and a head-changing fix requires fresh review. Reviews run in a dedicated worktree so they never race implementation work.
 
