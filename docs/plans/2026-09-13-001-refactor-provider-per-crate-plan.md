@@ -461,13 +461,14 @@ literals, doc drift, and cosmetic duplication are out of scope for this extensio
 - **Test scenarios:** a guest enrolls end to end; absent/consumed/expired admission and a revoked authority refuse named; a refused bootstrap leaves no tracked link.
 - **Verification:** gates green; no guest-side hand-rolled enrollment remains.
 
-### U25. Unsafe-local shell onto the terminal family
-- **Goal:** one shell implementation for every posture.
+### U25. Remove the unsafe-local shell route; the capability belongs to the shell family
+- **Goal:** one shell implementation, no unsafe-local route.
+- **Decision (operator):** the unsafe-local shell path is **removed**, not migrated; whatever capability it provided becomes part of the shell family.
 - **Requirements:** R1, R12. **Dependencies:** U21, U22.
-- **Files:** `packages/d2b-unsafe-local-helper/src/shell_*`, `packages/d2b-contracts-control/src/{unsafe_local_wire,public_wire}.rs`, `packages/d2bd-runtime/src/shell_backend.rs`, `packages/d2bd/src/composition.rs`.
-- **Approach:** prove the `shell-terminal` family covers the unsafe-local posture, move that route onto it, then delete the helper shell supervisor, the helper wire's shell shapes, the legacy backend, and the daemon's `HelperShellRequest` path in the same change; the orphaned `public_wire` shell shapes move to the generated catalog in the same cut.
-- **Test scenarios:** the posture's shell operations behave identically through the terminal family; the deleted path has no caller; the CLI golden behavior is unchanged.
-- **Verification:** gates green; no legacy shell route remains.
+- **Files:** `packages/d2b-unsafe-local-helper/src/shell_*`, `packages/d2b-contracts-control/src/{unsafe_local_wire,public_wire}.rs` (shell shapes), `packages/d2bd-runtime/src/shell_backend.rs` (the legacy backend and its selection), `packages/d2bd/src/composition.rs` (the `HelperShellRequest` path and the posture-based route choice), the shell family's declarations.
+- **Approach:** enumerate every behavior the legacy route served - session persistence and lifetime, attach/list/detach/kill semantics, posture marking and the CLI's non-isolation warning, policy and account handling - re-home each into the shell family's declared services, roles, and handlers (extending them where the legacy route did something the family does not yet declare), then delete the route: the helper's shell supervisor and its hidden subcommand, the helper's shell wire shapes, the legacy backend and its route selection, and the daemon's helper request path. The orphaned `public_wire` shell shapes move to the generated catalog or die with the route.
+- **Test scenarios:** every enumerated behavior has a shell-family test after the move; the deleted route has no caller; the CLI shell behavior for the formerly unsafe-local posture is indistinguishable from the family-served posture except for the posture marking the CLI already renders.
+- **Verification:** gates green; no unsafe-local shell surface remains anywhere in the tree.
 
 ### U26. Broker-owned rows and dead control-plane surfaces
 - **Goal:** every committed row is provider-owned or explicitly broker/transport-owned; dead surfaces are gone.
