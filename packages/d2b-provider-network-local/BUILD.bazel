@@ -43,8 +43,8 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core_test_support",
-        "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail",
-        "//packages/d2b-provider-runtime-cloud-hypervisor:d2b_provider_runtime_cloud_hypervisor",
+        "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail_test_support",
+        "//packages/d2b-provider-runtime-cloud-hypervisor:d2b_provider_runtime_cloud_hypervisor_test_support",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
@@ -126,8 +126,8 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_network_local_test_support",
     deps = [
-        "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail",
-        "//packages/d2b-provider-runtime-cloud-hypervisor:d2b_provider_runtime_cloud_hypervisor",
+        "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail_test_support",
+        "//packages/d2b-provider-runtime-cloud-hypervisor:d2b_provider_runtime_cloud_hypervisor_test_support",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",

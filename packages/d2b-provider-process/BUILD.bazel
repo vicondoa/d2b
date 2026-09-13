@@ -32,8 +32,8 @@ rust_library(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
-        "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail",
-        "//packages/d2b-provider-process-systemd:d2b_provider_process_systemd",
+        "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail_test_support",
+        "//packages/d2b-provider-process-systemd:d2b_provider_process_systemd_test_support",
         "//packages/d2b-provider-volume-virtiofs:d2b_provider_volume_virtiofs",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",

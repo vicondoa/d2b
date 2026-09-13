@@ -26,6 +26,25 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
+rust_library(
+    name = "d2b_provider_device_test_support",
+    srcs = d2b_provider_device_srcs,
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_provider_device",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-core-controller:d2b_core_controller_test_support",
+        "//packages/d2b-provider-device-gpu:d2b_provider_device_gpu",
+        "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key_test_support",
+        "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm_test_support",
+        "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip_test_support",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
 rust_test(
     name = "d2b_provider_device_unit_test",
     crate = ":d2b_provider_device",
