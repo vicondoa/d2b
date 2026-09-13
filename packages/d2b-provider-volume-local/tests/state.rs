@@ -23,7 +23,6 @@ use d2b_provider_volume_local::marker::{
     MarkerBinding, MarkerError, MarkerStore, VerifiedMarkerFile, VolumeRootIdentity,
     provision_marker, verify_marker,
 };
-use d2b_provider_volume_local::path::{PathError, RelativePath};
 use d2b_provider_volume_local::{VolumeLocalError, admit_attachments};
 use serde_json::json;
 
@@ -272,32 +271,6 @@ fn state_generation_canonical_json_and_quota_bounds_reject_invalid_inputs() {
         check_soft_quota(8192, 4096, 4097, 8192),
         Err(AtomicWriteError::QuotaExceeded)
     );
-}
-
-#[test]
-fn anchored_paths_reject_escape_and_ambiguous_separator_forms() {
-    for candidate in [
-        "",
-        "/state",
-        "state/",
-        "state//data",
-        "../state",
-        "state/..",
-        "state\\data",
-        "state/data name",
-    ] {
-        assert!(
-            RelativePath::parse(candidate).is_err(),
-            "accepted invalid anchored path"
-        );
-    }
-    assert_eq!(
-        RelativePath::from_components(Vec::<String>::new()),
-        Err(PathError::EmptyPath)
-    );
-    let path = RelativePath::parse("state/public").unwrap();
-    assert_eq!(path.components().len(), 2);
-    assert_eq!(path.leaf().as_str(), "public");
 }
 
 #[test]

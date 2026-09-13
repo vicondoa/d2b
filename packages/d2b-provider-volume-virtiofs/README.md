@@ -69,10 +69,9 @@ virtiofsd
 ```
 
 `--sandbox` is always `chroot`, `--inode-file-handles` is always `never`,
-and there is no free-form extra-argument channel. The public argv input
-accepts only a private derived socket identity and an inherited Volume-view
-descriptor number; the renderer emits `/proc/self/fd/<N>` and never accepts
-`/nix/store` as a shared directory.
+and there is no free-form extra-argument channel. The daemon composes this
+argv from the frozen worker plan; the shared directory is an inherited
+descriptor (`/proc/self/fd/<N>`) and is never `/nix/store`.
 
 ## Placement and dependencies
 
@@ -98,12 +97,11 @@ root start, `--sandbox=namespace`, or a writable root is rejected before
 any launch is requested. This is the ADR 0021 invariant, and it is asserted
 rather than assumed.
 
-The binding socket path is generated and private. Only its opaque
+The binding socket path is derived outside this crate (the daemon mirrors the
+same derivation); only its opaque
 `SocketIdentity` is public. The path never appears in a spec field, a
 status field, an audit record, or CLI output, and two bindings of one
-Volume have distinct identities. Launch is gated by the store-view marker,
-and the user-namespace conformance kit checks the ADR 0021 map-write order
-without carrying host UID or GID values.
+Volume have distinct identities. Launch is gated by the store-view marker.
 
 ## State and telemetry
 
@@ -117,7 +115,7 @@ emitted.
 
 | Path | Contents |
 | --- | --- |
-| `src/` | binding controller, worker plan, FD-based argv renderer, private socket derivation, readiness and ADR 0021 checks, effect port, colocated unit tests |
+| `src/` | binding controller, worker plan and sandbox posture, binding contract and socket identity, effect port, colocated unit tests |
 | `tests/` | hermetic binding lifecycle, sandbox, drain, and privacy conformance |
 | `integration/` | virtiofsd launch and guest-mount fixtures |
 
