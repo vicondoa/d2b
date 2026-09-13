@@ -1128,11 +1128,9 @@ dependencies = [
 name = "d2b-provider"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-bus",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-zone-routing",
  "tokio",
 ]
 
@@ -2082,7 +2080,6 @@ dependencies = [
  "d2b-core-controller",
  "d2b-provider-role",
  "d2b-resource-runtime",
- "d2b-telemetry",
  "protobuf",
  "ractor",
  "serde_json",

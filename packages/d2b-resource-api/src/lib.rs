@@ -7,17 +7,13 @@ pub mod adapter;
 mod admission;
 pub mod authz;
 pub mod client;
-pub mod emergency_gate;
 pub mod error;
 pub mod generated;
 mod identity;
-pub mod metrics;
-pub mod quota_gate;
 pub mod service;
 pub mod manager_backend;
 mod store;
 pub mod watch;
-pub mod zone_service;
 
 pub use adapter::{
     AdapterBindingError, RESOURCE_API_REACHABILITY, ResourceApiReachability, ResourceBusAdapter,
@@ -34,7 +30,3 @@ pub use store::{ResourceStoreBackend, StoreBindingError};
 pub use service::{GuestLifecycleAdmission, ResourceService};
 pub use watch::{WatchFrame, WatchSink, WatchSinkError};
 
-pub use zone_service::{
-    StrictWireMessage, ZoneCallContext, ZoneMethod, ZoneService, ZoneServiceError,
-    ZoneServiceHandler,
-};

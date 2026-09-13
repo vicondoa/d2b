@@ -307,3 +307,23 @@
   deleted too: the compiler input carries the declared system Providers
   (`systemProviderNames`), which `bundle-zones.nix` feeds from the generated
   Provider catalog's fixed-bootstrap rows.
+
+- The eleven declaration-only metadata resource types (`Role`, `RoleBinding`,
+  `Command`, `Operation`, `Quota`, `EmergencyPolicy`, `ResourceImport`,
+  `ResourceExport`, `SeccompProfile`, `Zone`, `ZoneLink`) no longer each ship a
+  copy of the same driver: one shared implementation in `d2b-resource-runtime`
+  and one shared declaration in `d2b-resource-types` serve all of them, and
+  each crate keeps the type's identity. Their registration suites assert the
+  same contract through one shared assertion. Operator-visible behavior is
+  unchanged: the same stored-spec fence, the same adopted recovery, the same
+  converged reconcile, the same child-first drain, and the same declared
+  verbs, execution domains, reads, and built-in mask.
+- The `system-core` Provider library no longer carries the unused bootstrap
+  sequence, raw NSS reconciler, manifest, Host process-effect audit, the
+  duplicate Host posture and status modules, the duplicate handler-status
+  emitter, or the Host budget check nothing computed. Its Host reconciliation,
+  its ownership allowlist, and its User discovery are unchanged.
+- The `Provider` driver's in-memory status is the fields it always carried
+  rather than a single-variant enum with accessors, and `ZoneLink` no longer
+  restates the bootstrap-PSK and session cryptoperiod bounds that the bus
+  enrollment machine owns.

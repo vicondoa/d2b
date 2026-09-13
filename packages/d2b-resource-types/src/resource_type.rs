@@ -1,5 +1,6 @@
 //! The well-known resource type names the v3 resource plane recognizes.
 
+use d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
 use d2b_resource_runtime::identity::ResourceTypeName;
 
 /// One well-known resource type name.
@@ -86,46 +87,11 @@ impl WellKnownType {
     /// A committed seccomp posture a role references.
     pub const SECCOMP_PROFILE: Self = Self("SeccompProfile");
 
-    /// Every well-known type, in the order of the v3 converted-type authority
-    /// list.
-    pub const ALL: &'static [Self] = &[
-        Self::PROCESS,
-        Self::EPHEMERAL_PROCESS,
-        Self::GUEST,
-        Self::VOLUME,
-        Self::VOLUME_BINDING,
-        Self::ENDPOINT,
-        Self::HOST,
-        Self::USER,
-        Self::NIXOS_GENERATION,
-        Self::TELEMETRY_SERVICE,
-        Self::TELEMETRY_BINDING,
-        Self::CREDENTIAL,
-        Self::NETWORK,
-        Self::DEVICE,
-        Self::USB_SERVICE,
-        Self::USB_BINDING,
-        Self::SECURITY_KEY_SERVICE,
-        Self::SECURITY_KEY_BINDING,
-        Self::WAYLAND_POLICY,
-        Self::WAYLAND_SESSION,
-        Self::AUDIO_SERVICE,
-        Self::AUDIO_BINDING,
-        Self::SHELL_POOL,
-        Self::SHELL_SESSION,
-        Self::ZONE,
-        Self::ZONE_LINK,
-        Self::PROVIDER,
-        Self::ROLE,
-        Self::ROLE_BINDING,
-        Self::QUOTA,
-        Self::EMERGENCY_POLICY,
-        Self::RESOURCE_EXPORT,
-        Self::RESOURCE_IMPORT,
-        Self::COMMAND,
-        Self::OPERATION,
-        Self::SECCOMP_PROFILE,
-    ];
+    /// Every well-known type, in the order of the converted-type authority
+    /// list: [`V3_CONVERTED_RESOURCE_TYPES`] is the single declaration the
+    /// vocabulary projects, so a type added there appears here without a
+    /// second edit.
+    pub const ALL: &'static [Self] = &ALL_TYPES;
 
     /// Convert to the runtime's owned resource type name.
     pub fn to_resource_type_name(&self) -> ResourceTypeName {
@@ -133,10 +99,20 @@ impl WellKnownType {
     }
 }
 
+/// The authority list projected into the vocabulary, entry for entry.
+const ALL_TYPES: [WellKnownType; V3_CONVERTED_RESOURCE_TYPES.len()] = {
+    let mut types = [WellKnownType(""); V3_CONVERTED_RESOURCE_TYPES.len()];
+    let mut index = 0;
+    while index < V3_CONVERTED_RESOURCE_TYPES.len() {
+        types[index] = WellKnownType(V3_CONVERTED_RESOURCE_TYPES[index]);
+        index += 1;
+    }
+    types
+};
+
 #[cfg(test)]
 mod tests {
     use super::WellKnownType;
-    use d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
     use d2b_resource_runtime::identity::ResourceTypeName;
 
     /// No two entries name the same resource type.
@@ -146,16 +122,6 @@ mod tests {
             for other in &WellKnownType::ALL[index + 1..] {
                 assert_ne!(entry, other, "duplicate well-known type in ALL");
             }
-        }
-    }
-
-    /// `ALL` is the authority list: same length, same names, same order.
-    #[test]
-    fn all_covers_the_converted_type_authority_list() {
-        assert_eq!(WellKnownType::ALL.len(), 36);
-        assert_eq!(WellKnownType::ALL.len(), V3_CONVERTED_RESOURCE_TYPES.len());
-        for (entry, authority) in WellKnownType::ALL.iter().zip(V3_CONVERTED_RESOURCE_TYPES) {
-            assert_eq!(entry.to_resource_type_name().as_str(), authority);
         }
     }
 

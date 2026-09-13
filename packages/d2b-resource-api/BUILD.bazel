@@ -36,7 +36,6 @@ rust_library(
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-provider-role:d2b_provider_role",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-telemetry:d2b_telemetry",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -59,7 +58,6 @@ rust_library(
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
         "//packages/d2b-provider-role:d2b_provider_role",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-telemetry:d2b_telemetry_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 

@@ -2,7 +2,6 @@
 
 pub mod component_session;
 pub mod emergency_policy;
-pub mod generation_bundle;
 pub mod resource_bundle;
 pub mod resource_export;
 pub mod resource_import;
@@ -41,7 +40,6 @@ pub use component_session::{
     SequenceError, ServicePackage, SessionErrorCode, TransportClass,
 };
 pub use emergency_policy::*;
-pub use generation_bundle::*;
 pub use resource_export::*;
 pub use resource_import::*;
 pub use role::{

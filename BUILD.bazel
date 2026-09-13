@@ -488,12 +488,6 @@ filegroup(
 )
 
 filegroup(
-    name = "generated_resource_type_catalog",
-    srcs = ["//packages/d2b-contracts:generated_resource_type_catalog"],
-    visibility = ["//visibility:public"],
-)
-
-filegroup(
     name = "generated_layer_catalogs",
     srcs = [
         "//packages/d2b:generated_surface_catalog",

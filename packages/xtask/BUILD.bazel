@@ -109,12 +109,6 @@ generated_artifact_check(
 )
 
 generated_artifact_check(
-    name = "gen_resource_type_catalog_drift",
-    command = "gen-resource-type-catalog",
-    data = ["//:generated_resource_type_catalog"],
-)
-
-generated_artifact_check(
     name = "gen_layer_catalogs_drift",
     command = "gen-layer-catalogs",
     data = ["//:generated_layer_catalogs"],
@@ -186,7 +180,6 @@ test_suite(
         ":gen_provider_packaging_drift",
         ":gen_resource_proto_drift",
         ":gen_resource_schemas_drift",
-        ":gen_resource_type_catalog_drift",
         ":gen_resource_ttrpc_drift",
         ":gen_schemas_drift",
         ":schema_reproducibility_test",
