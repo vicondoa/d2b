@@ -238,7 +238,7 @@ test-host-integration:
 	//packages/d2b-resource-compiler:d2b-resource-compiler \
 	//packages/d2b-provider-display-wayland:d2b-wayland-proxy \
 	//packages/d2b-provider-test-controller:d2b-provider-test-controller \
-	//packages/d2b-provider-runtime-cloud-hypervisor:d2b-cloud-hypervisor-controller; \
+	//packages/d2b-provider-guest-cloud-hypervisor:d2b-cloud-hypervisor-controller; \
 	bazel_bin="$$(realpath -e "$$('$(BAZEL_BIN)' info --config=local bazel-bin)")"; \
 	stage="$$run_dir/bundle"; \
 	controller_stage="$$run_dir/cloud-hypervisor-controller"; \
@@ -254,7 +254,7 @@ test-host-integration:
 	stage_tool packages/d2b-resource-compiler/d2b-resource-compiler d2b-resource-compiler; \
 	stage_tool packages/d2b-provider-display-wayland/d2b-wayland-proxy d2b-wayland-proxy; \
 	stage_tool packages/d2b-provider-test-controller/d2b-provider-test-controller d2b-provider-test-controller; \
-	source="$$(realpath -e "$$bazel_bin/packages/d2b-provider-runtime-cloud-hypervisor/d2b-cloud-hypervisor-controller")"; \
+	source="$$(realpath -e "$$bazel_bin/packages/d2b-provider-guest-cloud-hypervisor/d2b-cloud-hypervisor-controller")"; \
 	case "$$source" in "$$bazel_bin"/*) ;; *) echo "test-host-integration: Cloud Hypervisor controller escaped bazel-bin" >&2; exit 1;; esac; \
 	[ -f "$$source" ] && [ -x "$$source" ] || { echo "test-host-integration: invalid Bazel Cloud Hypervisor controller" >&2; exit 1; }; \
 	install -m 755 "$$source" "$$controller_stage/d2b-cloud-hypervisor-controller"; \

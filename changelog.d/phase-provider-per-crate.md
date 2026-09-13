@@ -140,3 +140,42 @@
   unchanged: the same Host Provider fence, the same bounded probe with its
   degraded fallback, the same local User discovery, and the same failure
   kinds.
+- The Activation driver and the telemetry pair now live in their own provider
+  crates: `d2b-provider-activation-nixos` owns the `NixosGeneration` driver,
+  its spec decoder, its factory, and the declaration the plane registers the
+  type by, and `d2b-provider-telemetry-service` and
+  `d2b-provider-telemetry-binding` own the two telemetry types with their
+  decoders and declarations. The daemon keeps the production activation
+  effects behind the port the driver declares and registers all three types
+  through their declarations, so the `activation_driver` and
+  `semantic_binding_resource_runtime` modules and their decoder table entries
+  are gone. Operator-visible behavior is unchanged: the same three types are
+  admitted, the preserved `ApplyHostGenerationHandoff` dispatch and its closed
+  result mapping run unchanged, and the telemetry pair keeps its verbs,
+  execution domains, and provider-declared child creations.
+- The Guest family now lives in its own `d2b-provider-guest` crate: the
+  `Guest` driver over the four runtime Providers, its spec decoder and driver
+  factory, the family's registration and child-creation declarations, and the
+  Guest-side target-control service and host-side channel. The daemon
+  registers the family through its descriptor and keeps only the production
+  effect implementation behind the port the crate declares, so
+  `guest_driver.rs` is gone. Operator-visible behavior is unchanged: the same
+  four Providers are admitted, the Cloud Hypervisor children stay
+  controller-owned, and validate, recover, reconcile, finalize, and delete run
+  the same per-kind verbs.
+- `d2b-provider-runtime-cloud-hypervisor`, `d2b-provider-runtime-qemu-media`,
+  `d2b-provider-runtime-azure-container-apps`, and
+  `d2b-provider-runtime-azure-virtual-machine` are renamed to
+  `d2b-provider-guest-cloud-hypervisor`, `d2b-provider-guest-qemu-media`,
+  `d2b-provider-guest-azure-container-apps`, and
+  `d2b-provider-guest-azure-virtual-machine`, beside the family crate they
+  realize. All four keep their provider identities
+  (`Provider/runtime-cloud-hypervisor`, `Provider/runtime-qemu-media`,
+  `Provider/runtime-azure-container-apps`,
+  `Provider/runtime-azure-virtual-machine`), their packaging dossiers, and
+  their exported names, and every Cargo, Bazel, Nix, copied-Guest, and
+  packaging-matrix reference follows the new names.
+- The shared-driver exemption ratchet in `check-provider-crate-layout` is
+  empty: no module in a shared crate declares a resource driver, so the list
+  retires its last entry with the Guest move and a driver outside a provider
+  crate fails with its module path instead of an exemption.

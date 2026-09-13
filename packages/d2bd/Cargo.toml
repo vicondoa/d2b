@@ -38,6 +38,7 @@ d2b-provider-supervisor = { path = "../d2b-provider-supervisor", version = "0.0.
 d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
 d2b-provider-endpoint = { path = "../d2b-provider-endpoint", version = "0.0.0-bootstrap" }
+d2b-provider-guest = { path = "../d2b-provider-guest", version = "0.0.0-bootstrap" }
 d2b-provider-telemetry-service = { path = "../d2b-provider-telemetry-service", version = "0.0.0-bootstrap" }
 d2b-provider-telemetry-binding = { path = "../d2b-provider-telemetry-binding", version = "0.0.0-bootstrap" }
 d2b-provider-volume = { path = "../d2b-provider-volume", version = "0.0.0-bootstrap" }
@@ -84,13 +85,13 @@ d2b-provider-clipboard-wayland = { path = "../d2b-provider-clipboard-wayland", v
 d2b-provider-notification-desktop = { path = "../d2b-provider-notification-desktop", version = "0.0.0-bootstrap", features = ["daemon-support"] }
 d2b-provider-audio-pipewire = { path = "../d2b-provider-audio-pipewire", version = "0.0.0-bootstrap" }
 d2b-provider-network-local = { path = "../d2b-provider-network-local", version = "0.0.0-bootstrap" }
-d2b-provider-runtime-cloud-hypervisor = { path = "../d2b-provider-runtime-cloud-hypervisor", version = "0.0.0-bootstrap" }
-d2b-provider-runtime-qemu-media = { path = "../d2b-provider-runtime-qemu-media", version = "0.0.0-bootstrap" }
-d2b-provider-runtime-azure-virtual-machine = { path = "../d2b-provider-runtime-azure-virtual-machine", version = "0.0.0-bootstrap" }
+d2b-provider-guest-cloud-hypervisor = { path = "../d2b-provider-guest-cloud-hypervisor", version = "0.0.0-bootstrap" }
+d2b-provider-guest-qemu-media = { path = "../d2b-provider-guest-qemu-media", version = "0.0.0-bootstrap" }
+d2b-provider-guest-azure-virtual-machine = { path = "../d2b-provider-guest-azure-virtual-machine", version = "0.0.0-bootstrap" }
 # v2 constellation contract crates (ADR 0032). The peer-module skeletons in
 # src/realm_stubs.rs wire this trait surface; they are compile-only
 # and NOT called from the running daemon (zero behavior change).
-d2b-provider-runtime-azure-container-apps = { path = "../d2b-provider-runtime-azure-container-apps", version = "0.0.0-bootstrap" }
+d2b-provider-guest-azure-container-apps = { path = "../d2b-provider-guest-azure-container-apps", version = "0.0.0-bootstrap" }
 d2b-provider-credential-secret-service = { path = "../d2b-provider-credential-secret-service", version = "0.0.0-bootstrap" }
 d2b-provider-credential-entra = { path = "../d2b-provider-credential-entra", version = "0.0.0-bootstrap" }
 d2b-provider-credential-managed-identity = { path = "../d2b-provider-credential-managed-identity", version = "0.0.0-bootstrap" }

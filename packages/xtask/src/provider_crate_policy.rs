@@ -83,41 +83,41 @@ pub(crate) const PROVIDER_MATRIX: &[ProviderMatrixRow] = &[
     },
     ProviderMatrixRow {
         identity: "runtime-cloud-hypervisor",
-        crate_name: "d2b-provider-runtime-cloud-hypervisor",
-        source_path: "packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs",
-        test_path: "packages/d2b-provider-runtime-cloud-hypervisor/tests/reconcile_state_machine_test.rs",
+        crate_name: "d2b-provider-guest-cloud-hypervisor",
+        source_path: "packages/d2b-provider-guest-cloud-hypervisor/src/controller.rs",
+        test_path: "packages/d2b-provider-guest-cloud-hypervisor/tests/reconcile_state_machine_test.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-runtime-cloud-hypervisor.md",
-        bazel_target: "//packages/d2b-provider-runtime-cloud-hypervisor:all-tests",
+        bazel_target: "//packages/d2b-provider-guest-cloud-hypervisor:all-tests",
         unit: "U6",
         bootstrap: false,
     },
     ProviderMatrixRow {
         identity: "runtime-qemu-media",
-        crate_name: "d2b-provider-runtime-qemu-media",
-        source_path: "packages/d2b-provider-runtime-qemu-media/src/controller/reconcile.rs",
-        test_path: "packages/d2b-provider-runtime-qemu-media/tests/lifecycle.rs",
+        crate_name: "d2b-provider-guest-qemu-media",
+        source_path: "packages/d2b-provider-guest-qemu-media/src/controller/reconcile.rs",
+        test_path: "packages/d2b-provider-guest-qemu-media/tests/lifecycle.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-runtime-qemu-media.md",
-        bazel_target: "//packages/d2b-provider-runtime-qemu-media:all-tests",
+        bazel_target: "//packages/d2b-provider-guest-qemu-media:all-tests",
         unit: "U6",
         bootstrap: false,
     },
     ProviderMatrixRow {
         identity: "runtime-azure-container-apps",
-        crate_name: "d2b-provider-runtime-azure-container-apps",
-        source_path: "packages/d2b-provider-runtime-azure-container-apps/src/controller.rs",
-        test_path: "packages/d2b-provider-runtime-azure-container-apps/tests/provider_lifecycle.rs",
+        crate_name: "d2b-provider-guest-azure-container-apps",
+        source_path: "packages/d2b-provider-guest-azure-container-apps/src/controller.rs",
+        test_path: "packages/d2b-provider-guest-azure-container-apps/tests/provider_lifecycle.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-runtime-azure-container-apps.md",
-        bazel_target: "//packages/d2b-provider-runtime-azure-container-apps:all-tests",
+        bazel_target: "//packages/d2b-provider-guest-azure-container-apps:all-tests",
         unit: "U6",
         bootstrap: false,
     },
     ProviderMatrixRow {
         identity: "runtime-azure-virtual-machine",
-        crate_name: "d2b-provider-runtime-azure-virtual-machine",
-        source_path: "packages/d2b-provider-runtime-azure-virtual-machine/src/controller/mod.rs",
-        test_path: "packages/d2b-provider-runtime-azure-virtual-machine/tests/lifecycle_hermetic.rs",
+        crate_name: "d2b-provider-guest-azure-virtual-machine",
+        source_path: "packages/d2b-provider-guest-azure-virtual-machine/src/controller/mod.rs",
+        test_path: "packages/d2b-provider-guest-azure-virtual-machine/tests/lifecycle_hermetic.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-runtime-azure-virtual-machine.md",
-        bazel_target: "//packages/d2b-provider-runtime-azure-virtual-machine:all-tests",
+        bazel_target: "//packages/d2b-provider-guest-azure-virtual-machine:all-tests",
         unit: "U6",
         bootstrap: false,
     },
@@ -339,9 +339,9 @@ const README_ONLY_INTEGRATION_RATCHET: &[&str] = &[
     "d2b-provider-notification-desktop",
     "d2b-provider-process-minijail",
     "d2b-provider-process-systemd",
-    "d2b-provider-runtime-azure-container-apps",
-    "d2b-provider-runtime-azure-virtual-machine",
-    "d2b-provider-runtime-cloud-hypervisor",
+    "d2b-provider-guest-azure-container-apps",
+    "d2b-provider-guest-azure-virtual-machine",
+    "d2b-provider-guest-cloud-hypervisor",
     "d2b-provider-system-core",
     "d2b-provider-transport-azure-relay",
     "d2b-provider-transport-unix",
@@ -580,7 +580,8 @@ const SHARED_CRATE_SOURCE_ROOTS: &[&str] = &[
 /// The list only shrinks: the change that moves a family into its own provider
 /// crate deletes its entry in the same commit, a module that declares a driver
 /// without an entry is a policy failure, and an entry whose module no longer
-/// declares one fails the same way.
+/// declares one fails the same way. The Guest move retires the last entry, so
+/// no shared crate declares a driver today and the list is empty.
 struct SharedDriverExemption {
     /// Repository-relative module path that declares the driver today.
     module: &'static str,
@@ -590,13 +591,7 @@ struct SharedDriverExemption {
     retires_with: &'static str,
 }
 
-const SHARED_DRIVER_EXEMPTIONS: &[SharedDriverExemption] = &[
-    SharedDriverExemption {
-        module: "packages/d2bd/src/guest_driver.rs",
-        family: "guest",
-        retires_with: "the family moves into its own provider crate",
-    },
-];
+const SHARED_DRIVER_EXEMPTIONS: &[SharedDriverExemption] = &[];
 
 /// The crate source root one shared module path belongs to.
 fn shared_source_root(module: &str) -> &str {
@@ -1566,9 +1561,9 @@ mod tests {
             "d2b-provider-notification-desktop",
             "d2b-provider-process-minijail",
             "d2b-provider-process-systemd",
-            "d2b-provider-runtime-azure-container-apps",
-            "d2b-provider-runtime-azure-virtual-machine",
-            "d2b-provider-runtime-cloud-hypervisor",
+            "d2b-provider-guest-azure-container-apps",
+            "d2b-provider-guest-azure-virtual-machine",
+            "d2b-provider-guest-cloud-hypervisor",
             "d2b-provider-system-core",
             "d2b-provider-transport-azure-relay",
             "d2b-provider-transport-unix",
@@ -1689,35 +1684,11 @@ mod tests {
         assert_eq!(check_shared_driver_placements(&fixture.root), Ok(()));
     }
 
-    /// The ratchet only shrinks: an exemption whose module no longer declares
-    /// a driver fails, so a family move cannot leave a dead entry behind.
-    #[test]
-    fn a_stale_shared_driver_exemption_is_refused() {
-        let fixture = Fixture::new("stale-driver");
-        let d2bd = fixture.root.join("packages/d2bd/src");
-        fs::create_dir_all(&d2bd).unwrap();
-        fs::write(
-            d2bd.join("volume_driver.rs"),
-            "impl ResourceDriver for VolumeDriver {}\n",
-        )
-        .unwrap();
-        let error = check_shared_driver_placements(&fixture.root)
-            .expect_err("an exemption the tree no longer needs is refused");
-        assert!(error.contains("stale-shared-driver-exemption"), "{error}");
-        // The fixture declares one module and no other, so every entry the
-        // ratchet still holds is stale and must be named.
-        let stale = SHARED_DRIVER_EXEMPTIONS
-            .first()
-            .expect("the ratchet holds an entry for this case to mean anything");
-        assert!(
-            error.contains(&format!("\"module\":\"{}\"", stale.module)),
-            "the stale exemption must be named: {error}"
-        );
-    }
-
     /// The exemption list matches the committed tree exactly: every entry
     /// names a module that still declares a driver, and no shared-crate module
-    /// declares one without an entry.
+    /// declares one without an entry. The ratchet holds no entries now that
+    /// the Guest family has moved, so this fails the moment a driver is
+    /// declared in a shared crate without an exemption beside it.
     #[test]
     fn the_shared_driver_exemptions_match_the_committed_tree() {
         let root = repo_root().expect("resolve repository root");

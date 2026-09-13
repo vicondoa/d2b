@@ -66,7 +66,7 @@ const CONFIG_VOLUME_PROVIDER_REF: &str = "Provider/volume-local";
 const AGENT_PROCESS_PROVIDER_REF: &str = d2b_provider_process_minijail::PROVIDER_REF;
 
 /// The net-VM Guest Provider the family declares.
-const NET_VM_GUEST_PROVIDER_REF: &str = d2b_provider_runtime_cloud_hypervisor::PROVIDER_REF;
+const NET_VM_GUEST_PROVIDER_REF: &str = d2b_provider_guest_cloud_hypervisor::PROVIDER_REF;
 
 /// The Network family's closed component vocabulary.
 ///

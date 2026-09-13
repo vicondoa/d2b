@@ -7,13 +7,13 @@ pub(crate) mod credential_effects;
 pub(crate) mod binding_effects;
 pub(crate) mod volume_effects;
 pub(crate) mod shared_provider_effects;
-pub(crate) mod guest_driver;
 pub(crate) mod guest_effects;
 pub(crate) mod system_core_effects;
 pub(crate) mod interaction_child_sources;
 
-pub(crate) mod guest_target_control;
+/// The daemon-side half of the Guest target-control seam: the family crate
+/// owns the channel, this module offers it the authenticated session.
+pub(crate) mod guest_target_session;
 pub(crate) mod resource_plane_v3;
-pub(crate) mod guest_target_service;
 
 include!("composition.rs");

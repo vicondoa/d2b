@@ -52,6 +52,7 @@ use d2b_provider_activation_nixos::{
 use d2b_provider_endpoint::{
     EndpointDriverArgs, EndpointDriverEffects, GuestControlProducer, endpoint_descriptor,
 };
+use d2b_provider_guest::{GuestDriverArgs, GuestDriverEffects, guest_descriptor};
 use d2b_provider_host::host_descriptor;
 use d2b_provider_user::user_descriptor;
 use d2b_provider_process::{
@@ -102,9 +103,6 @@ use d2b_provider_device::{DeviceDriverArgs, device_descriptor};
 use d2b_provider_device_security_key::{SecurityKeyDriverArgs, security_key_descriptors};
 use d2b_provider_device_usbip::{UsbipDriverArgs, usbip_descriptors};
 use d2b_provider_network_local::{NetworkDriverArgs, network_descriptor};
-use crate::guest_driver::{
-    GuestDriverArgs, GuestDriverEffects, GuestDriverFactory, guest_spec_decoder,
-};
 use crate::guest_effects::ProductionGuestDriverEffects;
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
 use crate::system_core_effects::{ProductionHostDriverEffects, ProductionUserDriverEffects};
@@ -781,9 +779,9 @@ impl GuestControlEndpointProbe {
             GuestControlProducer::VmmProcess => producer_ref.clone(),
             GuestControlProducer::Guest => {
                 let Ok(vmm_ref) =
-                    d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
+                    d2b_provider_guest_cloud_hypervisor::deterministic_child_ref(
                         producer_ref,
-                        d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess,
+                        d2b_provider_guest_cloud_hypervisor::ChildRole::VmmProcess,
                     )
                 else {
                     return false;
@@ -1871,11 +1869,16 @@ impl ResourcePlaneV3 {
             controller_generation: inputs.authority.controller_generation,
             effects: Arc::clone(&inputs.shared_provider_effects.device),
         }))?;
-        providers.register(Arc::new(GuestDriverFactory::new(GuestDriverArgs {
+        // The Guest type registers through its driver declaration: the
+        // registry serves the type's decoder and factory from it, and the
+        // declaration carries the family's verbs, execution domains,
+        // exportability, reads, and the children its runtime Providers
+        // create.
+        providers.register_driver(&guest_descriptor(GuestDriverArgs {
             zone: inputs.zone.as_str().to_owned(),
             controller_generation: inputs.authority.controller_generation,
             effects: Arc::clone(&inputs.guest_effects),
-        })))?;
+        }))?;
         // The Host and User bootstrap types register through their driver
         // declarations: the registry serves each type's decoder and factory
         // from its declaration, and the declarations carry the types' verbs,
@@ -1933,21 +1936,6 @@ impl ResourcePlaneV3 {
         Ok(providers)
     }
 
-    /// The manager's per-type decode hooks: the registered drivers'
-    /// decoders first (the Process, Endpoint, Host, and User families ride
-    /// their descriptors), then the families whose builders this plane still
-    /// wires directly.
-    fn decoders(providers: &ProviderDirectory) -> HashMap<ResourceTypeName, Arc<dyn SpecDecoder>> {
-        let mut decoders = providers.decoders();
-
-        // U12: the four runtime-Provider Guests.
-        for resource_type in [crate::guest_driver::GUEST_TYPE_NAME] {
-            decoders.insert(ResourceTypeName::new(resource_type), guest_spec_decoder());
-        }
-
-        decoders
-    }
-
     /// Open the store, register the converted-type factories, and
     /// spawn the manager. Initial-load completion is a separate step so the
     /// readiness checklist is observable stage by stage; [`Self::open`]
@@ -2003,7 +1991,10 @@ impl ResourcePlaneV3 {
         let targets = Arc::new(TargetDirectory::new());
         let host_target = TargetRef::host(CORE_HOST_TARGET_NAME)
             .map_err(|error| PlaneError::Target(error.to_string()))?;
-        let decoders = Self::decoders(&providers);
+        // Every registered driver's declaration carries its type's decoder,
+        // so the registry is the authority: the plane wires no decoder table
+        // of its own.
+        let decoders = providers.decoders();
         let args = ResourceManagerArgs {
             zone: inputs.zone.as_str().to_owned(),
             store: Arc::clone(&store),
@@ -2795,29 +2786,29 @@ mod tests {
     struct FakeGuestEffects;
 
     #[async_trait::async_trait]
-    impl crate::guest_driver::GuestDriverEffects for FakeGuestEffects {
+    impl d2b_provider_guest::GuestDriverEffects for FakeGuestEffects {
         async fn reconcile(
             &self,
-            _kind: crate::guest_driver::GuestKind,
-            _request: &crate::guest_driver::GuestEffectRequest<'_>,
+            _kind: d2b_provider_guest::GuestKind,
+            _request: &d2b_provider_guest::GuestEffectRequest<'_>,
         ) -> Result<
-            crate::guest_driver::GuestEffectOutcome,
-            crate::guest_driver::GuestEffectError,
+            d2b_provider_guest::GuestEffectOutcome,
+            d2b_provider_guest::GuestEffectError,
         > {
-            Ok(crate::guest_driver::GuestEffectOutcome::phase(
-                crate::guest_driver::GuestEffectPhase::Pending,
+            Ok(d2b_provider_guest::GuestEffectOutcome::phase(
+                d2b_provider_guest::GuestEffectPhase::Pending,
             ))
         }
 
         async fn finalize(
             &self,
-            _kind: crate::guest_driver::GuestKind,
-            _request: &crate::guest_driver::GuestEffectRequest<'_>,
+            _kind: d2b_provider_guest::GuestKind,
+            _request: &d2b_provider_guest::GuestEffectRequest<'_>,
         ) -> Result<
-            crate::guest_driver::GuestFinalizeStage,
-            crate::guest_driver::GuestEffectError,
+            d2b_provider_guest::GuestFinalizeStage,
+            d2b_provider_guest::GuestEffectError,
         > {
-            Ok(crate::guest_driver::GuestFinalizeStage::Complete)
+            Ok(d2b_provider_guest::GuestFinalizeStage::Complete)
         }
     }
 

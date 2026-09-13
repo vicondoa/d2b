@@ -1188,6 +1188,88 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-guest"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-guest-azure-container-apps",
+ "d2b-provider-guest-azure-virtual-machine",
+ "d2b-provider-guest-cloud-hypervisor",
+ "d2b-provider-guest-qemu-media",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "ttrpc",
+]
+
+[[package]]
+name = "d2b-provider-guest-azure-container-apps"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "d2b-provider-guest-azure-virtual-machine"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "base64",
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "d2b-provider-guest-cloud-hypervisor"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-core-controller",
+ "d2b-session",
+ "d2b-session-unix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "d2b-provider-guest-qemu-media"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-process-conformance",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tracing",
+]
+
+[[package]]
 name = "d2b-provider-host"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1211,8 +1293,8 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",
+ "d2b-provider-guest-cloud-hypervisor",
  "d2b-provider-process-minijail",
- "d2b-provider-runtime-cloud-hypervisor",
  "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
@@ -1387,68 +1469,6 @@ dependencies = [
  "d2b-resource-types",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "d2b-provider-runtime-azure-container-apps"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-contracts",
- "d2b-contracts-provider",
- "d2b-contracts-resource",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "d2b-provider-runtime-azure-virtual-machine"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "base64",
- "d2b-contracts",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "d2b-provider-runtime-cloud-hypervisor"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-contracts-provider",
- "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "d2b-core-controller",
- "d2b-session",
- "d2b-session-unix",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "d2b-provider-runtime-qemu-media"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "d2b-process-conformance",
- "schemars",
- "serde",
- "serde_json",
- "sha2",
- "tracing",
 ]
 
 [[package]]
@@ -1911,6 +1931,11 @@ dependencies = [
  "d2b-provider-display-wayland",
  "d2b-provider-emergency-policy",
  "d2b-provider-endpoint",
+ "d2b-provider-guest",
+ "d2b-provider-guest-azure-container-apps",
+ "d2b-provider-guest-azure-virtual-machine",
+ "d2b-provider-guest-cloud-hypervisor",
+ "d2b-provider-guest-qemu-media",
  "d2b-provider-host",
  "d2b-provider-network-local",
  "d2b-provider-notification-desktop",
@@ -1925,10 +1950,6 @@ dependencies = [
  "d2b-provider-resource-import",
  "d2b-provider-role",
  "d2b-provider-role-binding",
- "d2b-provider-runtime-azure-container-apps",
- "d2b-provider-runtime-azure-virtual-machine",
- "d2b-provider-runtime-cloud-hypervisor",
- "d2b-provider-runtime-qemu-media",
  "d2b-provider-seccomp-profile",
  "d2b-provider-shell-pool",
  "d2b-provider-shell-session",

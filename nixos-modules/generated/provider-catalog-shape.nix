@@ -210,41 +210,41 @@
     }
     {
       provider = "runtime-cloud-hypervisor";
-      package = "d2b-provider-runtime-cloud-hypervisor";
-      source = "packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs";
-      test = "packages/d2b-provider-runtime-cloud-hypervisor/tests/reconcile_state_machine_test.rs";
+      package = "d2b-provider-guest-cloud-hypervisor";
+      source = "packages/d2b-provider-guest-cloud-hypervisor/src/controller.rs";
+      test = "packages/d2b-provider-guest-cloud-hypervisor/tests/reconcile_state_machine_test.rs";
       dossier = "docs/specs/providers/ADR-046-provider-runtime-cloud-hypervisor.md";
-      bazelTarget = "//packages/d2b-provider-runtime-cloud-hypervisor:all-tests";
+      bazelTarget = "//packages/d2b-provider-guest-cloud-hypervisor:all-tests";
       unit = "U6";
       bootstrap = false;
     }
     {
       provider = "runtime-qemu-media";
-      package = "d2b-provider-runtime-qemu-media";
-      source = "packages/d2b-provider-runtime-qemu-media/src/controller/reconcile.rs";
-      test = "packages/d2b-provider-runtime-qemu-media/tests/lifecycle.rs";
+      package = "d2b-provider-guest-qemu-media";
+      source = "packages/d2b-provider-guest-qemu-media/src/controller/reconcile.rs";
+      test = "packages/d2b-provider-guest-qemu-media/tests/lifecycle.rs";
       dossier = "docs/specs/providers/ADR-046-provider-runtime-qemu-media.md";
-      bazelTarget = "//packages/d2b-provider-runtime-qemu-media:all-tests";
+      bazelTarget = "//packages/d2b-provider-guest-qemu-media:all-tests";
       unit = "U6";
       bootstrap = false;
     }
     {
       provider = "runtime-azure-container-apps";
-      package = "d2b-provider-runtime-azure-container-apps";
-      source = "packages/d2b-provider-runtime-azure-container-apps/src/controller.rs";
-      test = "packages/d2b-provider-runtime-azure-container-apps/tests/provider_lifecycle.rs";
+      package = "d2b-provider-guest-azure-container-apps";
+      source = "packages/d2b-provider-guest-azure-container-apps/src/controller.rs";
+      test = "packages/d2b-provider-guest-azure-container-apps/tests/provider_lifecycle.rs";
       dossier = "docs/specs/providers/ADR-046-provider-runtime-azure-container-apps.md";
-      bazelTarget = "//packages/d2b-provider-runtime-azure-container-apps:all-tests";
+      bazelTarget = "//packages/d2b-provider-guest-azure-container-apps:all-tests";
       unit = "U6";
       bootstrap = false;
     }
     {
       provider = "runtime-azure-virtual-machine";
-      package = "d2b-provider-runtime-azure-virtual-machine";
-      source = "packages/d2b-provider-runtime-azure-virtual-machine/src/controller/mod.rs";
-      test = "packages/d2b-provider-runtime-azure-virtual-machine/tests/lifecycle_hermetic.rs";
+      package = "d2b-provider-guest-azure-virtual-machine";
+      source = "packages/d2b-provider-guest-azure-virtual-machine/src/controller/mod.rs";
+      test = "packages/d2b-provider-guest-azure-virtual-machine/tests/lifecycle_hermetic.rs";
       dossier = "docs/specs/providers/ADR-046-provider-runtime-azure-virtual-machine.md";
-      bazelTarget = "//packages/d2b-provider-runtime-azure-virtual-machine:all-tests";
+      bazelTarget = "//packages/d2b-provider-guest-azure-virtual-machine:all-tests";
       unit = "U6";
       bootstrap = false;
     }
