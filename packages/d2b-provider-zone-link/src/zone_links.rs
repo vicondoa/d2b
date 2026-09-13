@@ -59,20 +59,8 @@ fn next_zone_link_handler_owner() -> u64 {
 /// Default absolute lifetime of one allocator-issued bootstrap PSK.
 pub const BOOTSTRAP_PSK_TTL_MS_DEFAULT: u64 = 300_000;
 
-/// Lowest permitted bootstrap PSK lifetime.
-pub const BOOTSTRAP_PSK_TTL_MS_MIN: u64 = 60_000;
-
-/// Highest permitted bootstrap PSK lifetime.
-pub const BOOTSTRAP_PSK_TTL_MS_MAX: u64 = 3_600_000;
-
 /// Default maximum lifetime of one enrolled KK session.
 pub const KK_SESSION_MAX_LIFETIME_MS_DEFAULT: u64 = 86_400_000;
-
-/// Lowest permitted enrolled KK session lifetime.
-pub const KK_SESSION_MAX_LIFETIME_MS_MIN: u64 = 3_600_000;
-
-/// Highest permitted enrolled KK session lifetime.
-pub const KK_SESSION_MAX_LIFETIME_MS_MAX: u64 = 604_800_000;
 
 /// Admission ceiling for `spec.limits.maxPendingIntents`.
 pub const MAX_PENDING_LOCAL_INTENTS: u32 = 1024;
@@ -336,24 +324,6 @@ pub struct ZoneLinkKeyPolicy {
 }
 
 impl ZoneLinkKeyPolicy {
-    /// Validate both cryptoperiods against their frozen ranges.
-    pub const fn new(
-        bootstrap_psk_ttl_ms: u64,
-        kk_session_max_lifetime_ms: u64,
-    ) -> Result<Self, ZoneLinkError> {
-        if bootstrap_psk_ttl_ms < BOOTSTRAP_PSK_TTL_MS_MIN
-            || bootstrap_psk_ttl_ms > BOOTSTRAP_PSK_TTL_MS_MAX
-            || kk_session_max_lifetime_ms < KK_SESSION_MAX_LIFETIME_MS_MIN
-            || kk_session_max_lifetime_ms > KK_SESSION_MAX_LIFETIME_MS_MAX
-        {
-            return Err(ZoneLinkError::InvalidLimits);
-        }
-        Ok(Self {
-            bootstrap_psk_ttl_ms,
-            kk_session_max_lifetime_ms,
-        })
-    }
-
     /// Return the bootstrap PSK lifetime.
     pub const fn bootstrap_psk_ttl_ms(self) -> u64 {
         self.bootstrap_psk_ttl_ms
@@ -3095,7 +3065,7 @@ mod tests {
     }
 
     #[test]
-    fn limits_and_cryptoperiods_reject_out_of_range_values() {
+    fn limits_reject_out_of_range_values() {
         assert_eq!(
             ZoneLinkLimits::new(MAX_PENDING_LOCAL_INTENTS + 1, 32, 10, 300),
             Err(ZoneLinkError::InvalidLimits)
@@ -3106,20 +3076,6 @@ mod tests {
         );
         assert_eq!(
             ZoneLinkLimits::new(256, 32, 0, 300),
-            Err(ZoneLinkError::InvalidLimits)
-        );
-        assert_eq!(
-            ZoneLinkKeyPolicy::new(
-                BOOTSTRAP_PSK_TTL_MS_MIN - 1,
-                KK_SESSION_MAX_LIFETIME_MS_DEFAULT
-            ),
-            Err(ZoneLinkError::InvalidLimits)
-        );
-        assert_eq!(
-            ZoneLinkKeyPolicy::new(
-                BOOTSTRAP_PSK_TTL_MS_DEFAULT,
-                KK_SESSION_MAX_LIFETIME_MS_MAX + 1
-            ),
             Err(ZoneLinkError::InvalidLimits)
         );
         let policy = ZoneLinkKeyPolicy::default();
