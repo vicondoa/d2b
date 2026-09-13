@@ -301,7 +301,7 @@ fn checked_in_contexts_are_nonempty_and_structurally_valid() {
     let paths = closure_paths();
     assert_eq!(
         paths.len(),
-        14,
+        12,
         "expected both systems and all production contexts"
     );
     for path in paths {
