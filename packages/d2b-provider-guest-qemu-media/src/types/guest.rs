@@ -15,8 +15,6 @@ pub use d2b_contracts_resource::v3::execution_policy::{DeviceAttachment, Network
 pub const MAX_REMOVABLE_VOLUMES: usize = 4;
 /// Provider schema identifier for Guest settings.
 pub const GUEST_SPEC_SCHEMA_ID: &str = "runtime-qemu-media.d2bus.org/Guest/spec";
-/// Provider reference implemented by this crate.
-pub const PROVIDER_REF: &str = "Provider/runtime-qemu-media";
 
 /// QEMU CPU model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -303,7 +301,8 @@ pub fn build_guest_resource_spec(
     mut settings: GuestProviderSpecSettings,
 ) -> Result<ResourceSpec, GuestResourceSpecError> {
     let provider_ref =
-        ResourceRef::parse(PROVIDER_REF).map_err(|_| GuestResourceSpecError::InvalidProviderRef)?;
+        ResourceRef::parse(crate::PROVIDER_REF)
+            .map_err(|_| GuestResourceSpecError::InvalidProviderRef)?;
     settings.boot_media_ref = boot_media_ref;
     settings.vcpu = vcpu;
     settings.memory_mib = memory_mib;

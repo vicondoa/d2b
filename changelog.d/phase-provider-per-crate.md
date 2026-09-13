@@ -448,3 +448,10 @@
   client that still sends a retired request is refused as an unknown variant,
   and the broker round-trip budget now measures a live read-only operation
   instead of the removed probe.
+
+- Two declarations that nothing referenced are gone: the duplicated
+  `ZONE_SERVICE_NAME` in the bus routing module, which the Zone routing
+  service's own frozen wire name already defines, and the duplicate
+  `PROVIDER_REF` inside the qemu-media Guest type module, whose reader now
+  resolves the crate root's public declaration.
+
