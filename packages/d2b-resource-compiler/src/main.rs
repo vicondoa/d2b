@@ -22,7 +22,7 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_contracts_zone_session::v3::resource_bundle::ProcessTemplateBinding;
 use d2b_resource_compiler::{
-    ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys,
+    ArtifactCatalogEntry, BootstrapBoundary, CatalogDigests, Diagnostic, StaticPublisherKeys,
     VerifiedProviderArtifact, compile_linux_artifact, project_static_controller_processes,
     resource_sort_key,
 };
@@ -301,7 +301,8 @@ fn compile(
     }
 
     let artifact_catalog_digest = verify_artifact_catalog(&input)?;
-    let compiled_providers = compile_providers(&input)?;
+    let bootstrap = BootstrapBoundary::new(input.system_provider_names.clone());
+    let compiled_providers = compile_providers(&input, &bootstrap)?;
     check_provider_resource_admission(&input, &compiled_providers)?;
     check_resource_type_collisions(&compiled_providers)?;
     validate_resources(&input, strict_secrets)?;
@@ -324,6 +325,7 @@ fn compile(
     let projection = project_static_controller_processes(
         &input.zone,
         &input.resources,
+        &bootstrap,
         compiled_providers.iter().map(|provider| &provider.verified),
     )
     .map_err(|error| {
@@ -466,7 +468,10 @@ fn verify_artifact_catalog(input: &CompileInput) -> Result<String, CliError> {
     Ok(actual.to_owned())
 }
 
-fn compile_providers(input: &CompileInput) -> Result<Vec<CompiledProvider>, CliError> {
+fn compile_providers(
+    input: &CompileInput,
+    bootstrap: &BootstrapBoundary,
+) -> Result<Vec<CompiledProvider>, CliError> {
     let mut providers = Vec::new();
     for provider in &input.providers {
         let artifact_id = ArtifactId::parse(provider.artifact_id.clone()).map_err(|_| {
@@ -505,7 +510,7 @@ fn compile_providers(input: &CompileInput) -> Result<Vec<CompiledProvider>, CliE
             provider.signature_id.clone(),
             signing_key,
         );
-        let compiled = compile_linux_artifact(&entry, &keys).map_err(CliError::from)?;
+        let compiled = compile_linux_artifact(&entry, &keys, bootstrap).map_err(CliError::from)?;
         let verified =
             VerifiedProviderArtifact::new(artifact_id, provider.store_path.clone(), compiled);
         providers.push(CompiledProvider {
@@ -2013,6 +2018,14 @@ fn parse_digest(value: &str) -> Result<ArtifactDigest, CliError> {
     })
 }
 
+/// Whether one resource carries inline secret-shaped material.
+///
+/// The policy is a key and value heuristic because no declaration carries the
+/// shape yet: no resource schema marks a property `writeOnly`, so there is no
+/// declared secret surface to read. The declared shape exists for operation
+/// payloads (a `writeOnly` property carries no default/enum/const/examples);
+/// when the resource schemas grow the same marker, this policy moves onto it
+/// and the key list below disappears.
 fn contains_secret_shape(value: &Value) -> bool {
     if value
         .get("type")

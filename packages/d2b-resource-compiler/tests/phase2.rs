@@ -27,7 +27,7 @@ use d2b_core::provider_artifact::{
     ProcessLauncher, ReadableFile,
 };
 use d2b_resource_compiler::{
-    ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys,
+    ArtifactCatalogEntry, BootstrapBoundary, CatalogDigests, Diagnostic, StaticPublisherKeys,
     VerifiedProviderArtifact, compile_artifact, executable_set_digest,
     project_static_controller_processes, sha256_digest,
 };
@@ -420,12 +420,20 @@ fn fixture_for_artifact(
     (entry, tree, keys, manifest_bytes)
 }
 
+/// The declared bootstrap boundary: the fixed bootstrap rows the Provider
+/// catalog carries (`fixedBootstrapProviderIds`). Every compile and projection
+/// call in this suite passes the declaration explicitly, so a boundary the
+/// compiler re-invented instead of reading would fail here.
+fn declared() -> BootstrapBoundary {
+    BootstrapBoundary::new(["system-core".to_owned(), "system-minijail".to_owned()])
+}
+
 fn compile(
     entry: &ArtifactCatalogEntry,
     tree: &MemoryDir,
     keys: &StaticPublisherKeys,
 ) -> Result<d2b_resource_compiler::CompiledArtifact, Diagnostic> {
-    compile_artifact(entry, tree, keys)
+    compile_artifact(entry, tree, keys, &declared())
 }
 
 fn kind(result: Result<d2b_resource_compiler::CompiledArtifact, Diagnostic>) -> &'static str {
@@ -458,6 +466,7 @@ fn signed_provider_controller_projects_to_an_ordinary_process() {
     let projection = project_static_controller_processes(
         "dev",
         &resources,
+        &declared(),
         &[VerifiedProviderArtifact::new(
             entry.artifact_id().clone(),
             entry.store_path().to_path_buf(),
@@ -556,6 +565,7 @@ fn static_controller_projection_rejects_invalid_execution_refs() {
     let missing = project_static_controller_processes(
         "dev",
         &projection_resources(serde_json::json!({})),
+        &declared(),
         std::slice::from_ref(&artifact),
     )
     .expect_err("missing controllerExecutionRef");
@@ -564,6 +574,7 @@ fn static_controller_projection_rejects_invalid_execution_refs() {
     let invalid = project_static_controller_processes(
         "dev",
         &projection_resources(serde_json::json!({"controllerExecutionRef": "not-a-ref"})),
+        &declared(),
         std::slice::from_ref(&artifact),
     )
     .expect_err("invalid controllerExecutionRef");
@@ -572,6 +583,7 @@ fn static_controller_projection_rejects_invalid_execution_refs() {
     let invalid_type = project_static_controller_processes(
         "dev",
         &projection_resources(serde_json::json!({"controllerExecutionRef": 7})),
+        &declared(),
         std::slice::from_ref(&artifact),
     )
     .expect_err("non-string controllerExecutionRef");
@@ -583,6 +595,7 @@ fn static_controller_projection_rejects_invalid_execution_refs() {
     let unsupported = project_static_controller_processes(
         "dev",
         &projection_resources(serde_json::json!({"controllerExecutionRef": "Zone/dev"})),
+        &declared(),
         std::slice::from_ref(&artifact),
     )
     .expect_err("unsupported target kind");
@@ -596,6 +609,7 @@ fn static_controller_projection_rejects_invalid_execution_refs() {
         &projection_resources(serde_json::json!({
             "controllerExecutionRef": "Host/missing"
         })),
+        &declared(),
         std::slice::from_ref(&artifact),
     )
     .expect_err("missing controller target");
@@ -630,9 +644,13 @@ fn static_controller_projection_rejects_duplicate_process_names() {
         "metadata": {"name": format!("controller-{suffix}"), "zone": "dev"},
         "spec": {}
     }));
-    let error =
-        project_static_controller_processes("dev", &resources, std::slice::from_ref(&artifact))
-            .expect_err("duplicate generated Process name");
+    let error = project_static_controller_processes(
+        "dev",
+        &resources,
+        &declared(),
+        std::slice::from_ref(&artifact),
+    )
+    .expect_err("duplicate generated Process name");
     assert_eq!(error.code(), "provider-controller-process-name-duplicate");
 }
 
@@ -650,15 +668,71 @@ fn static_controller_projection_keeps_bootstrap_components_in_process() {
     let projection = project_static_controller_processes(
         "dev",
         &resources,
+        &declared(),
+        &[VerifiedProviderArtifact::new(
+            entry.artifact_id().clone(),
+            entry.store_path().to_path_buf(),
+            compiled.clone(),
+        )],
+    )
+    .expect("bootstrap exception");
+    assert!(projection.resources.is_empty());
+    assert!(projection.templates.is_empty());
+
+    // The declared boundary is the only authority: the same launchable
+    // artifact is skipped as a declared bootstrap row and projected when the
+    // declaration does not carry it, so a boundary that drifts from the
+    // Provider catalog's fixed-bootstrap rows fails here.
+    let (entry, tree, keys, _) = fixture(ComponentExecution::Launchable {
+        binary_ref: BinaryRef::parse("test-controller").unwrap(),
+    });
+    let compiled = compile(&entry, &tree, &keys).expect("verified launchable artifact");
+    let resources = projection_resources(serde_json::json!({
+        "controllerExecutionRef": "Host/host"
+    }));
+    let declared_row = BootstrapBoundary::new([entry.artifact_id().as_str().to_owned()]);
+    let skipped = project_static_controller_processes(
+        "dev",
+        &resources,
+        &declared_row,
+        &[VerifiedProviderArtifact::new(
+            entry.artifact_id().clone(),
+            entry.store_path().to_path_buf(),
+            compiled.clone(),
+        )],
+    )
+    .expect("declared bootstrap row");
+    assert!(skipped.resources.is_empty());
+    assert!(skipped.templates.is_empty());
+    let projected = project_static_controller_processes(
+        "dev",
+        &resources,
+        &BootstrapBoundary::default(),
         &[VerifiedProviderArtifact::new(
             entry.artifact_id().clone(),
             entry.store_path().to_path_buf(),
             compiled,
         )],
     )
-    .expect("bootstrap exception");
-    assert!(projection.resources.is_empty());
-    assert!(projection.templates.is_empty());
+    .expect("undeclared Provider");
+    assert_eq!(projected.resources.len(), 1);
+}
+
+#[test]
+fn an_undeclared_in_process_bootstrap_component_is_refused() {
+    let (entry, tree, keys, _) =
+        fixture_for_artifact("system-core", ComponentExecution::InProcessBootstrap);
+    // The in-process bootstrap execution is admitted for a declared bootstrap
+    // row only; the boundary, not the artifact ID, decides.
+    assert_eq!(
+        kind(compile_artifact(
+            &entry,
+            &tree,
+            &keys,
+            &BootstrapBoundary::default()
+        )),
+        "provider-component-execution-invalid"
+    );
 }
 
 /// One nix-build failure vector: rebuild the default launchable fixture,
@@ -1259,8 +1333,9 @@ fn device_tpm_worker_rows_bind_their_declared_template_and_executable() {
             ),
         ],
     );
-    let projection = project_static_controller_processes("dev", &resources, &[artifact])
-        .expect("device-tpm worker projection");
+    let projection =
+        project_static_controller_processes("dev", &resources, &declared(), &[artifact])
+            .expect("device-tpm worker projection");
     assert!(projection.resources.iter().all(|resource| {
         resource["spec"]["processClass"] == "controller"
     }));
@@ -1308,6 +1383,45 @@ fn device_tpm_worker_rows_bind_their_declared_template_and_executable() {
     assert_eq!(bundle.process_templates.len(), 3);
 }
 
+/// The serving-worker arm reads core's declared `(provider, template)` pair:
+/// the binding it emits is exactly the pair the resolver's
+/// `TemplateIntentShape` classifies as the serving worker, so the compiler
+/// cannot spell the template differently from the mint that consumes it.
+#[test]
+fn serving_worker_template_binds_the_declared_core_pair() {
+    let (_, _, _, artifact) = device_worker_fixture("volume-virtiofs", &["virtiofsd"]);
+    let resources = device_worker_zone("volume-virtiofs", &[], Vec::new());
+    let projection =
+        project_static_controller_processes("dev", &resources, &declared(), &[artifact])
+            .expect("serving worker projection");
+    let serving = projection
+        .templates
+        .iter()
+        .filter(|binding| {
+            d2b_core::bundle_resolver::is_serving_worker_template(
+                &binding.owner_ref().to_canonical_string(),
+                binding.template().as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(serving.len(), 1, "one serving worker template");
+    let binding = serving[0];
+    assert_eq!(binding.binary_ref().as_str(), "virtiofsd");
+    assert!(binding.is_dynamic(), "binding-owned rows are minted");
+    assert!(binding.admits_launch_args());
+    assert_eq!(
+        binding.execution_ref().to_canonical_string(),
+        "Host/host-system"
+    );
+    let bundle = bundle_from_projection(&resources, &projection);
+    assert!(bundle.process_templates.iter().any(|template| {
+        d2b_core::bundle_resolver::is_serving_worker_template(
+            &template.owner_ref().to_canonical_string(),
+            template.template().as_str(),
+        )
+    }));
+}
+
 #[test]
 fn device_gpu_worker_rows_bind_the_declared_templates() {
     let (_, _, _, artifact) = device_worker_fixture("device-gpu", &["crosvm"]);
@@ -1331,8 +1445,9 @@ fn device_gpu_worker_rows_bind_the_declared_templates() {
             ),
         ],
     );
-    let projection = project_static_controller_processes("dev", &resources, &[artifact])
-        .expect("device-gpu worker projection");
+    let projection =
+        project_static_controller_processes("dev", &resources, &declared(), &[artifact])
+            .expect("device-gpu worker projection");
     let workers = worker_bindings(&projection);
     assert_eq!(workers.len(), 2);
     assert!(workers.iter().all(|binding| {
@@ -1376,8 +1491,9 @@ fn device_worker_rows_of_two_devices_bind_their_own_rows() {
             ),
         ],
     );
-    let projection = project_static_controller_processes("dev", &resources, &[artifact])
-        .expect("two-device projection");
+    let projection =
+        project_static_controller_processes("dev", &resources, &declared(), &[artifact])
+            .expect("two-device projection");
     let process_refs = worker_bindings(&projection)
         .iter()
         .map(|binding| binding.process_ref().to_canonical_string())
@@ -1407,8 +1523,9 @@ fn device_worker_row_sandbox_must_match_the_declared_template() {
             device_worker_sandbox(&["mount", "pid"], false),
         )],
     );
-    let diagnostic = project_static_controller_processes("dev", &resources, &[artifact])
-        .expect_err("posture mismatch");
+    let diagnostic =
+        project_static_controller_processes("dev", &resources, &declared(), &[artifact])
+            .expect_err("posture mismatch");
     assert_eq!(diagnostic.code(), "provider-device-worker-posture-mismatch");
 }
 
@@ -1426,8 +1543,9 @@ fn device_worker_rows_without_a_packaged_executable_are_not_bound() {
             device_worker_sandbox(&["mount", "pid", "ipc", "uts", "user"], true),
         )],
     );
-    let projection = project_static_controller_processes("dev", &resources, &[artifact])
-        .expect("projection without the worker binary");
+    let projection =
+        project_static_controller_processes("dev", &resources, &declared(), &[artifact])
+            .expect("projection without the worker binary");
     assert!(
         worker_bindings(&projection).is_empty(),
         "a worker template the artifact does not package must not be bound"
@@ -1463,8 +1581,9 @@ fn device_worker_rows_only_bind_rows_their_own_device_provider_declares() {
         "swtpm-socket",
         device_worker_sandbox(&["mount", "pid", "user"], true),
     ));
-    let projection = project_static_controller_processes("dev", &resources, &[artifact])
-        .expect("projection");
+    let projection =
+        project_static_controller_processes("dev", &resources, &declared(), &[artifact])
+            .expect("projection");
     let process_refs = worker_bindings(&projection)
         .iter()
         .map(|binding| binding.process_ref().to_canonical_string())
