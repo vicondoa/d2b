@@ -11,6 +11,9 @@ pub mod manager;
 pub mod resource;
 /// Resource-type-specific validate/recover/reconcile/delete behavior.
 pub mod driver;
+/// The shared declaration-only metadata driver: the conversion every
+/// declaration-only metadata type's rows converge through.
+pub mod metadata;
 /// The capability surface handed to drivers (ensure/get/delete/watch/...).
 pub mod context;
 /// Provider registry producing drivers per resource type.
@@ -67,6 +70,7 @@ mod smoke_tests {
         assert_eq!(crate::manager::MODULE_NAME, "manager");
         assert_eq!(crate::resource::MODULE_NAME, "resource");
         assert_eq!(crate::driver::MODULE_NAME, "driver");
+        assert_eq!(crate::metadata::MODULE_NAME, "metadata");
         assert_eq!(crate::context::MODULE_NAME, "context");
         assert_eq!(crate::provider::MODULE_NAME, "provider");
         assert_eq!(crate::target::MODULE_NAME, "target");
