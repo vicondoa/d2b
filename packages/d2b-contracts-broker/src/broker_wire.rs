@@ -363,6 +363,14 @@ pub struct ApplyHostGenerationHandoffResponse {
     pub summary: String,
 }
 
+/// The environment variable that names the socket a producer of forwarded
+/// operations dials.
+///
+/// One deployment fact, declared once: the broker reads it to find the peer
+/// that serves declared handlers, and the daemon that owns the endpoint binds
+/// that path. Neither side may invent a second spelling.
+pub const FORWARD_SOCKET_ENV: &str = "D2B_BROKER_FORWARD_SOCKET";
+
 /// One validated, authorized operation forwarded to the process that
 /// declares it.
 ///

@@ -33,7 +33,10 @@ use d2b_contracts_resource::v3::{CanonicalJsonObject, canonical_json_bytes};
 use crate::envelope::{DispatchFailure, DispatchOutcome, ERRORED};
 
 /// The environment variable that names the forwarding peer's socket.
-pub const FORWARD_SOCKET_ENV: &str = "D2B_BROKER_FORWARD_SOCKET";
+///
+/// The deployment fact is declared with the carrier it configures, so the
+/// broker and the peer that binds the socket cannot drift apart.
+pub use d2b_contracts_broker::FORWARD_SOCKET_ENV;
 
 /// The environment variable that bounds one forward round trip, in
 /// milliseconds.
