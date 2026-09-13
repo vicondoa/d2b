@@ -11,12 +11,11 @@ use d2b_contracts_resource::v3::process::{EphemeralProcessSpec, ProcessSpec};
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
 use d2b_process_conformance::{AdoptionCandidate, ProcessIdentityDigest};
 use d2b_provider_process::{
-    ProcessDriverArgs, ProcessDriverEffects, ProcessFamilySpec, ProcessResourceIdentity,
-    ProviderAdoption, ProviderLiveness, process_family_descriptors,
+    ExecutionMode, ProcessDriverArgs, ProcessDriverEffects, ProcessFamilySpec,
+    ProcessResourceIdentity, ProviderAdoption, ProviderLiveness, process_family_descriptors,
 };
 use d2b_resource_runtime::identity::ResourceKey;
 use d2b_resource_runtime::provider::{DriverRegistration, ProviderDirectory};
-use d2bd_runtime::target_runtime::DaemonMode;
 
 /// A port that refuses every effect: this test proves the declaration and
 /// registration path, never a launch.
@@ -135,7 +134,7 @@ fn descriptors() -> [d2b_resource_types::DriverDescriptor; 2] {
         controller_generation: d2b_contracts_resource::v3::ControllerGeneration::new(1)
             .expect("controller generation"),
         guest_execution: None,
-        mode: DaemonMode::Host,
+        mode: ExecutionMode::Host,
     })
 }
 

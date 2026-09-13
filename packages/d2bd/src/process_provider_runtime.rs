@@ -27,8 +27,8 @@ use d2b_core::{
     processes::{ProcessNode, ProcessRole},
 };
 use d2b_provider_process::{
-    DeviceWorkerLaunch, LaunchRow, ProviderAdoption, ProviderLiveness, ServingWorkerLaunch,
-    ServingWorkerRoot, execution_target_allowed, resolve_launch_identity,
+    DeviceWorkerLaunch, ExecutionMode, LaunchRow, ProviderAdoption, ProviderLiveness,
+    ServingWorkerLaunch, ServingWorkerRoot, execution_target_allowed, resolve_launch_identity,
 };
 use d2b_process_conformance::{
     AdoptionCandidate, AdoptionOutcome, CompiledDigests, ConfigurationDigest,
@@ -1838,7 +1838,7 @@ impl ProductionProcessProviders {
         if !mismatches.is_empty() {
             return Err(identity_changed_error(mismatches));
         }
-        if !execution_target_allowed(self.mode, &managed.execution_ref) {
+        if !execution_target_allowed(execution_mode(self.mode), &managed.execution_ref) {
             return Err(GUEST_EXECUTION_UNAVAILABLE.to_owned());
         }
         self.forget_controller_bootstrap_for_context(
@@ -3420,6 +3420,18 @@ fn configuration_digest(label: &str, value: &str) -> ConfigurationDigest {
     ConfigurationDigest::from_bytes(hasher.finalize().into())
 }
 
+/// Map the daemon's own mode onto the Process family's execution domain.
+///
+/// The family declares the Host/Guest vocabulary it admits and never reads
+/// the daemon's mode; this is the seat where the daemon's mode crosses into
+/// that vocabulary.
+pub(crate) const fn execution_mode(mode: DaemonMode) -> ExecutionMode {
+    match mode {
+        DaemonMode::Host => ExecutionMode::Host,
+        DaemonMode::Guest => ExecutionMode::Guest,
+    }
+}
+
 fn validate_resource_execution_target(
     mode: DaemonMode,
     context: &ProcessResourceContext<'_>,
@@ -3432,7 +3444,7 @@ fn validate_resource_execution_target(
     if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
         return Err("provider-ticket:invalid-execution-ref".to_owned());
     }
-    if !execution_target_allowed(mode, execution_ref) {
+    if !execution_target_allowed(execution_mode(mode), execution_ref) {
         return Err(match mode {
             DaemonMode::Host => GUEST_EXECUTION_UNAVAILABLE,
             DaemonMode::Guest => "provider-ticket:host-execution-denied",

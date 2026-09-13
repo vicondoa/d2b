@@ -45,7 +45,7 @@ use d2b_contracts_resource::v3::{
 use crate::effects::{ProcessDriverEffects, ProviderAdoption, ProviderLiveness};
 use crate::identity::{ProcessFamilySpec, ProcessResourceIdentity};
 use crate::launch_identity::{LaunchRow, resolve_launch_identity};
-use crate::execution::execution_target_allowed;
+use crate::execution::{ExecutionMode, execution_target_allowed};
 use crate::worker_launch::{ServingWorkerLaunch, ServingWorkerRoot};
 use d2b_process_conformance::{GuestExecutionBinding, ProcessStatusReport};
 use d2b_resource_runtime::context::{
@@ -60,8 +60,6 @@ use d2b_resource_runtime::error::{
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
-use d2bd_runtime::target_runtime::DaemonMode;
-
 
 /// The durable Process resource type this factory serves (KTD4 Phase A).
 pub(crate) const PROCESS_TYPE_NAME: &str = "Process";
@@ -103,7 +101,7 @@ enum ProcessDriverErrorKind {
     IdentityIncomplete,
     /// The spec selected a Provider this driver does not own.
     ProviderUnsupported,
-    /// The spec's execution target is not drivable in this daemon mode.
+    /// The spec's execution target is not drivable in this execution domain.
     ExecutionUnsupported,
     /// The trusted bundle did not contain the requested template binding.
     TemplateUnavailable,
@@ -512,9 +510,9 @@ pub struct ProcessDriverArgs {
     /// Binding-declared Guest execution inputs, when the plane serves a
     /// Guest-executing row set.
     pub guest_execution: Option<GuestExecutionBinding>,
-    /// The daemon mode this plane reconciles under: it gates which execution
-    /// targets the rows may name.
-    pub mode: DaemonMode,
+    /// The execution domain this plane reconciles under: it gates which
+    /// execution targets the rows may name.
+    pub mode: ExecutionMode,
 }
 
 /// [`ResourceDriverFactory`] for the Process-family resource types
@@ -784,7 +782,7 @@ struct ProcessZoneAuthority {
     provider_assignment_generation: Option<ResourceGeneration>,
     controller_generation: ControllerGeneration,
     guest_execution: Option<GuestExecutionBinding>,
-    mode: DaemonMode,
+    mode: ExecutionMode,
 }
 
 impl ProcessDriver {
@@ -2051,6 +2049,7 @@ mod tests {
 
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use crate::effects::{ProviderAdoption, ProviderLiveness};
+    use crate::execution::ExecutionMode;
     use crate::worker_launch::DeviceWorkerLaunch;
     use d2b_contracts_resource::v3::{
         ControllerGeneration, EphemeralProcessSpec, ProcessSpec, ResourceRef, ResourceUid, ZoneId,
@@ -2075,7 +2074,6 @@ mod tests {
     };
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
-    use d2bd_runtime::target_runtime::DaemonMode;
     use parking_lot::Mutex;
     use tokio::sync::mpsc;
 
@@ -2740,7 +2738,7 @@ mod tests {
             provider_assignment_generation: None,
             controller_generation: ControllerGeneration::new(1).expect("controller generation"),
             guest_execution: None,
-            mode: DaemonMode::Host,
+            mode: ExecutionMode::Host,
             effects,
         }
     }

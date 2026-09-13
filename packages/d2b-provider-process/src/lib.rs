@@ -27,7 +27,7 @@ pub use driver::{
     process_spec_decoder, resolve_guest_owner_uid, resource_uid_from_bytes,
 };
 pub use effects::{ProcessDriverEffects, ProviderAdoption, ProviderLiveness};
-pub use execution::execution_target_allowed;
+pub use execution::{ExecutionMode, execution_target_allowed};
 pub use identity::{ProcessFamilySpec, ProcessResourceIdentity, decode_metadata_owner_ref};
 pub use launch_identity::{LaunchRow, resolve_launch_identity};
 pub use worker_launch::{

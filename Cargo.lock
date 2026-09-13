@@ -1400,7 +1400,6 @@ dependencies = [
  "d2b-provider-volume-virtiofs",
  "d2b-resource-runtime",
  "d2b-resource-types",
- "d2bd-runtime",
  "parking_lot",
  "serde_json",
  "tokio",

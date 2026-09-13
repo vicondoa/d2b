@@ -1751,7 +1751,7 @@ impl ResourcePlaneV3 {
             provider_assignment_generation: inputs.authority.provider_assignment_generation,
             controller_generation: inputs.authority.controller_generation,
             guest_execution: inputs.authority.guest_execution.clone(),
-            mode: inputs.authority.mode,
+            mode: crate::process_provider_runtime::execution_mode(inputs.authority.mode),
         }) {
             providers.register_driver(&descriptor)?;
         }
