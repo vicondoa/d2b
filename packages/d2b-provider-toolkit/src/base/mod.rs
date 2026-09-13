@@ -21,6 +21,7 @@ mod bootstrap;
 pub mod error;
 #[cfg(feature = "unix-transport")]
 pub mod fd10;
+pub mod guest;
 pub mod runtime;
 pub mod startup;
 
@@ -28,6 +29,12 @@ pub use bootstrap::{
     AllocatorSessionBinding, PROVIDER_RESOURCE_TYPE, ProviderAgentBootstrap, ProviderAgentIdentity,
 };
 pub use error::ProviderToolkitError;
+pub use guest::{
+    AllocatorEnrollment, EnrolledRoute, EnrollmentRequest, GUEST_RECONNECT_ATTEMPTS,
+    GUEST_RECONNECT_INITIAL_MS, GUEST_RECONNECT_MAX_MS, GUEST_SESSION_MAX_FRAME_BYTES, GuestAgent,
+    GuestEnrollment, GuestError, GuestFrame, GuestLink, GuestLinkFuture, GuestPlacement,
+    run_guest,
+};
 pub use runtime::{
     AuthenticatedRoute, ProviderAdmission, ProviderEntrypoint, ProviderLifecycle,
     ProviderRuntimeError, ProviderSessionAdmission,
@@ -388,135 +395,6 @@ pub fn run_with_startup<P: SupervisedProvider>(
             1
         }
     }
-}
-
-/// Why a guest agent could not run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuestError {
-    /// The zone allocator's `ZoneBootstrap`/`ZoneEnroll` handlers are not
-    /// landed, so no guest agent can enroll.
-    EnrollmentUnsupported,
-    /// The allocator refused enrollment.
-    EnrollmentRefused,
-    /// The authenticated service loop failed.
-    ServiceLoopFailed,
-    /// Drain refused.
-    Refused,
-}
-
-impl GuestError {
-    /// The stable lower-kebab code for this refusal.
-    pub const fn code(self) -> &'static str {
-        match self {
-            Self::EnrollmentUnsupported => "guest-enrollment-unsupported",
-            Self::EnrollmentRefused => "guest-enrollment-refused",
-            Self::ServiceLoopFailed => "guest-service-loop-failed",
-            Self::Refused => "guest-refused",
-        }
-    }
-}
-
-impl fmt::Display for GuestError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.code())
-    }
-}
-
-impl std::error::Error for GuestError {}
-
-/// One guest enrollment request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnrollmentRequest {
-    /// The `Provider/<name>` identity the guest agent serves as.
-    ///
-    /// The zone arrives with the enrollment: a guest agent is placed by the
-    /// allocator it enrolls with, so it cannot name its own zone first.
-    pub provider_ref: ResourceRef,
-}
-
-/// The enrolled route a guest agent serves on.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnrolledRoute {
-    /// The zone the enrolled session is scoped to.
-    pub zone: ZoneId,
-    /// The generation the enrollment issued.
-    pub generation: u64,
-}
-
-/// The guest enrollment seam.
-#[async_trait]
-pub trait GuestEnrollment: Send + Sync {
-    /// Enroll the guest agent with the zone allocator.
-    async fn enroll(&self, request: &EnrollmentRequest) -> Result<EnrolledRoute, GuestError>;
-}
-
-/// The refusing enrollment seam.
-///
-/// The `ZoneBootstrap`/`ZoneEnroll` handlers today refuse fail-closed, so a
-/// production guest agent refuses here too rather than inventing a route.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct UnsupportedGuestEnrollment;
-
-#[async_trait]
-impl GuestEnrollment for UnsupportedGuestEnrollment {
-    async fn enroll(&self, _request: &EnrollmentRequest) -> Result<EnrolledRoute, GuestError> {
-        Err(GuestError::EnrollmentUnsupported)
-    }
-}
-
-/// A guest agent: the base's shape minus the host-plane bits.
-#[async_trait]
-pub trait GuestAgent: Send + Sync + 'static {
-    /// The identity and non-host facts this agent declares.
-    fn declaration(&self) -> &ProviderDeclaration;
-
-    /// What this agent serves, one descriptor per resource type.
-    fn drivers(&self) -> &'static [DriverDescriptor];
-
-    /// Tear down within the deadline.
-    async fn drain(&self, deadline: DrainDeadline) -> Result<(), DrainError>;
-}
-
-/// Run one guest agent on the same base, in the guest trust domain.
-///
-/// Guest enrollment is refused fail-closed until the allocator's
-/// `ZoneBootstrap`/`ZoneEnroll` handlers land; a test drives
-/// [`run_guest_with`] with a scripted enrollment.
-pub fn run_guest<A: GuestAgent>(agent: A) -> i32 {
-    run_guest_with(agent, UnsupportedGuestEnrollment)
-}
-
-/// Run one guest agent with an explicit enrollment seam.
-pub fn run_guest_with<A: GuestAgent, E: GuestEnrollment>(agent: A, enrollment: E) -> i32 {
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(_) => return 1,
-    };
-    match runtime.block_on(serve_guest(agent, enrollment)) {
-        Ok(()) => 0,
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
-    }
-}
-
-async fn serve_guest<A: GuestAgent, E: GuestEnrollment>(
-    agent: A,
-    enrollment: E,
-) -> Result<(), GuestError> {
-    let provider_ref =
-        ResourceRef::parse(&format!("Provider/{}", agent.declaration().provider_ref))
-            .map_err(|_| GuestError::EnrollmentRefused)?;
-    let _route = enrollment
-        .enroll(&EnrollmentRequest { provider_ref })
-        .await?;
-    let deadline = DrainDeadline::new(Arc::new(SystemClock), DEFAULT_DRAIN_BUDGET_MS);
-    agent.drain(deadline).await.map_err(|_| GuestError::Refused)
 }
 
 /// The one declared service a supervised route binds.

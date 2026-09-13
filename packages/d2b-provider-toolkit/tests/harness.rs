@@ -4,20 +4,21 @@
 //! child-creation fence, the operation envelope, and the audit ring. Only
 //! the effect ports are scripted.
 
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use async_trait::async_trait;
+use d2b_session::OwnedTransport;
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_contracts_resource::v3::resource_schema::CanonicalJsonObject;
 use d2b_provider_toolkit::{
-    AttachError, Cardinality, ChildCreation, ChildCreationFailure, ChildCustody, CreationRefusal,
-    DeterministicClock, DrainDeadline, DrainError, DriverDescriptor, EnrolledRoute,
-    EnrollmentRequest, FaultPlan, GuestAgent, GuestEnrollment, GuestError, HarnessDeclarations,
-    IsolationPosture, OperationCtx, OperationDef, OperationFailure, OperationHandler,
-    OperationResult, PlaneCall, ProviderAgentAuditOutcome, ProviderBase, ProviderDeclaration,
-    ReconcileCause, ReconcileCtx, ReconcileOutcome, ReconcileTarget, RowPhase, StartupStep,
-    StartupStepError, StartupStepExecutor, TestHarness, ValidatedPayload, WellKnownType,
-    ZonePlaneHandle, run_guest, run_guest_with,
+    AllocatorEnrollment, AttachError, Cardinality, ChildCreation, ChildCreationFailure,
+    ChildCustody, CreationRefusal, DeterministicClock, DrainDeadline, DrainError, DriverDescriptor,
+    FaultPlan, GuestAgent, GuestError, GuestFrame, GuestLink, GuestLinkFuture, GuestPlacement,
+    HarnessDeclarations, IsolationPosture,
+    OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult, PlaneCall,
+    ProviderAgentAuditOutcome, ProviderBase, ProviderDeclaration, ReconcileCause, ReconcileCtx,
+    ReconcileOutcome, ReconcileTarget, RowPhase, StartupStep, StartupStepError, StartupStepExecutor,
+    TestHarness, ValidatedPayload, WellKnownType, ZonePlaneHandle, run_guest,
 };
 
 const PROVIDER_REF: &str = "harness";
@@ -493,7 +494,13 @@ fn the_harness_uses_a_deterministic_clock() {
 }
 
 /// A guest agent: the base's shape minus the host-plane bits.
-struct FakeGuestAgent;
+///
+/// It serves one frame by answering it and raises one event of its own, then
+/// ends its event stream so the session closes cleanly.
+struct FakeGuestAgent {
+    served: Arc<Mutex<Vec<Vec<u8>>>>,
+    events: Mutex<std::collections::VecDeque<Vec<u8>>>,
+}
 
 #[async_trait]
 impl GuestAgent for FakeGuestAgent {
@@ -505,38 +512,221 @@ impl GuestAgent for FakeGuestAgent {
         &[]
     }
 
+    async fn serve(&self, frame: GuestFrame) -> Result<Vec<GuestFrame>, GuestError> {
+        self.served
+            .lock()
+            .expect("served frames")
+            .push(frame.as_bytes().to_vec());
+        Ok(vec![
+            GuestFrame::new(b"served".to_vec()).expect("bounded frame"),
+        ])
+    }
+
+    async fn next_event(&self) -> Option<GuestFrame> {
+        let next = self.events.lock().expect("events").pop_front();
+        match next {
+            Some(payload) => Some(GuestFrame::new(payload).expect("bounded frame")),
+            None => std::future::pending().await,
+        }
+    }
+
     async fn drain(&self, deadline: DrainDeadline) -> Result<(), DrainError> {
         assert!(!deadline.expired(), "drain runs under a live deadline");
         Ok(())
     }
 }
 
-/// A guest enrollment that answers, standing in for the allocator handlers.
-struct ScriptedEnrollment;
+/// A Guest link over an in-memory duplex wearing the real vsock framing.
+///
+/// The base never learns which transport it is on: this link hands out one
+/// duplex-backed `FramedVsockTransport`, and the allocator side of the test
+/// holds the other end.
+struct FakeVsockLink {
+    client: Mutex<Option<tokio::io::DuplexStream>>,
+}
 
-#[async_trait]
-impl GuestEnrollment for ScriptedEnrollment {
-    async fn enroll(&self, request: &EnrollmentRequest) -> Result<EnrolledRoute, GuestError> {
-        assert_eq!(request.provider_ref.name().as_str(), PROVIDER_REF);
-        Ok(EnrolledRoute {
-            zone: ZoneId::parse("dev").expect("a valid guest zone"),
-            generation: 1,
+impl FakeVsockLink {
+    fn new(client: tokio::io::DuplexStream) -> Self {
+        Self {
+            client: Mutex::new(Some(client)),
+        }
+    }
+}
+
+impl GuestLink for FakeVsockLink {
+    fn connect(&self) -> GuestLinkFuture {
+        let client = self.client.lock().expect("link").take();
+        Box::pin(async move {
+            let stream = client.ok_or(GuestError::LinkUnavailable)?;
+            let transport: Box<dyn d2b_session::OwnedTransport> =
+                Box::new(d2b_session_unix::FramedVsockTransport::new(stream));
+            Ok(transport)
         })
     }
 }
 
-#[test]
-fn a_guest_agent_runs_on_the_same_base_and_enrollment_refuses_without_handlers() {
-    assert_eq!(
-        run_guest_with(FakeGuestAgent, ScriptedEnrollment),
-        0,
-        "a scripted enrollment drives the guest lifecycle"
-    );
-    assert_eq!(
-        run_guest(FakeGuestAgent),
+fn test_placement() -> GuestPlacement {
+    GuestPlacement::new(
+        d2b_contracts_zone_session::v3::zone_session::ZoneEnrollmentIdentity {
+            zone_link_uid: d2b_contracts_resource::v3::ResourceUid::parse(
+                "11111111-1111-4111-8111-111111111111",
+            )
+            .expect("a valid UID"),
+            edge: d2b_contracts_zone_session::v3::zone_routing::ZoneTreeEdge::new(
+                d2b_contracts_zone_session::v3::zone_routing::ZonePath::new(vec![
+                    d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId::parse("k0")
+                        .expect("a valid label"),
+                ])
+                .expect("a valid zone"),
+                d2b_contracts_zone_session::v3::zone_routing::ZonePath::new(vec![
+                    d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId::parse("k1")
+                        .expect("a valid label"),
+                    d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId::parse("k0")
+                        .expect("a valid label"),
+                ])
+                .expect("a valid zone"),
+            )
+            .expect("a direct child edge"),
+            controller_generation:
+                d2b_contracts_zone_session::v3::zone_routing::ZoneLinkControllerGeneration::parse(
+                    "controller-1",
+                )
+                .expect("a valid generation"),
+            reconnect_generation: d2b_contracts_resource::v3::identity::ReconnectGeneration::new(7)
+                .expect("a valid generation"),
+            schema_fingerprint: [0x11; 32],
+        },
         1,
-        "guest enrollment is refused fail-closed until ZoneBootstrap/ZoneEnroll land"
+        300_000,
+        1_700_000_000_000,
+        [0x33; 32],
+    )
+    .expect("a valid placement")
+}
+
+/// Answer the two enrollment calls, then serve one frame and one event.
+async fn scripted_allocator(stream: tokio::io::DuplexStream) {
+    use d2b_contracts_zone_session::v3::zone_session::{
+        ZoneBootstrapCall, ZoneBootstrapReply, ZoneEnrollCall, ZoneEnrollReply,
+    };
+
+    let mut transport = d2b_session_unix::FramedVsockTransport::new(stream);
+    let bootstrap = transport
+        .receive(64 * 1024)
+        .await
+        .expect("a bootstrap call");
+    let call: ZoneBootstrapCall =
+        ZoneBootstrapCall::decode(bootstrap.as_bytes()).expect("a decodable bootstrap call");
+    assert_eq!(call.issuance, 1);
+    transport
+        .send(d2b_session::TransportPacket::new(
+            ZoneBootstrapReply::Admitted {
+                expires_at_unix_ms: 1_700_000_300_000,
+            }
+            .encode()
+            .expect("an encodable reply"),
+        ))
+        .await
+        .expect("the bootstrap reply is sent");
+
+    let enroll = transport.receive(64 * 1024).await.expect("an enroll call");
+    let call: ZoneEnrollCall =
+        ZoneEnrollCall::decode(enroll.as_bytes()).expect("a decodable enroll call");
+    assert_eq!(call.observed_peer_fingerprint, [0x33; 32]);
+    transport
+        .send(d2b_session::TransportPacket::new(
+            ZoneEnrollReply::Enrolled {
+                zone: ZoneId::parse("zone-k1").expect("a valid zone"),
+                generation: 1,
+            }
+            .encode()
+            .expect("an encodable reply"),
+        ))
+        .await
+        .expect("the enrollment reply is sent");
+
+    // One served frame and the agent's own event, in the order the base
+    // writes them.
+    transport
+        .send(d2b_session::TransportPacket::new(b"relay".to_vec()))
+        .await
+        .expect("the served frame is sent");
+    let reply = transport.receive(64 * 1024).await.expect("a served reply");
+    assert_eq!(reply.as_bytes(), b"served");
+    let event = transport.receive(64 * 1024).await.expect("an agent event");
+    assert_eq!(event.as_bytes(), b"uhid-report");
+}
+
+#[test]
+fn a_guest_agent_enrolls_serves_and_drains_over_a_faked_vsock_transport() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let allocator = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("the allocator runtime builds");
+        runtime.block_on(scripted_allocator(server));
+    });
+
+    let served = Arc::new(Mutex::new(Vec::new()));
+    let agent = FakeGuestAgent {
+        served: Arc::clone(&served),
+        events: Mutex::new(std::collections::VecDeque::from(vec![
+            b"uhid-report".to_vec(),
+        ])),
+    };
+    let code = run_guest(
+        agent,
+        Box::new(FakeVsockLink::new(client)),
+        Arc::new(AllocatorEnrollment::new(test_placement())),
     );
+    assert_eq!(code, 0, "the guest lifecycle completes");
+    allocator.join().expect("the allocator task completes");
+    assert_eq!(
+        served.lock().expect("served frames").as_slice(),
+        &[b"relay".to_vec()],
+        "the agent served exactly the frame the enrolled session carried"
+    );
+}
+
+#[test]
+fn a_refused_enrollment_ends_the_guest_lifecycle_without_serving() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let allocator = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("the allocator runtime builds");
+        runtime.block_on(async move {
+            use d2b_contracts_zone_session::v3::zone_session::{
+                ZoneBootstrapReply, ZoneEnrollmentRefusal,
+            };
+            let mut transport = d2b_session_unix::FramedVsockTransport::new(server);
+            let _ = transport.receive(64 * 1024).await.expect("a bootstrap call");
+            transport
+                .send(d2b_session::TransportPacket::new(
+                    ZoneBootstrapReply::Refused {
+                        reason: ZoneEnrollmentRefusal::BootstrapPskConsumed,
+                    }
+                    .encode()
+                    .expect("an encodable reply"),
+                ))
+                .await
+                .expect("the refusal is sent");
+        });
+    });
+
+    let agent = FakeGuestAgent {
+        served: Arc::new(Mutex::new(Vec::new())),
+        events: Mutex::new(std::collections::VecDeque::new()),
+    };
+    let code = run_guest(
+        agent,
+        Box::new(FakeVsockLink::new(client)),
+        Arc::new(AllocatorEnrollment::new(test_placement())),
+    );
+    assert_eq!(code, 1, "a refused enrollment is terminal");
+    allocator.join().expect("the allocator task completes");
 }
 
 #[test]

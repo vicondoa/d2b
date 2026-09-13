@@ -1,25 +1,58 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
 )
 
+SK_FRONTEND_DEPS = [
+    "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+    "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+    "//packages/d2b-session:d2b_session",
+    "//packages/d2b-session-unix:d2b_session_unix",
+] + all_crate_deps(normal = True, cargo_only = True)
+
+rust_library(
+    name = "d2b_sk_frontend",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/main.rs"],
+        allow_empty = True,
+    ),
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = SK_FRONTEND_DEPS,
+)
+
 rust_binary(
     name = "d2b-sk-frontend",
-    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    srcs = ["src/main.rs"],
     crate_root = "src/main.rs",
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-    ] + all_crate_deps(normal = True, cargo_only = True),
+        ":d2b_sk_frontend",
+    ] + SK_FRONTEND_DEPS,
 )
 
 rust_test(
     name = "d2b-sk-frontend_test",
+    crate = ":d2b_sk_frontend",
     compile_data = ["Cargo.toml"],
-    crate = ":d2b-sk-frontend",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-session:d2b_session",
+        "//packages/d2b-session-unix:d2b_session_unix",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+        cargo_only = True,
+    ),
 )
 
 # keep
@@ -43,4 +76,7 @@ filegroup(
 test_suite(
     name = "all-tests",
     tags = ["-local", "-no-remote-exec"],
+    tests = [
+        ":d2b-sk-frontend_test",
+    ],
 )

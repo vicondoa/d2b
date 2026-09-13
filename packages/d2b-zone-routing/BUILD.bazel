@@ -51,6 +51,22 @@ rust_test(
 )
 
 rust_test(
+    name = "guest_enrollment",
+    srcs = ["tests/guest_enrollment.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_zone_routing",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-session:d2b_session",
+        "//packages/d2b-session-unix:d2b_session_unix",
+        "//packages/d2b-sk-frontend:d2b_sk_frontend",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "route_decision",
     srcs = ["benches/route_decision.rs"],
     compile_data = ["Cargo.toml"],

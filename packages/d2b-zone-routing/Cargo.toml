@@ -17,6 +17,14 @@ d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version =
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 
+[dev-dependencies]
+async-trait = "0.1"
+d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
+d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
+d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap" }
+d2b-sk-frontend = { path = "../d2b-sk-frontend", version = "0.0.0-bootstrap" }
+tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "sync", "time"] }
+
 [[bench]]
 name = "route_decision"
 harness = false
@@ -26,3 +34,7 @@ required-features = ["test-support"]
 name = "route_engine_vectors"
 path = "tests/route_engine_vectors.rs"
 required-features = ["test-support"]
+
+[[test]]
+name = "guest_enrollment"
+path = "tests/guest_enrollment.rs"

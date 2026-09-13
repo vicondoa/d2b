@@ -30,38 +30,52 @@
 //!
 //! # Fail-closed posture
 //!
-//! Every refusal in this file is one closed [`ZoneRouteFailClosedReason`].
-//! There is no permissive default: a missing or mismatched runtime-issued
-//! admission refuses a route, a method with no landed handler is refused at
-//! dispatch admission rather than served, and an over-ceiling dispatch or
-//! shortcut table is refused rather than grown. The service mints, holds, and
-//! presents no authority, and performs no I/O.
+//! Every refusal in this file is one closed [`ZoneRouteFailClosedReason`] or
+//! one closed `ZoneEnrollmentRefusal`. There is no permissive default: a
+//! missing or mismatched runtime-issued admission refuses a route, a
+//! method with no landed handler is refused at dispatch admission rather than
+//! served, and an over-ceiling dispatch or shortcut table is refused rather
+//! than grown. The service mints, holds, and presents no authority, and
+//! performs no I/O.
 //!
 //! Nothing here accepts or returns a uid, gid, host path, socket path, store
 //! path, transport endpoint, credential, or key material.
 //!
-//! # Deliberately absent
+//! # Enrollment
 //!
-//! `zone-bootstrap` and `zone-enroll` are frozen in the method inventory but
-//! carry no handler. Their contract - the allocator-issued single-use PSK, the
-//! IKpsk2 bootstrap that consumes it, and the follow-on Noise_KK enrollment
-//! record - belongs to the Zone session work that has not landed
-//! (`d2b_contracts_zone_session::v3::zone_session` is still empty). Rather than invent a
-//! session or credential surface, both methods fail closed at dispatch
-//! admission; see [`ZoneServiceMethod::has_handler`].
+//! `zone-bootstrap` and `zone-enroll` are landed. Both consume a
+//! runtime-issued, single-use [`ZoneEnrollmentAdmission`] and compose the
+//! frozen ZoneLink enrollment state machine rather than restating it:
+//! `zone-bootstrap` admits one IKpsk2 attempt and burns the presented
+//! single-use PSK, and `zone-enroll` seals the enrollment record and admits
+//! the peer into the enrolled session, answering with the link epoch the
+//! session was assigned. The admitted route a Guest agent receives is the
+//! allocator's own tuple - the placed `ZoneId` and the enrollment generation -
+//! never a credential, a key, or a handle.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use d2b_bus::session::{RouteAdmissionEvidence, RouteAdmissionVerifier};
+use d2b_bus::session::{
+    BootstrapPskIssuance, EnrollmentFingerprint, EnrollmentRecord, RouteAdmissionEvidence,
+    RouteAdmissionVerifier, ZoneLinkEnrollment, ZoneLinkEnrollmentError, ZoneLinkState,
+};
 use d2b_contracts_resource::v3::execution_policy::PrimitiveSpecError;
 use d2b_contracts_zone_session::v3::zone_routing::{
     MAX_ZONE_PARENT_ENTRIES, ZONE_ROUTE_INITIAL_HOP_BUDGET, ZonePath, ZoneRouteAuditEventKind,
     ZoneRouteFailClosedReason, ZoneTreeEdge,
 };
+use d2b_contracts_zone_session::v3::zone_session::{
+    ZONE_BOOTSTRAP_METHOD, ZONE_ENROLL_METHOD, ZoneBootstrapCall, ZoneBootstrapReply,
+    ZoneEnrollCall, ZoneEnrollReply, ZoneEnrollmentIdentity, ZoneEnrollmentRefusal,
+};
 
 use crate::engine::{
     ZoneRelayAdmission, ZoneRelayRequest, ZoneRouteAdmission, ZoneRouteAdmissionExpectation,
     ZoneRouteEngine,
+};
+use crate::enrollment::{
+    ZoneEnrollmentAdmission, ZoneEnrollmentAdmissionEvidence, ZoneEnrollmentAdmissionVerifier,
+    ZoneEnrollmentExpectation,
 };
 use crate::resolver::{
     SealedZoneTopology, ZoneEntrypointRequest, ZoneEntrypointResolution, ZoneEntrypointResolver,
@@ -111,15 +125,13 @@ macro_rules! redacted_service_debug {
 
 /// The closed set of `d2b.zone.v3.ZoneService` methods.
 ///
-/// The inventory is frozen here in full, including the two methods whose
-/// handler has not landed, so the wire surface does not shift when they do.
+/// The inventory is frozen here in full. Every method has a landed handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ZoneServiceMethod {
     /// One-time IKpsk2 bootstrap consuming the allocator-issued single-use
-    /// PSK. No handler has landed.
+    /// PSK.
     ZoneBootstrap,
-    /// Noise_KK enrollment following a consumed bootstrap. No handler has
-    /// landed.
+    /// Noise_KK enrollment following a consumed bootstrap.
     ZoneEnroll,
     /// Resolve a target Zone to its sealed entrypoint and decide the route.
     ResolveZoneRoute,
@@ -141,10 +153,14 @@ pub enum ZoneServiceMethod {
 
 impl ZoneServiceMethod {
     /// The stable kebab-case wire method name.
+    ///
+    /// The two enrollment method names are the frozen contract constants
+    /// rather than a second copy of the spelling, so the service, the
+    /// allocator, and a Guest agent client cannot drift apart.
     pub const fn wire_name(self) -> &'static str {
         match self {
-            Self::ZoneBootstrap => "zone-bootstrap",
-            Self::ZoneEnroll => "zone-enroll",
+            Self::ZoneBootstrap => ZONE_BOOTSTRAP_METHOD,
+            Self::ZoneEnroll => ZONE_ENROLL_METHOD,
             Self::ResolveZoneRoute => "resolve-zone-route",
             Self::AuthorizeZoneShortcut => "authorize-zone-shortcut",
             Self::RevokeZoneShortcut => "revoke-zone-shortcut",
@@ -154,17 +170,6 @@ impl ZoneServiceMethod {
             Self::ZoneTopologyWatch => "zone-topology-watch",
             Self::ZoneRelayHop => "zone-relay-hop",
         }
-    }
-
-    /// Whether a handler for this method has landed.
-    ///
-    /// A method without a handler is refused at dispatch admission with
-    /// [`ZoneRouteFailClosedReason::PolicyDenial`]; it is never served by a
-    /// stand-in. The Zone session contract that `zone-bootstrap` and
-    /// `zone-enroll` require has not landed, so guessing at it here would be
-    /// worse than refusing.
-    pub const fn has_handler(self) -> bool {
-        !matches!(self, Self::ZoneBootstrap | Self::ZoneEnroll)
     }
 }
 
@@ -391,6 +396,109 @@ impl ZoneShortcutOutcome {
 
 redacted_service_debug!(ZoneShortcutOutcome);
 
+/// One `zone-bootstrap` call as this Zone serves it.
+///
+/// The wire [`ZoneBootstrapCall`] is what a Guest agent sends. The admission
+/// and the daemon time are attached by the serving runtime, exactly as the
+/// topology and entrypoint requests attach theirs: neither is on the wire and
+/// neither is the caller's to state.
+pub struct ZoneBootstrapRequest {
+    admission: Option<ZoneEnrollmentAdmission>,
+    now_unix_ms: u64,
+    call: ZoneBootstrapCall,
+}
+
+impl ZoneBootstrapRequest {
+    /// A bootstrap request with no runtime admission.
+    pub const fn new(call: ZoneBootstrapCall, now_unix_ms: u64) -> Self {
+        Self {
+            admission: None,
+            now_unix_ms,
+            call,
+        }
+    }
+
+    /// Attach the runtime-issued admission this Zone holds for the link.
+    pub fn with_admission(mut self, admission: ZoneEnrollmentAdmission) -> Self {
+        self.admission = Some(admission);
+        self
+    }
+
+    /// Consume and verify one runtime-issued admission for this request.
+    pub fn with_runtime_admission(
+        self,
+        verifier: ZoneEnrollmentAdmissionVerifier,
+        evidence: ZoneEnrollmentAdmissionEvidence,
+        expected: &ZoneEnrollmentExpectation,
+    ) -> Result<Self, ZoneEnrollmentRefusal> {
+        let admission = ZoneEnrollmentAdmission::verify(verifier, evidence, expected)?;
+        Ok(self.with_admission(admission))
+    }
+
+    /// Borrow the wire call.
+    pub const fn call(&self) -> &ZoneBootstrapCall {
+        &self.call
+    }
+}
+
+impl std::fmt::Debug for ZoneBootstrapRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ZoneBootstrapRequest(<redacted>)")
+    }
+}
+
+/// One `zone-enroll` call as this Zone serves it.
+pub struct ZoneEnrollRequest {
+    admission: Option<ZoneEnrollmentAdmission>,
+    now_unix_ms: u64,
+    call: ZoneEnrollCall,
+}
+
+impl ZoneEnrollRequest {
+    /// An enrollment request with no runtime admission.
+    pub const fn new(call: ZoneEnrollCall, now_unix_ms: u64) -> Self {
+        Self {
+            admission: None,
+            now_unix_ms,
+            call,
+        }
+    }
+
+    /// Attach the runtime-issued admission this Zone holds for the link.
+    pub fn with_admission(mut self, admission: ZoneEnrollmentAdmission) -> Self {
+        self.admission = Some(admission);
+        self
+    }
+
+    /// Consume and verify one runtime-issued admission for this request.
+    pub fn with_runtime_admission(
+        self,
+        verifier: ZoneEnrollmentAdmissionVerifier,
+        evidence: ZoneEnrollmentAdmissionEvidence,
+        expected: &ZoneEnrollmentExpectation,
+    ) -> Result<Self, ZoneEnrollmentRefusal> {
+        let admission = ZoneEnrollmentAdmission::verify(verifier, evidence, expected)?;
+        Ok(self.with_admission(admission))
+    }
+
+    /// Borrow the wire call.
+    pub const fn call(&self) -> &ZoneEnrollCall {
+        &self.call
+    }
+}
+
+impl std::fmt::Debug for ZoneEnrollRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ZoneEnrollRequest(<redacted>)")
+    }
+}
+
+/// One admitted enrollment call, after its admission was consumed.
+struct AdmittedEnrollment {
+    expected: ZoneEnrollmentExpectation,
+    child: ZonePath,
+}
+
 /// The `d2b.zone.v3.ZoneService` handler for one Zone.
 ///
 /// The Zone runtime instantiates exactly one of these per Zone. It composes
@@ -401,6 +509,13 @@ pub struct ZoneServiceServer {
     resolver: ZoneEntrypointResolver,
     /// The sealed `{ childZone, parentZone }` rows, sorted and deduplicated.
     rows: Vec<(ZonePath, ZonePath)>,
+    /// The one Zone this service instance serves.
+    local_root: ZonePath,
+    /// The ZoneLink enrollment state machine of every sealed child link.
+    ///
+    /// The composition is the frozen five-state machine; this server owns no
+    /// transition rule of its own and never restates one.
+    links: BTreeMap<ZonePath, ZoneLinkEnrollment>,
     limits: ZoneServiceLimits,
     in_flight: u32,
     shortcuts: BTreeSet<ZonePath>,
@@ -436,9 +551,12 @@ impl ZoneServiceServer {
         rows.dedup();
 
         let topology = SealedZoneTopology::seal(local_root, edges)?;
+        let local_root = topology.local_root().clone();
         Ok(Self {
             resolver: ZoneEntrypointResolver::new(topology),
             rows,
+            local_root,
+            links: BTreeMap::new(),
             limits,
             in_flight: 0,
             shortcuts: BTreeSet::new(),
@@ -465,22 +583,13 @@ impl ZoneServiceServer {
 
     /// Admit one request into the dispatch window.
     ///
-    /// Refuses a method with no landed handler with
-    /// [`ZoneRouteFailClosedReason::PolicyDenial`], and a request beyond the
-    /// concurrency ceiling with
+    /// Refuses a request beyond the concurrency ceiling with
     /// [`ZoneRouteFailClosedReason::QueueFullDropNew`]. Overflow drops the new
     /// request rather than displacing in-flight work, matching the engine's
-    /// pre-authentication admission.
+    /// pre-authentication admission. Every method in the frozen inventory has
+    /// a landed handler; the handlers themselves are what refuse a request
+    /// that carries no admissible authority.
     pub fn begin_dispatch(&mut self, method: ZoneServiceMethod) -> ZoneDispatchAdmission {
-        if !method.has_handler() {
-            let reason = ZoneRouteFailClosedReason::PolicyDenial;
-            self.record(
-                method,
-                ZoneRouteAuditEventKind::ZoneRouteDenied,
-                Some(reason),
-            );
-            return ZoneDispatchAdmission::Refused { reason };
-        }
         if self.in_flight >= self.limits.max_dispatch_in_flight {
             let reason = ZoneRouteFailClosedReason::QueueFullDropNew;
             self.record(
@@ -502,6 +611,198 @@ impl ZoneServiceServer {
     /// window far larger than the ceiling.
     pub fn end_dispatch(&mut self) {
         self.in_flight = self.in_flight.saturating_sub(1);
+    }
+
+    /// Serve `zone-bootstrap`.
+    ///
+    /// The handler composes the frozen enrollment state machine: it consumes
+    /// the runtime-issued admission, refuses a call whose identity is not the
+    /// identity that admission was issued for, requires the named edge to be
+    /// one of this Zone's sealed rows, and only then admits one IKpsk2 attempt
+    /// - which burns the presented single-use PSK whether or not the handshake
+    /// that follows succeeds.
+    pub fn zone_bootstrap(&mut self, request: &ZoneBootstrapRequest) -> ZoneBootstrapReply {
+        let method = ZoneServiceMethod::ZoneBootstrap;
+        let call = &request.call;
+        let admitted = match self.admit_enrollment(&call.identity, request.admission.as_ref()) {
+            Ok(admitted) => admitted,
+            Err(refusal) => return self.refuse_enrollment(method, refusal),
+        };
+
+        let psk =
+            match BootstrapPskIssuance::new(call.issuance, call.issued_at_unix_ms, call.ttl_ms) {
+                Ok(psk) => psk,
+                Err(error) => return self.refuse_enrollment(method, machine_refusal(error)),
+            };
+
+        let child = admitted.child.clone();
+        let tracked = self.links.contains_key(&child);
+        let mut link = self
+            .links
+            .remove(&child)
+            .unwrap_or_else(ZoneLinkEnrollment::new_unenrolled);
+        match link.begin_bootstrap(psk, request.now_unix_ms) {
+            Ok(()) => {
+                self.links.insert(child, link);
+                self.record(
+                    method,
+                    ZoneRouteAuditEventKind::ZoneLinkSessionEstablished,
+                    None,
+                );
+                ZoneBootstrapReply::Admitted {
+                    expires_at_unix_ms: call.issued_at_unix_ms.saturating_add(call.ttl_ms),
+                }
+            }
+            Err(error) => {
+                // A refused bootstrap leaves no state behind for a link that
+                // had none; a link that was already tracked keeps its state.
+                if tracked {
+                    self.links.insert(child, link);
+                }
+                self.refuse_enrollment(method, machine_refusal(error))
+            }
+        }
+    }
+
+    /// Serve `zone-enroll`.
+    ///
+    /// The handler consumes the runtime-issued admission exactly as
+    /// `zone-bootstrap` does, then seals the enrollment record and admits the
+    /// peer into the enrolled `Noise_KK` session, answering with the Zone the
+    /// allocator placed the agent in and the link epoch the session was
+    /// assigned. A peer whose fingerprint does not match the sealed record is
+    /// refused and the link returns to `EnrollmentCommitted` rather than
+    /// downgrading.
+    pub fn zone_enroll(&mut self, request: &ZoneEnrollRequest) -> ZoneEnrollReply {
+        let method = ZoneServiceMethod::ZoneEnroll;
+        let call = &request.call;
+        let admitted = match self.admit_enrollment(&call.identity, request.admission.as_ref()) {
+            Ok(admitted) => admitted,
+            Err(refusal) => return self.refuse_enroll(method, refusal),
+        };
+
+        let Some(fingerprint) = EnrollmentFingerprint::new(call.observed_peer_fingerprint) else {
+            return self.refuse_enroll(method, ZoneEnrollmentRefusal::MalformedRequest);
+        };
+        let Some(sealed) =
+            EnrollmentFingerprint::new(admitted.expected.enrolled_peer_fingerprint())
+        else {
+            return self.refuse_enroll(method, ZoneEnrollmentRefusal::MalformedRequest);
+        };
+        // The record is sealed from the allocator's own tuple, never from
+        // anything the request states, so a peer cannot enroll itself against
+        // a fingerprint it chose.
+        let record = EnrollmentRecord::new(sealed, admitted.expected.allocator_binding());
+
+        let child = admitted.child.clone();
+        let tracked = self.links.contains_key(&child);
+        let mut link = self
+            .links
+            .remove(&child)
+            .unwrap_or_else(ZoneLinkEnrollment::new_unenrolled);
+        let outcome = if link.state() == ZoneLinkState::EnrollmentCommitted {
+            // A peer refused after the record was sealed needs no second
+            // commit: the same sealed record admits it on the next enrolled
+            // handshake, and there is no path from here back to a bootstrap.
+            link.begin_enrolled_handshake()
+                .and_then(|()| link.establish(fingerprint, request.now_unix_ms))
+        } else {
+            link.commit_enrollment(record)
+                .and_then(|()| link.begin_enrolled_handshake())
+                .and_then(|()| link.establish(fingerprint, request.now_unix_ms))
+        };
+        match outcome {
+            Ok(epoch) => {
+                self.links.insert(child, link);
+                self.record(
+                    method,
+                    ZoneRouteAuditEventKind::ZoneLinkSessionEstablished,
+                    None,
+                );
+                ZoneEnrollReply::Enrolled {
+                    zone: admitted.expected.zone().clone(),
+                    generation: epoch.get(),
+                }
+            }
+            Err(error) => {
+                // A peer that presented the wrong key falls back to the
+                // committed enrollment rather than to a bootstrap, so a link
+                // that was already tracked keeps its advanced state.
+                if tracked {
+                    self.links.insert(child, link);
+                }
+                self.refuse_enroll(method, machine_refusal(error))
+            }
+        }
+    }
+
+    /// The current enrollment state of one sealed child link, when known.
+    pub fn link_state(&self, child: &ZonePath) -> Option<ZoneLinkState> {
+        self.links.get(child).map(ZoneLinkEnrollment::state)
+    }
+
+    /// Consume the admission and check the call against this Zone's truth.
+    ///
+    /// Every refusal returns without recording; the caller records exactly
+    /// once through [`Self::refuse_enrollment`] or [`Self::refuse_enroll`].
+    fn admit_enrollment(
+        &mut self,
+        identity: &ZoneEnrollmentIdentity,
+        admission: Option<&ZoneEnrollmentAdmission>,
+    ) -> Result<AdmittedEnrollment, ZoneEnrollmentRefusal> {
+        let expected = admission
+            .ok_or(ZoneEnrollmentRefusal::AdmissionAbsent)?
+            .consume()?;
+        identity.validate()?;
+        if !expected.admits(identity) {
+            // A request that names a link but not the session profile it was
+            // admitted for is refused distinctly: the link identity matched,
+            // so this is a stale or substituted session binding rather than a
+            // substituted link.
+            return Err(if expected.admits_link(identity) {
+                ZoneEnrollmentRefusal::SessionProfileRefused
+            } else {
+                ZoneEnrollmentRefusal::IdentityMismatch
+            });
+        }
+        let child = expected.edge().child();
+        let sealed = expected.edge().parent() == &self.local_root
+            && self.rows.iter().any(|(row_child, row_parent)| {
+                row_child == child && row_parent == expected.edge().parent()
+            });
+        if !sealed {
+            return Err(ZoneEnrollmentRefusal::UnsealedZoneLink);
+        }
+        Ok(AdmittedEnrollment {
+            child: child.clone(),
+            expected,
+        })
+    }
+
+    fn refuse_enrollment(
+        &mut self,
+        method: ZoneServiceMethod,
+        refusal: ZoneEnrollmentRefusal,
+    ) -> ZoneBootstrapReply {
+        self.record(
+            method,
+            ZoneRouteAuditEventKind::ZoneLinkSessionFailed,
+            Some(audit_reason(refusal)),
+        );
+        ZoneBootstrapReply::Refused { reason: refusal }
+    }
+
+    fn refuse_enroll(
+        &mut self,
+        method: ZoneServiceMethod,
+        refusal: ZoneEnrollmentRefusal,
+    ) -> ZoneEnrollReply {
+        self.record(
+            method,
+            ZoneRouteAuditEventKind::ZoneLinkSessionFailed,
+            Some(audit_reason(refusal)),
+        );
+        ZoneEnrollReply::Refused { reason: refusal }
     }
 
     /// Serve `resolve-zone-route`.
@@ -743,10 +1044,76 @@ impl ZoneServiceServer {
 
 redacted_service_debug!(ZoneServiceServer);
 
+/// The closed enrollment refusal of one state-machine refusal.
+///
+/// The mapping is exhaustive, so a new machine refusal cannot be silently
+/// swallowed into a permissive default.
+fn machine_refusal(error: ZoneLinkEnrollmentError) -> ZoneEnrollmentRefusal {
+    match error {
+        ZoneLinkEnrollmentError::BootstrapPskConsumed => {
+            ZoneEnrollmentRefusal::BootstrapPskConsumed
+        }
+        ZoneLinkEnrollmentError::BootstrapPskExpired => ZoneEnrollmentRefusal::BootstrapPskExpired,
+        ZoneLinkEnrollmentError::BootstrapHandshakeFailed => {
+            ZoneEnrollmentRefusal::BootstrapHandshakeFailed
+        }
+        ZoneLinkEnrollmentError::ZoneLinkEnrollmentKeyMismatch => {
+            ZoneEnrollmentRefusal::ZoneLinkEnrollmentKeyMismatch
+        }
+        ZoneLinkEnrollmentError::ZoneLinkRevoked => ZoneEnrollmentRefusal::ZoneLinkRevoked,
+        ZoneLinkEnrollmentError::InvalidTransition => ZoneEnrollmentRefusal::InvalidTransition,
+        ZoneLinkEnrollmentError::BootstrapPskTtlOutOfRange => {
+            ZoneEnrollmentRefusal::BootstrapPskTtlOutOfRange
+        }
+        ZoneLinkEnrollmentError::KkSessionLifetimeOutOfRange => {
+            ZoneEnrollmentRefusal::KkSessionLifetimeOutOfRange
+        }
+        ZoneLinkEnrollmentError::LinkEpochExhausted => ZoneEnrollmentRefusal::LinkEpochExhausted,
+        ZoneLinkEnrollmentError::ResourceTrafficBeforeReady => {
+            ZoneEnrollmentRefusal::ResourceTrafficBeforeReady
+        }
+    }
+}
+
+/// The closed audit reason one enrollment refusal is recorded under.
+fn audit_reason(refusal: ZoneEnrollmentRefusal) -> ZoneRouteFailClosedReason {
+    match refusal {
+        ZoneEnrollmentRefusal::AdmissionAbsent
+        | ZoneEnrollmentRefusal::PolicyDenial
+        | ZoneEnrollmentRefusal::IdentityMismatch
+        | ZoneEnrollmentRefusal::SessionProfileRefused
+        | ZoneEnrollmentRefusal::ZoneLinkEnrollmentKeyMismatch
+        | ZoneEnrollmentRefusal::ZoneLinkRevoked
+        | ZoneEnrollmentRefusal::InvalidTransition
+        | ZoneEnrollmentRefusal::BootstrapPskTtlOutOfRange
+        | ZoneEnrollmentRefusal::KkSessionLifetimeOutOfRange
+        | ZoneEnrollmentRefusal::LinkEpochExhausted
+        | ZoneEnrollmentRefusal::MalformedRequest => ZoneRouteFailClosedReason::PolicyDenial,
+        ZoneEnrollmentRefusal::AdmissionConsumed | ZoneEnrollmentRefusal::BootstrapPskConsumed => {
+            ZoneRouteFailClosedReason::Replay
+        }
+        ZoneEnrollmentRefusal::AdmissionExpired | ZoneEnrollmentRefusal::BootstrapPskExpired => {
+            ZoneRouteFailClosedReason::Expired
+        }
+        ZoneEnrollmentRefusal::UnsealedZoneLink => ZoneRouteFailClosedReason::UnknownParent,
+        ZoneEnrollmentRefusal::BootstrapHandshakeFailed
+        | ZoneEnrollmentRefusal::ResourceTrafficBeforeReady => {
+            ZoneRouteFailClosedReason::ZoneLinkDisconnected
+        }
+        ZoneEnrollmentRefusal::PayloadTooLarge => ZoneRouteFailClosedReason::QueueFullDropNew,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
-    use d2b_contracts_resource::v3::{ResourceUid, ZoneRevision, identity::ReconnectGeneration};
+    use d2b_contracts_resource::v3::{
+        ResourceUid, ZoneId, ZoneRevision, identity::ReconnectGeneration,
+    };
+    use d2b_contracts_zone_session::v3::component_session::LimitProfile;
     use d2b_contracts_zone_session::v3::{
         component_session::{OperationClass, OperationId},
         zone_routing::{
@@ -761,6 +1128,7 @@ mod tests {
     use crate::engine::{
         ZoneAdvertisementAdmission, ZoneRouteAdmission, ZoneRouteAdmissionExpectation,
     };
+    use crate::enrollment::ZoneEnrollmentAuthority;
 
     fn zone(labels: &[&str]) -> ZonePath {
         ZonePath::new(
@@ -954,19 +1322,27 @@ mod tests {
     // -- dispatch admission ------------------------------------------------
 
     #[test]
-    fn a_method_without_a_landed_handler_is_refused_at_admission() {
+    fn every_landed_method_dispatches_within_the_window() {
         let mut server = server();
         for method in [
             ZoneServiceMethod::ZoneBootstrap,
             ZoneServiceMethod::ZoneEnroll,
+            ZoneServiceMethod::ResolveZoneRoute,
         ] {
-            assert!(!method.has_handler());
-            assert_eq!(
-                server.begin_dispatch(method).denial_reason(),
-                Some(ZoneRouteFailClosedReason::PolicyDenial)
-            );
+            assert!(matches!(
+                server.begin_dispatch(method),
+                ZoneDispatchAdmission::Admitted { .. }
+            ));
+            server.end_dispatch();
         }
-        assert_eq!(server.in_flight(), 0);
+        assert_eq!(
+            ZoneServiceMethod::ZoneBootstrap.wire_name(),
+            ZONE_BOOTSTRAP_METHOD
+        );
+        assert_eq!(
+            ZoneServiceMethod::ZoneEnroll.wire_name(),
+            ZONE_ENROLL_METHOD
+        );
     }
 
     #[test]
@@ -1493,6 +1869,414 @@ mod tests {
                 .list_topology(&seeded_engine(), &allowed_topology_request())
                 .len(),
             1
+        );
+    }
+
+    // -- enrollment --------------------------------------------------------
+
+    const BOOTSTRAP_TTL_MS: u64 = 300_000;
+    const ENROLL_NOW_MS: u64 = 1_700_000_000_500;
+    const SEALED_PEER_FINGERPRINT: [u8; 32] = [0x33; 32];
+
+    fn enrolled_expectation() -> ZoneEnrollmentExpectation {
+        ZoneEnrollmentExpectation::for_enrolled_guest_session(
+            ZoneId::parse("zone-k1").expect("valid zone"),
+            uid('1'),
+            edge(&["k0"], &["k1", "k0"]),
+            ZoneLinkControllerGeneration::parse("controller-1").expect("valid generation"),
+            SEALED_PEER_FINGERPRINT,
+            [0x44; 32],
+            [0x11; 32],
+            [0x22; 32],
+            ReconnectGeneration::new(7).expect("valid generation"),
+            LimitProfile::remote_default(),
+        )
+        .expect("the contract enrolled guest session profile")
+    }
+
+    fn enrollment_identity(expected: &ZoneEnrollmentExpectation) -> ZoneEnrollmentIdentity {
+        ZoneEnrollmentIdentity {
+            zone_link_uid: expected.zone_link_uid().clone(),
+            edge: expected.edge().clone(),
+            controller_generation: expected.controller_generation().clone(),
+            reconnect_generation: ReconnectGeneration::new(
+                expected.session_policy().reconnect_generation,
+            )
+            .expect("valid generation"),
+            schema_fingerprint: expected.session_policy().schema_fingerprint,
+        }
+    }
+
+    fn bootstrap_request(
+        expected: &ZoneEnrollmentExpectation,
+        issuance: u64,
+    ) -> ZoneBootstrapRequest {
+        ZoneBootstrapRequest::new(
+            ZoneBootstrapCall::new(
+                enrollment_identity(expected),
+                issuance,
+                BOOTSTRAP_TTL_MS,
+                1_700_000_000_000,
+            ),
+            ENROLL_NOW_MS,
+        )
+    }
+
+    fn enroll_request(
+        expected: &ZoneEnrollmentExpectation,
+        fingerprint: [u8; 32],
+    ) -> ZoneEnrollRequest {
+        ZoneEnrollRequest::new(
+            ZoneEnrollCall::new(enrollment_identity(expected), fingerprint, ENROLL_NOW_MS),
+            ENROLL_NOW_MS,
+        )
+    }
+
+    fn admitted_bootstrap(server: &mut ZoneServiceServer, expected: &ZoneEnrollmentExpectation) {
+        let bootstrap = bootstrap_request(expected, 1)
+            .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert!(matches!(
+            server.zone_bootstrap(&bootstrap),
+            ZoneBootstrapReply::Admitted { .. }
+        ));
+    }
+
+    #[test]
+    fn a_bootstrap_without_a_runtime_admission_is_refused_fail_closed() {
+        let mut server = server();
+        let expected = enrolled_expectation();
+        assert_eq!(
+            server.zone_bootstrap(&bootstrap_request(&expected, 1)),
+            ZoneBootstrapReply::Refused {
+                reason: ZoneEnrollmentRefusal::AdmissionAbsent
+            }
+        );
+        assert_eq!(
+            server.zone_enroll(&enroll_request(&expected, [0x33; 32])),
+            ZoneEnrollReply::Refused {
+                reason: ZoneEnrollmentRefusal::AdmissionAbsent
+            }
+        );
+        assert_eq!(server.link_state(&zone(&["k1", "k0"])), None);
+        assert_eq!(server.audit_events().len(), 2);
+        for event in server.audit_events() {
+            assert_eq!(event.kind, ZoneRouteAuditEventKind::ZoneLinkSessionFailed);
+            assert_eq!(
+                event.denial_reason,
+                Some(ZoneRouteFailClosedReason::PolicyDenial)
+            );
+        }
+    }
+
+    #[test]
+    fn bootstrap_admits_once_and_burns_the_psk_against_replay() {
+        let mut server = server();
+        let expected = enrolled_expectation();
+        let request = bootstrap_request(&expected, 1)
+            .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert_eq!(
+            server.zone_bootstrap(&request),
+            ZoneBootstrapReply::Admitted {
+                expires_at_unix_ms: 1_700_000_300_000
+            }
+        );
+        assert_eq!(
+            server.link_state(&zone(&["k1", "k0"])),
+            Some(d2b_bus::session::ZoneLinkState::IKpsk2)
+        );
+
+        // The admission was consumed, so the same request cannot be replayed.
+        assert_eq!(
+            server.zone_bootstrap(&request),
+            ZoneBootstrapReply::Refused {
+                reason: ZoneEnrollmentRefusal::AdmissionConsumed
+            }
+        );
+
+        // A fresh admission cannot restart a bootstrap that is already in
+        // flight: the PSK was burned by the first attempt, and the link never
+        // returns to `Unenrolled` on its own.
+        let replay = bootstrap_request(&expected, 1)
+            .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert_eq!(
+            server.zone_bootstrap(&replay),
+            ZoneBootstrapReply::Refused {
+                reason: ZoneEnrollmentRefusal::InvalidTransition
+            }
+        );
+        assert_eq!(
+            server.link_state(&zone(&["k1", "k0"])),
+            Some(d2b_bus::session::ZoneLinkState::IKpsk2)
+        );
+    }
+
+    #[test]
+    fn a_call_that_names_a_substituted_link_or_session_is_refused_before_the_psk_burns() {
+        let mut server = server();
+        let expected = enrolled_expectation();
+
+        let mut substituted = enrollment_identity(&expected);
+        substituted.zone_link_uid = uid('2');
+        let call = ZoneBootstrapRequest::new(
+            ZoneBootstrapCall::new(substituted, 1, BOOTSTRAP_TTL_MS, 1_700_000_000_000),
+            ENROLL_NOW_MS,
+        )
+        .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert_eq!(
+            server.zone_bootstrap(&call),
+            ZoneBootstrapReply::Refused {
+                reason: ZoneEnrollmentRefusal::IdentityMismatch
+            }
+        );
+
+        let mut substituted = enrollment_identity(&expected);
+        substituted.schema_fingerprint = [0x99; 32];
+        let call = ZoneBootstrapRequest::new(
+            ZoneBootstrapCall::new(substituted, 1, BOOTSTRAP_TTL_MS, 1_700_000_000_000),
+            ENROLL_NOW_MS,
+        )
+        .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert_eq!(
+            server.zone_bootstrap(&call),
+            ZoneBootstrapReply::Refused {
+                reason: ZoneEnrollmentRefusal::SessionProfileRefused
+            }
+        );
+
+        // The admitted link never advanced, so the honest call still works.
+        assert_eq!(server.link_state(&zone(&["k1", "k0"])), None);
+        let honest = bootstrap_request(&expected, 1)
+            .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert!(matches!(
+            server.zone_bootstrap(&honest),
+            ZoneBootstrapReply::Admitted { .. }
+        ));
+    }
+
+    #[test]
+    fn an_edge_outside_the_sealed_topology_is_refused() {
+        let mut server = server();
+        let expected = ZoneEnrollmentExpectation::for_enrolled_guest_session(
+            ZoneId::parse("zone-k9").expect("valid zone"),
+            uid('1'),
+            edge(&["k0"], &["k9", "k0"]),
+            ZoneLinkControllerGeneration::parse("controller-1").expect("valid generation"),
+            SEALED_PEER_FINGERPRINT,
+            [0x44; 32],
+            [0x11; 32],
+            [0x22; 32],
+            ReconnectGeneration::new(7).expect("valid generation"),
+            LimitProfile::remote_default(),
+        )
+        .expect("the contract enrolled guest session profile");
+        let call = bootstrap_request(&expected, 1)
+            .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert_eq!(
+            server.zone_bootstrap(&call),
+            ZoneBootstrapReply::Refused {
+                reason: ZoneEnrollmentRefusal::UnsealedZoneLink
+            }
+        );
+        assert_eq!(server.audit_events().len(), 1);
+        assert_eq!(
+            server
+                .audit_events()
+                .next()
+                .expect("one record")
+                .denial_reason,
+            Some(ZoneRouteFailClosedReason::UnknownParent)
+        );
+    }
+
+    #[test]
+    fn a_psk_lifetime_outside_the_frozen_range_is_refused() {
+        let mut server = server();
+        let expected = enrolled_expectation();
+        let call = ZoneBootstrapRequest::new(
+            ZoneBootstrapCall::new(enrollment_identity(&expected), 1, 1_000, 1_700_000_000_000),
+            ENROLL_NOW_MS,
+        )
+        .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert_eq!(
+            server.zone_bootstrap(&call),
+            ZoneBootstrapReply::Refused {
+                reason: ZoneEnrollmentRefusal::BootstrapPskTtlOutOfRange
+            }
+        );
+        assert_eq!(server.link_state(&zone(&["k1", "k0"])), None);
+    }
+
+    #[test]
+    fn an_expired_psk_is_refused_and_leaves_the_link_unenrolled() {
+        let mut server = server();
+        let expected = enrolled_expectation();
+        let call = ZoneBootstrapRequest::new(
+            ZoneBootstrapCall::new(
+                enrollment_identity(&expected),
+                1,
+                BOOTSTRAP_TTL_MS,
+                1_700_000_000_000,
+            ),
+            // One millisecond past the issuance expiry.
+            1_700_000_000_000 + BOOTSTRAP_TTL_MS,
+        )
+        .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert_eq!(
+            server.zone_bootstrap(&call),
+            ZoneBootstrapReply::Refused {
+                reason: ZoneEnrollmentRefusal::BootstrapPskExpired
+            }
+        );
+        // An expired PSK is refused, not burned: the link stays unenrolled and
+        // a fresh issuance is what a retry needs.
+        assert_eq!(server.link_state(&zone(&["k1", "k0"])), None);
+        let fresh = bootstrap_request(&expected, 2)
+            .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert!(matches!(
+            server.zone_bootstrap(&fresh),
+            ZoneBootstrapReply::Admitted { .. }
+        ));
+    }
+
+    #[test]
+    fn a_runtime_issued_admission_reaches_the_handler_and_then_burns() {
+        let mut server = server();
+        let expected = enrolled_expectation();
+        let now = Arc::new(AtomicU64::new(1_700_000_000_400));
+        let clock: Arc<dyn Fn() -> u64 + Send + Sync> = {
+            let now = Arc::clone(&now);
+            Arc::new(move || now.load(Ordering::Acquire))
+        };
+        let authority =
+            ZoneEnrollmentAuthority::with_lifetime(clock, 30_000).expect("valid authority");
+        let (verifier, evidence) = authority.issue(expected.clone()).expect("issued");
+        let request = bootstrap_request(&expected, 1)
+            .with_runtime_admission(verifier, evidence, &expected)
+            .expect("admission");
+        assert!(matches!(
+            server.zone_bootstrap(&request),
+            ZoneBootstrapReply::Admitted { .. }
+        ));
+    }
+
+    #[test]
+    fn enrollment_commits_and_admits_the_peer_with_the_allocator_placement() {
+        let mut server = server();
+        let expected = enrolled_expectation();
+        let bootstrap = bootstrap_request(&expected, 1)
+            .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert!(matches!(
+            server.zone_bootstrap(&bootstrap),
+            ZoneBootstrapReply::Admitted { .. }
+        ));
+
+        let enroll = enroll_request(&expected, [0x33; 32])
+            .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert_eq!(
+            server.zone_enroll(&enroll),
+            ZoneEnrollReply::Enrolled {
+                zone: expected.zone().clone(),
+                generation: 1,
+            }
+        );
+        assert_eq!(
+            server.link_state(&zone(&["k1", "k0"])),
+            Some(d2b_bus::session::ZoneLinkState::Ready)
+        );
+        assert!(
+            server
+                .audit_events()
+                .all(|event| event.kind == ZoneRouteAuditEventKind::ZoneLinkSessionEstablished)
+        );
+    }
+
+    #[test]
+    fn an_enrollment_without_a_admitted_bootstrap_is_refused() {
+        let mut server = server();
+        let expected = enrolled_expectation();
+        let enroll = enroll_request(&expected, [0x33; 32])
+            .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert_eq!(
+            server.zone_enroll(&enroll),
+            ZoneEnrollReply::Refused {
+                reason: ZoneEnrollmentRefusal::InvalidTransition
+            }
+        );
+    }
+
+    #[test]
+    fn a_peer_that_does_not_match_the_sealed_enrollment_is_refused_without_downgrading() {
+        let mut server = server();
+        let expected = enrolled_expectation();
+        admitted_bootstrap(&mut server, &expected);
+
+        // The call presents a peer fingerprint other than the one the
+        // allocator sealed, so the record never admits it.
+        let mismatch = enroll_request(&expected, [0x99; 32])
+            .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert_eq!(
+            server.zone_enroll(&mismatch),
+            ZoneEnrollReply::Refused {
+                reason: ZoneEnrollmentRefusal::ZoneLinkEnrollmentKeyMismatch
+            }
+        );
+        // The refusal falls back to the committed enrollment, never to a
+        // bootstrap: the PSK is already burned and the sealed record stands.
+        assert_eq!(
+            server.link_state(&zone(&["k1", "k0"])),
+            Some(d2b_bus::session::ZoneLinkState::EnrollmentCommitted)
+        );
+
+        let retry = enroll_request(&expected, SEALED_PEER_FINGERPRINT)
+            .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert!(matches!(
+            server.zone_enroll(&retry),
+            ZoneEnrollReply::Enrolled { generation: 1, .. }
+        ));
+
+        let bootstrap_again = bootstrap_request(&expected, 2)
+            .with_admission(ZoneEnrollmentAdmission::for_test(expected.clone()));
+        assert_eq!(
+            server.zone_bootstrap(&bootstrap_again),
+            ZoneBootstrapReply::Refused {
+                reason: ZoneEnrollmentRefusal::InvalidTransition
+            }
+        );
+    }
+
+    #[test]
+    fn a_revoked_authority_refuses_both_handlers() {
+        let mut server = server();
+        let expected = enrolled_expectation();
+        let now = Arc::new(AtomicU64::new(1_700_000_000_400));
+        let clock: Arc<dyn Fn() -> u64 + Send + Sync> = {
+            let now = Arc::clone(&now);
+            Arc::new(move || now.load(Ordering::Acquire))
+        };
+        let authority =
+            ZoneEnrollmentAuthority::with_lifetime(clock, 30_000).expect("valid authority");
+        let (bootstrap_verifier, bootstrap_evidence) =
+            authority.issue(expected.clone()).expect("issued");
+        let (enroll_verifier, enroll_evidence) = authority.issue(expected.clone()).expect("issued");
+        authority.revoke();
+
+        let bootstrap = bootstrap_request(&expected, 1)
+            .with_runtime_admission(bootstrap_verifier, bootstrap_evidence, &expected)
+            .expect("admission");
+        assert_eq!(
+            server.zone_bootstrap(&bootstrap),
+            ZoneBootstrapReply::Refused {
+                reason: ZoneEnrollmentRefusal::PolicyDenial
+            }
+        );
+        let enroll = enroll_request(&expected, [0x33; 32])
+            .with_runtime_admission(enroll_verifier, enroll_evidence, &expected)
+            .expect("admission");
+        assert_eq!(
+            server.zone_enroll(&enroll),
+            ZoneEnrollReply::Refused {
+                reason: ZoneEnrollmentRefusal::PolicyDenial
+            }
         );
     }
 }
