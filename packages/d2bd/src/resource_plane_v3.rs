@@ -2323,16 +2323,16 @@ mod tests {
             &self,
             _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
-            Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
+        ) -> Result<d2b_process::ProviderAdoption, String> {
+            Ok(d2b_process::ProviderAdoption::Absent)
         }
 
         async fn probe(
             &self,
             _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
-            Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
+        ) -> Result<d2b_process::ProviderLiveness, String> {
+            Ok(d2b_process::ProviderLiveness::Alive)
         }
 
         async fn launch_ephemeral(
@@ -2350,16 +2350,16 @@ mod tests {
             &self,
             _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
-            Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
+        ) -> Result<d2b_process::ProviderAdoption, String> {
+            Ok(d2b_process::ProviderAdoption::Absent)
         }
 
         async fn probe_ephemeral(
             &self,
             _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
-            Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
+        ) -> Result<d2b_process::ProviderLiveness, String> {
+            Ok(d2b_process::ProviderLiveness::Alive)
         }
 
         async fn stop_ephemeral(
@@ -3167,13 +3167,13 @@ mod tests {
             &self,
             _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
+        ) -> Result<d2b_process::ProviderAdoption, String> {
             if self.launched.load(std::sync::atomic::Ordering::SeqCst) {
-                Ok(crate::process_provider_runtime::ProviderAdoption::Adopted(
+                Ok(d2b_process::ProviderAdoption::Adopted(
                     adopted_report(),
                 ))
             } else {
-                Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
+                Ok(d2b_process::ProviderAdoption::Absent)
             }
         }
 
@@ -3181,8 +3181,8 @@ mod tests {
             &self,
             _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
-            Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
+        ) -> Result<d2b_process::ProviderLiveness, String> {
+            Ok(d2b_process::ProviderLiveness::Alive)
         }
 
         async fn launch_ephemeral(
@@ -3199,16 +3199,16 @@ mod tests {
             &self,
             _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
-            Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
+        ) -> Result<d2b_process::ProviderAdoption, String> {
+            Ok(d2b_process::ProviderAdoption::Absent)
         }
 
         async fn probe_ephemeral(
             &self,
             _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
-            Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
+        ) -> Result<d2b_process::ProviderLiveness, String> {
+            Ok(d2b_process::ProviderLiveness::Alive)
         }
 
         async fn stop_ephemeral(

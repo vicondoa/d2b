@@ -26,7 +26,9 @@ use d2b_core::{
     bundle_resolver::BundleResolver,
     processes::{ProcessNode, ProcessRole},
 };
-use d2b_process::{DeviceWorkerLaunch, ServingWorkerLaunch, ServingWorkerRoot};
+use d2b_process::{
+    DeviceWorkerLaunch, ProviderAdoption, ProviderLiveness, ServingWorkerLaunch, ServingWorkerRoot,
+};
 use d2b_process_conformance::{
     AdoptionCandidate, AdoptionOutcome, CompiledDigests, ConfigurationDigest,
     GuestExecutionBinding, IdentityBinding, LaunchIdentity, LaunchTicket, OperationBinding,
@@ -576,12 +578,6 @@ pub struct ProviderLaunch {
     pub identity: ProcessIdentityDigest,
 }
 
-/// Result of a Provider-backed adoption attempt.
-///
-/// Defined by the Process effect port (`d2b_process::ProviderAdoption`) and
-/// re-exported here so the daemon's existing paths keep resolving.
-pub use d2b_process::ProviderAdoption;
-
 const MAX_CONTROLLER_BOOTSTRAP_ENDPOINTS: usize = 256;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -793,12 +789,6 @@ impl ControllerBootstrapMarker {
         }
     }
 }
-
-/// Provider-backed liveness result used by the daemon readiness loop.
-///
-/// Defined by the Process effect port (`d2b_process::ProviderLiveness`) and
-/// re-exported here so the daemon's existing paths keep resolving.
-pub use d2b_process::ProviderLiveness;
 
 /// Readiness-loop adapter for one Provider-managed process node.
 pub struct ProviderLivenessProbe {
@@ -4651,6 +4641,52 @@ mod tests {
             true,
         )
         .unwrap()
+    }
+
+    /// The declared GPU settings cross the family/realizer boundary as
+    /// canonical JSON, so the wire shape is pinned against a hand-written
+    /// payload rather than one produced by the same type the consumer
+    /// decodes: a payload the realizer's shape accepts renders the declared
+    /// argv, and one it refuses fails closed instead of defaulting.
+    #[test]
+    fn device_worker_launch_args_pin_the_gpu_settings_wire_shape() {
+        let gpu = DeviceWorkerLaunch::Gpu(Box::new(GpuWorkerParams {
+            binary_path: PathBuf::from("/nix/store/crosvm/bin/crosvm"),
+            vm_name: "corp-vm".to_owned(),
+            socket_path: PathBuf::from("/run/d2b/vms/corp-vm/gpu.sock"),
+            wayland_sock: PathBuf::from("/run/user/1000/wayland-0"),
+            params: serde_json::from_str(
+                r#"{"context-types":["virgl"],"displays":[{"hidden":true}],"egl":false,"vulkan":true}"#,
+            )
+            .expect("the hand-written payload is the declared wire shape"),
+        }));
+        assert_eq!(
+            device_worker_launch_args(std::path::Path::new("/run/d2b"), &gpu)
+                .expect("the pinned payload renders"),
+            vec![
+                "device",
+                "gpu",
+                "--socket",
+                "/run/d2b/vms/corp-vm/gpu.sock",
+                "--wayland-sock",
+                "/run/user/1000/wayland-0",
+                "--params",
+                "{\"context-types\":\"virgl\",\"displays\":[{\"hidden\":true}],\"egl\":false,\"vulkan\":true}",
+            ]
+        );
+
+        let malformed = DeviceWorkerLaunch::Gpu(Box::new(GpuWorkerParams {
+            binary_path: PathBuf::from("/nix/store/crosvm/bin/crosvm"),
+            vm_name: "corp-vm".to_owned(),
+            socket_path: PathBuf::from("/run/d2b/vms/corp-vm/gpu.sock"),
+            wayland_sock: PathBuf::from("/run/user/1000/wayland-0"),
+            params: serde_json::json!({ "contextTypes": ["virgl"] }),
+        }));
+        assert_eq!(
+            device_worker_launch_args(std::path::Path::new("/run/d2b"), &malformed)
+                .expect_err("a payload the declared shape refuses fails closed"),
+            "provider-ticket:device-worker-gpu-params-invalid"
+        );
     }
 
     #[test]

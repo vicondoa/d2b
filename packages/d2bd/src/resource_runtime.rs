@@ -2493,13 +2493,13 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                                 CloudHypervisorResourceApiError::Transport
                             })?;
                         match liveness {
-                            crate::process_provider_runtime::ProviderLiveness::Alive => {
+                            d2b_process::ProviderLiveness::Alive => {
                                 d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current
                             }
-                            crate::process_provider_runtime::ProviderLiveness::Exited => {
+                            d2b_process::ProviderLiveness::Exited => {
                                 d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Absent
                             }
-                            crate::process_provider_runtime::ProviderLiveness::Unknown => {
+                            d2b_process::ProviderLiveness::Unknown => {
                                 d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Unavailable
                             }
                         }
@@ -5908,13 +5908,13 @@ impl ZoneResourceRuntime {
         .with_owner_ref(Some(guest_ref.clone()))
         .with_guest_descriptor_digest(descriptor_digest.as_ref());
         match providers.probe_resource(context, &spec).await {
-            Ok(crate::process_provider_runtime::ProviderLiveness::Alive) => {
+            Ok(d2b_process::ProviderLiveness::Alive) => {
                 Ok(crate::provider_effects::GuestLifecycleState::Started)
             }
-            Ok(crate::process_provider_runtime::ProviderLiveness::Exited) => {
+            Ok(d2b_process::ProviderLiveness::Exited) => {
                 Ok(crate::provider_effects::GuestLifecycleState::Stopped)
             }
-            Ok(crate::process_provider_runtime::ProviderLiveness::Unknown) => {
+            Ok(d2b_process::ProviderLiveness::Unknown) => {
                 tracing::debug!(
                     guest = %guest_ref.to_canonical_string(),
                     "Cloud Hypervisor lifecycle probe returned unknown liveness",

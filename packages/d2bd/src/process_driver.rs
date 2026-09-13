@@ -60,7 +60,7 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_process::{
     DeviceWorkerLaunch, ProcessDriverEffects, ProcessFamilySpec, ProcessResourceIdentity,
-    ServingWorkerLaunch, ServingWorkerRoot,
+    ProviderAdoption, ProviderLiveness, ServingWorkerLaunch, ServingWorkerRoot,
 };
 use d2b_process_conformance::{
     AdoptionCandidate, GuestExecutionBinding, ProcessIdentityDigest, ProcessStatusReport,
@@ -79,8 +79,7 @@ use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2bd_runtime::target_runtime::DaemonMode;
 
 use crate::process_provider_runtime::{
-    ProcessResourceContext, ProductionProcessProviders, ProviderAdoption, ProviderLiveness,
-    execution_target_allowed,
+    ProcessResourceContext, ProductionProcessProviders, execution_target_allowed,
 };
 use crate::process_resource_runtime::{LaunchRow, resolve_launch_identity};
 
@@ -2652,6 +2651,7 @@ mod tests {
         ResourceUid, ZoneId,
         process::ProcessClass,
     };
+    use d2b_process::{ProviderAdoption, ProviderLiveness};
     use d2b_process_conformance::testing::fixtures;
     use d2b_process_conformance::{
         AdoptionCandidate, AdoptionCondition, IdentityBinding, ObservedIdentity,
@@ -2678,7 +2678,6 @@ mod tests {
         DeviceWorkerLaunch, ProcessDriver, ProcessDriverArgs, ProcessDriverErrorKind,
         ProcessDriverFactory, ProcessDriverStatus, process_spec_decoder,
     };
-    use crate::process_provider_runtime::{ProviderAdoption, ProviderLiveness};
 
     // -- fake effect port ----------------------------------------------------
 

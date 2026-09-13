@@ -23,6 +23,7 @@ use d2b_contracts_resource::v3::{
     SchemaFingerprint, ZoneId, ZoneRevision, identity::ReconnectGeneration,
 };
 use d2b_contracts_zone_session::v3::zone_routing::{ZoneLabelId, ZonePath};
+use d2b_process::ProviderAdoption;
 use d2b_provider::instance::ProviderInstance;
 use d2b_provider::{
     ProviderCapabilitySet, ProviderClass, ProviderDescriptor, ProviderImplementationId,
@@ -31,9 +32,7 @@ use d2b_provider::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::process_provider_runtime::{
-    ProductionProcessProviders, ProviderAdoption, ProviderLaunch,
-};
+use crate::process_provider_runtime::{ProductionProcessProviders, ProviderLaunch};
 use crate::provider_effects::{
     EffectDispatch, GuestLifecycleOperation, GuestLifecycleRequest, LifecycleAuthorization,
     ProviderEffectError, ProviderLifecycleDispatch, ProviderLifecycleEffectPort,
