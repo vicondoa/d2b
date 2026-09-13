@@ -790,22 +790,22 @@ pub(crate) fn runtime_dispatch(cli: &ModernCli, context: &ZoneContext) -> Result
         ModernCommand::Process(args) => guest::run_process(context, args, mode, deadline),
         ModernCommand::Exec(args) => exec::run(context, args, mode, deadline),
         ModernCommand::Shell(args) => shell::run(context, args, mode, deadline),
-        ModernCommand::Volume(args) => resource::typed(context, "Volume", args, mode, deadline),
-        ModernCommand::Network(args) => resource::typed(context, "Network", args, mode, deadline),
-        ModernCommand::Device(args) => resource::typed(context, "Device", args, mode, deadline),
+        ModernCommand::Volume(args) => resource::typed_noun(context, "volume", args, mode, deadline),
+        ModernCommand::Network(args) => resource::typed_noun(context, "network", args, mode, deadline),
+        ModernCommand::Device(args) => resource::typed_noun(context, "device", args, mode, deadline),
         ModernCommand::Endpoint(args) => endpoint::run(context, args, mode, deadline),
         ModernCommand::Export(args) => share::run_export(context, args, mode, deadline),
         ModernCommand::Import(args) => share::run_import(context, args, mode, deadline),
         ModernCommand::Resource(args) => resource::run_resource(context, args, mode, deadline),
-        ModernCommand::User(args) => resource::typed(context, "User", args, mode, deadline),
+        ModernCommand::User(args) => resource::typed_noun(context, "user", args, mode, deadline),
         ModernCommand::Credential(args) => {
-            resource::typed(context, "Credential", args, mode, deadline)
+            resource::typed_noun(context, "credential", args, mode, deadline)
         }
         ModernCommand::Provider(args) => provider::run(context, args, mode, deadline),
         ModernCommand::Zone(args) => zone::run(context, args, mode, deadline),
-        ModernCommand::Quota(args) => resource::typed(context, "Quota", args, mode, deadline),
+        ModernCommand::Quota(args) => resource::typed_noun(context, "quota", args, mode, deadline),
         ModernCommand::EmergencyPolicy(args) => {
-            resource::typed(context, "EmergencyPolicy", args, mode, deadline)
+            resource::typed_noun(context, "emergency-policy", args, mode, deadline)
         }
         ModernCommand::Activation(args) => activation::run(context, args, mode, deadline),
         ModernCommand::Complete(args) => complete::run(args, Some(context), mode, deadline),

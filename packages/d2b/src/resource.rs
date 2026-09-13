@@ -498,6 +498,23 @@ pub(crate) fn reconcile(
     Ok(0)
 }
 
+/// Dispatch one typed noun from the generated surface catalog.
+///
+/// The noun-to-type table is generated: a typed noun the catalog does not
+/// carry has no resource type to address and is refused rather than guessed.
+pub(crate) fn typed_noun(
+    context: &ZoneContext,
+    noun: &str,
+    args: &TypedResourceArgs,
+    mode: OutputMode,
+    deadline: RequestDeadline,
+) -> Result<i32, CliFailure> {
+    let Some(resource_type) = crate::generated::surface_catalog::typed_noun_type(noun) else {
+        return Err(context.failure("ref-invalid", "unknown typed noun", mode, 2));
+    };
+    typed(context, resource_type, args, mode, deadline)
+}
+
 pub(crate) fn typed(
     context: &ZoneContext,
     resource_type: &str,
@@ -553,7 +570,7 @@ pub(crate) fn typed(
                 wait_for_reconcile: args.wait_for_reconcile,
                 reconcile_deadline: args.reconcile_deadline.clone(),
             };
-            if resource_type == "Endpoint" {
+            if crate::generated::surface_catalog::is_controller_owned(resource_type) {
                 return Err(context.failure(
                     "authorization-denied",
                     "controller-owned Endpoint specs are not operator-writable",
@@ -564,7 +581,7 @@ pub(crate) fn typed(
             update_spec(context, &generic, mode, deadline)
         }
         TypedResourceCommand::Delete(args) => {
-            if resource_type == "Endpoint" {
+            if crate::generated::surface_catalog::is_controller_owned(resource_type) {
                 return Err(context.failure(
                     "authorization-denied",
                     "controller-owned Endpoints are not operator-deletable",
@@ -604,7 +621,7 @@ pub(crate) fn typed(
             reconcile(context, &generic, mode, deadline)
         }
         TypedResourceCommand::Verify(args) => {
-            if resource_type != "Volume" {
+            if !crate::generated::surface_catalog::typed_verb_type("verify").is_some_and(|owner| owner == resource_type) {
                 return Err(context.failure(
                     "ref-invalid",
                     "verify is available only for Volume resources",
@@ -626,7 +643,7 @@ pub(crate) fn typed(
             Ok(0)
         }
         TypedResourceCommand::Usb(args) => {
-            if resource_type != "Device" {
+            if !crate::generated::surface_catalog::typed_verb_type("usb").is_some_and(|owner| owner == resource_type) {
                 return Err(context.failure(
                     "ref-invalid",
                     "USB operations are available only for Device resources",
@@ -637,7 +654,7 @@ pub(crate) fn typed(
             device_usb(context, args, mode, deadline)
         }
         TypedResourceCommand::SecurityKey(args) => {
-            if resource_type != "Device" {
+            if !crate::generated::surface_catalog::typed_verb_type("security-key").is_some_and(|owner| owner == resource_type) {
                 return Err(context.failure(
                     "ref-invalid",
                     "security-key operations are available only for Device resources",
@@ -746,7 +763,7 @@ fn list_payload(args: ListPayloadArgs<'_>) -> Result<Value, CliFailure> {
     }
     if let Some(execution_ref) = execution_ref {
         let execution_ref = parse_resource_ref(execution_ref, None)?;
-        if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
+        if !crate::generated::surface_catalog::is_execution_target(execution_ref.resource_type().as_str()) {
             return Err(CliFailure::new(
                 2,
                 "execution-ref must name a Host or Guest",
@@ -876,7 +893,7 @@ fn reject_endpoint_mutation(
     resource_type: &str,
     mode: OutputMode,
 ) -> Result<(), CliFailure> {
-    if resource_type == "Endpoint" {
+    if crate::generated::surface_catalog::is_controller_owned(resource_type) {
         return Err(context.failure(
             "authorization-denied",
             "controller-owned Endpoints are not operator-writable",

@@ -380,6 +380,18 @@ fn delete(
     Ok(0)
 }
 
+/// Whether the export contract admits the target resource.
+///
+/// `ResourceExport.resourceRef` must name a locally owned authority Service.
+/// The admission is the declared semantic projection contract's, not a
+/// heuristic over the type name: the pairs the catalog carries are the
+/// factory-bound Services an export may target.
+fn admits_export_target(resource_ref: &d2b_contracts_resource::v3::ResourceRef) -> bool {
+    d2b_contracts_provider::v3::semantic_services::catalog()
+        .iter()
+        .any(|pair| pair.admit_export_target(resource_ref).is_ok())
+}
+
 fn validate_share_spec(
     context: &ZoneContext,
     resource_type: &str,
@@ -422,10 +434,7 @@ fn validate_share_spec(
                 1,
             )
         })?;
-        if !owner.resource_type().as_str().contains("Service")
-            || owner.resource_type().as_str().contains("Binding")
-            || matches!(owner.resource_type().as_str(), "Device" | "Endpoint")
-        {
+        if !admits_export_target(&owner) {
             return Err(context.failure(
                 "resource-schema-invalid",
                 "ResourceExport.resourceRef must target a local factory-bound Service",

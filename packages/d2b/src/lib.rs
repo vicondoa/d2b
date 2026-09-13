@@ -19,6 +19,7 @@ mod doctor;
 mod endpoint;
 mod exec;
 mod exec_client;
+mod generated;
 mod guest;
 mod host;
 pub mod host_generation;

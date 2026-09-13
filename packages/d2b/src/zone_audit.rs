@@ -716,7 +716,7 @@ fn validate_public_field(class: &str, key: &str, value: &Value) -> bool {
         "verb" => valid_verb(class, value),
         "outcome" => valid_outcome(class, value),
         "event" => valid_event(class, value),
-        "provider" => matches!(value, "minijail" | "systemd" | "system-core-user"),
+        "provider" => crate::generated::surface_catalog::PROCESS_PROVIDERS.contains(&value),
         "domain" => matches!(value, "system" | "user"),
         "profile" => matches!(value, "NN" | "KK" | "IKpsk2"),
         "purpose_class" => matches!(value, "local" | "enrolled" | "bootstrap"),
@@ -737,17 +737,9 @@ fn validate_public_field(class: &str, key: &str, value: &Value) -> bool {
 
 fn valid_verb(class: &str, value: &str) -> bool {
     match class {
-        "resource-mutation" | "rbac-change" => matches!(
-            value,
-            "create"
-                | "update-spec"
-                | "update-status"
-                | "update-metadata"
-                | "update-finalizers"
-                | "delete"
-                | "use-credential"
-                | "admin-credential"
-        ),
+        "resource-mutation" | "rbac-change" => {
+            crate::generated::surface_catalog::admits_mutation_verb(value)
+        }
         "resource-upgrade" => matches!(value, "assess" | "plan" | "execute"),
         _ => false,
     }
@@ -783,28 +775,8 @@ fn valid_event(class: &str, value: &str) -> bool {
 }
 
 fn valid_resource_type(value: &str) -> bool {
-    matches!(
-        value,
-        "Zone"
-            | "ZoneLink"
-            | "Provider"
-            | "Role"
-            | "RoleBinding"
-            | "Quota"
-            | "Host"
-            | "Guest"
-            | "Process"
-            | "EphemeralProcess"
-            | "Volume"
-            | "Network"
-            | "Device"
-            | "User"
-            | "Credential"
-            | "Endpoint"
-            | "ResourceExport"
-            | "ResourceImport"
-            | "vendor"
-    )
+    crate::generated::surface_catalog::admits_resource_type(value)
+        || value.contains(".d2bus.org.")
 }
 
 fn valid_service(value: &str) -> bool {

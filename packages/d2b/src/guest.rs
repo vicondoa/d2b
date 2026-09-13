@@ -303,9 +303,9 @@ fn filter_unsafe_local(mut value: Value) -> Value {
                 .pointer("/status/providerKind")
                 .and_then(Value::as_str)
                 .or_else(|| item.get("providerKind").and_then(Value::as_str));
-            !matches!(posture, Some("none" | "unsafe-local"))
-                && provider != Some("Provider/unsafe-local")
-                && provider_kind != Some("unsafe-local")
+            !posture.is_some_and(crate::generated::surface_catalog::is_no_isolation_posture)
+                && !provider.is_some_and(crate::generated::surface_catalog::is_unsafe_local_provider)
+                && !provider_kind.is_some_and(crate::generated::surface_catalog::is_unsafe_local_provider_kind)
         });
     }
     value
@@ -320,17 +320,17 @@ fn reject_unsafe_local(
         .pointer("/status/isolationPosture")
         .and_then(Value::as_str)
         .or_else(|| value.get("isolationPosture").and_then(Value::as_str))
-        .is_some_and(|posture| matches!(posture, "none" | "unsafe-local"))
+        .is_some_and(crate::generated::surface_catalog::is_no_isolation_posture)
         || value
             .pointer("/spec/providerRef")
             .and_then(Value::as_str)
             .or_else(|| value.get("providerRef").and_then(Value::as_str))
-            == Some("Provider/unsafe-local")
+            .is_some_and(crate::generated::surface_catalog::is_unsafe_local_provider)
         || value
             .pointer("/status/providerKind")
             .and_then(Value::as_str)
             .or_else(|| value.get("providerKind").and_then(Value::as_str))
-            == Some("unsafe-local");
+            .is_some_and(crate::generated::surface_catalog::is_unsafe_local_provider_kind);
     if unsafe_local {
         return Err(context.failure(
             "resource-schema-invalid",

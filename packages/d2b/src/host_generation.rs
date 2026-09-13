@@ -19,7 +19,7 @@ pub fn build_request(
     artifact_id: impl Into<String>,
     mode: ActivationMode,
 ) -> Result<HostGenerationRequest, HostGenerationRequestError> {
-    if !matches!(target.resource_type().as_str(), "Host" | "Guest") {
+    if !crate::generated::surface_catalog::is_execution_target(target.resource_type().as_str()) {
         return Err(HostGenerationRequestError::TargetInvalid);
     }
     let artifact_id = ArtifactId::parse(artifact_id.into())
