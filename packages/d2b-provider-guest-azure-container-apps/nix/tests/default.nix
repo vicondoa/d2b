@@ -38,7 +38,7 @@ in
     "provider-runtime-azure-container-apps/gateway-processes" = {
       expr = lib.attrNames (evaluated.config.d2b._resourceCompiler
         .providerProjectionRuntimeAzureContainerApps.processesByZone.dev);
-      expected = [ "aca-controller" "aca-deployment-service" ];
+      expected = [ "aca-controller" ];
     };
     "provider-runtime-azure-container-apps/processes-stay-in-gateway" = {
       expr = evaluated.config.d2b._resourceCompiler

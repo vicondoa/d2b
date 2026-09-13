@@ -18,7 +18,7 @@ let
     then (resourcesFor zoneName).runtime-azure-container-apps
     else null;
 
-  processFor = zoneName: name: template: executionRef: {
+  processFor = zoneName: name: executionRef: {
     type = "Process";
     metadata = {
       name = name;
@@ -30,7 +30,7 @@ let
       inherit executionRef;
       domain = "system";
       processClass = "service";
-      inherit template;
+      template = name;
       desiredLifecycle = "running";
       deviceUsage = [ ];
       networkUsage = null;
@@ -47,10 +47,7 @@ let
     in if executionRef == null
       then { }
       else {
-        "aca-controller" = processFor zoneName
-          "aca-controller" "aca-controller" executionRef;
-        "aca-deployment-service" = processFor zoneName
-          "aca-deployment-service" "aca-deployment-service" executionRef;
+        "aca-controller" = processFor zoneName "aca-controller" executionRef;
       };
 
   providerAssertions = zoneName:

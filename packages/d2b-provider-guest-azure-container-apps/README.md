@@ -5,8 +5,8 @@ Canonical implementation of `Provider/runtime-azure-container-apps`.
 ## Provider identity
 
 The implementation identifier is `azure-container-apps`. It reconciles remote
-ACA sandbox Guests while keeping the controller and deployment service inside a
-configured gateway Guest.
+ACA sandbox Guests while keeping the controller inside a configured gateway
+Guest.
 
 ## Config schema
 
@@ -23,8 +23,8 @@ observations. A managed ACA sandbox is not a Zone or a ZoneLink.
 ## Controllers / services / workers / binaries
 
 `AcaController` performs observe, adopt, ensure, start, stop, destroy, and
-finalize through `AcaControl` and `AcaCredentialLeaseClient`. The deployment
-service dispatches bounded lifecycle requests and never self-spawns a process.
+finalize through `AcaControl` and `AcaCredentialLeaseClient`; it never
+self-spawns a process.
 
 ## Placement and dependencies
 
@@ -43,15 +43,13 @@ ports are the only mutation boundary; ambiguous adoption fails closed.
 
 ## Security posture
 
-Credential leases expose only opaque metadata. Status, Debug, audit, and
-metrics never contain sandbox IDs, endpoints, tokens, paths, or ZoneLink
-authority.
+Credential leases expose only opaque metadata. Status and Debug never contain
+sandbox IDs, endpoints, tokens, paths, or ZoneLink authority.
 
 ## State and telemetry
 
 Bounded observed identity digests and lifecycle phases are status-first.
-Completed operation entries are bounded and expirable. Audit events and metric
-labels use closed semantic values.
+Completed operation entries are bounded and expirable.
 
 ## Build and test
 

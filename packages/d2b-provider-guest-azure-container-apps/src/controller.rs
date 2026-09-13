@@ -48,47 +48,6 @@ pub const ACA_REPAIR_INTERVAL_SECS: u64 = 30;
 /// Exact Guest finalizer owned by the ACA runtime Provider.
 pub const ACA_GUEST_FINALIZER: &str = "runtime-azure-container-apps.d2bus.org/guest-cleanup";
 
-/// The shared-Runner contract for the Azure Container Apps Guest owner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AzureContainerAppsRunnerContract {
-    resource_type: &'static str,
-    finalizer: &'static str,
-    repair_interval_secs: u64,
-    watched_configuration_is_dependency: bool,
-}
-
-impl AzureContainerAppsRunnerContract {
-    /// Return the owned ResourceType.
-    pub const fn resource_type(self) -> &'static str {
-        self.resource_type
-    }
-
-    /// Return the exact Guest finalizer.
-    pub const fn finalizer(self) -> &'static str {
-        self.finalizer
-    }
-
-    /// Return the bounded repair interval.
-    pub const fn repair_interval_secs(self) -> u64 {
-        self.repair_interval_secs
-    }
-
-    /// Whether watched configuration is treated as a dependency.
-    pub const fn watched_configuration_is_dependency(self) -> bool {
-        self.watched_configuration_is_dependency
-    }
-}
-
-/// Return the shared-Runner contract for Azure Container Apps Guests.
-pub const fn azure_container_apps_runner_contract() -> AzureContainerAppsRunnerContract {
-    AzureContainerAppsRunnerContract {
-        resource_type: "Guest",
-        finalizer: ACA_GUEST_FINALIZER,
-        repair_interval_secs: ACA_REPAIR_INTERVAL_SECS,
-        watched_configuration_is_dependency: true,
-    }
-}
-
 /// Result of one non-blocking reconcile pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcaReconcileOutcome {
@@ -113,8 +72,6 @@ pub enum AcaControllerError {
     InvalidState,
     /// More than one matching sandbox was found.
     AmbiguousAdoption,
-    /// No disk image was returned and creation was not possible.
-    DiskImageUnavailable,
     /// No sandbox was available for a requested operation.
     SandboxUnavailable,
     /// The injected effect failed.
@@ -131,7 +88,6 @@ impl AcaControllerError {
         match self {
             Self::InvalidState => "aca-invalid-state",
             Self::AmbiguousAdoption => "aca-ambiguous-adoption",
-            Self::DiskImageUnavailable => "aca-disk-image-unavailable",
             Self::SandboxUnavailable => "aca-sandbox-unavailable",
             Self::Effect(kind) | Self::LeaseCleanup(kind) => kind.code(),
             Self::ReadinessExhausted => "aca-readiness-exhausted",
@@ -274,16 +230,6 @@ impl CompletedOperationLedger {
     pub fn get(&self, operation_id: &AcaOperationId) -> Option<AcaPhase> {
         self.completed.get(operation_id).map(|(_, phase, _)| *phase)
     }
-
-    /// Return the number of retained records.
-    pub fn len(&self) -> usize {
-        self.completed.len()
-    }
-
-    /// Return whether no records are retained.
-    pub fn is_empty(&self) -> bool {
-        self.completed.is_empty()
-    }
 }
 
 impl AcaFinalizationStage {
@@ -316,7 +262,6 @@ pub struct AcaController<C, L> {
     phase: AcaPhase,
     finalizer: bool,
     observed: Option<AcaSandboxRecord>,
-    disk_image: Option<AcaDiskImageRecord>,
     ledger: CompletedOperationLedger,
     clock: Arc<dyn AcaClock>,
     readiness_generation: u64,
@@ -349,7 +294,6 @@ where
             phase: AcaPhase::Pending,
             finalizer: true,
             observed: None,
-            disk_image: None,
             ledger: CompletedOperationLedger::default(),
             clock: Arc::new(SystemAcaClock),
             readiness_generation: generation,
@@ -435,11 +379,6 @@ where
             }),
             observed_generation: self.binding.provider_generation,
         }
-    }
-
-    /// Return the bounded operation ledger.
-    pub const fn ledger(&self) -> &CompletedOperationLedger {
-        &self.ledger
     }
 
     /// Reconcile using external observation before any ensure effect.
@@ -880,7 +819,6 @@ where
                 },
             )
             .await?;
-        self.disk_image = Some(image.clone());
         let desired = AcaDesiredSandbox {
             binding: self.binding.clone(),
             profile: self.config.profile().clone(),

@@ -8,26 +8,12 @@ use d2b_provider_guest_azure_container_apps::{
     AcaClock, AcaConfiguredDiskId, AcaControl, AcaControlContext, AcaControlError,
     AcaControlErrorKind, AcaControlHealth, AcaController, AcaControllerError, AcaCpuMillis,
     AcaCredentialLease, AcaCredentialLeaseClient, AcaCredentialLeaseRequest, AcaDeleteOutcome,
-    AcaDeploymentRequest, AcaDeploymentResponse, AcaDeploymentService, AcaDesiredDiskImage,
-    AcaDesiredSandbox, AcaDiskImageCandidates, AcaDiskImageId, AcaDiskImageRecord,
-    AcaDiskImageSource, AcaMemoryMib, AcaOperationId, AcaPhase, AcaProfileId, AcaReadinessPolicy,
-    AcaReconcileOutcome, AcaRecoveryState, AcaResourceBinding, AcaRuntimeConfig,
-    AcaSandboxCandidates, AcaSandboxId, AcaSandboxLifecycle, AcaSandboxProfile, AcaSandboxRecord,
-    AcaServiceMethod,
+    AcaDesiredDiskImage, AcaDesiredSandbox, AcaDiskImageCandidates, AcaDiskImageId,
+    AcaDiskImageRecord, AcaDiskImageSource, AcaMemoryMib, AcaOperationId, AcaPhase, AcaProfileId,
+    AcaReadinessPolicy, AcaReconcileOutcome, AcaRecoveryState, AcaResourceBinding,
+    AcaRuntimeConfig, AcaSandboxCandidates, AcaSandboxId, AcaSandboxLifecycle, AcaSandboxProfile,
+    AcaSandboxRecord,
 };
-
-#[test]
-fn aca_publishes_the_shared_runner_contract() {
-    let contract =
-        d2b_provider_guest_azure_container_apps::azure_container_apps_runner_contract();
-    assert_eq!(contract.resource_type(), "Guest");
-    assert_eq!(
-        contract.finalizer(),
-        d2b_provider_guest_azure_container_apps::FINALIZER
-    );
-    assert_eq!(contract.repair_interval_secs(), 30);
-    assert!(contract.watched_configuration_is_dependency());
-}
 
 #[derive(Default)]
 struct FakeState {
@@ -260,30 +246,6 @@ async fn running_sandbox_requires_authenticated_healthy_control() {
         AcaReconcileOutcome::Converged
     );
     assert_eq!(controller.phase(), AcaPhase::Ready);
-}
-
-#[tokio::test]
-async fn deployment_service_dispatches_authenticated_health() {
-    let state = Arc::new(Mutex::new(FakeState::default()));
-    let service = AcaDeploymentService::new(
-        Arc::new(FakeControl {
-            state: Arc::clone(&state),
-        }),
-        Arc::new(FakeLeaseClient { state }),
-    );
-    assert_eq!(
-        service
-            .dispatch(
-                AcaServiceMethod::GuestHealth,
-                AcaDeploymentRequest::Health {
-                    operation_id: AcaOperationId::parse("operation-service-health").unwrap(),
-                },
-                1_000,
-            )
-            .await
-            .unwrap(),
-        AcaDeploymentResponse::Health(AcaControlHealth::Ready)
-    );
 }
 
 #[tokio::test]
