@@ -163,6 +163,25 @@ generated_artifact_check(
     ],
 )
 
+# The policy-inputs bundle is projected from the locked Cargo metadata, so its
+# drift target needs the lock, the workspace sources, the protected ownership
+# declaration the advisory policy is validated against, and the bundle it
+# rewrites. `//:packages_workspace_sources` still misses `d2b-resource-runtime`
+# and the test-controller manifest, so both are named here beside it until the
+# aggregate carries them.
+generated_artifact_check(
+    name = "gen_package_policy_inputs_drift",
+    command = "gen-package-policy-inputs",
+    data = [
+        "//:.github/CODEOWNERS",
+        "//:Cargo.lock",
+        "//:packages_workspace_sources",
+        "//:policy_inputs_workspace_sources",
+        "//packages/d2b-provider-test-controller:Cargo.toml",
+        "//packages/d2b-resource-runtime:cargo_workspace_sources",
+    ],
+)
+
 generated_artifact_generator(
     name = "generate",
     data = [
@@ -183,6 +202,7 @@ test_suite(
         ":gen_error_codes_drift",
         ":gen_layer_catalogs_drift",
         ":gen_nix_inventories_drift",
+        ":gen_package_policy_inputs_drift",
         ":gen_provider_packaging_drift",
         ":gen_resource_proto_drift",
         ":gen_resource_schemas_drift",

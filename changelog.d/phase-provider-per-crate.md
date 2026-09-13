@@ -429,6 +429,33 @@
   a committed row facet, it reaches the generated catalog and the operator
   triage table, and a row that drops it fails both the generator and the
   broker's gate.
+- `check-provider-crate-layout` now watches `d2b-resource-runtime` and
+  `d2b-resource-types`, so the framework's shared declaration-only metadata
+  driver is policed where it lives instead of sitting outside the monitored
+  roots. The framework driver and its factory are named as the one allowed
+  declaration in those crates; a per-resource driver parked in either crate
+  still fails, and an allowance that stops matching the tree fails with it.
+  The driver signal is the `ResourceDriver for` shape rather than a line
+  prefix, so a declaration behind a visibility qualifier, an attribute, or
+  another item on the line is still seen, commented-out examples are not
+  declarations, and test modules are not production placement.
+- The check now fails on a comment inside a monitored root that cites a
+  repository path or a crate-qualified module path the tree no longer has,
+  and `check-provider-crate-layout --fix` removes the mechanical shapes (a
+  citation-only line, a parenthetical holding only the citation, and a
+  trailing clause after a comma or dash) while reporting the citations woven
+  into a sentence for a human to restate. Every rewrite is comments-only and
+  check mode verifies it afterwards. The three citations in the monitored
+  roots that had drifted now point at the module that holds the behavior, the
+  policy matrix's system-core row cites `src/host.rs` instead of the deleted
+  reconciler module, and the generated provider catalog shape is regenerated
+  from that row.
+- `gen-package-policy-inputs` prunes context directories the current context
+  set does not name: `--write` deletes them in deterministic order and
+  reports each removal, and `--check` fails naming them, so a context retired
+  with its crate cannot strand protected files that nothing regenerates or
+  verifies.
+
 ### Removed
 
 - Seven broker operations nothing in tree constructed are gone with their rows,
@@ -467,35 +494,6 @@
   service's own frozen wire name already defines, and the duplicate
   `PROVIDER_REF` inside the qemu-media Guest type module, whose reader now
   resolves the crate root's public declaration.
-
-### Changed
-
-- `check-provider-crate-layout` now watches `d2b-resource-runtime` and
-  `d2b-resource-types`, so the framework's shared declaration-only metadata
-  driver is policed where it lives instead of sitting outside the monitored
-  roots. The framework driver and its factory are named as the one allowed
-  declaration in those crates; a per-resource driver parked in either crate
-  still fails, and an allowance that stops matching the tree fails with it.
-  The driver signal is the `ResourceDriver for` shape rather than a line
-  prefix, so a declaration behind a visibility qualifier, an attribute, or
-  another item on the line is still seen, commented-out examples are not
-  declarations, and test modules are not production placement.
-- The check now fails on a comment inside a monitored root that cites a
-  repository path or a crate-qualified module path the tree no longer has,
-  and `check-provider-crate-layout --fix` removes the mechanical shapes (a
-  citation-only line, a parenthetical holding only the citation, and a
-  trailing clause after a comma or dash) while reporting the citations woven
-  into a sentence for a human to restate. Every rewrite is comments-only and
-  check mode verifies it afterwards. The three citations in the monitored
-  roots that had drifted now point at the module that holds the behavior, the
-  policy matrix's system-core row cites `src/host.rs` instead of the deleted
-  reconciler module, and the generated provider catalog shape is regenerated
-  from that row.
-- `gen-package-policy-inputs` prunes context directories the current context
-  set does not name: `--write` deletes them in deterministic order and
-  reports each removal, and `--check` fails naming them, so a context retired
-  with its crate cannot strand protected files that nothing regenerates or
-  verifies.
 
 ### Fixed
 
@@ -553,3 +551,13 @@
   yet.
 - The broker's SIGCHLD reap loop shares the reactor the accept loop runs on
   instead of owning a second runtime.
+
+### Security
+
+- The broker-forwarding rendezvous admits a peer only after verifying its
+  kernel credentials. The socket is chgrp'd to the public socket group, which
+  carries every launcher and admin, so group access alone let any of them
+  drive a provider operation the broker had never authorized and that carried
+  no broker audit record. The accepted peer is the privileged broker (uid 0,
+  host and realm alike) or the daemon's own uid where both run under one
+  unprivileged user; anything else is refused by name as `ungranted-caller`.

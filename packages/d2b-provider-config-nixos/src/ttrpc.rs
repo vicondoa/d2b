@@ -459,22 +459,51 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn a_blocking_backend_dispatch_does_not_occupy_the_polling_worker() {
-        // The dispatch parks on the blocking pool while the runtime keeps
-        // polling: the release is delivered by the same single-threaded
-        // runtime, so it can only arrive if the read left that worker free.
+        // Drive the registered service handler, not the helper behind it. On
+        // the single-threaded runtime below the release can only be delivered
+        // while the backend is parked if the handler left its polling worker
+        // free: an inline `backend.dispatch` would stall the only worker and
+        // the handler would answer the parked call with an error.
         let (started, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
         let (release, release_rx) = channel();
-        let backend = Arc::new(ParkingBackend {
+        let services = create_ttrpc_services(Arc::new(ParkingBackend {
             started,
             release: std::sync::Mutex::new(Some(release_rx)),
-        });
-        let dispatched = tokio::spawn(dispatch_on_blocking_worker(
-            backend,
-            ConfigOperation::ReadGuestConfig,
-            Value::Null,
-        ));
-        started_rx.recv().await.expect("dispatch started");
+        }));
+        let handler = services
+            .get(&format!("{SERVICE_PACKAGE}.{SERVICE_NAME}"))
+            .expect("config-nixos service is registered")
+            .methods
+            .get("ReadGuestConfig")
+            .expect("guest read handler is registered");
+        let payload = ConfigSyncRequest::new(
+            ResourceRef::parse("Guest/parked-dispatch").expect("guest reference"),
+        )
+        .expect("config sync request");
+        let request = ttrpc::Request {
+            service: format!("{SERVICE_PACKAGE}.{SERVICE_NAME}"),
+            method: "ReadGuestConfig".to_owned(),
+            payload: serde_json::to_vec(&payload).expect("request encoding"),
+            ..Default::default()
+        };
+        let context = ttrpc::r#async::TtrpcContext {
+            mh: ttrpc::proto::MessageHeader::new_request(1, 0),
+            metadata: HashMap::new(),
+            timeout_nano: 0,
+        };
+        let handled = ttrpc::r#async::MethodHandler::handler(handler.as_ref(), context, request);
+        tokio::pin!(handled);
+        tokio::select! {
+            completed = &mut handled => {
+                panic!("handler completed before the backend parked: {completed:?}");
+            }
+            Some(()) = started_rx.recv() => {}
+        }
         release.send(()).expect("release parked dispatch");
-        assert!(dispatched.await.expect("dispatch task").is_ok());
+        let response = handled.await.expect("handler answer");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&response.payload).expect("response payload"),
+            Value::Null,
+        );
     }
 }
