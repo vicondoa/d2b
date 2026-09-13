@@ -334,6 +334,18 @@ rust_test(
 )
 
 rust_test(
+    name = "debug_contract",
+    srcs = ["tests/debug_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "zone_doctor_contract",
     srcs = ["tests/zone_doctor_contract.rs"],
     compile_data = ["Cargo.toml"],

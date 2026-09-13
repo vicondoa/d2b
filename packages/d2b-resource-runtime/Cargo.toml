@@ -9,6 +9,11 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+# Issue #508 follow-up: the driver failure-kind registry (with the
+# operator-facing means/likely-cause notes) moved to `d2b-contracts` so a
+# second consumer can read it without depending on this crate. Re-exported
+# from `crate::error` for existing consumers.
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 ractor.workspace = true
 rusqlite.workspace = true
 rusqlite_migration.workspace = true

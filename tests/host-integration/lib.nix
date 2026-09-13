@@ -707,7 +707,29 @@ rec {
               ),
           ]
 
-      def diag_step(name, action, rows=(), explain=(), wait=None):
+      # Every fixture drives one zone as one linux user through the same
+      # public socket, so the composed explanation is available without each
+      # stage listing the rows it asserted on: `d2b debug` reads the whole
+      # zone and prints the ownership tree, the row that is not settled, and
+      # the structured failure behind it.
+      _diag_zone = "work"
+      _diag_user = "alice"
+
+      def diag_debug_zone(label="zone explanation"):
+          """The composed `d2b debug` report, always diagnostic and never
+          fatal: a failure that happened before the daemon was reachable must
+          still print its own stage rather than a diagnostic error. Bounded,
+          because a failure can happen before there is anything to explain."""
+          status = diag(
+              f"runuser -u {_diag_user} -- env "
+              f"D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+              f"timeout 60 d2b --zone {_diag_zone} debug {_diag_zone} 2>&1 "
+              f"|| true",
+              label,
+          )
+          return status
+
+      def diag_step(name, action, rows=(), explain=(), wait=None, debug=True):
           stage(name)
           try:
               return action()
@@ -727,24 +749,28 @@ rec {
                   if token:
                       detail += f" lines matching {token!r}"
                   diag(_diag_journal(unit, token), detail)
+              if debug:
+                  diag_debug_zone()
               raise
 
-      def diag_unit(name, unit, timeout):
+      def diag_unit(name, unit, timeout, debug=True):
           """wait_for_unit with the unit status and journal on timeout."""
           return diag_step(
               name,
               lambda: machine.wait_for_unit(unit, timeout=timeout),
               unit_dumps(unit),
               [(unit, None)],
+              debug=debug,
           )
 
-      def diag_wait(name, command, timeout, rows=(), explain=()):
+      def diag_wait(name, command, timeout, rows=(), explain=(), debug=True):
           return diag_step(
               name,
               lambda: machine.wait_until_succeeds(command, timeout=timeout),
               rows,
               explain,
               command,
+              debug=debug,
           )
   '';
 

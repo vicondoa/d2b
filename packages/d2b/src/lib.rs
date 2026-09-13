@@ -13,6 +13,7 @@ use serde_json::Value;
 mod activation;
 mod complete;
 mod context;
+mod debug;
 mod dispatch;
 mod doctor;
 mod endpoint;

@@ -168,6 +168,20 @@ _arguments "${_arguments_options[@]}" : \
 ':resource_ref:_default' \
 && ret=0
 ;;
+(debug)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--all[Expand subtrees whose rows are all Ready]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':zone_ref -- Zone to explain:_default' \
+'::resource_ref -- Resource to explain, as `<ResourceType>/<name>`. Absent renders the zone:_default' \
+&& ret=0
+;;
 (host)
 _arguments "${_arguments_options[@]}" : \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
@@ -4227,6 +4241,7 @@ _d2b_commands() {
 'status:' \
 'upgrade:' \
 'reconcile:' \
+'debug:Arguments for \`d2b debug\`' \
 'host:' \
 'guest:' \
 'process:' \
@@ -4554,6 +4569,11 @@ _d2b__subcmd__credential__subcmd__verify_commands() {
 _d2b__subcmd__credential__subcmd__watch_commands() {
     local commands; commands=()
     _describe -t commands 'd2b credential watch commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__debug_commands] )) ||
+_d2b__subcmd__debug_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b debug commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__delete_commands] )) ||
 _d2b__subcmd__delete_commands() {

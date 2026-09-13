@@ -12,7 +12,9 @@ rust_library(
     srcs = d2b_resource_runtime_srcs,
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = all_crate_deps(normal = True, cargo_only = True),
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -20,7 +22,9 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_resource_runtime",
     data = ["//:docs/reference/resource-runtime-failure-kinds.md"],
-    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep
