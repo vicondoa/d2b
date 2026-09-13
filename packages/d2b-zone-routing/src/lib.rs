@@ -4,6 +4,7 @@
 //! work item named in its own doc comment.
 
 pub mod engine;
+pub mod enrollment;
 pub mod resolver;
 pub mod router;
 pub mod service;
