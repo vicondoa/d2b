@@ -265,6 +265,7 @@
             "host prepare --dry-run",
             "host reconcile-otel-acls --apply",
             "host shutdown-hook --apply",
+            "inspect-process-family",
             "keys list",
             "keys rotate",
             "keys show",
