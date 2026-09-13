@@ -108,10 +108,16 @@ generated_artifact_check(
     data = ["//:generated_resource_schemas"],
 )
 
+# The telemetry `op` label domain is projected from the committed broker rows,
+# so the drift target needs the row catalog as an input beside the artifacts it
+# compares.
 generated_artifact_check(
     name = "gen_layer_catalogs_drift",
     command = "gen-layer-catalogs",
-    data = ["//:generated_layer_catalogs"],
+    data = [
+        "//:generated_layer_catalogs",
+        "//:docs/reference/policy/broker-operations.json",
+    ],
 )
 
 generated_artifact_check(

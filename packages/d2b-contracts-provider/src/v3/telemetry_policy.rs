@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use crate::v3::generated::telemetry_catalog::{
-    API_VERBS, PROCESS_PROVIDERS, RESOURCE_TYPE_VALUES,
+    API_VERBS, BROKER_OPERATION_VALUES, PROCESS_PROVIDERS, RESOURCE_TYPE_VALUES,
 };
 
 /// Exact keys which can never be metric dimensions.
@@ -180,32 +180,12 @@ pub const METRIC_LABEL_POLICY: &[(&str, &[&str])] = &[
             "launcher-exec",
         ],
     ),
-    (
-        "op",
-        &[
-            "Hello",
-            "ValidateBundle",
-            "ExportBrokerAudit",
-            "ApplyNftables",
-            "ApplyRoute",
-            "ApplySysctl",
-            "StoreSync",
-            "StoreVerify",
-            "SpawnRunner",
-            "SignalRunner",
-            "OpenPidfd",
-            "CreateBridge",
-            "CreatePersistentTap",
-            "UsbipBind",
-            "UsbipUnbind",
-            "QemuMediaBoot",
-            "QemuMediaAttach",
-            "QemuMediaDetach",
-            "vmStart",
-            "vmStop",
-            "vmRestart",
-        ],
-    ),
+    // The metric `op` label carries a broker request's wire name, so the
+    // domain is the committed operation rows' wire variants
+    // (`docs/reference/policy/broker-operations.json`), projected by
+    // `gen-layer-catalogs`: a row the catalog retires leaves the domain with
+    // it.
+    ("op", BROKER_OPERATION_VALUES),
     (
         "record_class",
         &[

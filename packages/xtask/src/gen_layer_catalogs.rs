@@ -11,16 +11,24 @@
 //!   type vocabulary, the resource mutation verbs, and the process-provider
 //!   vocabulary.
 //! - `packages/d2b-contracts-provider/src/v3/generated/telemetry_catalog.rs` -
-//!   the metric label resource-type and verb domains and the process-provider
-//!   label domain.
+//!   the metric label resource-type, verb, process-provider, and
+//!   broker-operation domains.
 //!
 //! Every list is either projected from a committed authority (the standard
 //! and converted resource type registries in `d2b-contracts`, the Role
-//! resource verbs in `d2b-contracts-zone-session`) or declared by one table
-//! here. Nothing is restated beside a generated copy, and each emitted file
-//! is compared byte-for-byte against this generator by its drift target.
+//! resource verbs in `d2b-contracts-zone-session`, the committed broker
+//! operation rows in `docs/reference/policy/broker-operations.json`) or
+//! declared by one table here. Nothing is restated beside a generated copy,
+//! and each emitted file is compared byte-for-byte against this generator by
+//! its drift target.
 
-use std::{fmt::Write as _, fs, path::PathBuf};
+use std::{
+    fmt::Write as _,
+    fs,
+    path::{Path, PathBuf},
+};
+
+use serde::Deserialize;
 
 use d2b_contracts::identity::{STANDARD_RESOURCE_TYPES, V3_CONVERTED_RESOURCE_TYPES};
 use d2b_contracts_zone_session::v3::RoleResourceVerb;
@@ -41,6 +49,9 @@ const HEADER: &str = concat!(
     "// Do not hand-edit: the generator's `--check` form compares this file\n",
     "// byte-for-byte against its output.\n",
 );
+
+/// The committed broker operation rows.
+const BROKER_OPERATIONS_PATH: &str = "docs/reference/policy/broker-operations.json";
 
 /// The pseudo type name the audit and metric vocabularies admit for resources
 /// whose type is outside the registry.
@@ -208,6 +219,68 @@ fn metric_resource_types() -> Vec<String> {
         .collect::<Vec<_>>();
     values.push(VENDOR_TYPE.to_owned());
     values
+}
+
+/// One committed broker operation row, as far as the label domain needs it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrokerOperationRow {
+    /// The declared operation name.
+    operation: String,
+    /// The wire variant a broker request carries, when the row is callable
+    /// over the wire at all.
+    #[serde(default)]
+    wire_variant: Option<String>,
+}
+
+/// The committed broker operation rows.
+#[derive(Debug, Deserialize)]
+struct BrokerOperations {
+    version: u32,
+    rows: Vec<BrokerOperationRow>,
+}
+
+/// The broker operation label domain: every wire variant the committed rows
+/// declare, in row order.
+///
+/// The metric `op` label carries the wire request name, so a row that
+/// declares no wire variant is not in the domain - nothing can emit it as a
+/// label - and a row cannot be admitted as one without a wire variant. The
+/// rows are the authority `gen-broker-operations` projects every broker view
+/// from, so the domain moves with them or fails the drift target.
+fn broker_operation_values(repo_root: &Path) -> Result<Vec<String>, String> {
+    let text = fs::read_to_string(repo_root.join(BROKER_OPERATIONS_PATH))
+        .map_err(|error| format!("read {BROKER_OPERATIONS_PATH}: {error}"))?;
+    let catalog: BrokerOperations = serde_json::from_str(&text)
+        .map_err(|error| format!("parse {BROKER_OPERATIONS_PATH}: {error}"))?;
+    if catalog.version != 1 {
+        return Err(format!(
+            "{BROKER_OPERATIONS_PATH}: unsupported catalog version {}",
+            catalog.version
+        ));
+    }
+    let mut values = Vec::new();
+    for row in &catalog.rows {
+        let Some(variant) = row.wire_variant.as_deref() else {
+            continue;
+        };
+        if variant.is_empty()
+            || !variant.bytes().all(|byte| byte.is_ascii_graphic())
+            || values.iter().any(|value| value == variant)
+        {
+            return Err(format!(
+                "{BROKER_OPERATIONS_PATH}: row {} does not carry a usable wire variant",
+                row.operation
+            ));
+        }
+        values.push(variant.to_owned());
+    }
+    if values.is_empty() {
+        return Err(format!(
+            "{BROKER_OPERATIONS_PATH}: no committed wire variants"
+        ));
+    }
+    Ok(values)
 }
 
 /// The process-provider ids one consumer admits.
@@ -417,7 +490,7 @@ fn audit_catalog_source() -> String {
 }
 
 /// Render the provider contracts crate's telemetry catalog module.
-fn telemetry_catalog_source() -> String {
+fn telemetry_catalog_source(repo_root: &Path) -> Result<String, String> {
     let mut source = String::from(HEADER);
     source.push_str(&string_array(
         "RESOURCE_TYPE_VALUES",
@@ -440,7 +513,20 @@ fn telemetry_catalog_source() -> String {
         &["The process provider label domain."],
         &process_provider_ids(Some(true)),
     ));
-    source
+    source.push_str(&string_array(
+        "BROKER_OPERATION_VALUES",
+        &[
+            "The broker operation label domain: the committed operation rows'",
+            "wire variants, in row order.",
+            "",
+            "The metric `op` label carries the wire request name, so the",
+            "committed rows in `docs/reference/policy/broker-operations.json`",
+            "are the authority this domain is projected from; a row the catalog",
+            "retires leaves the domain with it.",
+        ],
+        &broker_operation_values(repo_root)?,
+    ));
+    Ok(source)
 }
 
 /// Render one generated directory's module file.
@@ -449,8 +535,8 @@ fn mod_source(module: &str, doc: &str) -> String {
 }
 
 /// The generated (path, content) pairs, in write order.
-fn artifacts() -> Vec<(PathBuf, String)> {
-    vec![
+fn artifacts(repo_root: &Path) -> Result<Vec<(PathBuf, String)>, String> {
+    Ok(vec![
         (
             PathBuf::from(CLI_OUT_DIR).join("surface_catalog.rs"),
             surface_catalog_source(),
@@ -475,7 +561,7 @@ fn artifacts() -> Vec<(PathBuf, String)> {
         ),
         (
             PathBuf::from(TELEMETRY_OUT_DIR).join("telemetry_catalog.rs"),
-            telemetry_catalog_source(),
+            telemetry_catalog_source(repo_root)?,
         ),
         (
             PathBuf::from(TELEMETRY_OUT_DIR).join(MOD_FILE),
@@ -484,7 +570,7 @@ fn artifacts() -> Vec<(PathBuf, String)> {
                 "The generated telemetry label catalogs the crate validates against.",
             ),
         ),
-    ]
+    ])
 }
 
 /// Run `gen-layer-catalogs [--check|--write]`.
@@ -505,7 +591,7 @@ pub fn run_cli(repo_root: &std::path::Path, args: &[String]) -> Result<Vec<PathB
         }
     };
     let mut written = Vec::new();
-    for (relative, content) in artifacts() {
+    for (relative, content) in artifacts(repo_root)? {
         let path = repo_root.join(&relative);
         if check {
             let committed = fs::read_to_string(&path).map_err(|error| {
@@ -598,6 +684,31 @@ mod tests {
         assert_eq!(
             process_provider_ids(Some(true)),
             vec!["minijail".to_owned(), "systemd".to_owned()]
+        );
+    }
+
+    /// The broker operation domain is the committed rows' wire variants: a row
+    /// that gains, retires, or renames a wire variant moves the domain, and the
+    /// drift target then refuses the stale generated copy.
+    #[test]
+    fn broker_operation_domain_projects_the_committed_rows() {
+        let root = crate::repo_root().expect("repository root");
+        let values = broker_operation_values(root).expect("committed broker rows");
+        let text = fs::read_to_string(root.join(BROKER_OPERATIONS_PATH)).expect("row catalog");
+        let catalog: BrokerOperations = serde_json::from_str(&text).expect("row catalog parses");
+        let expected = catalog
+            .rows
+            .iter()
+            .filter_map(|row| row.wire_variant.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(values, expected);
+        assert!(
+            values.iter().any(|value| value == "SpawnRunner"),
+            "a committed family operation is in the domain"
+        );
+        assert!(
+            !values.iter().any(|value| value == "vmStart"),
+            "a name no committed row declares is not in the domain"
         );
     }
 }
