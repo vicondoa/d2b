@@ -92,21 +92,29 @@
           cp -r ${./packages/d2b-process-conformance} $out/packages/d2b-process-conformance
           cp -r ${./packages/d2b-provider} $out/packages/d2b-provider
           cp -r ${./packages/d2b-provider-activation-nixos} $out/packages/d2b-provider-activation-nixos
+          cp -r ${./packages/d2b-provider-audio-binding} $out/packages/d2b-provider-audio-binding
           cp -r ${./packages/d2b-provider-audio-pipewire} $out/packages/d2b-provider-audio-pipewire
+          cp -r ${./packages/d2b-provider-audio-service} $out/packages/d2b-provider-audio-service
           cp -r ${./packages/d2b-provider-clipboard-wayland} $out/packages/d2b-provider-clipboard-wayland
+          cp -r ${./packages/d2b-provider-command} $out/packages/d2b-provider-command
           cp -r ${./packages/d2b-provider-config-nixos} $out/packages/d2b-provider-config-nixos
+          cp -r ${./packages/d2b-provider-credential} $out/packages/d2b-provider-credential
           cp -r ${./packages/d2b-provider-credential-entra} $out/packages/d2b-provider-credential-entra
           cp -r ${./packages/d2b-provider-credential-managed-identity} $out/packages/d2b-provider-credential-managed-identity
           cp -r ${./packages/d2b-provider-credential-secret-service} $out/packages/d2b-provider-credential-secret-service
+          cp -r ${./packages/d2b-provider-device} $out/packages/d2b-provider-device
           cp -r ${./packages/d2b-provider-device-gpu} $out/packages/d2b-provider-device-gpu
           cp -r ${./packages/d2b-provider-device-security-key} $out/packages/d2b-provider-device-security-key
           cp -r ${./packages/d2b-provider-device-tpm} $out/packages/d2b-provider-device-tpm
           cp -r ${./packages/d2b-provider-device-usbip} $out/packages/d2b-provider-device-usbip
           cp -r ${./packages/d2b-provider-display-wayland} $out/packages/d2b-provider-display-wayland
+          cp -r ${./packages/d2b-provider-emergency-policy} $out/packages/d2b-provider-emergency-policy
           cp -r ${./packages/d2b-provider-endpoint} $out/packages/d2b-provider-endpoint
+          cp -r ${./packages/d2b-provider-host} $out/packages/d2b-provider-host
           cp -r ${./packages/d2b-provider-network-local} $out/packages/d2b-provider-network-local
           cp -r ${./packages/d2b-provider-notification-desktop} $out/packages/d2b-provider-notification-desktop
           cp -r ${./packages/d2b-provider-observability-otel} $out/packages/d2b-provider-observability-otel
+          cp -r ${./packages/d2b-provider-operation} $out/packages/d2b-provider-operation
           cp -r ${./packages/d2b-provider-runtime-azure-container-apps} $out/packages/d2b-provider-runtime-azure-container-apps
           cp -r ${./packages/d2b-provider-runtime-azure-virtual-machine} $out/packages/d2b-provider-runtime-azure-virtual-machine
           cp -r ${./packages/d2b-provider-runtime-cloud-hypervisor} $out/packages/d2b-provider-runtime-cloud-hypervisor
@@ -116,10 +124,26 @@
           cp -r ${./packages/d2b-provider-system-core} $out/packages/d2b-provider-system-core
           cp -r ${./packages/d2b-provider-process-minijail} $out/packages/d2b-provider-process-minijail
           cp -r ${./packages/d2b-provider-process-systemd} $out/packages/d2b-provider-process-systemd
+          cp -r ${./packages/d2b-provider-provider} $out/packages/d2b-provider-provider
+          cp -r ${./packages/d2b-provider-quota} $out/packages/d2b-provider-quota
+          cp -r ${./packages/d2b-provider-resource-export} $out/packages/d2b-provider-resource-export
+          cp -r ${./packages/d2b-provider-resource-import} $out/packages/d2b-provider-resource-import
+          cp -r ${./packages/d2b-provider-role} $out/packages/d2b-provider-role
+          cp -r ${./packages/d2b-provider-role-binding} $out/packages/d2b-provider-role-binding
+          cp -r ${./packages/d2b-provider-seccomp-profile} $out/packages/d2b-provider-seccomp-profile
+          cp -r ${./packages/d2b-provider-shell-pool} $out/packages/d2b-provider-shell-pool
+          cp -r ${./packages/d2b-provider-shell-session} $out/packages/d2b-provider-shell-session
           cp -r ${./packages/d2b-provider-toolkit} $out/packages/d2b-provider-toolkit
           cp -r ${./packages/d2b-provider-transport-azure-relay} $out/packages/d2b-provider-transport-azure-relay
+          cp -r ${./packages/d2b-provider-user} $out/packages/d2b-provider-user
+          cp -r ${./packages/d2b-provider-volume} $out/packages/d2b-provider-volume
+          cp -r ${./packages/d2b-provider-volume-binding} $out/packages/d2b-provider-volume-binding
           cp -r ${./packages/d2b-provider-volume-local} $out/packages/d2b-provider-volume-local
           cp -r ${./packages/d2b-provider-volume-virtiofs} $out/packages/d2b-provider-volume-virtiofs
+          cp -r ${./packages/d2b-provider-wayland-policy} $out/packages/d2b-provider-wayland-policy
+          cp -r ${./packages/d2b-provider-wayland-session} $out/packages/d2b-provider-wayland-session
+          cp -r ${./packages/d2b-provider-zone} $out/packages/d2b-provider-zone
+          cp -r ${./packages/d2b-provider-zone-link} $out/packages/d2b-provider-zone-link
           cp -r ${./packages/d2b-resource-api} $out/packages/d2b-resource-api
           cp -r ${./packages/d2b-resource-types} $out/packages/d2b-resource-types
           cp -r ${./packages/d2b-resource-runtime} $out/packages/d2b-resource-runtime
