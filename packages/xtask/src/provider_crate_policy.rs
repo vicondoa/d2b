@@ -24,6 +24,13 @@ const NON_PROVIDER_PREFIXED: &[&str] = &[
     "d2b-provider-toolkit",
 ];
 
+/// The crate that declares the resource types a driver crate serves.
+///
+/// A per-type driver crate implements one resource type's driver, so it
+/// depends on this crate; that declared dependency, and not the shape of the
+/// crate name, is what separates a driver crate from a packaging Provider.
+const RESOURCE_TYPES_CRATE: &str = "d2b-resource-types";
+
 /// One row in the accepted Provider catalog.
 ///
 /// The matrix is deliberately kept beside the workspace policy.  Cargo
@@ -372,12 +379,18 @@ struct WorkspaceMember {
     package_name: String,
     crate_dir: PathBuf,
     manifest_path: PathBuf,
+    /// Whether the member manifest declares the resource-type crate, which
+    /// makes a provider-prefixed member a per-type driver crate.
+    declares_driver: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OnDiskProvider {
     directory_name: String,
     manifest_path: PathBuf,
+    /// Whether the crate manifest declares the resource-type crate, which
+    /// keeps a driver crate out of the packaging obligations and the catalog.
+    declares_driver: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -457,7 +470,10 @@ fn check_closed_matrix(
         .collect();
     let actual: BTreeSet<&str> = members
         .iter()
-        .filter(|member| provider_name_kind(&member.package_name) == ProviderNameKind::Provider)
+        .filter(|member| {
+            provider_name_kind(&member.package_name, member.declares_driver)
+                == ProviderNameKind::Provider
+        })
         .map(|member| member.package_name.as_str())
         .collect();
     let mut violations = Vec::new();
@@ -746,9 +762,10 @@ fn render_shared_driver_violation(error: &str, module: &str, family: Option<&str
 
 fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), String> {
     let on_disk = on_disk_providers(&repo_root)?;
-    let has_provider_member = members
-        .iter()
-        .any(|member| provider_name_kind(&member.package_name) == ProviderNameKind::Provider);
+    let has_provider_member = members.iter().any(|member| {
+        provider_name_kind(&member.package_name, member.declares_driver)
+            == ProviderNameKind::Provider
+    });
     if !has_provider_member && on_disk.is_empty() {
         return Err("provider-crate-layout-empty-scope".to_owned());
     }
@@ -760,7 +777,7 @@ fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), 
     let mut violations = Vec::new();
 
     for member in &members {
-        match provider_name_kind(&member.package_name) {
+        match provider_name_kind(&member.package_name, member.declares_driver) {
             ProviderNameKind::Provider => {
                 if !is_provider_directory(&repo_root, &member.crate_dir, &member.package_name) {
                     violations.push(Diagnostic::simple(
@@ -792,7 +809,8 @@ fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), 
                         &crate_on_disk.directory_name,
                     ));
                 }
-                if provider_name_kind(&crate_on_disk.directory_name) == ProviderNameKind::Malformed
+                if provider_name_kind(&crate_on_disk.directory_name, crate_on_disk.declares_driver)
+                    == ProviderNameKind::Malformed
                 {
                     violations.push(Diagnostic::simple(
                         "provider-crate-name-invalid",
@@ -843,10 +861,13 @@ fn cargo_workspace_members(repo_root: &Path) -> Result<Vec<WorkspaceMember>, Str
             .parent()
             .ok_or_else(|| "provider-crate-layout-member-invalid".to_owned())?
             .to_owned();
+        let manifest = fs::read_to_string(&manifest_path)
+            .map_err(|_| "provider-crate-layout-member-invalid".to_owned())?;
         members.push(WorkspaceMember {
             package_name: package.name.clone(),
             crate_dir,
             manifest_path,
+            declares_driver: manifest_declares_driver(&manifest),
         });
     }
     if members.is_empty() {
@@ -919,8 +940,11 @@ fn on_disk_providers(repo_root: &Path) -> Result<Vec<OnDiskProvider>, String> {
         if !manifest_path.is_file() {
             continue;
         }
+        let manifest = fs::read_to_string(&manifest_path)
+            .map_err(|_| "provider-crate-layout-packages-unreadable".to_owned())?;
+        let declares_driver = manifest_declares_driver(&manifest);
         if matches!(
-            provider_name_kind(&directory_name),
+            provider_name_kind(&directory_name, declares_driver),
             ProviderNameKind::NonProvider
         ) {
             continue;
@@ -930,13 +954,48 @@ fn on_disk_providers(repo_root: &Path) -> Result<Vec<OnDiskProvider>, String> {
             manifest_path: manifest_path
                 .canonicalize()
                 .map_err(|_| "provider-crate-layout-member-invalid".to_owned())?,
+            declares_driver,
         });
     }
     providers.sort_by(|left, right| left.directory_name.cmp(&right.directory_name));
     Ok(providers)
 }
 
-fn provider_name_kind(name: &str) -> ProviderNameKind {
+/// Whether a package manifest declares a dependency on the resource types.
+///
+/// The declaration is read from the manifest text because the workspace
+/// metadata the check already uses does not carry per-member dependencies. A
+/// dependency counts in either spelling Cargo allows: the crate name as the
+/// key, or the crate name as the package of a renamed key.
+fn manifest_declares_driver(manifest: &str) -> bool {
+    manifest.lines().any(|line| {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        if let Some(table) = line
+            .strip_prefix('[')
+            .and_then(|table| table.strip_suffix(']'))
+        {
+            return table
+                .rsplit('.')
+                .next()
+                .is_some_and(|key| key.trim_matches(['"', '\'']) == RESOURCE_TYPES_CRATE);
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return false;
+        };
+        key.trim().split('.').next().unwrap_or_default() == RESOURCE_TYPES_CRATE
+            || value
+                .trim()
+                .contains(&format!("package = \"{RESOURCE_TYPES_CRATE}\""))
+    })
+}
+
+/// Classify one provider-prefixed crate name for this policy.
+///
+/// The classification decides packaging obligations and the catalog row, so
+/// the name alone cannot settle it: a per-type driver crate is named after the
+/// resource type it serves, and that type name may contain a dash, which is
+/// exactly the shape of a packaging Provider identity.
+fn provider_name_kind(name: &str, declares_driver: bool) -> ProviderNameKind {
     if NON_PROVIDER_PREFIXED.contains(&name) {
         return ProviderNameKind::NonProvider;
     }
@@ -947,13 +1006,11 @@ fn provider_name_kind(name: &str) -> ProviderNameKind {
     if segments.iter().any(|segment| !valid_name_segment(segment)) {
         return ProviderNameKind::Malformed;
     }
-    // The two-segment shape is the packaged Provider this policy covers: one
-    // that publishes a packaging artifact, a dossier, and a catalog id. A
-    // single segment names a per-type driver crate - the crate that declares
-    // one resource type's driver for the plane and ships no packaging artifact
-    // of its own - so it carries neither the packaging obligations nor a
-    // catalog row.
-    if segments.len() < 2 {
+    // A driver crate declares one resource type's driver for the plane and
+    // ships no packaging artifact of its own, so it carries neither the
+    // packaging obligations nor a catalog row. A single segment names the same
+    // kind of crate without declaring the shared resource types.
+    if declares_driver || segments.len() < 2 {
         return ProviderNameKind::NonProvider;
     }
     ProviderNameKind::Provider
@@ -1216,6 +1273,7 @@ mod tests {
                 package_name,
                 crate_dir: manifest_path.parent().unwrap().to_owned(),
                 manifest_path,
+                declares_driver: manifest_declares_driver(&manifest),
             });
         }
         Ok(members)
@@ -1241,6 +1299,28 @@ mod tests {
             format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n"),
         )
         .unwrap();
+    }
+
+    /// Give one fixture package the declared dependency that makes it a
+    /// per-type driver crate.
+    fn declare_resource_types_dependency(crate_dir: &Path) {
+        let manifest = crate_dir.join("Cargo.toml");
+        let text = fs::read_to_string(&manifest).expect("read fixture manifest");
+        fs::write(
+            &manifest,
+            format!(
+                "{text}\n[dependencies]\nd2b-resource-types = {{ path = \"../d2b-resource-types\" }}\n"
+            ),
+        )
+        .expect("write fixture manifest");
+    }
+
+    /// Classify one crate the way the check does: from its name and the
+    /// dependency its manifest declares.
+    fn classified_kind(root: &Path, name: &str) -> ProviderNameKind {
+        let manifest = fs::read_to_string(root.join("packages").join(name).join("Cargo.toml"))
+            .expect("read crate manifest");
+        provider_name_kind(name, manifest_declares_driver(&manifest))
     }
 
     fn required_readme(identity: &str) -> String {
@@ -1315,42 +1395,49 @@ mod tests {
     fn every_provider_prefixed_name_has_one_explicit_classification() {
         let root = repo_root().expect("resolve repository root");
         let members = manifest_workspace_members(root).expect("read workspace manifest");
-        let mut names: BTreeSet<String> = members
+        let mut manifests: BTreeMap<String, PathBuf> = members
             .into_iter()
-            .map(|member| member.package_name)
-            .filter(|name| name.starts_with(PROVIDER_PREFIX))
+            .map(|member| (member.package_name, member.manifest_path))
+            .filter(|(name, _)| name.starts_with(PROVIDER_PREFIX))
             .collect();
         for entry in fs::read_dir(root.join("packages")).expect("read packages directory") {
             let entry = entry.expect("read package entry");
             if entry.file_type().expect("read package entry type").is_dir() {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if name.starts_with(PROVIDER_PREFIX) {
-                    names.insert(name);
+                    manifests
+                        .entry(name)
+                        .or_insert_with(|| entry.path().join("Cargo.toml"));
                 }
             }
         }
 
         assert!(
-            !names.is_empty(),
+            !manifests.is_empty(),
             "Provider-name classification must inspect a non-empty scope"
         );
-        for name in names {
-            let kind = provider_name_kind(&name);
-            match kind {
+        for (name, manifest_path) in manifests {
+            let manifest = fs::read_to_string(&manifest_path).expect("read crate manifest");
+            let declares_driver = manifest_declares_driver(&manifest);
+            match provider_name_kind(&name, declares_driver) {
                 ProviderNameKind::NonProvider => {
-                    let driver_crate = name
+                    let single_segment = name
                         .strip_prefix(PROVIDER_PREFIX)
                         .is_some_and(|suffix| suffix.split('-').count() == 1);
                     assert!(
-                        NON_PROVIDER_PREFIXED.contains(&name.as_str()) || driver_crate,
-                        "{name} is neither an explicit non-Provider helper nor a per-type driver crate"
+                        NON_PROVIDER_PREFIXED.contains(&name.as_str())
+                            || single_segment
+                            || declares_driver,
+                        "{name} is neither an explicit non-Provider helper, a single-segment driver crate, nor a crate that declares a driver"
                     );
                 }
                 ProviderNameKind::Provider => {
                     assert!(
-                        name.strip_prefix(PROVIDER_PREFIX)
-                            .is_some_and(|suffix| suffix.split('-').count() >= 2),
-                        "{name} is not a two-segment Provider identity"
+                        !declares_driver
+                            && name
+                                .strip_prefix(PROVIDER_PREFIX)
+                                .is_some_and(|suffix| suffix.split('-').count() >= 2),
+                        "{name} is not a two-segment Provider identity that declares no driver"
                     );
                 }
                 ProviderNameKind::Malformed => {
@@ -1361,6 +1448,132 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The driver signal is the dependency declaration, in the forms a Cargo
+    /// manifest spells it, and nothing else in the manifest.
+    #[test]
+    fn the_driver_signal_reads_the_declared_resource_types_dependency() {
+        assert!(manifest_declares_driver(
+            "[dependencies]\nd2b-resource-types = { path = \"../d2b-resource-types\", version = \"0.0.0-bootstrap\" }\n"
+        ));
+        assert!(manifest_declares_driver(
+            "[dependencies]\nresource-types = { package = \"d2b-resource-types\", path = \"../d2b-resource-types\" }\n"
+        ));
+        assert!(manifest_declares_driver(
+            "[target.'cfg(unix)'.dependencies.d2b-resource-types]\npath = \"../d2b-resource-types\"\n"
+        ));
+        assert!(!manifest_declares_driver(
+            "[dependencies]\nd2b-resource-types-extra = { path = \"../d2b-resource-types-extra\" }\n"
+        ));
+        assert!(!manifest_declares_driver(
+            "# d2b-resource-types = { path = \"../d2b-resource-types\" }\n[dependencies]\n"
+        ));
+        assert!(!manifest_declares_driver(
+            "[package]\nname = \"d2b-provider-example\"\ndescription = \"depends on d2b-resource-types\"\n"
+        ));
+    }
+
+    /// A per-type driver crate is named after the resource type it serves, so
+    /// its type name may contain a dash. The declared driver, not that shape,
+    /// is what keeps it out of the packaging obligations and the catalog.
+    #[test]
+    fn a_per_type_driver_crate_with_a_dashed_type_name_needs_no_matrix_row() {
+        let fixture = Fixture::new("dashed-driver");
+        let driver = fixture.add_package("d2b-provider-wayland-policy");
+        declare_resource_types_dependency(&driver);
+        fixture.set_members(&[
+            "d2b-core",
+            "d2b-provider-fixture-example",
+            "d2b-provider-wayland-policy",
+        ]);
+
+        assert_eq!(
+            classified_kind(&fixture.root, "d2b-provider-wayland-policy"),
+            ProviderNameKind::NonProvider
+        );
+        // A driver crate ships no packaging artifact, so it owes no Provider
+        // layout.
+        assert_eq!(check_fixture(&fixture.root), Ok(()));
+
+        let members = manifest_workspace_members(&fixture.root).expect("read workspace manifest");
+        let error = check_closed_matrix(&fixture.root, &members)
+            .expect_err("the fixture holds no Provider matrix row");
+        assert!(
+            !error.contains("d2b-provider-wayland-policy"),
+            "a declared driver needs no catalog row: {error}"
+        );
+    }
+
+    /// The control for the dashed name above: the same name shape without the
+    /// declared driver is a packaging Provider, so the check may not start
+    /// passing a crate that genuinely forgot its matrix row.
+    #[test]
+    fn a_dashed_provider_name_without_a_driver_declaration_keeps_the_packaging_obligations() {
+        let fixture = Fixture::new("dashed-provider");
+        fixture.add_package("d2b-provider-wayland-policy");
+        fixture.set_members(&[
+            "d2b-core",
+            "d2b-provider-fixture-example",
+            "d2b-provider-wayland-policy",
+        ]);
+
+        assert_eq!(
+            classified_kind(&fixture.root, "d2b-provider-wayland-policy"),
+            ProviderNameKind::Provider
+        );
+        let error = check_fixture(&fixture.root).expect_err("a packaging Provider owes its layout");
+        assert!(error.contains("missing-provider-crate-path"), "{error}");
+        assert!(error.contains("d2b-provider-wayland-policy"), "{error}");
+
+        let members = manifest_workspace_members(&fixture.root).expect("read workspace manifest");
+        let error = check_closed_matrix(&fixture.root, &members)
+            .expect_err("the fixture holds no Provider matrix row");
+        assert!(
+            error.contains(
+                r#"{"error":"provider-matrix-row-unexpected","crate":"d2b-provider-wayland-policy"}"#
+            ),
+            "{error}"
+        );
+    }
+
+    /// A provider-prefixed crate that declares no driver keeps the packaging
+    /// identity however its name reads, so its catalog row is still demanded.
+    #[test]
+    fn a_packaging_provider_without_a_driver_declaration_keeps_its_matrix_row() {
+        let fixture = Fixture::new("packaging-provider");
+        fixture.add_package("d2b-provider-volume-local");
+
+        assert_eq!(
+            classified_kind(&fixture.root, "d2b-provider-volume-local"),
+            ProviderNameKind::Provider
+        );
+        // Dropping the crate from the workspace must report its row missing
+        // rather than silently pass.
+        let members = manifest_workspace_members(&fixture.root).expect("read workspace manifest");
+        let error = check_closed_matrix(&fixture.root, &members)
+            .expect_err("the fixture holds no Provider matrix row");
+        assert!(
+            error.contains(
+                r#"{"error":"provider-matrix-row-missing","crate":"d2b-provider-volume-local"}"#
+            ),
+            "{error}"
+        );
+    }
+
+    /// The single-segment shape is unchanged: it names a per-type driver crate
+    /// whether or not the manifest declares the resource types.
+    #[test]
+    fn a_single_segment_driver_crate_stays_a_non_provider() {
+        let root = repo_root().expect("resolve repository root");
+        assert_eq!(
+            classified_kind(root, "d2b-provider-endpoint"),
+            ProviderNameKind::NonProvider
+        );
+        assert_eq!(
+            provider_name_kind("d2b-provider-endpoint", false),
+            ProviderNameKind::NonProvider
+        );
     }
 
     #[test]
