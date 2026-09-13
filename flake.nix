@@ -120,6 +120,7 @@
           cp -r ${./packages/d2b-provider-volume-local} $out/packages/d2b-provider-volume-local
           cp -r ${./packages/d2b-provider-volume-virtiofs} $out/packages/d2b-provider-volume-virtiofs
           cp -r ${./packages/d2b-resource-api} $out/packages/d2b-resource-api
+          cp -r ${./packages/d2b-resource-types} $out/packages/d2b-resource-types
           cp -r ${./packages/d2b-resource-runtime} $out/packages/d2b-resource-runtime
           cp -r ${./packages/d2b-session} $out/packages/d2b-session
           cp -r ${./packages/d2b-session-unix} $out/packages/d2b-session-unix
