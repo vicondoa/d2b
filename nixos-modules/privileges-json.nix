@@ -823,30 +823,6 @@ let
     "auditMode": "yes"
   },
   {
-    "operation": "ValidateBundle",
-    "subject": "bundle",
-    "scope": "global",
-    "allowedGroups": [
-      "d2bd"
-    ],
-    "destructive": false,
-    "secretAccess": "none",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
-    "operation": "ResourceActivationAudit",
-    "subject": "resource-bundle",
-    "scope": "per-Zone",
-    "allowedGroups": [
-      "d2bd"
-    ],
-    "destructive": false,
-    "secretAccess": "metadata-only",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
     "operation": "RunHostInstall",
     "subject": "installer",
     "scope": "global",
@@ -1231,30 +1207,6 @@ let
     "auditMode": "yes"
   },
   {
-    "operation": "BindUnixSocket",
-    "subject": "socket",
-    "scope": "per-VM/role",
-    "allowedGroups": [
-      "d2bd"
-    ],
-    "destructive": true,
-    "secretAccess": "none",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
-    "operation": "SetSocketAcl",
-    "subject": "socket",
-    "scope": "per-VM/role",
-    "allowedGroups": [
-      "d2bd"
-    ],
-    "destructive": true,
-    "secretAccess": "none",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
     "operation": "SetupMountNamespace",
     "subject": "mount/store",
     "scope": "per-VM/role",
@@ -1395,30 +1347,6 @@ let
     ],
     "destructive": true,
     "secretAccess": "none",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
-    "operation": "PauseBroker",
-    "subject": "broker-admin",
-    "scope": "global",
-    "allowedGroups": [
-      "d2bd"
-    ],
-    "destructive": true,
-    "secretAccess": "metadata-only",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
-    "operation": "ResumeBroker",
-    "subject": "broker-admin",
-    "scope": "global",
-    "allowedGroups": [
-      "d2bd"
-    ],
-    "destructive": true,
-    "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
   },
