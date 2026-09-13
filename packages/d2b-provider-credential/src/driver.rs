@@ -194,33 +194,6 @@ pub enum CredentialDriverStatus {
     },
 }
 
-impl CredentialDriverStatus {
-    /// The phase the old status candidate published.
-    pub const fn phase(&self) -> &'static str {
-        match self {
-            Self::ProviderUnavailable
-            | Self::AgentUnavailable
-            | Self::AgentDraining
-            | Self::RevocationUncertain { .. } => "Degraded",
-            Self::AgentPending | Self::LeaseRevoked { .. } => "Pending",
-            Self::Ready => "Ready",
-        }
-    }
-
-    /// The outcome code the old status candidate published.
-    pub const fn outcome_code(&self) -> &'static str {
-        match self {
-            Self::ProviderUnavailable => "credential-provider-unavailable",
-            Self::AgentPending => "credential-agent-pending",
-            Self::AgentUnavailable => "credential-agent-unavailable",
-            Self::AgentDraining => "credential-agent-draining",
-            Self::Ready => "success",
-            Self::LeaseRevoked { .. } => "credential-lease-revoked",
-            Self::RevocationUncertain { .. } => "credential-revocation-uncertain",
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Decoded spec envelope
 // ---------------------------------------------------------------------------
@@ -1880,8 +1853,13 @@ mod tests {
             .expect_err("fail closed");
         assert_eq!(error.to_string(), "credential-revocation-unconfirmed");
         let status = ctx.status::<CredentialDriverStatus>().expect("status");
-        assert_eq!(status.phase(), "Degraded");
-        assert_eq!(status.outcome_code(), "credential-revocation-uncertain");
+        assert!(
+            matches!(
+                status,
+                CredentialDriverStatus::RevocationUncertain { evidence: Some(_) }
+            ),
+            "a stale session generation leaves the revocation uncertain: {status:?}"
+        );
         assert!(!manager.children()[0].deleting);
     }
 

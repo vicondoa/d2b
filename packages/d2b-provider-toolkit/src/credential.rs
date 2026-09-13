@@ -10,9 +10,6 @@
 //! frame, or the dispatch seam cannot reach two of the three and miss the
 //! third.
 
-use std::pin::pin;
-use std::task::{Context, Poll, Waker};
-
 use d2b_contracts_provider::v3::credential::{
     CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialRequest,
     CredentialResponse, CredentialServiceError, PlacementBinding,
@@ -112,20 +109,20 @@ pub fn dispatch_blocking<P: CredentialProvider + ?Sized>(
 
 /// Drive a future to completion on a current-thread runtime.
 ///
-/// A future that is ready without ever parking completes without building a
-/// runtime, which keeps the overwhelmingly common case allocation-free.
+/// The future is always polled inside a runtime, never on a bare first poll:
+/// a future that constructs a timer while polling, as the Credential clients
+/// do through `tokio::time::timeout`, reads the runtime's timer handle at
+/// construction time and would panic outside one even when it is ready
+/// immediately. The runtime is built once per thread and reused, so a
+/// caller that dispatches repeatedly pays for it once.
 fn block_on<F: Future>(future: F) -> F::Output {
-    let mut future = pin!(future);
-    let waker = Waker::noop();
-    let mut context = Context::from_waker(waker);
-    if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
-        return value;
+    thread_local! {
+        static RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a current-thread runtime is available in a Provider process");
     }
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .build()
-        .expect("a current-thread runtime is available in a Provider process");
-    runtime.block_on(future)
+    RUNTIME.with(|runtime| runtime.block_on(future))
 }
 
 #[cfg(test)]
@@ -186,5 +183,17 @@ mod tests {
             CredentialTelemetryFrame::validate_collector_fields(frame.all_fields()).is_ok(),
             "every field of a frame built here is a closed value"
         );
+    }
+
+    #[test]
+    fn a_future_that_arms_a_timer_while_polling_completes_without_a_runtime() {
+        // The Credential clients bound every call with `tokio::time::timeout`,
+        // which reads the runtime's timer handle while the future is being
+        // polled. Driving the synchronous dispatch half outside a runtime must
+        // therefore enter one, not poll bare.
+        let value = block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(30), async { 7_u8 }).await
+        });
+        assert_eq!(value.expect("the inner future is ready"), 7);
     }
 }
