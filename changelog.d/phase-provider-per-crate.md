@@ -307,6 +307,39 @@
   deleted too: the compiler input carries the declared system Providers
   (`systemProviderNames`), which `bundle-zones.nix` feeds from the generated
   Provider catalog's fixed-bootstrap rows.
+- The converted-resource-type list has one declaration again.
+  `d2b-contracts::identity::V3_CONVERTED_RESOURCE_TYPES` is the only list:
+  the generated crate-local catalog, its generator, its `--check` drift gate,
+  the generated-module tree it lived in, and the two fence tests that compared
+  the copies are deleted, and the resource-type vocabulary derives
+  `WellKnownType::ALL` from the authority const instead of restating it. The
+  plane's two startup cross-checks read the authority const directly, so a
+  type added to the list reaches the vocabulary and the plane with no second
+  edit.
+- `d2b-core::runtime` re-exports the eight runtime capability and service DTOs
+  that `d2b-contracts::runtime` already owns, instead of declaring a second
+  field-for-field copy: `RuntimeOperationCapabilities` (with its
+  `local_nixos`/`local_qemu_media` presets, which move to the owning crate),
+  `RuntimeLifecycleCapabilities`, `RuntimeMediaCapabilities`,
+  `RuntimeDisplayCapabilities`, `RuntimeGuestCapabilities`,
+  `RuntimeStorageCapabilities`, `RuntimeServiceRole`, and
+  `RuntimeServiceSummary`. The `ProcessRole`-derived helpers stay in
+  `d2b-core`: the `From<&ProcessRole>` conversion and a `service_summary`
+  constructor replace the inherent summary constructor. Wire shape, serde
+  attributes, and every caller-visible behavior are unchanged.
+- The dead contract surface is deleted: `d2b-contracts-zone-session`'s
+  second Zone-bundle DTO module and its fixture test (the live bundle DTOs
+  live in `resource_bundle`), four zero-caller `d2b-resource-api` modules
+  (the API metrics inventory, the Zone service dispatch seam, the quota gate,
+  and the emergency gate), `d2b-provider`'s installation, share-adapter, and
+  forwarding admission modules, and `d2b-contracts`' unconsumed usbip effect
+  port, its one-line provider-effects re-export, and its one-constant
+  auth-wire module. No production path referenced any of them. The API watch
+  sink stays: its impl is the writer end of the bus watch-delivery credit
+  path, which is built and tested but not yet wired to a producer.
+- `d2b-resource-api` no longer depends on `d2b-telemetry`, and
+  `d2b-provider` no longer depends on `d2b-bus` or `d2b-zone-routing`; the
+  removed modules were their only users.
 
 - The eleven declaration-only metadata resource types (`Role`, `RoleBinding`,
   `Command`, `Operation`, `Quota`, `EmergencyPolicy`, `ResourceImport`,
