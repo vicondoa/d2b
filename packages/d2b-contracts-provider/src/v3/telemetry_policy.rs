@@ -6,7 +6,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::v3::generated::telemetry_catalog::{API_VERBS, PROCESS_PROVIDERS, RESOURCE_TYPE_VALUES};
+pub use crate::v3::generated::telemetry_catalog::{
+    API_VERBS, PROCESS_PROVIDERS, RESOURCE_TYPE_VALUES,
+};
 
 /// Exact keys which can never be metric dimensions.
 pub const FORBIDDEN_LABEL_KEYS: &[&str] = &[

@@ -275,3 +275,30 @@
   owners. One preimage, one `d2b-digest/v1` frame, one digest beside it, and a
   golden digest pinned by the `host-contract` unit surface, so a row that
   moves without regenerating the document fails the gate.
+
+- The client-facing layers read generated catalogs instead of hand tables.
+  `xtask gen-layer-catalogs` emits three crate-local views, drift-checked by
+  `//packages/xtask:gen_layer_catalogs_drift`: the CLI's surface catalog (the
+  resource type registry, the typed nouns and their types, the typed-verb
+  gates, the execution targets, the controller-owned types, the no-isolation
+  vocabulary, the mutation verbs, and the process providers), the audit
+  crate's record catalog (the converted registry in full plus the vendor
+  pseudo type, the mutation verbs projected from the Role contract, and the
+  process providers), and the provider contracts crate's telemetry catalog
+  (the standard registry as the resource type label domain, the API verbs
+  projected from the Role contract, and the process provider label domain).
+  The CLI's typed-noun dispatch, per-type gating literals, execution-target
+  gates, no-isolation literals, audit type/verb/provider lists, and share
+  exportability heuristic are deleted; the share admission now asks the
+  declared semantic projection contract. The audit type vocabulary is the
+  registry in full, so `VolumeBinding`, `EmergencyPolicy`, `Command`,
+  `Operation`, and `SeccompProfile` are record subjects instead of being
+  missed by a stale copy, and the metric label resource-type domain is the
+  complete standard registry for the same reason.
+- `d2b-resource-compiler` reads the declared registry instead of its own
+  type list: `ADDITIONAL_RESOURCE_TYPES` is deleted and a resource type is
+  recognized when the converted-resource registry carries it or a declared
+  semantic projection pair names it. The bootstrap external-reference list is
+  deleted too: the compiler input carries the declared system Providers
+  (`systemProviderNames`), which `bundle-zones.nix` feeds from the generated
+  Provider catalog's fixed-bootstrap rows.

@@ -3,8 +3,9 @@
 use std::collections::BTreeMap;
 
 use d2b_telemetry::{
-    BoundedEmitter, EmitOutcome, IdentityCanaries, MetricDescriptor, MetricPolicyError, Signal,
-    TraceContext, emitter::encode_frame, meter_registry::label, validate_data_point,
+    API_VERBS, BoundedEmitter, EmitOutcome, IdentityCanaries, MetricDescriptor, MetricPolicyError,
+    RESOURCE_TYPE_VALUES, Signal, TraceContext, emitter::encode_frame, meter_registry::label,
+    validate_data_point,
 };
 
 /// Resource API metric names.
@@ -13,21 +14,6 @@ pub const METRIC_INVENTORY: &[&str] = &[
     "d2b_api_request_duration_seconds",
     "d2b_api_watch_active",
     "d2b_api_admission_rejected_total",
-];
-
-/// API verbs in the closed service catalog.
-pub const API_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-    "use-credential",
-    "admin-credential",
 ];
 
 /// Resource API metric family.
@@ -59,30 +45,7 @@ impl ApiMetric {
         let labels = match self {
             Self::RequestTotal => vec![
                 label("verb", API_VERBS),
-                label(
-                    "resource_type",
-                    &[
-                        "Zone",
-                        "ZoneLink",
-                        "Provider",
-                        "Role",
-                        "RoleBinding",
-                        "Quota",
-                        "Host",
-                        "Guest",
-                        "Process",
-                        "EphemeralProcess",
-                        "Volume",
-                        "Network",
-                        "Device",
-                        "User",
-                        "Credential",
-                        "Endpoint",
-                        "ResourceExport",
-                        "ResourceImport",
-                        "vendor",
-                    ],
-                ),
+                label("resource_type", RESOURCE_TYPE_VALUES),
                 label(
                     "outcome",
                     &[
@@ -98,30 +61,7 @@ impl ApiMetric {
             ],
             Self::RequestDuration => vec![
                 label("verb", API_VERBS),
-                label(
-                    "resource_type",
-                    &[
-                        "Zone",
-                        "ZoneLink",
-                        "Provider",
-                        "Role",
-                        "RoleBinding",
-                        "Quota",
-                        "Host",
-                        "Guest",
-                        "Process",
-                        "EphemeralProcess",
-                        "Volume",
-                        "Network",
-                        "Device",
-                        "User",
-                        "Credential",
-                        "Endpoint",
-                        "ResourceExport",
-                        "ResourceImport",
-                        "vendor",
-                    ],
-                ),
+                label("resource_type", RESOURCE_TYPE_VALUES),
             ],
             Self::WatchActive => Vec::new(),
             Self::AdmissionRejected => vec![label(
