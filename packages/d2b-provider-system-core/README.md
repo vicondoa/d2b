@@ -29,10 +29,15 @@ EphemeralProcess belong to `system-systemd` and `system-minijail`.
 
 ## Controllers / services / workers / binaries
 
-One controller, embedded in the Zone runtime binary rather than launched as
-a Process. This crate ships the reconciliation logic as a library: the
+One controller, embedded in the Zone runtime binary rather than launched as a
+Process. This crate ships the reconciliation logic as a library: the
 `HostReconciler` computes Host status, and the `UserReconciler` performs
 local User discovery over an injected effect port. It ships no binary.
+
+The `Host` and `User` resource drivers live in `d2b-provider-host` and
+`d2b-provider-user`; the daemon implements their effect ports over the
+reconcilers here, so the resource plane reaches a Host or User row through
+those declarations and this crate keeps the realizer.
 
 ## Placement and dependencies
 

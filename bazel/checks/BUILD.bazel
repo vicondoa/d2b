@@ -70,6 +70,8 @@ test_suite(
         "//packages/d2bd-runtime:all-tests",
         "//packages/xtask:all-tests",
         "//packages/d2b-provider-endpoint:all-tests",
+        "//packages/d2b-provider-host:all-tests",
+        "//packages/d2b-provider-user:all-tests",
     ],
 )
 
