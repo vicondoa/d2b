@@ -331,6 +331,7 @@ filegroup(
         "//packages/d2bd-runtime:cargo_workspace_sources",
         "//packages/d2bd:cargo_workspace_sources",
         "//packages/xtask:cargo_workspace_sources",
+        "//packages/d2b-provider-endpoint:cargo_workspace_sources",
     ],
     visibility = ["//visibility:public"],
 )

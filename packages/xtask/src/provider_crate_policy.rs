@@ -724,10 +724,19 @@ fn provider_name_kind(name: &str) -> ProviderNameKind {
         return ProviderNameKind::NonProvider;
     };
     let segments: Vec<_> = rest.split('-').collect();
-    if segments.len() < 2 || segments.iter().any(|segment| !valid_name_segment(segment)) {
+    // A per-type driver crate carries the ResourceType alone
+    // (`d2b-provider-endpoint`). It ships no signed packaging artifact, so it
+    // is not a packaging Provider: the closed matrix does not describe it and
+    // the layout obligations are the ones the type's own crate carries. Only
+    // the two-segment (and longer) shape is a packaging Provider. A name with
+    // an empty or non-lowercase segment stays malformed, so a directory cannot
+    // slip past this classification by looking provider-shaped.
+    if segments.iter().any(|segment| !valid_name_segment(segment)) {
         ProviderNameKind::Malformed
-    } else {
+    } else if segments.len() >= 2 {
         ProviderNameKind::Provider
+    } else {
+        ProviderNameKind::NonProvider
     }
 }
 
@@ -1106,9 +1115,18 @@ mod tests {
             let kind = provider_name_kind(&name);
             match kind {
                 ProviderNameKind::NonProvider => {
+                    let explicit_helper = NON_PROVIDER_PREFIXED.contains(&name.as_str());
+                    // A per-type driver crate carries the ResourceType alone
+                    // (`d2b-provider-endpoint`): a non-packaging crate the
+                    // matrix does not describe, not an unclassified one.
+                    let driver_crate = name
+                        .strip_prefix(PROVIDER_PREFIX)
+                        .is_some_and(|suffix| {
+                            !suffix.contains('-') && valid_name_segment(suffix)
+                        });
                     assert!(
-                        NON_PROVIDER_PREFIXED.contains(&name.as_str()),
-                        "{name} is not an explicit non-Provider helper"
+                        explicit_helper || driver_crate,
+                        "{name} is neither an explicit non-Provider helper nor a per-type driver crate"
                     );
                 }
                 ProviderNameKind::Provider => {
@@ -1191,16 +1209,16 @@ mod tests {
     #[test]
     fn a_malformed_provider_name_is_rejected_instead_of_ignored() {
         let fixture = Fixture::new("malformed");
-        fixture.add_package("d2b-provider-fixture");
+        fixture.add_package("d2b-provider-fixture-");
         fixture.set_members(&[
             "d2b-core",
             "d2b-provider-fixture-example",
-            "d2b-provider-fixture",
+            "d2b-provider-fixture-",
         ]);
 
         let error = check_fixture(&fixture.root).unwrap_err();
         assert!(error.contains("provider-crate-name-invalid"));
-        assert!(error.contains("d2b-provider-fixture"));
+        assert!(error.contains("d2b-provider-fixture-"));
     }
 
     #[test]

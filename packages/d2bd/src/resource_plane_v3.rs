@@ -47,6 +47,9 @@ use d2b_contracts_resource::v3::{
 use d2b_contracts_zone_session::v3::resource_bundle::{BundleResource, ResourceBundle};
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedStoreViewIntent, intent_id_store_view};
 use d2b_process::ProcessDriverEffects;
+use d2b_provider_endpoint::{
+    EndpointDriverArgs, EndpointDriverEffects, GuestControlProducer, endpoint_descriptor,
+};
 use d2b_provider_volume_local::{VolumeLocalController, VolumeLocalProfile};
 use d2b_provider_volume_virtiofs::{MAX_SOCKET_PATH_BYTES, SocketIdentity, StoredBinding};
 use d2b_resource_api::manager_backend::nix_bundle_subject;
@@ -79,7 +82,10 @@ use crate::binding_driver::{
 use crate::credential_driver::{
     CredentialDriverArgs, CredentialDriverEffects, CredentialDriverFactory, credential_spec_decoder,
 };
-use crate::endpoint_driver::{AsyncSocketEffect, EndpointDriverArgs, EndpointDriverFactory, endpoint_spec_decoder};
+use crate::endpoint_effects::{
+    AsyncSocketEffect, ProductionEndpointDriverEffects, device_worker_purpose,
+    guest_control_producer, guest_control_purpose,
+};
 use crate::process_driver::{
     GuestOwnerIdentitySource, ProcessDriverArgs, ProductionProcessDriverEffects,
     process_family_descriptors,
@@ -108,8 +114,7 @@ use crate::interaction_driver::{
 };
 use crate::resource_runtime::ProductionInteractionDriverEffects;
 
-/// Frozen purpose of the binding-owned virtiofsd socket (old `VIRTIOFSD_PURPOSE`
-/// in `endpoint_driver.rs`).
+/// Frozen purpose of the binding-owned virtiofsd socket.
 const VIRTIOFSD_PURPOSE: &str = "virtiofsd";
 
 /// Preserved reconcile backoff for the plane's resource actors (R13).
@@ -735,15 +740,15 @@ impl GuestControlEndpointProbe {
     /// row is the evidence row), `guest-control` by the Guest (the evidence
     /// row is the guest's deterministic VMM child).
     async fn present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
-        let Some(producer) = crate::endpoint_driver::guest_control_producer(purpose) else {
+        let Some(producer) = guest_control_producer(purpose) else {
             return false;
         };
         if producer_ref.resource_type().as_str() != producer.resource_type() {
             return false;
         }
         let vmm_ref = match producer {
-            crate::endpoint_driver::GuestControlProducer::VmmProcess => producer_ref.clone(),
-            crate::endpoint_driver::GuestControlProducer::Guest => {
+            GuestControlProducer::VmmProcess => producer_ref.clone(),
+            GuestControlProducer::Guest => {
                 let Ok(vmm_ref) =
                     d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
                         producer_ref,
@@ -805,9 +810,7 @@ impl DeviceWorkerEndpointProbe {
     /// Whether the producer worker row reports `Ready` at its current
     /// generation.
     async fn present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
-        if !crate::endpoint_driver::device_worker_purpose(purpose)
-            || producer_ref.resource_type().as_str() != "Process"
-        {
+        if !device_worker_purpose(purpose) || producer_ref.resource_type().as_str() != "Process" {
             return false;
         }
         let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
@@ -849,10 +852,8 @@ struct EndpointEnsureEffect {
 #[async_trait::async_trait]
 impl AsyncSocketEffect for EndpointEnsureEffect {
     async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
-        if crate::endpoint_driver::guest_control_purpose(purpose)
-            || crate::endpoint_driver::device_worker_purpose(purpose)
-        {
-            let probe = if crate::endpoint_driver::guest_control_purpose(purpose) {
+        if guest_control_purpose(purpose) || device_worker_purpose(purpose) {
+            let probe = if guest_control_purpose(purpose) {
                 EndpointEvidence::Control(&self.control)
             } else {
                 EndpointEvidence::DeviceWorker(&self.device_worker)
@@ -900,9 +901,7 @@ struct EndpointRemoveEffect {
 #[async_trait::async_trait]
 impl AsyncSocketEffect for EndpointRemoveEffect {
     async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
-        if crate::endpoint_driver::guest_control_purpose(purpose)
-            || crate::endpoint_driver::device_worker_purpose(purpose)
-        {
+        if guest_control_purpose(purpose) || device_worker_purpose(purpose) {
             return Ok(());
         }
         self.socket.run(producer_ref, purpose).await
@@ -1360,7 +1359,7 @@ pub struct ConstructionInputs {
     pub process_effects: Arc<dyn ProcessDriverEffects>,
     pub volume_effects: Arc<dyn VolumeDriverEffects>,
     pub binding_effects: Arc<dyn BindingDriverEffects>,
-    pub endpoint_effects: Arc<dyn crate::endpoint_driver::EndpointDriverEffects>,
+    pub endpoint_effects: Arc<dyn EndpointDriverEffects>,
     pub activation_effects: Arc<dyn ActivationDriverEffects>,
     pub credential_effects: Arc<dyn CredentialDriverEffects>,
     pub shared_provider_effects: Arc<dyn SharedProviderDriverEffects>,
@@ -1512,15 +1511,15 @@ impl ConstructionInputs {
                     zone.clone(),
                 ));
                 let ensure_device_worker = Arc::clone(&device_worker);
-                Arc::new(crate::endpoint_driver::ProductionEndpointDriverEffects::new(
+                Arc::new(ProductionEndpointDriverEffects::new(
                     Arc::new(move |producer_ref: &ResourceRef, purpose: &str| {
                         let present = Arc::clone(&present);
                         let control = Arc::clone(&control);
                         let device_worker = Arc::clone(&device_worker);
                         Box::pin(async move {
-                            if crate::endpoint_driver::guest_control_purpose(purpose) {
+                            if guest_control_purpose(purpose) {
                                 control.present(producer_ref, purpose).await
-                            } else if crate::endpoint_driver::device_worker_purpose(purpose) {
+                            } else if device_worker_purpose(purpose) {
                                 device_worker.present(producer_ref, purpose).await
                             } else {
                                 present.present(producer_ref, purpose).await
@@ -1775,10 +1774,14 @@ impl ResourcePlaneV3 {
             effects: Arc::clone(&inputs.binding_effects),
             vcpu_count: inputs.authority.vcpu_count,
         })))?;
-        providers.register(Arc::new(EndpointDriverFactory::new(EndpointDriverArgs {
+        // The Endpoint type registers through its driver declaration: the
+        // registry serves the type's decoder and factory from it, and the
+        // declaration carries the family's verbs, execution domains,
+        // exportability, and reads.
+        providers.register_driver(&endpoint_descriptor(EndpointDriverArgs {
             zone: inputs.zone.as_str().to_owned(),
             effects: Arc::clone(&inputs.endpoint_effects),
-        })))?;
+        }))?;
         providers.register(Arc::new(CredentialDriverFactory::new(CredentialDriverArgs {
             zone: inputs.zone.as_str().to_owned(),
             controller_generation: inputs.authority.controller_generation,
@@ -1821,7 +1824,6 @@ impl ResourcePlaneV3 {
         let mut decoders = providers.decoders();
         decoders.insert(ResourceTypeName::new("Volume"), volume_spec_decoder());
         decoders.insert(ResourceTypeName::new("VolumeBinding"), binding_spec_decoder());
-        decoders.insert(ResourceTypeName::new("Endpoint"), endpoint_spec_decoder());
         decoders.insert(
             ResourceTypeName::new(crate::activation_driver::ACTIVATION_TYPE_NAME),
             activation_spec_decoder(),
@@ -2500,8 +2502,24 @@ mod tests {
 
     struct FakeEndpointEffects;
 
+    impl d2b_provider_endpoint::EndpointPurposeVocabulary for FakeEndpointEffects {
+        fn guest_control_producer(
+            &self,
+            purpose: &str,
+        ) -> Option<d2b_provider_endpoint::GuestControlProducer> {
+            crate::endpoint_effects::guest_control_producer(purpose)
+        }
+
+        fn device_worker_endpoint_class(
+            &self,
+            purpose: &str,
+        ) -> Option<d2b_contracts_resource::v3::endpoint::EndpointClass> {
+            crate::endpoint_effects::device_worker_endpoint_class(purpose)
+        }
+    }
+
     #[async_trait::async_trait]
-    impl crate::endpoint_driver::EndpointDriverEffects for FakeEndpointEffects {
+    impl d2b_provider_endpoint::EndpointDriverEffects for FakeEndpointEffects {
         async fn socket_present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
             true
         }
