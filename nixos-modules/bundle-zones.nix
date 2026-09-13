@@ -394,6 +394,11 @@ let
         # stay out of the processes.json projection.
         expectedContentHash = data.contentHash;
         inherit strictSecrets;
+        # The declared bootstrap Providers: the Provider catalog's own
+        # fixed-bootstrap rows, so the compiler reads the declaration rather
+        # than a list of its own.
+        systemProviderNames =
+          (import ./generated/provider-catalog-shape.nix).fixedBootstrapProviderIds;
       };
       compilerInput = pkgs.runCommand "d2b-resource-compiler-${zoneName}.json"
         {
