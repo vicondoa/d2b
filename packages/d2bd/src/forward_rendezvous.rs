@@ -331,12 +331,16 @@ async fn serve_accepted(
         // Authz-first: the peer is bound to its kernel identity before a
         // single frame is read, so a peer that is not the broker can neither
         // occupy a slot nor drive a forwarded operation.
-        let Ok(peer_uid) = connection.peer_uid() else {
-            tracing::warn!(
-                "forward rendezvous could not read its peer's credentials; refusing the call"
-            );
-            refuse(&connection, UNGRANTED_CALLER).await;
-            continue;
+        let peer_uid = match connection.peer_uid() {
+            Ok(peer_uid) => peer_uid,
+            Err(error) => {
+                tracing::warn!(
+                    reason = %error.message(),
+                    "forward rendezvous could not read its peer's credentials; refusing the call"
+                );
+                refuse(&connection, UNGRANTED_CALLER).await;
+                continue;
+            }
         };
         if !posture.admits(peer_uid) {
             tracing::warn!(
@@ -360,7 +364,10 @@ async fn serve_accepted(
             // The permit lives exactly as long as the call does, so the slot
             // is released by the call finishing - never by the accept loop.
             let _permit = permit;
-            if let Err(error) = rendezvous.serve_connection(&connection, posture.handler_deadline).await {
+            if let Err(error) = rendezvous
+                .serve_connection(&connection, posture.handler_deadline)
+                .await
+            {
                 tracing::warn!(
                     reason = %error.message(),
                     "forward rendezvous call refused"
@@ -378,10 +385,7 @@ async fn serve_accepted(
 async fn refuse(connection: &AsyncSeqpacket, code: &str) {
     match encode_reply(&refused(code)) {
         Ok(frame) => {
-            if let Err(error) = connection
-                .write_frame(&frame, FORWARD_REPLY_DEADLINE)
-                .await
-            {
+            if let Err(error) = connection.write_frame(&frame, FORWARD_REPLY_DEADLINE).await {
                 tracing::warn!(
                     reason = %error.message(),
                     "forward rendezvous refusal not delivered"
@@ -395,7 +399,9 @@ async fn refuse(connection: &AsyncSeqpacket, code: &str) {
             );
         }
     }
-    connection.drain_pending(FORWARD_REFUSAL_DRAIN_DEADLINE).await;
+    connection
+        .drain_pending(FORWARD_REFUSAL_DRAIN_DEADLINE)
+        .await;
 }
 
 /// One seqpacket endpoint registered with the reactor.
@@ -1101,7 +1107,10 @@ mod tests {
             serde_json::json!({ "resourceType": "Process" }),
         )
         .await;
-        assert!(matches!(warm.outcome, ForwardOperationOutcome::Result { .. }));
+        assert!(matches!(
+            warm.outcome,
+            ForwardOperationOutcome::Result { .. }
+        ));
 
         let before = thread_count();
         let calls: Vec<_> = (0..CALLS)
