@@ -26,12 +26,15 @@ use serde_json::Value;
 use super::ZoneResourceRuntime;
 use crate::ServerState;
 use crate::audio_resource_runtime::{
-    AUDIO_BINDING_TYPE, AudioResourceRuntime, AudioResourceRuntimeError, audio_binding_projection,
+    AudioResourceRuntime, AudioResourceRuntimeError, audio_binding_projection,
 };
-use crate::interaction_driver::{
+use d2b_provider_audio_binding::AUDIO_BINDING_TYPE;
+use d2b_provider_shell_pool::shell_pool_spec;
+use d2b_provider_shell_session::{shell_session_execution, shell_session_pool_ref};
+use d2b_provider_wayland_policy::{
     InteractionDriverEffects, InteractionEffectError, InteractionEffectOutcome,
     InteractionEffectPhase, InteractionEffectRequest, InteractionFinalize, InteractionKind,
-    key_ref, shell_pool_spec, shell_session_execution, shell_session_pool_ref,
+    key_ref,
 };
 
 /// Production composition adapter for the closed interaction/shell family.

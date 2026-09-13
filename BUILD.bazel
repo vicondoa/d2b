@@ -335,6 +335,12 @@ filegroup(
         "//packages/d2b-provider-endpoint:cargo_workspace_sources",
         "//packages/d2b-provider-volume:cargo_workspace_sources",
         "//packages/d2b-provider-volume-binding:cargo_workspace_sources",
+        "//packages/d2b-provider-wayland-policy:cargo_workspace_sources",
+        "//packages/d2b-provider-wayland-session:cargo_workspace_sources",
+        "//packages/d2b-provider-audio-service:cargo_workspace_sources",
+        "//packages/d2b-provider-audio-binding:cargo_workspace_sources",
+        "//packages/d2b-provider-shell-pool:cargo_workspace_sources",
+        "//packages/d2b-provider-shell-session:cargo_workspace_sources",
     ],
     visibility = ["//visibility:public"],
 )

@@ -80,6 +80,12 @@ d2b-provider-credential-managed-identity = { path = "../d2b-provider-credential-
 d2b-provider-credential = { path = "../d2b-provider-credential", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 d2b-provider-transport-azure-relay = { path = "../d2b-provider-transport-azure-relay", version = "0.0.0-bootstrap" }
+d2b-provider-wayland-policy = { path = "../d2b-provider-wayland-policy", version = "0.0.0-bootstrap" }
+d2b-provider-wayland-session = { path = "../d2b-provider-wayland-session", version = "0.0.0-bootstrap" }
+d2b-provider-audio-service = { path = "../d2b-provider-audio-service", version = "0.0.0-bootstrap" }
+d2b-provider-audio-binding = { path = "../d2b-provider-audio-binding", version = "0.0.0-bootstrap" }
+d2b-provider-shell-pool = { path = "../d2b-provider-shell-pool", version = "0.0.0-bootstrap" }
+d2b-provider-shell-session = { path = "../d2b-provider-shell-session", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"
 serde.workspace = true
 sha2 = "0.10"

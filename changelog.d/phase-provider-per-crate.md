@@ -26,3 +26,18 @@
   from the declaration instead of a daemon-side table. Operator-visible
   behavior is unchanged: the same endpoint shapes are admitted, and the same
   validate, recover, reconcile, finalize, and delete verbs run.
+- The interaction family is now six per-type crates -
+  `d2b-provider-wayland-policy`, `d2b-provider-wayland-session`,
+  `d2b-provider-audio-service`, `d2b-provider-audio-binding`,
+  `d2b-provider-shell-pool`, and `d2b-provider-shell-session` - one per
+  resource type. Each owns its type's driver, spec decoder, factory, row
+  vocabulary, and driver declaration; the six descriptors register through the
+  registry, so the daemon's `interaction_driver` module, its decoder loop, and
+  its type and provider literals are gone. The shared driver engine (the
+  reconcile, recover, finalize, and delete verbs, the spec-envelope decode, the
+  manager-child plumbing, and the effect port) lives in the family's root
+  crate, the daemon keeps the production effects, and the display supervisor's
+  and audio Provider's child intents reach the session and binding crates
+  through ports the daemon implements. Operator-visible behavior is unchanged:
+  the same six types are served, the same children are ensured in the same
+  order, and the same teardown ordering runs.

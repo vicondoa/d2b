@@ -40,3 +40,6 @@ pub use service::{
 pub use session::{
     AdoptionDecision, OutputRing, SupervisorCandidate, SupervisorIdentity, adopt_supervisor,
 };
+
+/// Canonical Provider reference.
+pub const PROVIDER_REF: &str = "Provider/shell-terminal";

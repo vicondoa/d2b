@@ -38,7 +38,7 @@ pub use mediator::{
 };
 pub use resource_type::{
     AudioAdmissionError, AudioBindingSpec, AudioGrants, AudioServiceRole, AudioServiceSpec,
-    ProviderExtension, validate_audio_binding, validate_audio_binding_in_zone,
+    PROVIDER_REF, ProviderExtension, validate_audio_binding, validate_audio_binding_in_zone,
     validate_audio_service,
 };
 pub use state::{
