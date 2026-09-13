@@ -51,21 +51,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_core_controller",
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "zone_status",
-    srcs = [
-        "tests/zone_status.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_core_controller",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",
 )
 
 # keep

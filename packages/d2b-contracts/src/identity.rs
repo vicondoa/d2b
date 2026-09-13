@@ -27,7 +27,7 @@ const SHA256_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
 const RESOURCE_TYPE_QUALIFIER: &str = ".d2bus.org.";
 
 /// The complete standard ResourceType catalog.
-pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
+pub const STANDARD_RESOURCE_TYPES: [&str; 23] = [
     "Zone",
     "ZoneLink",
     "Provider",
@@ -48,11 +48,16 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
     "Endpoint",
     "ResourceExport",
     "ResourceImport",
+    // The controller family's policy types: unqualified, always-committed
+    // vocabulary whose rows the foundation seed writes.
+    "Command",
+    "Operation",
+    "SeccompProfile",
 ];
 
 /// The resource types the v3 resource runtime owns end to end (R35/F1
 /// exclusive per-type partition): served only by the per-zone manager plane.
-pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 33] = [
+pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 36] = [
     "Process",
     // U12: the one-shot Process family member, served by the same Process
     // driver factory.
@@ -91,6 +96,11 @@ pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 33] = [
     "EmergencyPolicy",
     "ResourceExport",
     "ResourceImport",
+    // The controller family's policy types: declared with their drivers, and
+    // materialized by the committed policy rows the seed writes.
+    "Command",
+    "Operation",
+    "SeccompProfile",
 ];
 
 /// The storage plane that owns one resource type (R35/F1: an exclusive

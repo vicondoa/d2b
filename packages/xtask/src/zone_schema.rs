@@ -47,7 +47,7 @@ const CORE_SCHEMA_NAMESPACE: &str = "core.d2bus.org";
 /// The canonical 20-type registry from `ADR-046-resource-object-model`. The
 /// unit test below pins it against `nixos-modules/resources.nix`, which is the
 /// hand-maintained registry the structural option base already uses.
-pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
+pub const STANDARD_RESOURCE_TYPES: [&str; 23] = [
     "Zone",
     "ZoneLink",
     "Provider",
@@ -68,6 +68,11 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
     "Endpoint",
     "ResourceExport",
     "ResourceImport",
+    // The controller family's policy types: unqualified, always-committed
+    // vocabulary whose rows the foundation seed writes.
+    "Command",
+    "Operation",
+    "SeccompProfile",
 ];
 
 /// U12 Provider-owned qualified ResourceTypes. They are generated from their

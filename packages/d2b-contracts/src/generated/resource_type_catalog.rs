@@ -8,7 +8,7 @@
 /// [`crate::identity::V3_CONVERTED_RESOURCE_TYPES`], which the
 /// generator projects entry for entry; the fence below fails the
 /// moment the two disagree.
-pub const CONVERTED_RESOURCE_TYPES: [&str; 33] = [
+pub const CONVERTED_RESOURCE_TYPES: [&str; 36] = [
     "Process",
     "EphemeralProcess",
     "Guest",
@@ -42,6 +42,9 @@ pub const CONVERTED_RESOURCE_TYPES: [&str; 33] = [
     "EmergencyPolicy",
     "ResourceExport",
     "ResourceImport",
+    "Command",
+    "Operation",
+    "SeccompProfile",
 ];
 
 #[cfg(test)]

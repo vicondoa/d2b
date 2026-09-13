@@ -19,7 +19,7 @@ use d2b_contracts_zone_session::v3::{
 use d2b_core_controller::controller_assignment::{
     AssignmentError, AssignmentIdentity, AssignmentTarget, ScopedResourceMutation,
 };
-use d2b_core_controller::rbac::{AuthorizationCacheKey, PolicyRevisionSet, PositiveDecisionCache};
+use d2b_provider_role::rbac::{AuthorizationCacheKey, PolicyRevisionSet, PositiveDecisionCache};
 use d2b_contracts_resource::v3::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, PolicySnapshot,
     ResourceAssignmentFence, ResourceAssignmentScope, StoreMutation, StoreOperationContext,

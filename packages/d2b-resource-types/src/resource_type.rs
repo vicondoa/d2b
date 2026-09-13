@@ -79,6 +79,12 @@ impl WellKnownType {
     pub const RESOURCE_EXPORT: Self = Self("ResourceExport");
     /// A resource imported from another zone.
     pub const RESOURCE_IMPORT: Self = Self("ResourceImport");
+    /// A declared launch shape a `Process` instance references.
+    pub const COMMAND: Self = Self("Command");
+    /// A committed broker operation with its handler reference.
+    pub const OPERATION: Self = Self("Operation");
+    /// A committed seccomp posture a role references.
+    pub const SECCOMP_PROFILE: Self = Self("SeccompProfile");
 
     /// Every well-known type, in the order of the v3 converted-type authority
     /// list.
@@ -116,6 +122,9 @@ impl WellKnownType {
         Self::EMERGENCY_POLICY,
         Self::RESOURCE_EXPORT,
         Self::RESOURCE_IMPORT,
+        Self::COMMAND,
+        Self::OPERATION,
+        Self::SECCOMP_PROFILE,
     ];
 
     /// Convert to the runtime's owned resource type name.
@@ -143,7 +152,7 @@ mod tests {
     /// `ALL` is the authority list: same length, same names, same order.
     #[test]
     fn all_covers_the_converted_type_authority_list() {
-        assert_eq!(WellKnownType::ALL.len(), 33);
+        assert_eq!(WellKnownType::ALL.len(), 36);
         assert_eq!(WellKnownType::ALL.len(), V3_CONVERTED_RESOURCE_TYPES.len());
         for (entry, authority) in WellKnownType::ALL.iter().zip(V3_CONVERTED_RESOURCE_TYPES) {
             assert_eq!(entry.to_resource_type_name().as_str(), authority);
