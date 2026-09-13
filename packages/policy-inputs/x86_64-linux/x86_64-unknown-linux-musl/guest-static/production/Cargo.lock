@@ -1934,6 +1934,7 @@ name = "d2b-resource-runtime"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts",
  "parking_lot",
  "ractor",
  "rusqlite",
@@ -2005,6 +2006,22 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-sk-frontend"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-provider-toolkit",
+ "d2b-session",
+ "d2b-session-unix",
+ "libc",
+ "tokio",
+ "tokio-vsock",
+]
+
+
+[[package]]
 name = "d2b-telemetry"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -2023,10 +2040,16 @@ dependencies = [
 name = "d2b-zone-routing"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-bus",
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-provider-toolkit",
+ "d2b-session",
+ "d2b-session-unix",
+ "d2b-sk-frontend",
+ "tokio",
 ]
 
 
