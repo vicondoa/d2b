@@ -387,3 +387,35 @@
   ComponentSession route with the session's supervisor owned as a target-local
   Process child. The `d2b-sk-waybar-helper` package output, whose sources were
   already deleted, is dropped in the same pass.
+- The resource compiler reads the declared bootstrap boundary instead of
+  matching two Provider IDs: the compiler input's declared system Provider
+  names (the Provider catalog's fixed-bootstrap rows) are what keeps an
+  artifact's components in-process, and what admits an in-process bootstrap
+  component in the first place. A boundary that drops a declared bootstrap row
+  no longer compiles that row's artifact or projects its Provider, so the
+  declaration, not a list in the compiler, is the authority.
+- The static controller projection binds Device-owned worker templates from
+  the rows the Device Providers declare - the row's `template` plus its owning
+  Device's declared `providerRef` - instead of one arm per Device family, so a
+  new Device Provider that declares the same row shape is bound with no
+  compiler edit, and the serving worker's Provider reference and template are
+  read from the one core declaration the resolver's mint classifies with
+  rather than respelled here. The declared row, its digest-pinned executable,
+  and the closed posture its template pins are unchanged.
+- The CLI's built-in top-level command registry is derived from its own
+  parser: the hand-maintained 33-name table is gone, a command the parser does
+  not declare is not a built-in, and the three Provider projection carriers
+  (`audio`, `clipboard`, `display`) stay outside the registry because the
+  declaring Provider names them through its own `cliProjection`. A typed noun
+  the generated CLI catalog declares is asserted to be a parser command, so
+  the catalog and the parser cannot drift apart.
+- The telemetry `op` label domain is generated from the committed broker
+  operation rows - `gen-layer-catalogs` projects their wire variants into the
+  provider contracts catalog - instead of a hand list of 21 names: every
+  operation a broker request can name labels a data point, a row the catalog
+  retires leaves the domain with it, and the two redaction fixtures that
+  pinned `vmStart` as an admitted value now use a committed family operation.
+  The compiler's inline-secret check stays key and value keyed for now: no
+  resource schema marks a property `writeOnly`, so the declared secret surface
+  it would read does not exist yet, and the check moves onto the marker when
+  the schemas grow it.
