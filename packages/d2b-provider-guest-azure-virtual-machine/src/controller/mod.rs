@@ -1,17 +1,13 @@
 //! Azure VM lifecycle controller.
 
-use std::{
-    fmt,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{fmt, sync::Arc};
 
+use d2b_provider_toolkit::plane::{Clock, SystemClock};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    bootstrap::BootstrapPsk,
-    bootstrap_svc::{BootstrapService, BootstrapServiceState},
+    bootstrap::{BootstrapPsk, BootstrapService, BootstrapServiceState},
     config::{AzureVmConfig, AzureVmGuestSettings, DataDiskSpec},
     effect::AzureCredentialPort,
     effect::{
@@ -19,30 +15,10 @@ use crate::{
         PskExtensionPayload, TagDigest,
     },
     error::AzureVmError,
-    idempotency,
 };
 
 const MAX_PSK_DELIVERY_ATTEMPTS: u8 = 3;
 const MAX_LRO_AGE_MS: u64 = 15 * 60 * 1_000;
-
-/// Clock used for bootstrap admission and deadline checks.
-pub trait AzureVmClock: Send + Sync {
-    /// Return the current Unix time in milliseconds.
-    fn now_unix_ms(&self) -> u64;
-}
-
-/// Production wall clock for Azure VM bootstrap deadlines.
-#[derive(Debug, Default)]
-pub struct SystemAzureVmClock;
-
-impl AzureVmClock for SystemAzureVmClock {
-    fn now_unix_ms(&self) -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-            .unwrap_or(0)
-    }
-}
 
 /// Azure VM Provider phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,47 +55,6 @@ pub const AZURE_VM_REPAIR_INTERVAL_SECS: u64 = 30;
 /// Exact Guest finalizer owned by the Azure VM runtime Provider.
 pub const AZURE_VM_GUEST_FINALIZER: &str =
     "runtime-azure-virtual-machine.d2bus.org/guest-cleanup";
-
-/// The shared-Runner contract for the Azure VM Guest owner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AzureVirtualMachineRunnerContract {
-    resource_type: &'static str,
-    finalizer: &'static str,
-    repair_interval_secs: u64,
-    watched_configuration_is_dependency: bool,
-}
-
-impl AzureVirtualMachineRunnerContract {
-    /// Return the owned ResourceType.
-    pub const fn resource_type(self) -> &'static str {
-        self.resource_type
-    }
-
-    /// Return the exact Guest finalizer.
-    pub const fn finalizer(self) -> &'static str {
-        self.finalizer
-    }
-
-    /// Return the bounded repair interval.
-    pub const fn repair_interval_secs(self) -> u64 {
-        self.repair_interval_secs
-    }
-
-    /// Whether watched configuration is treated as a dependency.
-    pub const fn watched_configuration_is_dependency(self) -> bool {
-        self.watched_configuration_is_dependency
-    }
-}
-
-/// Return the shared-Runner contract for Azure VM Guests.
-pub const fn azure_virtual_machine_runner_contract() -> AzureVirtualMachineRunnerContract {
-    AzureVirtualMachineRunnerContract {
-        resource_type: "Guest",
-        finalizer: AZURE_VM_GUEST_FINALIZER,
-        repair_interval_secs: AZURE_VM_REPAIR_INTERVAL_SECS,
-        watched_configuration_is_dependency: true,
-    }
-}
 
 /// Non-blocking controller result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,9 +124,6 @@ pub struct AzureVmRecoveryState {
     /// Whether the one-time bootstrap extension may still contain PSK data.
     #[serde(default)]
     pub bootstrap_extension_present: bool,
-    /// Whether the VM deletion has been externally confirmed.
-    #[serde(default)]
-    pub vm_delete_confirmed: bool,
     /// Whether provider-owned child-resource cleanup has completed.
     #[serde(default)]
     pub child_cleanup_complete: bool,
@@ -216,7 +148,6 @@ impl AzureVmUpdate {
 pub struct AzureVmStatus {
     phase: AzureVmPhase,
     identity_digest: Option<[u8; 32]>,
-    operation_digest: Option<[u8; 32]>,
 }
 
 impl AzureVmStatus {
@@ -229,11 +160,6 @@ impl AzureVmStatus {
     pub const fn identity_digest(&self) -> Option<[u8; 32]> {
         self.identity_digest
     }
-
-    /// Return the opaque operation digest.
-    pub const fn operation_digest(&self) -> Option<[u8; 32]> {
-        self.operation_digest
-    }
 }
 
 impl fmt::Debug for AzureVmStatus {
@@ -244,10 +170,6 @@ impl fmt::Debug for AzureVmStatus {
             .field(
                 "identity_digest",
                 &self.identity_digest.map(|_| "<redacted>"),
-            )
-            .field(
-                "operation_digest",
-                &self.operation_digest.map(|_| "<redacted>"),
             )
             .finish()
     }
@@ -263,7 +185,6 @@ pub struct AzureVmController<E> {
     finalizer: bool,
     operation: Option<crate::effect::AzureOperationHandle>,
     vm_handle: Option<AzureVmHandle>,
-    tag_digest: Option<TagDigest>,
     expected_tag_digest: TagDigest,
     identity_digest: Option<[u8; 32]>,
     bootstrap_psk: Option<BootstrapPsk>,
@@ -273,9 +194,8 @@ pub struct AzureVmController<E> {
     psk_delivery_attempts: u8,
     operation_started_at_unix_ms: Option<u64>,
     pending_update: Option<AzureVmUpdate>,
-    clock: Arc<dyn AzureVmClock>,
+    clock: Arc<dyn Clock>,
     bootstrap_extension_present: bool,
-    vm_delete_confirmed: bool,
     child_cleanup_complete: bool,
     bootstrap_deadline_failed: bool,
 }
@@ -304,7 +224,6 @@ where
             finalizer: true,
             operation: None,
             vm_handle: None,
-            tag_digest: None,
             expected_tag_digest,
             identity_digest: None,
             bootstrap_psk,
@@ -314,9 +233,8 @@ where
             psk_delivery_attempts: 0,
             operation_started_at_unix_ms: None,
             pending_update: None,
-            clock: Arc::new(SystemAzureVmClock),
+            clock: Arc::new(SystemClock),
             bootstrap_extension_present: false,
-            vm_delete_confirmed: false,
             child_cleanup_complete: false,
             bootstrap_deadline_failed: false,
         })
@@ -329,7 +247,7 @@ where
     }
 
     /// Replace the wall clock used for bootstrap deadlines.
-    pub fn with_clock(mut self, clock: Arc<dyn AzureVmClock>) -> Self {
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
         self
     }
@@ -347,7 +265,6 @@ where
             pending_update: self.pending_update.clone(),
             bootstrap_service_state: self.bootstrap_service.state(),
             bootstrap_extension_present: self.bootstrap_extension_present,
-            vm_delete_confirmed: self.vm_delete_confirmed,
             child_cleanup_complete: self.child_cleanup_complete,
             bootstrap_deadline_failed: self.bootstrap_deadline_failed,
         }
@@ -389,7 +306,6 @@ where
         self.pending_update = recovery.pending_update;
         self.bootstrap_service = BootstrapService::from_state(recovery.bootstrap_service_state);
         self.bootstrap_extension_present = recovery.bootstrap_extension_present;
-        self.vm_delete_confirmed = recovery.vm_delete_confirmed;
         self.child_cleanup_complete = recovery.child_cleanup_complete;
         self.bootstrap_deadline_failed = recovery.bootstrap_deadline_failed;
         Ok(self)
@@ -410,7 +326,6 @@ where
         AzureVmStatus {
             phase: self.phase,
             identity_digest: self.identity_digest,
-            operation_digest: self.operation.as_ref().map(|operation| operation.digest()),
         }
     }
 
@@ -449,7 +364,7 @@ where
         match state {
             AzureVmState::Absent => {
                 let operation_id =
-                    idempotency::operation_id(zone_uid, guest_uid, generation, "provision");
+                    operation_id(zone_uid, guest_uid, generation, "provision");
                 let token = self.arm_token().await?;
                 let operation = self
                     .effect
@@ -460,37 +375,15 @@ where
                 Ok(AzureVmReconcileOutcome::Progressing { after_ms: 1_000 })
             }
             AzureVmState::Running => {
-                let Some(handle) = handle else {
-                    tracing::warn!(
-                        zone = %zone_uid,
-                        resource = %guest_uid,
-                        provider = "runtime-azure-virtual-machine",
-                        "running VM observed without effect handle"
-                    );
-                    return Err(AzureVmError::Ambiguous);
+                let (_, tags) = match self.verify_owned_vm(handle, tags, "reconcile") {
+                    Ok(owned) => owned,
+                    Err(error) => {
+                        if error == AzureVmError::ArmResourceConflict {
+                            self.phase = AzureVmPhase::Failed;
+                        }
+                        return Err(error);
+                    }
                 };
-                let Some(tags) = tags else {
-                    tracing::warn!(
-                        zone = %zone_uid,
-                        resource = %guest_uid,
-                        provider = "runtime-azure-virtual-machine",
-                        "VM tag digest missing; refusing foreign or drifted resource"
-                    );
-                    self.phase = AzureVmPhase::Failed;
-                    return Err(AzureVmError::ArmResourceConflict);
-                };
-                if tags != self.expected_tag_digest {
-                    tracing::warn!(
-                        zone = %zone_uid,
-                        resource = %guest_uid,
-                        provider = "runtime-azure-virtual-machine",
-                        "VM tag digest mismatch; refusing foreign or drifted resource"
-                    );
-                    self.phase = AzureVmPhase::Failed;
-                    return Err(AzureVmError::ArmResourceConflict);
-                }
-                self.vm_handle = Some(handle);
-                self.tag_digest = Some(tags);
                 if self.bootstrap_psk.is_some()
                     && self.bootstrap_service.state() != BootstrapServiceState::Enrolled
                 {
@@ -537,34 +430,15 @@ where
             );
             return Err(AzureVmError::Transient);
         }
-        let Some(handle) = handle else {
-            tracing::warn!(
-                resource_group = %self.settings.resource_group,
-                provider = "runtime-azure-virtual-machine",
-                "adoption refused: running VM without effect handle"
-            );
-            return Err(AzureVmError::Ambiguous);
+        let (_, tags) = match self.verify_owned_vm(handle, tags, "adopt") {
+            Ok(owned) => owned,
+            Err(error) => {
+                if error == AzureVmError::ArmResourceConflict {
+                    self.phase = AzureVmPhase::Failed;
+                }
+                return Err(error);
+            }
         };
-        let Some(tags) = tags else {
-            tracing::warn!(
-                resource_group = %self.settings.resource_group,
-                provider = "runtime-azure-virtual-machine",
-                "adoption refused: VM tag digest missing"
-            );
-            self.phase = AzureVmPhase::Failed;
-            return Err(AzureVmError::ArmResourceConflict);
-        };
-        if tags != self.expected_tag_digest {
-            tracing::warn!(
-                resource_group = %self.settings.resource_group,
-                provider = "runtime-azure-virtual-machine",
-                "adoption refused: VM tag digest mismatch"
-            );
-            self.phase = AzureVmPhase::Failed;
-            return Err(AzureVmError::ArmResourceConflict);
-        }
-        self.vm_handle = Some(handle);
-        self.tag_digest = Some(tags);
         self.ready_if_enrolled(tags).await
     }
 
@@ -652,35 +526,11 @@ where
                             self.phase = AzureVmPhase::Failed;
                             return Err(AzureVmError::ArmProvisioningFailed);
                         }
-                        let Some(handle) = handle else {
-                            tracing::warn!(
-                                resource_group = %self.settings.resource_group,
-                                provider = "runtime-azure-virtual-machine",
-                                "running VM observed without effect handle after provision"
-                            );
+                        if let Err(error) = self.verify_owned_vm(handle, tags, "provision-complete")
+                        {
                             self.phase = AzureVmPhase::Failed;
-                            return Err(AzureVmError::Ambiguous);
-                        };
-                        let Some(tags) = tags else {
-                            tracing::warn!(
-                                resource_group = %self.settings.resource_group,
-                                provider = "runtime-azure-virtual-machine",
-                                "VM tag digest missing after provision; refusing foreign resource"
-                            );
-                            self.phase = AzureVmPhase::Failed;
-                            return Err(AzureVmError::ArmResourceConflict);
-                        };
-                        if tags != self.expected_tag_digest {
-                            tracing::warn!(
-                                resource_group = %self.settings.resource_group,
-                                provider = "runtime-azure-virtual-machine",
-                                "VM tag digest mismatch after provision; refusing foreign resource"
-                            );
-                            self.phase = AzureVmPhase::Failed;
-                            return Err(AzureVmError::ArmResourceConflict);
+                            return Err(error);
                         }
-                        self.vm_handle = Some(handle.clone());
-                        self.tag_digest = Some(tags);
                         if self.bootstrap_psk.is_some() {
                             self.start_psk_delivery().await
                         } else {
@@ -789,7 +639,7 @@ where
         }
         let handle = self.vm_handle.clone().ok_or(AzureVmError::Ambiguous)?;
         let operation_id =
-            idempotency::operation_id(zone_uid, guest_uid, generation, update.operation_class());
+            operation_id(zone_uid, guest_uid, generation, update.operation_class());
         let token = self.arm_token().await?;
         let operation = match &update {
             AzureVmUpdate::Resize { size } => {
@@ -832,7 +682,7 @@ where
         let delete_operation_id = self
             .pending_delete_operation_id
             .get_or_insert_with(|| {
-                idempotency::operation_id(zone_uid, guest_uid, generation, "delete")
+                operation_id(zone_uid, guest_uid, generation, "delete")
             })
             .clone();
         if self.operation.is_some() {
@@ -853,44 +703,15 @@ where
         let token = self.arm_token().await?;
         let (state, handle, tags) = self.effect.get_vm_state(&self.settings, &token).await?;
         let handle = match state {
-            AzureVmState::Absent => {
-                self.vm_delete_confirmed = true;
-                return self.start_child_cleanup().await;
-            }
+            AzureVmState::Absent => return self.start_child_cleanup().await,
             AzureVmState::Running | AzureVmState::Stopped => {
-                let Some(handle) = handle else {
-                    tracing::warn!(
-                        zone = %zone_uid,
-                        resource = %guest_uid,
-                        provider = "runtime-azure-virtual-machine",
-                        "running VM observed without effect handle during finalization"
-                    );
-                    self.phase = AzureVmPhase::Failed;
-                    return Err(AzureVmError::Ambiguous);
-                };
-                let Some(tags) = tags else {
-                    tracing::warn!(
-                        zone = %zone_uid,
-                        resource = %guest_uid,
-                        provider = "runtime-azure-virtual-machine",
-                        "VM tag digest missing during finalization; refusing foreign resource"
-                    );
-                    self.phase = AzureVmPhase::Failed;
-                    return Err(AzureVmError::ArmResourceConflict);
-                };
-                if tags != self.expected_tag_digest {
-                    tracing::warn!(
-                        zone = %zone_uid,
-                        resource = %guest_uid,
-                        provider = "runtime-azure-virtual-machine",
-                        "VM tag digest mismatch during finalization; refusing foreign resource"
-                    );
-                    self.phase = AzureVmPhase::Failed;
-                    return Err(AzureVmError::ArmResourceConflict);
+                match self.verify_owned_vm(handle, tags, "finalization") {
+                    Ok((handle, _)) => handle,
+                    Err(error) => {
+                        self.phase = AzureVmPhase::Failed;
+                        return Err(error);
+                    }
                 }
-                self.vm_handle = Some(handle.clone());
-                self.tag_digest = Some(tags);
-                handle
             }
             AzureVmState::Provisioning => {
                 self.phase = AzureVmPhase::Deleting;
@@ -1023,35 +844,9 @@ where
         let token = self.arm_token().await?;
         let (state, handle, tags) = self.effect.get_vm_state(&self.settings, &token).await?;
         match state {
-            AzureVmState::Absent => {
-                self.vm_delete_confirmed = true;
-                self.start_child_cleanup().await
-            }
+            AzureVmState::Absent => self.start_child_cleanup().await,
             AzureVmState::Running | AzureVmState::Stopped => {
-                let Some(handle) = handle else {
-                    tracing::warn!(
-                        resource_group = %self.settings.resource_group,
-                        provider = "runtime-azure-virtual-machine",
-                        "running VM observed without effect handle during pending delete"
-                    );
-                    return Err(AzureVmError::Ambiguous);
-                };
-                let Some(tags) = tags else {
-                    tracing::warn!(
-                        resource_group = %self.settings.resource_group,
-                        provider = "runtime-azure-virtual-machine",
-                        "VM tag digest missing during pending delete; refusing foreign resource"
-                    );
-                    return Err(AzureVmError::ArmResourceConflict);
-                };
-                if tags != self.expected_tag_digest {
-                    tracing::warn!(
-                        resource_group = %self.settings.resource_group,
-                        provider = "runtime-azure-virtual-machine",
-                        "VM tag digest mismatch during pending delete; refusing foreign resource"
-                    );
-                    return Err(AzureVmError::ArmResourceConflict);
-                }
+                let (handle, _) = self.verify_owned_vm(handle, tags, "pending-delete")?;
                 let operation_id = self
                     .pending_delete_operation_id
                     .clone()
@@ -1119,6 +914,50 @@ where
         self.set_operation(operation);
         self.phase = AzureVmPhase::ChildCleaning;
         Ok(AzureVmReconcileOutcome::Progressing { after_ms: 1_000 })
+    }
+
+    /// Verify that an observed VM is the provider-owned one before acting on it.
+    ///
+    /// The tag digest is compared against the digest derived from the
+    /// configured tags, so a VM carrying foreign or drifted ownership tags is
+    /// never adopted, reconfigured, or deleted. Failures are logged here and
+    /// returned as an error; `stage` names the caller's phase in the record.
+    /// The observed handle is stored on success.
+    fn verify_owned_vm(
+        &mut self,
+        handle: Option<AzureVmHandle>,
+        tags: Option<TagDigest>,
+        stage: &str,
+    ) -> Result<(AzureVmHandle, TagDigest), AzureVmError> {
+        let Some(handle) = handle else {
+            tracing::warn!(
+                resource_group = %self.settings.resource_group,
+                provider = "runtime-azure-virtual-machine",
+                stage,
+                "running VM observed without effect handle"
+            );
+            return Err(AzureVmError::Ambiguous);
+        };
+        let Some(tags) = tags else {
+            tracing::warn!(
+                resource_group = %self.settings.resource_group,
+                provider = "runtime-azure-virtual-machine",
+                stage,
+                "VM tag digest missing; refusing foreign or drifted resource"
+            );
+            return Err(AzureVmError::ArmResourceConflict);
+        };
+        if tags != self.expected_tag_digest {
+            tracing::warn!(
+                resource_group = %self.settings.resource_group,
+                provider = "runtime-azure-virtual-machine",
+                stage,
+                "VM tag digest mismatch; refusing foreign or drifted resource"
+            );
+            return Err(AzureVmError::ArmResourceConflict);
+        }
+        self.vm_handle = Some(handle.clone());
+        Ok((handle, tags))
     }
 
     fn set_operation(&mut self, operation: crate::effect::AzureOperationHandle) {
@@ -1193,4 +1032,36 @@ where
                 error
             })
     }
+}
+
+/// Derive a stable 20-character operation identifier.
+fn operation_id(zone_uid: &str, guest_uid: &str, generation: u64, operation_class: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(zone_uid.as_bytes());
+    digest.update([0]);
+    digest.update(guest_uid.as_bytes());
+    digest.update([0]);
+    digest.update(generation.to_be_bytes());
+    digest.update([0]);
+    digest.update(operation_class.as_bytes());
+    base32(&digest.finalize())[..20].to_owned()
+}
+
+fn base32(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut output = String::with_capacity((bytes.len() * 8).div_ceil(5));
+    let mut buffer = 0u16;
+    let mut bits = 0u8;
+    for byte in bytes {
+        buffer = (buffer << 8) | u16::from(*byte);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            output.push(ALPHABET[((buffer >> bits) & 0x1f) as usize] as char);
+        }
+    }
+    if bits != 0 {
+        output.push(ALPHABET[((buffer << (5 - bits)) & 0x1f) as usize] as char);
+    }
+    output
 }

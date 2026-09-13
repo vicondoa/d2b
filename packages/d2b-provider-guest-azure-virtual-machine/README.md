@@ -43,7 +43,7 @@ implementations. Bootstrap PSKs are zeroized and single-use.
 ## State and telemetry
 
 Guest status stores only bounded lifecycle and digest projections. ARM LRO
-polling is requeue-driven, and metric labels are a closed semantic allowlist.
+polling is requeue-driven.
 
 ## Build and test
 

@@ -12,6 +12,7 @@ rust_library(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, cargo_only = True),
     proc_macro_deps = [
         "@crates//:async-trait",
@@ -44,18 +45,6 @@ rust_test(
 )
 
 rust_test(
-    name = "idempotency",
-    srcs = [
-        "tests/idempotency.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_provider_guest_azure_virtual_machine",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "lifecycle_hermetic",
     srcs = [
         "tests/lifecycle_hermetic.rs",
@@ -64,6 +53,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
         ":d2b_provider_guest_azure_virtual_machine",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

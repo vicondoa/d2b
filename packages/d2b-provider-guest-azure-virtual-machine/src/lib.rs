@@ -3,26 +3,22 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub mod audit;
 pub mod bootstrap;
-pub mod bootstrap_svc;
 pub mod config;
 pub mod controller;
 pub mod effect;
 pub mod error;
-pub mod idempotency;
-pub mod telemetry;
 
-pub use bootstrap::{BootstrapAdmission, BootstrapAdmissionState, BootstrapPsk};
-pub use bootstrap_svc::{BootstrapService, BootstrapServiceState};
+pub use bootstrap::{
+    BootstrapAdmission, BootstrapAdmissionState, BootstrapPsk, BootstrapService,
+    BootstrapServiceState,
+};
 pub use config::{
     AzureVmConfig, AzureVmGuestSettings, BootstrapPskDelivery, DataDiskSpec, DiskSku,
 };
 pub use controller::{
-    AzureVmClock, AzureVmController, AzureVmPhase, AzureVmReconcileOutcome, AzureVmRecoveryState,
-    AzureVmStatus, AzureVmUpdate, AzureVirtualMachineRunnerContract, SystemAzureVmClock,
-    AZURE_VM_GUEST_FINALIZER, AZURE_VM_REPAIR_INTERVAL_SECS,
-    azure_virtual_machine_runner_contract,
+    AzureVmController, AzureVmPhase, AzureVmReconcileOutcome, AzureVmRecoveryState, AzureVmStatus,
+    AzureVmUpdate, AZURE_VM_GUEST_FINALIZER, AZURE_VM_REPAIR_INTERVAL_SECS,
 };
 pub use effect::{
     AzureAccessToken, AzureCredentialPort, AzureEffectPort, AzureOperationHandle, AzureVmHandle,

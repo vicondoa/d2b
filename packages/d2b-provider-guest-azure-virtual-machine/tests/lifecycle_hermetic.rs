@@ -3,25 +3,13 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use d2b_contracts::{OpaqueAzureRef, ResourceRef};
 use d2b_provider_guest_azure_virtual_machine::{
-    AzureAccessToken, AzureCredentialPort, AzureEffectPort, AzureOperationHandle, AzureVmClock,
-    AzureVmConfig, AzureVmController, AzureVmError, AzureVmGuestSettings, AzureVmHandle,
-    AzureVmPhase, AzureVmReconcileOutcome, AzureVmRecoveryState, AzureVmState, AzureVmUpdate,
-    BootstrapAdmission, BootstrapPsk, BootstrapPskDelivery, BootstrapService, DiskSku, LroStatus,
-    PskExtensionPayload, TagDigest,
+    AzureAccessToken, AzureCredentialPort, AzureEffectPort, AzureOperationHandle, AzureVmConfig,
+    AzureVmController, AzureVmError, AzureVmGuestSettings, AzureVmHandle, AzureVmPhase,
+    AzureVmReconcileOutcome, AzureVmRecoveryState, AzureVmState, AzureVmUpdate, BootstrapAdmission,
+    BootstrapPsk, BootstrapPskDelivery, BootstrapService, DiskSku, LroStatus, PskExtensionPayload,
+    TagDigest,
 };
-
-#[test]
-fn azure_vm_publishes_the_shared_runner_contract() {
-    let contract =
-        d2b_provider_guest_azure_virtual_machine::azure_virtual_machine_runner_contract();
-    assert_eq!(contract.resource_type(), "Guest");
-    assert_eq!(
-        contract.finalizer(),
-        d2b_provider_guest_azure_virtual_machine::FINALIZER
-    );
-    assert_eq!(contract.repair_interval_secs(), 30);
-    assert!(contract.watched_configuration_is_dependency());
-}
+use d2b_provider_toolkit::plane::Clock;
 
 struct FakeState {
     state: AzureVmState,
@@ -68,7 +56,7 @@ impl AzureCredentialPort for FakeCredential {
 
 struct FixedClock(Arc<Mutex<u64>>);
 
-impl AzureVmClock for FixedClock {
+impl Clock for FixedClock {
     fn now_unix_ms(&self) -> u64 {
         *self.0.lock().unwrap()
     }
@@ -605,7 +593,6 @@ async fn restart_with_pending_delete_never_reprovisions_an_absent_vm() {
             pending_update: None,
             bootstrap_service_state: BootstrapService::default().state(),
             bootstrap_extension_present: false,
-            vm_delete_confirmed: false,
             child_cleanup_complete: false,
             bootstrap_deadline_failed: false,
         })
@@ -842,7 +829,6 @@ async fn bootstrap_deadline_retries_failed_extension_cleanup() {
         pending_update: None,
         bootstrap_service_state: BootstrapService::default().state(),
         bootstrap_extension_present: true,
-        vm_delete_confirmed: false,
         child_cleanup_complete: false,
         bootstrap_deadline_failed: true,
     };

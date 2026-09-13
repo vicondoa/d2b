@@ -112,17 +112,6 @@ impl AzureVmConfig {
         }
         Ok(())
     }
-
-    /// Require a Credential scope to equal the gateway Guest exactly.
-    pub fn validate_credential_scope(
-        &self,
-        execution_ref: &ResourceRef,
-    ) -> Result<(), AzureVmError> {
-        if execution_ref != &self.controller_execution_ref {
-            return Err(AzureVmError::InvalidConfiguration);
-        }
-        Ok(())
-    }
 }
 
 impl fmt::Debug for AzureVmConfig {

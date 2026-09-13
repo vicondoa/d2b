@@ -32,11 +32,6 @@ impl AzureVmHandle {
         }
         Ok(Self(value))
     }
-
-    /// Borrow the opaque handle for the effect adapter.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 impl fmt::Debug for AzureVmHandle {
@@ -57,11 +52,6 @@ impl AzureOperationHandle {
             return Err(AzureVmError::InvalidOperationHandle);
         }
         Ok(Self(bytes))
-    }
-
-    /// Return a one-way digest for status and ledger joins.
-    pub fn digest(&self) -> [u8; 32] {
-        Sha256::digest(&self.0).into()
     }
 }
 

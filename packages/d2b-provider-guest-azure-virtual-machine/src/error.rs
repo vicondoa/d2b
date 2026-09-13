@@ -64,11 +64,6 @@ impl AzureVmError {
             Self::Ambiguous => "azure-operation-ambiguous",
         }
     }
-
-    /// Return whether retrying the same operation is safe.
-    pub const fn retryable(self) -> bool {
-        matches!(self, Self::Transient | Self::ArmThrottled)
-    }
 }
 
 impl fmt::Display for AzureVmError {
