@@ -2,9 +2,10 @@
 
 use d2b_contracts_provider::v3::credential::CredentialMethod;
 use d2b_contracts_provider::v3::credential_controller::{
-    CredentialAuditDigest, CredentialAuditOutcome, CredentialAuditRecord,
-    CredentialObservabilityError, CredentialProviderKind,
+    CredentialAuditOutcome, CredentialAuditRecord, CredentialObservabilityError,
+    CredentialProviderKind,
 };
+use d2b_provider_toolkit::credential;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn authorized_service_record(
@@ -17,32 +18,16 @@ pub(super) fn authorized_service_record(
     rotation_generation: u64,
     idempotency_key: Option<&[u8]>,
 ) -> Result<Option<CredentialAuditRecord>, CredentialObservabilityError> {
-    if !authorized {
-        return CredentialAuditRecord::authorized_service(
-            false,
-            CredentialProviderKind::Entra,
-            "",
-            "",
-            "",
-            method,
-            outcome,
-            rotation_generation,
-            None,
-        );
-    }
-    let subject = CredentialAuditDigest::after_authorization(subject_identity);
-    let resource = CredentialAuditDigest::after_authorization(credential_name);
-    let idempotency = idempotency_key.map(CredentialAuditDigest::after_authorization);
-    CredentialAuditRecord::authorized_service(
-        true,
+    credential::authorized_service_record(
         CredentialProviderKind::Entra,
+        authorized,
         zone,
-        subject.as_str(),
-        resource.as_str(),
+        subject_identity,
+        credential_name,
         method,
         outcome,
         rotation_generation,
-        idempotency.map(|digest| digest.as_str().to_owned()),
+        idempotency_key,
     )
 }
 
