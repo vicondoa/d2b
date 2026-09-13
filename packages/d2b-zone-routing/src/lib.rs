@@ -8,3 +8,4 @@ pub mod enrollment;
 pub mod resolver;
 pub mod router;
 pub mod service;
+pub mod serving;
