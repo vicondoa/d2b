@@ -1,14 +1,13 @@
 //! Authenticated notification Provider runtime composition.
 
 use d2b_contracts_resource::v3::ResourceRef;
-use tracing::{debug, warn};
-use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
+use tracing::warn;
+use d2b_provider_toolkit::AuthenticatedSessionRouteBinding;
 
 use crate::{
-    ActionNonceError, DesktopNotificationPort, DisplayDependencyEvidence, GuestSource,
-    NotificationController, NotificationError, NotificationProviderConfig, NotificationRequest,
-    NotificationResult, NotificationSink, SessionEvidence, SourceProcessEffectPort,
-    SourceReconcileResult,
+    DesktopNotificationPort, GuestSource, NotificationController, NotificationError,
+    NotificationProviderConfig, NotificationRequest, NotificationResult, NotificationSink,
+    SessionEvidence, SourceProcessEffectPort, SourceReconcileResult,
 };
 
 /// Daemon-owned notification effect boundary.
@@ -24,8 +23,6 @@ pub enum NotificationRuntimeError {
     SessionUnauthenticated,
     /// A source or observer session was not admitted.
     SessionAdmissionFailed,
-    /// The display dependency was absent or invalid.
-    DisplayDependencyUnavailable,
     /// The controller or daemon effect port rejected reconciliation.
     ReconciliationFailed,
 }
@@ -35,7 +32,6 @@ impl core::fmt::Display for NotificationRuntimeError {
         formatter.write_str(match self {
             Self::SessionUnauthenticated => "notification-runtime-session-unauthenticated",
             Self::SessionAdmissionFailed => "notification-runtime-session-admission-failed",
-            Self::DisplayDependencyUnavailable => "notification-runtime-display-unavailable",
             Self::ReconciliationFailed => "notification-runtime-reconciliation-failed",
         })
     }
@@ -89,40 +85,6 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
         &self.sink
     }
 
-    /// Deliver one request through the authenticated source and observer
-    /// sessions, using only the configured source category set.
-    pub fn deliver<P: DesktopNotificationPort + ?Sized, C>(
-        &mut self,
-        port: &mut P,
-        source_session: &AuthenticatedComponentSession<C>,
-        observer_session: &AuthenticatedComponentSession<C>,
-        request: NotificationRequest,
-        now_secs: u64,
-    ) -> Result<NotificationResult, NotificationError> {
-        let source = self
-            .source_evidence(source_session)
-            .map_err(|_| NotificationError::InvalidOpaqueKey)?;
-        let observer = self
-            .source_evidence(observer_session)
-            .map_err(|_| NotificationError::InvalidOpaqueKey)?;
-        let config = self
-            .config
-            .guest_sources()
-            .iter()
-            .find(|configured| configured.source_ref() == source.subject_ref())
-            .ok_or(NotificationError::InvalidOpaqueKey)?;
-        let guest_source = GuestSource::from_config_at_generation(config, source.generation())
-            .map_err(|_| NotificationError::InvalidOpaqueKey)?;
-        self.sink.deliver_from_guest_source(
-            port,
-            &guest_source,
-            &source,
-            &observer,
-            request,
-            now_secs,
-        )
-    }
-
     /// Deliver using route projections already authenticated and retained by
     /// the daemon.  This is the production dispatcher entry point.
     pub fn deliver_evidence<P: DesktopNotificationPort + ?Sized>(
@@ -168,92 +130,6 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
         self.deliver_evidence(port, &source_session, observer_session, request, now_secs)
     }
 
-    /// Consume one action capability using an authenticated observer session.
-    pub fn invoke_action<C>(
-        &mut self,
-        action_key: &str,
-        observer_session: &AuthenticatedComponentSession<C>,
-        now_secs: u64,
-    ) -> Result<String, ActionNonceError> {
-        let observer = self
-            .source_evidence(observer_session)
-            .map_err(|_| ActionNonceError::SessionMismatch)?;
-        self.sink.invoke_action(action_key, &observer, now_secs)
-    }
-
-    /// Consume one action capability using daemon-retained observer evidence.
-    pub fn invoke_action_evidence(
-        &mut self,
-        action_key: &str,
-        observer: &SessionEvidence,
-        now_secs: u64,
-    ) -> Result<String, ActionNonceError> {
-        self.sink.invoke_action(action_key, observer, now_secs)
-    }
-
-    /// Close all projections owned by one authenticated observer session.
-    pub fn close_observer<C>(
-        &mut self,
-        observer_session: &AuthenticatedComponentSession<C>,
-    ) -> Result<(), NotificationRuntimeError> {
-        let observer = self.source_evidence(observer_session)?;
-        observer.admit_observer().map_err(|_| {
-            debug!(
-                provider = "notification-desktop",
-                "observer close refused: session not authenticated as observer"
-            );
-            NotificationRuntimeError::SessionAdmissionFailed
-        })?;
-        self.sink.close_session(&observer);
-        Ok(())
-    }
-
-    /// Close all projections owned by daemon-retained observer evidence.
-    pub fn close_observer_evidence(
-        &mut self,
-        observer: &SessionEvidence,
-    ) -> Result<(), NotificationRuntimeError> {
-        observer.admit_observer().map_err(|_| {
-            debug!(
-                provider = "notification-desktop",
-                "observer close refused: session not authenticated as observer"
-            );
-            NotificationRuntimeError::SessionAdmissionFailed
-        })?;
-        self.sink.close_session(observer);
-        Ok(())
-    }
-
-    /// Admit a display route from the sealed ComponentSession authority.
-    pub fn display_route<C>(
-        &self,
-        session: &AuthenticatedComponentSession<C>,
-    ) -> Result<AuthenticatedSessionRouteBinding, NotificationRuntimeError> {
-        let route = session.route_binding();
-        DisplayDependencyEvidence::from_authenticated_route(route.clone())
-            .map_err(|_| NotificationRuntimeError::DisplayDependencyUnavailable)?;
-        Ok(route)
-    }
-
-    /// Admit one Guest source or local observer ComponentSession.
-    pub fn source_evidence<C>(
-        &self,
-        session: &AuthenticatedComponentSession<C>,
-    ) -> Result<SessionEvidence, NotificationRuntimeError> {
-        SessionEvidence::from_component_session(session)
-            .map_err(|_| NotificationRuntimeError::SessionAdmissionFailed)
-    }
-
-    /// Project one route retained by the daemon after authenticated bus
-    /// registration into notification source evidence.
-    pub fn source_route_evidence(
-        &self,
-        route: AuthenticatedSessionRouteBinding,
-    ) -> Result<SessionEvidence, NotificationRuntimeError> {
-        SessionEvidence::from_authenticated_route(route)
-            .map_err(|_| NotificationRuntimeError::SessionAdmissionFailed)
-    }
-
     /// Project daemon-local Guest source routes into typed source evidence.
     pub fn daemon_source_route_evidence(
         &self,
@@ -261,63 +137,6 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
     ) -> Result<SessionEvidence, NotificationRuntimeError> {
         SessionEvidence::from_daemon_route(route)
             .map_err(|_| NotificationRuntimeError::SessionAdmissionFailed)
-    }
-
-    /// Reconcile all configured source sessions against the authenticated
-    /// display route. Missing or stale evidence drains existing ownership.
-    pub fn reconcile<C>(
-        &mut self,
-        display: Option<&AuthenticatedComponentSession<C>>,
-        source_sessions: &[&AuthenticatedComponentSession<C>],
-    ) -> Result<SourceReconcileResult, NotificationRuntimeError> {
-        let display_route = display.map(|session| session.route_binding());
-        let source_evidence = source_sessions
-            .iter()
-            .map(|session| self.source_evidence(session))
-            .collect::<Result<Vec<_>, _>>()?;
-        self.controller
-            .reconcile_authenticated_display_with_effects(
-                display_route,
-                &self.config,
-                &source_evidence,
-                &mut self.effects,
-            )
-            .map_err(|error| {
-                warn!(
-                    provider = "notification-desktop",
-                    reason = error,
-                    "notification source reconcile failed"
-                );
-                NotificationRuntimeError::ReconciliationFailed
-            })
-    }
-
-    /// Reconcile source routes retained by the daemon after registration.
-    pub fn reconcile_routes(
-        &mut self,
-        display: Option<AuthenticatedSessionRouteBinding>,
-        source_routes: &[AuthenticatedSessionRouteBinding],
-    ) -> Result<SourceReconcileResult, NotificationRuntimeError> {
-        let source_evidence = source_routes
-            .iter()
-            .cloned()
-            .map(|route| self.source_route_evidence(route))
-            .collect::<Result<Vec<_>, _>>()?;
-        self.controller
-            .reconcile_authenticated_display_with_effects(
-                display,
-                &self.config,
-                &source_evidence,
-                &mut self.effects,
-            )
-            .map_err(|error| {
-                warn!(
-                    provider = "notification-desktop",
-                    reason = error,
-                    "notification source route reconcile failed"
-                );
-                NotificationRuntimeError::ReconciliationFailed
-            })
     }
 
     /// Reconcile daemon-local Guest source routes admitted through the

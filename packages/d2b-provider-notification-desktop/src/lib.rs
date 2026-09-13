@@ -16,8 +16,6 @@ mod metrics;
 mod rbac;
 mod redact;
 mod runtime;
-#[allow(missing_docs)]
-pub mod security_key;
 mod stream_admission;
 mod types;
 
