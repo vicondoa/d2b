@@ -3615,7 +3615,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     refresh_broker_reap_log(&state, "startup");
 
     let mut startup_resource_plane_ready = !state.config.enable_resource_plane;
-    match load_bundle_resolver(&state) {
+    match load_bundle_resolver_on_worker(&state).await {
         Ok(resolver) => {
             let provider_root = d2bd_runtime::zone_authority::authoritative_zone_ids(&resolver)
                 .ok()
@@ -3902,7 +3902,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     // gate - the autostart pass already logs and short-circuits
     // in that case, and the daemon must remain reachable for
     // diagnostic verbs (status / doctor / audit).
-    let module_degraded_vms: BTreeSet<String> = match load_bundle_resolver(&state) {
+    let module_degraded_vms: BTreeSet<String> = match load_bundle_resolver_on_worker(&state).await {
         Ok(resolver) => {
             let report = d2bd_runtime::kernel_module_check::run_kernel_module_check(&resolver);
             // D2B_SKIP_KERNEL_MODULE_CHECK converts the fatal check
@@ -4396,7 +4396,8 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     .map_err(|error| TypedError::InternalConfig {
         detail: error.to_string(),
     })?;
-    let bundle = BundleResolver::load(&options.bundle_path)
+    let bundle = BundleResolver::load_on_loader_worker(&options.bundle_path)
+        .await
         .inspect_err(|error| {
             tracing::error!(
                 error = %error,
@@ -5240,7 +5241,7 @@ impl d2bd_runtime::autostart::VmStarter for BrokerVmStarter {
 /// Logged outcomes are best-effort: any failure short-circuits to
 /// a warning so the daemon's accept loop still comes up.
 async fn run_startup_autostart(state: &ServerState, kernel_module_degraded: &BTreeSet<String>) {
-    let resolver = match load_bundle_resolver(state) {
+    let resolver = match load_bundle_resolver_on_worker(state).await {
         Ok(r) => r,
         Err(error) => {
             tracing::warn!(
@@ -10818,7 +10819,9 @@ async fn connect_guest_component_session_legacy_with_mode(
             .clone()
     };
     let _connect_lock = key_lock.lock().await;
-    let resolver = load_bundle_resolver(state).map_err(|_| "bundle-unavailable".to_owned())?;
+    let resolver = load_bundle_resolver_on_worker(state)
+        .await
+        .map_err(|_| "bundle-unavailable".to_owned())?;
     let endpoint = resolve_component_session_endpoint(state, &resolver, vm)?;
     let state_root = endpoint.state_root.clone();
     let config =
@@ -10914,7 +10917,9 @@ pub(crate) async fn connect_guest_component_session_for_guest_with_mode(
     let runtime = plane
         .zone(target.zone())
         .map_err(|_| "guest-session:zone-runtime-unavailable".to_owned())?;
-    let resolver = load_bundle_resolver(state).map_err(|_| "bundle-unavailable".to_owned())?;
+    let resolver = load_bundle_resolver_on_worker(state)
+        .await
+        .map_err(|_| "bundle-unavailable".to_owned())?;
     let endpoint =
         resolve_component_session_endpoint_for_guest(state, &resolver, &runtime, target).await?;
     let state_root = endpoint.state_root.clone();
@@ -14031,7 +14036,32 @@ fn load_bundle_resolver(state: &ServerState) -> Result<BundleResolver, TypedErro
     #[cfg(not(test))]
     let loaded = BundleResolver::load(&state.config.artifacts.bundle_path);
 
-    loaded.map_err(|err| match err {
+    loaded.map_err(bundle_resolver_load_error)
+}
+
+/// Async seat for the daemon paths that must not park their executor on the
+/// bundle reads, ownership checks, and SHA-256 verification
+/// ([`d2b_core::loader_worker`]).
+///
+/// Same policy branch as [`load_bundle_resolver`], but the load runs on the
+/// bounded loader worker; a saturated queue or a dead worker surfaces as the
+/// loader's named refusal through the same
+/// [`bundle_resolver_load_error`] mapping.
+async fn load_bundle_resolver_on_worker(state: &ServerState) -> Result<BundleResolver, TypedError> {
+    #[cfg(test)]
+    let loaded = BundleResolver::load_with_policy_on_loader_worker(
+        &state.config.artifacts.bundle_path,
+        d2b_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
+    )
+    .await;
+    #[cfg(not(test))]
+    let loaded = BundleResolver::load_on_loader_worker(&state.config.artifacts.bundle_path).await;
+
+    loaded.map_err(bundle_resolver_load_error)
+}
+
+fn bundle_resolver_load_error(err: d2b_core::error::Error) -> TypedError {
+    match err {
         d2b_core::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
             TypedError::BundleTampered { path, reason }
         }
@@ -14039,7 +14069,7 @@ fn load_bundle_resolver(state: &ServerState) -> Result<BundleResolver, TypedErro
             context: "load bundle resolver".to_owned(),
             detail: other.to_string(),
         },
-    })
+    }
 }
 
 async fn shutdown_unpublished_runtimes(
@@ -22953,17 +22983,17 @@ fn dispatch_audit(
     }
 }
 
-fn dispatch_host_check(
-    state: &ServerState,
-    request: d2bd_runtime::wire::HostCheckRequestExt,
-) -> Result<Value, TypedError> {
-    let bundle = load_json::<Bundle>(&state.config.artifacts.bundle_path)?;
-    let bundle_dir = state
-        .config
-        .artifacts
-        .bundle_path
-        .parent()
-        .unwrap_or_else(|| Path::new("/"));
+/// Load the bundle, host, and closure metadata and run the host check.
+///
+/// Blocking by construction: callers run it on the bounded loader worker
+/// ([`d2b_core::loader_worker`]), whose thread absorbs the file reads and the
+/// `nft`/`systemctl` probes instead of the handler thread.
+fn run_host_check(
+    bundle_path: &Path,
+    strict: bool,
+) -> Result<host_check::HostCheckReport, TypedError> {
+    let bundle = load_json::<Bundle>(bundle_path)?;
+    let bundle_dir = bundle_path.parent().unwrap_or_else(|| Path::new("/"));
     let host_path = resolve_bundle_artifact_path(bundle_dir, &bundle.host_path);
     let host = load_json::<HostJson>(&host_path)?;
     let closures = bundle
@@ -22973,13 +23003,40 @@ fn dispatch_host_check(
             load_json::<ClosureMetadata>(&resolve_bundle_artifact_path(bundle_dir, &closure.path))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let report =
-        host_check::run(&host, closures.iter(), request.request.strict).map_err(|err| {
-            TypedError::InternalIo {
+    host_check::run(&host, closures.iter(), strict).map_err(|err| TypedError::InternalIo {
+        context: "host check".to_owned(),
+        detail: err.opaque_reason,
+    })
+}
+
+fn dispatch_host_check(
+    state: &ServerState,
+    request: d2bd_runtime::wire::HostCheckRequestExt,
+) -> Result<Value, TypedError> {
+    let bundle_path = state.config.artifacts.bundle_path.clone();
+    let strict = request.request.strict;
+    // The reads and the `nft`/`systemctl` probes park for seconds: run the
+    // whole unit on the bounded loader worker so this handler thread only
+    // waits on the outcome.
+    let report = match block_on_future(d2b_core::loader_worker::run(move || {
+        run_host_check(&bundle_path, strict)
+    })) {
+        Ok(Ok(report)) => report,
+        Ok(Err(error)) => return Err(error),
+        Err(refusal) => {
+            return Err(TypedError::InternalIo {
                 context: "host check".to_owned(),
-                detail: err.opaque_reason,
-            }
-        })?;
+                detail: match refusal {
+                    d2b_core::loader_worker::LoaderRefusal::Busy => {
+                        "host-check-loader-busy".to_owned()
+                    }
+                    d2b_core::loader_worker::LoaderRefusal::Unavailable => {
+                        "host-check-loader-unavailable".to_owned()
+                    }
+                },
+            });
+        }
+    };
     let summary = json!({
         "warnings": report.summary.warn,
         "failures": report.summary.fail,
