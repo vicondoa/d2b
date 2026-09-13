@@ -963,7 +963,7 @@ impl ProductionGuestDriverEffects {
             .map_err(|_| GuestEffectError::InvalidResource)?;
         let plane = self.plane()?;
         {
-            use crate::process_driver::CommittedProviderIdentitySource;
+            use d2b_provider_process::CommittedProviderIdentitySource;
             let source = plane.registry().as_ref() as &dyn CommittedProviderIdentitySource;
             if source.committed_provider_identity(&provider_ref).is_none() {
                 return Err(GuestEffectError::Unavailable);
@@ -1213,7 +1213,7 @@ impl ProductionGuestDriverEffects {
         provider_ref: &ResourceRef,
     ) -> Result<ResourceGeneration, GuestEffectError> {
         let plane = self.plane()?;
-        use crate::process_driver::CommittedProviderIdentitySource;
+        use d2b_provider_process::CommittedProviderIdentitySource;
         let source = plane.registry().as_ref() as &dyn CommittedProviderIdentitySource;
         source
             .committed_provider_identity(provider_ref)

@@ -26,8 +26,9 @@ use d2b_core::{
     bundle_resolver::BundleResolver,
     processes::{ProcessNode, ProcessRole},
 };
-use d2b_process::{
-    DeviceWorkerLaunch, ProviderAdoption, ProviderLiveness, ServingWorkerLaunch, ServingWorkerRoot,
+use d2b_provider_process::{
+    DeviceWorkerLaunch, LaunchRow, ProviderAdoption, ProviderLiveness, ServingWorkerLaunch,
+    ServingWorkerRoot, execution_target_allowed, resolve_launch_identity,
 };
 use d2b_process_conformance::{
     AdoptionCandidate, AdoptionOutcome, CompiledDigests, ConfigurationDigest,
@@ -40,8 +41,8 @@ use d2b_provider_supervisor::{
     BrokerProcessBackend, BrokerSystemdEffectOwner, BundleBackedLaunchResolver, ProviderSupervisor,
     SystemdProcessBackend,
 };
-use d2b_provider_system_minijail::{MinijailProcessProvider, launch::PlatformGate};
-use d2b_provider_system_systemd::SystemdProcessProvider;
+use d2b_provider_process_minijail::{MinijailProcessProvider, launch::PlatformGate};
+use d2b_provider_process_systemd::SystemdProcessProvider;
 use d2b_provider_toolkit::CredentialDeliveryKeyHandoff;
 use d2b_session::AuthenticatedSessionRouteBinding;
 use d2b_session_unix::{PeerCredentials, SeqpacketSocket, prearmed_seqpacket_pair};
@@ -52,7 +53,6 @@ use d2bd_runtime::vm_start_support::{
 use sha2::{Digest, Sha256};
 
 use crate::provider_effects::FixedEffectAdapter;
-use crate::process_resource_runtime::{LaunchRow, resolve_launch_identity};
 
 /// The fixed process Provider names wired by the daemon.
 pub const FIXED_PROCESS_PROVIDER_NAMES: [&str; 2] = ["system-minijail", "system-systemd"];
@@ -3420,13 +3420,6 @@ fn configuration_digest(label: &str, value: &str) -> ConfigurationDigest {
     ConfigurationDigest::from_bytes(hasher.finalize().into())
 }
 
-pub(crate) fn execution_target_allowed(mode: DaemonMode, execution_ref: &ResourceRef) -> bool {
-    match mode {
-        DaemonMode::Host => execution_ref.resource_type().as_str() == "Host",
-        DaemonMode::Guest => execution_ref.resource_type().as_str() == "Guest",
-    }
-}
-
 fn validate_resource_execution_target(
     mode: DaemonMode,
     context: &ProcessResourceContext<'_>,
@@ -4297,7 +4290,7 @@ fn stable_token(value: &str) -> String {
 mod tests {
     use super::*;
     use std::os::fd::AsRawFd;
-    use d2b_process::{GpuWorkerParams, SwtpmFlushParams, SwtpmWorkerParams, VideoWorkerParams};
+    use d2b_provider_process::{GpuWorkerParams, SwtpmFlushParams, SwtpmWorkerParams, VideoWorkerParams};
     use d2b_contracts_provider::v3::{
         ArtifactDigest, BinaryRef, ComponentDescriptor, ComponentExecution,
         ComponentTargetCapability, ComponentType, ControllerInstanceScope, ControllerTargetKind,

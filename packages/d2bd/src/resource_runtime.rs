@@ -2493,13 +2493,13 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                                 CloudHypervisorResourceApiError::Transport
                             })?;
                         match liveness {
-                            d2b_process::ProviderLiveness::Alive => {
+                            d2b_provider_process::ProviderLiveness::Alive => {
                                 d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current
                             }
-                            d2b_process::ProviderLiveness::Exited => {
+                            d2b_provider_process::ProviderLiveness::Exited => {
                                 d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Absent
                             }
-                            d2b_process::ProviderLiveness::Unknown => {
+                            d2b_provider_process::ProviderLiveness::Unknown => {
                                 d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Unavailable
                             }
                         }
@@ -5908,13 +5908,13 @@ impl ZoneResourceRuntime {
         .with_owner_ref(Some(guest_ref.clone()))
         .with_guest_descriptor_digest(descriptor_digest.as_ref());
         match providers.probe_resource(context, &spec).await {
-            Ok(d2b_process::ProviderLiveness::Alive) => {
+            Ok(d2b_provider_process::ProviderLiveness::Alive) => {
                 Ok(crate::provider_effects::GuestLifecycleState::Started)
             }
-            Ok(d2b_process::ProviderLiveness::Exited) => {
+            Ok(d2b_provider_process::ProviderLiveness::Exited) => {
                 Ok(crate::provider_effects::GuestLifecycleState::Stopped)
             }
-            Ok(d2b_process::ProviderLiveness::Unknown) => {
+            Ok(d2b_provider_process::ProviderLiveness::Unknown) => {
                 tracing::debug!(
                     guest = %guest_ref.to_canonical_string(),
                     "Cloud Hypervisor lifecycle probe returned unknown liveness",

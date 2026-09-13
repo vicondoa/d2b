@@ -848,17 +848,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-process"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-process-conformance",
- "d2b-resource-runtime",
- "serde_json",
-]
-
-[[package]]
 name = "d2b-process-conformance"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1122,6 +1111,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-process"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-process-conformance",
+ "d2b-provider-process-minijail",
+ "d2b-provider-process-systemd",
+ "d2b-provider-volume-virtiofs",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "d2bd-runtime",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "d2b-provider-process-minijail"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-process-conformance",
+ "serde",
+ "tracing",
+]
+
+[[package]]
+name = "d2b-provider-process-systemd"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-control",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-process-conformance",
+ "d2b-provider-toolkit",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "d2b-provider-runtime-azure-container-apps"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1202,10 +1236,10 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",
- "d2b-process",
  "d2b-process-conformance",
- "d2b-provider-system-minijail",
- "d2b-provider-system-systemd",
+ "d2b-provider-process",
+ "d2b-provider-process-minijail",
+ "d2b-provider-process-systemd",
  "d2b-telemetry",
  "rustix 0.38.44",
  "serde_json",
@@ -1225,32 +1259,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "tracing",
-]
-
-[[package]]
-name = "d2b-provider-system-minijail"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "d2b-process-conformance",
- "serde",
- "tracing",
-]
-
-[[package]]
-name = "d2b-provider-system-systemd"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts-control",
- "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "d2b-process-conformance",
- "d2b-provider-toolkit",
- "serde",
- "serde_json",
- "tokio",
  "tracing",
 ]
 
@@ -1474,7 +1482,6 @@ dependencies = [
  "d2b-core",
  "d2b-core-controller",
  "d2b-host",
- "d2b-process",
  "d2b-process-conformance",
  "d2b-provider",
  "d2b-provider-activation-nixos",
@@ -1492,6 +1499,9 @@ dependencies = [
  "d2b-provider-network-local",
  "d2b-provider-notification-desktop",
  "d2b-provider-observability-otel",
+ "d2b-provider-process",
+ "d2b-provider-process-minijail",
+ "d2b-provider-process-systemd",
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-runtime-azure-virtual-machine",
  "d2b-provider-runtime-cloud-hypervisor",
@@ -1499,8 +1509,6 @@ dependencies = [
  "d2b-provider-shell-terminal",
  "d2b-provider-supervisor",
  "d2b-provider-system-core",
- "d2b-provider-system-minijail",
- "d2b-provider-system-systemd",
  "d2b-provider-toolkit",
  "d2b-provider-transport-azure-relay",
  "d2b-provider-volume-local",

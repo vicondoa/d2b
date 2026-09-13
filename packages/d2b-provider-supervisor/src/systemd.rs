@@ -11,7 +11,7 @@ use d2b_contracts_broker::broker_wire::{
     SystemdUnitIdentity, SystemdUnitRequest,
 };
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
-use d2b_process::{
+use d2b_provider_process::{
     BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity, ProcessEffectBackend,
     ProcessEffectError, ProcessIdentityDigest, ProcessRequest, ProcessStopClass, WaitReapOwner,
 };

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use crate::broker::{BrokerLaunchResolver, BrokerProcessBackend};
 use d2b_contracts_resource::v3::ResourceUid;
-use d2b_process::{
+use d2b_provider_process::{
     AdoptionCandidate, BackendObservation, LaunchTicket, LaunchedProcess, PidfdEvidence,
     ProcessConformanceError, ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest,
     ProcessLaunchEffectPort, ProcessLaunchRequest, ProcessRequest, ProcessStopClass, StopClass,
@@ -882,7 +882,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU8};
     use std::sync::mpsc::{Receiver, Sender, channel};
 
-    use d2b_process::{IdentityBinding, ObservedIdentity, WaitReapOwner};
+    use d2b_provider_process::{IdentityBinding, ObservedIdentity, WaitReapOwner};
     use d2b_process_conformance::testing::{block_on, fixtures};
 
     use super::*;
@@ -934,13 +934,13 @@ mod tests {
         fn launch(
             &self,
             _request: ProcessRequest,
-        ) -> Result<d2b_process::BackendLaunch<Self::Handle>, ProcessEffectError> {
+        ) -> Result<d2b_provider_process::BackendLaunch<Self::Handle>, ProcessEffectError> {
             self.live.store(true, Ordering::Release);
             if let Some(started) = self.started.lock().unwrap().take() {
                 started.send(()).unwrap();
                 self.release.lock().unwrap().recv().unwrap();
             }
-            Ok(d2b_process::BackendLaunch::new(self.observation(), ()))
+            Ok(d2b_provider_process::BackendLaunch::new(self.observation(), ()))
         }
 
         fn observe(
@@ -1091,12 +1091,12 @@ mod tests {
         fn launch(
             &self,
             _request: ProcessRequest,
-        ) -> Result<d2b_process::BackendLaunch<Self::Handle>, ProcessEffectError> {
+        ) -> Result<d2b_provider_process::BackendLaunch<Self::Handle>, ProcessEffectError> {
             if !self.launch_delay.is_zero() {
                 std::thread::sleep(self.launch_delay);
             }
             self.live.store(true, Ordering::Release);
-            Ok(d2b_process::BackendLaunch::new(
+            Ok(d2b_provider_process::BackendLaunch::new(
                 BackendObservation::new(
                     ProcessIdentityDigest::from_bytes([9; 32]),
                     ObservedIdentity::from_verified([IdentityBinding::Cgroup]),
@@ -1264,7 +1264,7 @@ mod tests {
         fn launch(
             &self,
             _request: ProcessRequest,
-        ) -> Result<d2b_process::BackendLaunch<Self::Handle>, ProcessEffectError> {
+        ) -> Result<d2b_provider_process::BackendLaunch<Self::Handle>, ProcessEffectError> {
             unreachable!("probe-only backend is not used for launch")
         }
 

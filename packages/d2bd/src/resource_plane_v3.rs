@@ -46,7 +46,10 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_contracts_zone_session::v3::resource_bundle::{BundleResource, ResourceBundle};
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedStoreViewIntent, intent_id_store_view};
-use d2b_process::ProcessDriverEffects;
+use d2b_provider_process::{
+    GuestOwnerIdentitySource, ProcessDriverArgs, ProcessDriverEffects, decode_metadata_owner_ref,
+    process_family_descriptors,
+};
 use d2b_provider_volume_local::{VolumeLocalController, VolumeLocalProfile};
 use d2b_provider_volume_virtiofs::{MAX_SOCKET_PATH_BYTES, SocketIdentity, StoredBinding};
 use d2b_resource_api::manager_backend::nix_bundle_subject;
@@ -80,10 +83,7 @@ use crate::credential_driver::{
     CredentialDriverArgs, CredentialDriverEffects, CredentialDriverFactory, credential_spec_decoder,
 };
 use crate::endpoint_driver::{AsyncSocketEffect, EndpointDriverArgs, EndpointDriverFactory, endpoint_spec_decoder};
-use crate::process_driver::{
-    GuestOwnerIdentitySource, ProcessDriverArgs, ProductionProcessDriverEffects,
-    process_family_descriptors,
-};
+use crate::process_effects::ProductionProcessDriverEffects;
 use crate::semantic_binding_resource_runtime::{
     TELEMETRY_BINDING_TYPE, TELEMETRY_SERVICE_TYPE, TelemetryDriverFactory,
     telemetry_spec_decoder,
@@ -371,7 +371,7 @@ impl PlaneResourceRegistry {
 
 /// The committed-`Provider` identity view the production Process effects
 /// consult (KTD7), published by [`PlaneResourceRegistry`].
-impl crate::process_driver::CommittedProviderIdentitySource for PlaneResourceRegistry {
+impl d2b_provider_process::CommittedProviderIdentitySource for PlaneResourceRegistry {
     fn committed_provider_identity(
         &self,
         provider_ref: &ResourceRef,
@@ -469,14 +469,6 @@ fn nix_closure_volume_anchor(
         }
         _ => Err("resource does not name a NixClosure volume identity".to_owned()),
     }
-}
-
-pub(crate) fn decode_metadata_owner_ref(metadata: &[u8]) -> Option<ResourceRef> {
-    let value: serde_json::Value = serde_json::from_slice(metadata).ok()?;
-    value
-        .get("ownerRef")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|owner| ResourceRef::parse(owner).ok())
 }
 
 fn decode_volume_spec(spec_bytes: &[u8]) -> Option<VolumeSpec> {
@@ -2368,7 +2360,7 @@ mod tests {
     impl ProcessDriverEffects for FakeProcessEffects {
         async fn launch(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
@@ -2379,23 +2371,23 @@ mod tests {
 
         async fn adopt(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<d2b_process::ProviderAdoption, String> {
-            Ok(d2b_process::ProviderAdoption::Absent)
+        ) -> Result<d2b_provider_process::ProviderAdoption, String> {
+            Ok(d2b_provider_process::ProviderAdoption::Absent)
         }
 
         async fn probe(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<d2b_process::ProviderLiveness, String> {
-            Ok(d2b_process::ProviderLiveness::Alive)
+        ) -> Result<d2b_provider_process::ProviderLiveness, String> {
+            Ok(d2b_provider_process::ProviderLiveness::Alive)
         }
 
         async fn launch_ephemeral(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
@@ -2406,23 +2398,23 @@ mod tests {
 
         async fn adopt_ephemeral(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<d2b_process::ProviderAdoption, String> {
-            Ok(d2b_process::ProviderAdoption::Absent)
+        ) -> Result<d2b_provider_process::ProviderAdoption, String> {
+            Ok(d2b_provider_process::ProviderAdoption::Absent)
         }
 
         async fn probe_ephemeral(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<d2b_process::ProviderLiveness, String> {
-            Ok(d2b_process::ProviderLiveness::Alive)
+        ) -> Result<d2b_provider_process::ProviderLiveness, String> {
+            Ok(d2b_provider_process::ProviderLiveness::Alive)
         }
 
         async fn stop_ephemeral(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -2432,7 +2424,7 @@ mod tests {
 
         async fn stop(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -2448,7 +2440,7 @@ mod tests {
             Ok(())
         }
 
-        async fn finalize(&self, _identity: &d2b_process::ProcessResourceIdentity) -> Result<(), String> {
+        async fn finalize(&self, _identity: &d2b_provider_process::ProcessResourceIdentity) -> Result<(), String> {
             Ok(())
         }
 
@@ -2786,7 +2778,7 @@ mod tests {
         )]);
         let registry = Arc::clone(&inputs.registry);
         let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
-        let source = &*registry as &dyn crate::process_driver::CommittedProviderIdentitySource;
+        let source = &*registry as &dyn d2b_provider_process::CommittedProviderIdentitySource;
         assert_eq!(
             source.committed_provider_identity(
                 &ResourceRef::parse("Provider/network-local").expect("provider ref")
@@ -3246,7 +3238,7 @@ mod tests {
     impl ProcessDriverEffects for AdoptingProcessEffects {
         async fn launch(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
@@ -3256,29 +3248,29 @@ mod tests {
 
         async fn adopt(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<d2b_process::ProviderAdoption, String> {
+        ) -> Result<d2b_provider_process::ProviderAdoption, String> {
             if self.launched.load(std::sync::atomic::Ordering::SeqCst) {
-                Ok(d2b_process::ProviderAdoption::Adopted(
+                Ok(d2b_provider_process::ProviderAdoption::Adopted(
                     adopted_report(),
                 ))
             } else {
-                Ok(d2b_process::ProviderAdoption::Absent)
+                Ok(d2b_provider_process::ProviderAdoption::Absent)
             }
         }
 
         async fn probe(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<d2b_process::ProviderLiveness, String> {
-            Ok(d2b_process::ProviderLiveness::Alive)
+        ) -> Result<d2b_provider_process::ProviderLiveness, String> {
+            Ok(d2b_provider_process::ProviderLiveness::Alive)
         }
 
         async fn launch_ephemeral(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
@@ -3288,23 +3280,23 @@ mod tests {
 
         async fn adopt_ephemeral(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<d2b_process::ProviderAdoption, String> {
-            Ok(d2b_process::ProviderAdoption::Absent)
+        ) -> Result<d2b_provider_process::ProviderAdoption, String> {
+            Ok(d2b_provider_process::ProviderAdoption::Absent)
         }
 
         async fn probe_ephemeral(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<d2b_process::ProviderLiveness, String> {
-            Ok(d2b_process::ProviderLiveness::Alive)
+        ) -> Result<d2b_provider_process::ProviderLiveness, String> {
+            Ok(d2b_provider_process::ProviderLiveness::Alive)
         }
 
         async fn stop_ephemeral(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -3314,7 +3306,7 @@ mod tests {
 
         async fn stop(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -3332,7 +3324,7 @@ mod tests {
 
         async fn finalize(
             &self,
-            _identity: &d2b_process::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
         ) -> Result<(), String> {
             Ok(())
         }

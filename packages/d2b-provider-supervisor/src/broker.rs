@@ -20,7 +20,7 @@ use d2b_contracts_resource::v3::{ActivationRunnerInput, execution_policy::Execut
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_core::bundle_resolver::{BundleResolver, intent_id_legacy_runner};
 use d2b_core::processes::ProcessRole;
-use d2b_process::{
+use d2b_provider_process::{
     BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity, ProcessEffectBackend,
     ProcessEffectError, ProcessIdentityDigest, ProcessLaunchRequest, ProcessRequest,
     ProcessStopClass, WaitReapOwner,

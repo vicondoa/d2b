@@ -23,7 +23,7 @@ use d2b_contracts_resource::v3::{
     SchemaFingerprint, ZoneId, ZoneRevision, identity::ReconnectGeneration,
 };
 use d2b_contracts_zone_session::v3::zone_routing::{ZoneLabelId, ZonePath};
-use d2b_process::ProviderAdoption;
+use d2b_provider_process::ProviderAdoption;
 use d2b_provider::instance::ProviderInstance;
 use d2b_provider::{
     ProviderCapabilitySet, ProviderClass, ProviderDescriptor, ProviderImplementationId,

@@ -88,7 +88,7 @@
           cp -r ${./packages/d2b-core-controller} $out/packages/d2b-core-controller
           cp -r ${./packages/d2b-host} $out/packages/d2b-host
           cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
-          cp -r ${./packages/d2b-process} $out/packages/d2b-process
+          cp -r ${./packages/d2b-provider-process} $out/packages/d2b-provider-process
           cp -r ${./packages/d2b-process-conformance} $out/packages/d2b-process-conformance
           cp -r ${./packages/d2b-provider} $out/packages/d2b-provider
           cp -r ${./packages/d2b-provider-activation-nixos} $out/packages/d2b-provider-activation-nixos
@@ -113,8 +113,8 @@
           cp -r ${./packages/d2b-provider-shell-terminal} $out/packages/d2b-provider-shell-terminal
           cp -r ${./packages/d2b-provider-supervisor} $out/packages/d2b-provider-supervisor
           cp -r ${./packages/d2b-provider-system-core} $out/packages/d2b-provider-system-core
-          cp -r ${./packages/d2b-provider-system-minijail} $out/packages/d2b-provider-system-minijail
-          cp -r ${./packages/d2b-provider-system-systemd} $out/packages/d2b-provider-system-systemd
+          cp -r ${./packages/d2b-provider-process-minijail} $out/packages/d2b-provider-process-minijail
+          cp -r ${./packages/d2b-provider-process-systemd} $out/packages/d2b-provider-process-systemd
           cp -r ${./packages/d2b-provider-toolkit} $out/packages/d2b-provider-toolkit
           cp -r ${./packages/d2b-provider-transport-azure-relay} $out/packages/d2b-provider-transport-azure-relay
           cp -r ${./packages/d2b-provider-volume-local} $out/packages/d2b-provider-volume-local

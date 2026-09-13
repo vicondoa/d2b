@@ -190,21 +190,21 @@
     }
     {
       provider = "system-systemd";
-      package = "d2b-provider-system-systemd";
-      source = "packages/d2b-provider-system-systemd/src/controller.rs";
-      test = "packages/d2b-provider-system-systemd/tests/controller.rs";
+      package = "d2b-provider-process-systemd";
+      source = "packages/d2b-provider-process-systemd/src/controller.rs";
+      test = "packages/d2b-provider-process-systemd/tests/controller.rs";
       dossier = "docs/specs/providers/ADR-046-provider-system-systemd.md";
-      bazelTarget = "//packages/d2b-provider-system-systemd:all-tests";
+      bazelTarget = "//packages/d2b-provider-process-systemd:all-tests";
       unit = "U5";
       bootstrap = false;
     }
     {
       provider = "system-minijail";
-      package = "d2b-provider-system-minijail";
-      source = "packages/d2b-provider-system-minijail/src/launch.rs";
-      test = "packages/d2b-provider-system-minijail/tests/conformance.rs";
+      package = "d2b-provider-process-minijail";
+      source = "packages/d2b-provider-process-minijail/src/launch.rs";
+      test = "packages/d2b-provider-process-minijail/tests/conformance.rs";
       dossier = "docs/specs/providers/ADR-046-provider-system-minijail.md";
-      bazelTarget = "//packages/d2b-provider-system-minijail:all-tests";
+      bazelTarget = "//packages/d2b-provider-process-minijail:all-tests";
       unit = "U5";
       bootstrap = true;
     }

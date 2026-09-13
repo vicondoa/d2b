@@ -47,9 +47,9 @@ use d2b_contracts_zone_session::v3::component_session::{
     Locality as TransportLocality, MAX_LOGICAL_MESSAGE_BYTES, NoiseProfile, PurposeClass,
     ServicePackage, TransportBinding, TransportClass,
 };
-use d2b_process::ProcessLaunchEffectPort;
+use d2b_provider_process::ProcessLaunchEffectPort;
 #[cfg(test)]
-use d2b_process::{
+use d2b_provider_process::{
     CompiledDigests, IdentityBinding, LaunchTicket as ProcessLaunchTicket, OperationBinding,
     StopClass,
 };
@@ -5855,7 +5855,7 @@ fn process_ticket_for_session(
 fn configuration_digest(
     binding: &DisplayLaunchBinding,
     label: &[u8],
-) -> d2b_process::ConfigurationDigest {
+) -> d2b_provider_process::ConfigurationDigest {
     let mut digest = Sha256::new();
     digest.update(b"d2bd-display-config-v1");
     digest.update(label);
@@ -5863,7 +5863,7 @@ fn configuration_digest(
     digest.update(binding.policy_digest());
     digest.update(binding.policy_generation().to_be_bytes());
     digest.update(binding.teardown_generation().to_be_bytes());
-    d2b_process::ConfigurationDigest::from_bytes(digest.finalize().into())
+    d2b_provider_process::ConfigurationDigest::from_bytes(digest.finalize().into())
 }
 
 #[cfg(test)]
@@ -6321,7 +6321,7 @@ mod tests {
     use super::*;
     use d2b_contracts_resource::v3::ResourceGeneration;
     use d2b_contracts_zone_session::v3::component_session::RequestId;
-    use d2b_process::{
+    use d2b_provider_process::{
         BackendLaunch, BackendObservation, ObservedIdentity, ProcessEffectBackend,
         ProcessEffectError, ProcessRequest, ProcessStopClass, WaitReapOwner,
     };

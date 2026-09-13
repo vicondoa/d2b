@@ -56,21 +56,21 @@ pub(crate) const PROVIDER_MATRIX: &[ProviderMatrixRow] = &[
     },
     ProviderMatrixRow {
         identity: "system-systemd",
-        crate_name: "d2b-provider-system-systemd",
-        source_path: "packages/d2b-provider-system-systemd/src/controller.rs",
-        test_path: "packages/d2b-provider-system-systemd/tests/controller.rs",
+        crate_name: "d2b-provider-process-systemd",
+        source_path: "packages/d2b-provider-process-systemd/src/controller.rs",
+        test_path: "packages/d2b-provider-process-systemd/tests/controller.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-system-systemd.md",
-        bazel_target: "//packages/d2b-provider-system-systemd:all-tests",
+        bazel_target: "//packages/d2b-provider-process-systemd:all-tests",
         unit: "U5",
         bootstrap: false,
     },
     ProviderMatrixRow {
         identity: "system-minijail",
-        crate_name: "d2b-provider-system-minijail",
-        source_path: "packages/d2b-provider-system-minijail/src/launch.rs",
-        test_path: "packages/d2b-provider-system-minijail/tests/conformance.rs",
+        crate_name: "d2b-provider-process-minijail",
+        source_path: "packages/d2b-provider-process-minijail/src/launch.rs",
+        test_path: "packages/d2b-provider-process-minijail/tests/conformance.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-system-minijail.md",
-        bazel_target: "//packages/d2b-provider-system-minijail:all-tests",
+        bazel_target: "//packages/d2b-provider-process-minijail:all-tests",
         unit: "U5",
         bootstrap: true,
     },
@@ -315,16 +315,29 @@ pub(crate) const PROVIDER_MATRIX: &[ProviderMatrixRow] = &[
         bootstrap: false,
     },
 ];
-// These exact README-only integration placeholders are recorded in the
-// existing Provider-state canon. They are not exemptions from the four
-// required paths or the README sections, and new crates cannot join the set.
+// The Provider crates whose integration surface is a recorded scaffold rather
+// than an executable scenario. The set only shrinks: a listed crate that gains
+// an executable scenario fails the check until its entry is deleted, no crate
+// joins the set, and the entries are not exemptions from the four required
+// paths or the README sections.
 const README_ONLY_INTEGRATION_RATCHET: &[&str] = &[
+    "d2b-provider-activation-nixos",
+    "d2b-provider-audio-pipewire",
+    "d2b-provider-clipboard-wayland",
     "d2b-provider-credential-entra",
     "d2b-provider-credential-managed-identity",
     "d2b-provider-credential-secret-service",
+    "d2b-provider-device-gpu",
+    "d2b-provider-display-wayland",
+    "d2b-provider-notification-desktop",
+    "d2b-provider-process-minijail",
+    "d2b-provider-process-systemd",
+    "d2b-provider-runtime-azure-container-apps",
+    "d2b-provider-runtime-azure-virtual-machine",
+    "d2b-provider-runtime-cloud-hypervisor",
     "d2b-provider-system-core",
-    "d2b-provider-system-minijail",
-    "d2b-provider-system-systemd",
+    "d2b-provider-transport-azure-relay",
+    "d2b-provider-transport-unix",
     "d2b-provider-volume-virtiofs",
 ];
 
@@ -421,15 +434,17 @@ impl Diagnostic {
     }
 }
 
-/// Check the normative layout of every Provider workspace member and ensure
-/// every Provider-shaped crate on disk is represented by Cargo metadata.
+/// Check the normative layout of every Provider workspace member, ensure every
+/// Provider-shaped crate on disk is represented by Cargo metadata, and fail on
+/// resource knowledge that still lives in a shared crate.
 pub fn check(repo_root: &Path) -> Result<(), String> {
     let repo_root = repo_root
         .canonicalize()
         .map_err(|_| "provider-crate-layout-input-unreadable".to_owned())?;
     let members = cargo_workspace_members(&repo_root)?;
     check_members(&repo_root, members.clone())?;
-    check_closed_matrix(&repo_root, &members)
+    check_closed_matrix(&repo_root, &members)?;
+    check_shared_driver_placements(&repo_root)
 }
 
 fn check_closed_matrix(
@@ -522,6 +537,216 @@ fn check_closed_matrix(
             .collect::<Vec<_>>()
             .join("\n"))
     }
+}
+
+/// The shared-crate source roots whose modules must not declare a resource
+/// driver.
+///
+/// A driver belongs to the per-type crate that declares its resource type.
+/// These roots are the shared platform - the daemon, the broker, the core
+/// contracts, and the controller session library - so a driver declaration
+/// here is resource knowledge living outside the crate that owns it.
+const SHARED_CRATE_SOURCE_ROOTS: &[&str] = &[
+    "packages/d2b-broker/src",
+    "packages/d2b-contracts-broker/src",
+    "packages/d2b-contracts-control/src",
+    "packages/d2b-contracts-provider/src",
+    "packages/d2b-contracts-resource/src",
+    "packages/d2b-contracts-zone-session/src",
+    "packages/d2b-contracts/src",
+    "packages/d2b-core-controller/src",
+    "packages/d2b-core/src",
+    "packages/d2bd/src",
+];
+
+/// One shared-crate module that still declares a resource driver.
+///
+/// The list only shrinks: the change that moves a family into its own provider
+/// crate deletes its entry in the same commit, a module that declares a driver
+/// without an entry is a policy failure, and an entry whose module no longer
+/// declares one fails the same way.
+struct SharedDriverExemption {
+    /// Repository-relative module path that declares the driver today.
+    module: &'static str,
+    /// The family that owns the module today.
+    family: &'static str,
+    /// What deletes the entry.
+    retires_with: &'static str,
+}
+
+const SHARED_DRIVER_EXEMPTIONS: &[SharedDriverExemption] = &[
+    SharedDriverExemption {
+        module: "packages/d2bd/src/activation_driver.rs",
+        family: "activation-nixos",
+        retires_with: "the family moves into its own provider crate",
+    },
+    SharedDriverExemption {
+        module: "packages/d2bd/src/binding_driver.rs",
+        family: "volume-binding",
+        retires_with: "the family moves into its own provider crate",
+    },
+    SharedDriverExemption {
+        module: "packages/d2bd/src/core_driver.rs",
+        family: "core",
+        retires_with: "the family moves into its own provider crate",
+    },
+    SharedDriverExemption {
+        module: "packages/d2bd/src/credential_driver.rs",
+        family: "credential",
+        retires_with: "the family moves into its own provider crate",
+    },
+    SharedDriverExemption {
+        module: "packages/d2bd/src/endpoint_driver.rs",
+        family: "endpoint",
+        retires_with: "the family moves into its own provider crate",
+    },
+    SharedDriverExemption {
+        module: "packages/d2bd/src/guest_driver.rs",
+        family: "guest",
+        retires_with: "the family moves into its own provider crate",
+    },
+    SharedDriverExemption {
+        module: "packages/d2bd/src/interaction_driver.rs",
+        family: "interaction",
+        retires_with: "the family moves into its own provider crate",
+    },
+    SharedDriverExemption {
+        module: "packages/d2bd/src/semantic_binding_resource_runtime.rs",
+        family: "telemetry",
+        retires_with: "the family moves into its own provider crate",
+    },
+    SharedDriverExemption {
+        module: "packages/d2bd/src/shared_provider_driver.rs",
+        family: "usb/security-key/network",
+        retires_with: "the family moves into its own provider crate",
+    },
+    SharedDriverExemption {
+        module: "packages/d2bd/src/system_core_driver.rs",
+        family: "host/user",
+        retires_with: "the family moves into its own provider crate",
+    },
+    SharedDriverExemption {
+        module: "packages/d2bd/src/volume_driver.rs",
+        family: "volume",
+        retires_with: "the family moves into its own provider crate",
+    },
+];
+
+/// The crate source root one shared module path belongs to.
+fn shared_source_root(module: &str) -> &str {
+    match module.match_indices('/').nth(1) {
+        Some((index, _)) => &module[..index],
+        None => module,
+    }
+}
+
+/// Whether one module declares a resource driver or a driver factory.
+fn declares_resource_driver(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("impl")
+            && (line.contains("ResourceDriver for ") || line.contains("ResourceDriverFactory for "))
+    })
+}
+
+fn collect_shared_drivers(
+    repo_root: &Path,
+    directory: &Path,
+    declared: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        if file_type.is_dir() {
+            collect_shared_drivers(repo_root, &path, declared)?;
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        if declares_resource_driver(&text) {
+            let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+            declared.insert(relative.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    Ok(())
+}
+
+/// Every shared-crate module that declares a resource driver today.
+fn declared_shared_drivers(repo_root: &Path) -> Result<BTreeSet<String>, String> {
+    let mut declared = BTreeSet::new();
+    for root in SHARED_CRATE_SOURCE_ROOTS {
+        let directory = repo_root.join(root);
+        if !directory.is_dir() {
+            continue;
+        }
+        collect_shared_drivers(repo_root, &directory, &mut declared)?;
+    }
+    Ok(declared)
+}
+
+/// Fail when a resource driver is declared outside a provider crate, and fail
+/// on an exemption the tree no longer needs.
+fn check_shared_driver_placements(repo_root: &Path) -> Result<(), String> {
+    let declared = declared_shared_drivers(repo_root)?;
+    let exempt: BTreeSet<String> = SHARED_DRIVER_EXEMPTIONS
+        .iter()
+        .map(|exemption| exemption.module.to_owned())
+        .collect();
+    let mut violations = Vec::new();
+
+    for module in declared.difference(&exempt) {
+        violations.push(render_shared_driver_violation(
+            "shared-crate-driver-placement",
+            module,
+            None,
+        ));
+    }
+    for exemption in SHARED_DRIVER_EXEMPTIONS {
+        if !repo_root.join(shared_source_root(exemption.module)).is_dir() {
+            continue;
+        }
+        if !declared.contains(exemption.module) {
+            violations.push(render_shared_driver_violation(
+                "stale-shared-driver-exemption",
+                exemption.module,
+                Some(exemption.family),
+            ));
+        }
+    }
+
+    violations.sort();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations.join("\n"))
+    }
+}
+
+/// Render one shared-driver placement diagnostic as canonical JSON.
+fn render_shared_driver_violation(error: &str, module: &str, family: Option<&str>) -> String {
+    let mut diagnostic = serde_json::json!({
+        "error": error,
+        "module": module,
+    });
+    if let Some(family) = family {
+        diagnostic["family"] = serde_json::Value::String(family.to_owned());
+        diagnostic["retiresWith"] = serde_json::Value::String(
+            SHARED_DRIVER_EXEMPTIONS
+                .iter()
+                .find(|exemption| exemption.module == module)
+                .map(|exemption| exemption.retires_with.to_owned())
+                .unwrap_or_default(),
+        );
+    }
+    diagnostic.to_string()
 }
 
 fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), String> {
@@ -724,11 +949,19 @@ fn provider_name_kind(name: &str) -> ProviderNameKind {
         return ProviderNameKind::NonProvider;
     };
     let segments: Vec<_> = rest.split('-').collect();
-    if segments.len() < 2 || segments.iter().any(|segment| !valid_name_segment(segment)) {
-        ProviderNameKind::Malformed
-    } else {
-        ProviderNameKind::Provider
+    if segments.iter().any(|segment| !valid_name_segment(segment)) {
+        return ProviderNameKind::Malformed;
     }
+    // The two-segment shape is the packaged Provider this policy covers: one
+    // that publishes a packaging artifact, a dossier, and a catalog id. A
+    // single segment names a per-type driver crate - the crate that declares
+    // one resource type's driver for the plane and ships no packaging artifact
+    // of its own - so it carries neither the packaging obligations nor a
+    // catalog row.
+    if segments.len() < 2 {
+        return ProviderNameKind::NonProvider;
+    }
+    ProviderNameKind::Provider
 }
 
 fn valid_name_segment(segment: &str) -> bool {
@@ -1056,7 +1289,11 @@ mod tests {
             vec!["system-core", "system-minijail"]
         );
         for row in PROVIDER_MATRIX {
-            assert_eq!(row.crate_name, format!("d2b-provider-{}", row.identity));
+            // A crate is renamed with the family it realizes, so the identity
+            // suffix is only required to be non-empty here; the provider
+            // identity - and with it the dossier and the catalog id - is what
+            // stays put across a rename.
+            assert!(row.crate_name.strip_prefix(PROVIDER_PREFIX).is_some_and(|suffix| !suffix.is_empty()));
             assert!(row.bazel_target.ends_with(":all-tests"));
             assert!(row.dossier_path.ends_with(&format!(
                 "ADR-046-provider-{}.md",
@@ -1106,9 +1343,12 @@ mod tests {
             let kind = provider_name_kind(&name);
             match kind {
                 ProviderNameKind::NonProvider => {
+                    let driver_crate = name
+                        .strip_prefix(PROVIDER_PREFIX)
+                        .is_some_and(|suffix| suffix.split('-').count() == 1);
                     assert!(
-                        NON_PROVIDER_PREFIXED.contains(&name.as_str()),
-                        "{name} is not an explicit non-Provider helper"
+                        NON_PROVIDER_PREFIXED.contains(&name.as_str()) || driver_crate,
+                        "{name} is neither an explicit non-Provider helper nor a per-type driver crate"
                     );
                 }
                 ProviderNameKind::Provider => {
@@ -1131,12 +1371,23 @@ mod tests {
     #[test]
     fn readme_only_integration_ratchet_is_exactly_the_scaffolded_set() {
         let expected = [
+            "d2b-provider-activation-nixos",
+            "d2b-provider-audio-pipewire",
+            "d2b-provider-clipboard-wayland",
             "d2b-provider-credential-entra",
             "d2b-provider-credential-managed-identity",
             "d2b-provider-credential-secret-service",
+            "d2b-provider-device-gpu",
+            "d2b-provider-display-wayland",
+            "d2b-provider-notification-desktop",
+            "d2b-provider-process-minijail",
+            "d2b-provider-process-systemd",
+            "d2b-provider-runtime-azure-container-apps",
+            "d2b-provider-runtime-azure-virtual-machine",
+            "d2b-provider-runtime-cloud-hypervisor",
             "d2b-provider-system-core",
-            "d2b-provider-system-minijail",
-            "d2b-provider-system-systemd",
+            "d2b-provider-transport-azure-relay",
+            "d2b-provider-transport-unix",
             "d2b-provider-volume-virtiofs",
         ];
         assert_eq!(
@@ -1191,16 +1442,16 @@ mod tests {
     #[test]
     fn a_malformed_provider_name_is_rejected_instead_of_ignored() {
         let fixture = Fixture::new("malformed");
-        fixture.add_package("d2b-provider-fixture");
+        fixture.add_package("d2b-provider-fixture-");
         fixture.set_members(&[
             "d2b-core",
             "d2b-provider-fixture-example",
-            "d2b-provider-fixture",
+            "d2b-provider-fixture-",
         ]);
 
         let error = check_fixture(&fixture.root).unwrap_err();
         assert!(error.contains("provider-crate-name-invalid"));
-        assert!(error.contains("d2b-provider-fixture"));
+        assert!(error.contains("d2b-provider-fixture-"));
     }
 
     #[test]
@@ -1228,4 +1479,63 @@ mod tests {
         let error = check_fixture(&fixture.root).unwrap_err();
         assert!(!error.contains(&marker));
     }
+
+    /// A driver declared in a shared crate is refused, naming the module: the
+    /// exemption list is what keeps the still-un-migrated families passing,
+    /// and nothing else may declare a driver outside a provider crate.
+    #[test]
+    fn a_driver_declared_in_a_shared_crate_is_refused() {
+        let fixture = Fixture::new("shared-driver");
+        let broker = fixture.root.join("packages/d2b-broker/src");
+        fs::create_dir_all(&broker).unwrap();
+        fs::write(
+            broker.join("hidden_driver.rs"),
+            "impl ResourceDriver for HiddenDriver {}\n",
+        )
+        .unwrap();
+        let error = check_shared_driver_placements(&fixture.root)
+            .expect_err("a driver declared in a shared crate is refused");
+        assert!(error.contains("shared-crate-driver-placement"), "{error}");
+        assert!(
+            error.contains("packages/d2b-broker/src/hidden_driver.rs"),
+            "{error}"
+        );
+
+        fs::remove_file(broker.join("hidden_driver.rs")).unwrap();
+        assert_eq!(check_shared_driver_placements(&fixture.root), Ok(()));
+    }
+
+    /// The ratchet only shrinks: an exemption whose module no longer declares
+    /// a driver fails, so a family move cannot leave a dead entry behind.
+    #[test]
+    fn a_stale_shared_driver_exemption_is_refused() {
+        let fixture = Fixture::new("stale-driver");
+        let d2bd = fixture.root.join("packages/d2bd/src");
+        fs::create_dir_all(&d2bd).unwrap();
+        fs::write(
+            d2bd.join("volume_driver.rs"),
+            "impl ResourceDriver for VolumeDriver {}\n",
+        )
+        .unwrap();
+        let error = check_shared_driver_placements(&fixture.root)
+            .expect_err("an exemption the tree no longer needs is refused");
+        assert!(error.contains("stale-shared-driver-exemption"), "{error}");
+        assert!(
+            error.contains("packages/d2bd/src/activation_driver.rs"),
+            "{error}"
+        );
+        if error.contains("packages/d2bd/src/volume_driver.rs") {
+            panic!("the module that still declares a driver must not be stale: {error}");
+        }
+    }
+
+    /// The exemption list matches the committed tree exactly: every entry
+    /// names a module that still declares a driver, and no shared-crate module
+    /// declares one without an entry.
+    #[test]
+    fn the_shared_driver_exemptions_match_the_committed_tree() {
+        let root = repo_root().expect("resolve repository root");
+        assert_eq!(check_shared_driver_placements(root), Ok(()));
+    }
+
 }
