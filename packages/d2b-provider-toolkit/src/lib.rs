@@ -88,13 +88,15 @@ pub use base::fd10::{
     spawn_guest_credential_backend_responder, zeroizing_bytes,
 };
 pub use base::{
-    AllocatorSessionBinding, AttachError, AuthenticatedRoute, DEFAULT_DRAIN_BUDGET_MS, DrainError,
-    EnrolledRoute, EnrollmentRequest, GuestAgent, GuestEnrollment, GuestError, Lifecycle,
+    AllocatorEnrollment, AllocatorSessionBinding, AttachError, AuthenticatedRoute,
+    DEFAULT_DRAIN_BUDGET_MS, DrainError, EnrolledRoute, EnrollmentRequest, GUEST_RECONNECT_ATTEMPTS,
+    GUEST_RECONNECT_INITIAL_MS, GUEST_RECONNECT_MAX_MS, GUEST_SESSION_MAX_FRAME_BYTES, GuestAgent,
+    GuestEnrollment, GuestError, GuestFrame, GuestLink, GuestLinkFuture, GuestPlacement, Lifecycle,
     PROVIDER_RESOURCE_TYPE, ProviderAdmission, ProviderAgentBootstrap, ProviderAgentIdentity,
     ProviderBase, ProviderEntrypoint, ProviderLifecycle, ProviderRunError, ProviderRuntimeError,
     ProviderSessionAdmission, ProviderToolkitError, ServiceMethods, ServiceSurface, StartupError,
     StartupPlan, StartupPlanRefusal, StartupStepError, StartupStepExecutor, SupervisedProvider,
-    UnsupportedGuestEnrollment, run, run_guest, run_guest_with, run_with_startup,
+    run, run_guest, run_with_startup,
 };
 pub use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, Cancellation,
