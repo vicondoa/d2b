@@ -1,6 +1,5 @@
 use d2b_provider_guest_qemu_media::{
-    GuestPhase, GuestProviderSpecSettings, GuestSpec, GuestStatus, ProviderPhase,
-    build_guest_resource_spec,
+    GuestProviderSpecSettings, GuestSpec, build_guest_resource_spec,
 };
 
 #[test]
@@ -39,15 +38,6 @@ fn unknown_fields_and_invalid_refs_are_rejected() {
         .is_err()
     );
     assert!(serde_json::from_str::<GuestProviderSpecSettings>(r#"{"unexpected":true}"#).is_err());
-}
-
-#[test]
-fn status_provider_phase_is_closed_and_bounded() {
-    let status = GuestStatus::new(GuestPhase::Pending, ProviderPhase::WaitingDependencies);
-    assert_eq!(status.phase(), GuestPhase::Pending);
-    assert_eq!(status.provider_phase(), ProviderPhase::WaitingDependencies);
-    assert!(GuestStatus::from_provider_phase("not-a-provider-phase").is_err());
-    assert!(GuestStatus::from_provider_phase(&"x".repeat(65)).is_err());
 }
 
 #[test]

@@ -7,12 +7,6 @@ use std::collections::VecDeque;
 pub enum QmpCommand {
     /// Negotiate QMP capabilities.
     Capabilities,
-    /// Continue a paused VM.
-    Cont,
-    /// Request guest ACPI powerdown.
-    SystemPowerdown,
-    /// Query guest status.
-    QueryStatus,
     /// Add a block backend from an inherited fd slot.
     BlockdevAdd {
         /// QMP node name.
@@ -39,25 +33,6 @@ pub enum QmpCommand {
         /// QMP node name.
         node_name: String,
     },
-    /// Query current block devices.
-    QueryBlock,
-}
-
-impl QmpCommand {
-    /// Return the wire command name.
-    pub const fn name(&self) -> &'static str {
-        match self {
-            Self::Capabilities => "qmp_capabilities",
-            Self::Cont => "cont",
-            Self::SystemPowerdown => "system_powerdown",
-            Self::QueryStatus => "query-status",
-            Self::BlockdevAdd { .. } => "blockdev-add",
-            Self::DeviceAdd { .. } => "device_add",
-            Self::DeviceDel { .. } => "device_del",
-            Self::BlockdevDel { .. } => "blockdev-del",
-            Self::QueryBlock => "query-block",
-        }
-    }
 }
 
 /// QMP greeting received from the runner Endpoint.
@@ -83,19 +58,12 @@ pub enum QmpVmStatus {
 pub enum QmpReply {
     /// Command succeeded without a status payload.
     Ok,
-    /// Command succeeded with a guest status.
-    Status(QmpVmStatus),
 }
 
 impl QmpReply {
     /// Construct an empty successful response.
     pub const fn ok() -> Self {
         Self::Ok
-    }
-
-    /// Construct a status response.
-    pub const fn status(status: QmpVmStatus) -> Self {
-        Self::Status(status)
     }
 }
 
@@ -214,9 +182,7 @@ impl QmpTransport for ScriptedQmpTransport {
 pub struct QmpSession<T> {
     transport: T,
     negotiated: bool,
-    greeting: Option<QmpGreeting>,
-    commands: Vec<QmpCommand>,
-    health: QmpHealth,
+    commands: VecDeque<QmpCommand>,
 }
 
 impl<T: QmpTransport> QmpSession<T> {
@@ -225,45 +191,20 @@ impl<T: QmpTransport> QmpSession<T> {
         Self {
             transport,
             negotiated: false,
-            greeting: None,
-            commands: Vec::new(),
-            health: QmpHealth::new(3),
+            commands: VecDeque::new(),
         }
     }
 
     /// Negotiate QMP capabilities.
     pub fn negotiate(&mut self) -> Result<(), QmpError> {
         self.negotiated = false;
-        self.greeting = None;
         let greeting = self.transport.receive_greeting()?;
         if greeting.version.is_empty() || greeting.version.len() > 64 {
             return Err(QmpError::GreetingInvalid);
         }
-        self.greeting = Some(greeting);
-        if let Err(error) = self.execute(QmpCommand::Capabilities) {
-            self.greeting = None;
-            return Err(error);
-        }
+        self.execute(QmpCommand::Capabilities)?;
         self.negotiated = true;
         Ok(())
-    }
-
-    /// Continue a paused VM.
-    pub fn cont(&mut self) -> Result<(), QmpError> {
-        self.execute(QmpCommand::Cont).map(|_| ())
-    }
-
-    /// Request graceful guest shutdown.
-    pub fn system_powerdown(&mut self) -> Result<(), QmpError> {
-        self.execute(QmpCommand::SystemPowerdown).map(|_| ())
-    }
-
-    /// Query guest status.
-    pub fn query_status(&mut self) -> Result<QmpVmStatus, QmpError> {
-        match self.execute(QmpCommand::QueryStatus)? {
-            QmpReply::Status(status) => Ok(status),
-            QmpReply::Ok => Err(QmpError::Protocol),
-        }
     }
 
     /// Attach one media fd slot through the QMP block/device sequence.
@@ -313,91 +254,20 @@ impl<T: QmpTransport> QmpSession<T> {
         Ok(())
     }
 
-    /// Query current block devices.
-    pub fn query_block(&mut self) -> Result<(), QmpError> {
-        self.execute(QmpCommand::QueryBlock).map(|_| ())
-    }
-
-    /// Borrow the negotiated greeting.
-    pub fn greeting(&self) -> Option<&QmpGreeting> {
-        self.greeting.as_ref()
-    }
-
     /// Borrow dispatched commands.
-    pub fn commands(&self) -> &[QmpCommand] {
-        &self.commands
-    }
-
-    /// Borrow session health.
-    pub const fn health(&self) -> &QmpHealth {
-        &self.health
-    }
-
-    /// Record a health probe success.
-    pub fn record_health_success(&mut self) {
-        self.health.record_success();
-    }
-
-    /// Record a health probe failure.
-    pub fn record_health_failure(&mut self) -> Result<(), QmpError> {
-        self.health.record_failure()
+    pub fn commands(&self) -> impl Iterator<Item = &QmpCommand> {
+        self.commands.iter()
     }
 
     fn execute(&mut self, command: QmpCommand) -> Result<QmpReply, QmpError> {
         if !matches!(command, QmpCommand::Capabilities) && !self.negotiated {
             return Err(QmpError::NotReady);
         }
-        self.commands.push(command.clone());
+        self.commands.push_back(command.clone());
         if self.commands.len() > 128 {
-            self.commands.remove(0);
+            self.commands.pop_front();
         }
         self.transport.execute(&command)
-    }
-}
-
-/// Bounded QMP health tracker.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QmpHealth {
-    threshold: u8,
-    failures: u8,
-    phase: &'static str,
-}
-
-impl QmpHealth {
-    /// Construct a health tracker with a non-zero failure threshold.
-    pub fn new(threshold: u8) -> Self {
-        Self {
-            threshold: threshold.max(1),
-            failures: 0,
-            phase: "ready",
-        }
-    }
-
-    /// Record a successful health probe.
-    pub fn record_success(&mut self) {
-        self.failures = 0;
-        self.phase = "ready";
-    }
-
-    /// Record a failure and degrade at the threshold.
-    pub fn record_failure(&mut self) -> Result<(), QmpError> {
-        self.failures = self.failures.saturating_add(1);
-        if self.failures >= self.threshold {
-            self.phase = "degraded";
-            Err(QmpError::CommandFailed)
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Return the closed health phase.
-    pub const fn phase(&self) -> &'static str {
-        self.phase
-    }
-
-    /// Return consecutive failures.
-    pub const fn failures(&self) -> u8 {
-        self.failures
     }
 }
 

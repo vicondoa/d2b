@@ -1,10 +1,10 @@
-//! Resource specifications and status projections for qemu-media Guests.
+//! Resource specifications for qemu-media Guests.
 
 mod guest;
 
 pub use guest::{
-    Bios, ConditionStatus, CpuModel, DeviceAttachment, ExtraFeature, GuestCondition, GuestPhase,
-    GuestProviderDetails, GuestProviderSpecSettings, GuestProviderStatus, GuestResourceSpecError,
-    GuestRuntimeStatus, GuestSpec, GuestSpecError, GuestStatus, MachineType, NetworkAttachment,
-    ProviderPhase, RemovableVolumeRef, RtcBase, build_guest_resource_spec,
+    Bios, CpuModel, DeviceAttachment, ExtraFeature, GuestProviderSpecSettings,
+    GuestResourceSpecError, GuestSpec, GuestSpecError, MachineType, NetworkAttachment,
+    RemovableVolumeRef, RtcBase, build_guest_resource_spec,
 };
+pub(crate) use guest::validate_token;

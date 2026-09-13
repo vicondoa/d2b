@@ -1,10 +1,9 @@
 use d2b_provider_guest_qemu_media::{
-    GuestPhase, GuestProviderSpecSettings, GuestSpec, GuestStatus, ProviderPhase,
-    build_guest_resource_spec,
+    GuestProviderSpecSettings, GuestSpec, build_guest_resource_spec,
 };
 
 #[test]
-fn guest_conformance_keeps_common_and_provider_status_layers_distinct() {
+fn guest_conformance_keeps_the_common_base_and_provider_extension_distinct() {
     let spec = build_guest_resource_spec(
         Some(d2b_contracts_resource::v3::ResourceRef::parse("Volume/boot").unwrap()),
         2,
@@ -18,12 +17,5 @@ fn guest_conformance_keeps_common_and_provider_status_layers_distinct() {
     assert_eq!(
         spec.provider().unwrap().schema_id().to_canonical_string(),
         "runtime-qemu-media.d2bus.org/Guest/spec"
-    );
-    let status = GuestStatus::new(GuestPhase::Ready, ProviderPhase::PausedAtBoot);
-    assert_eq!(status.phase(), GuestPhase::Ready);
-    assert_eq!(status.provider_phase(), ProviderPhase::PausedAtBoot);
-    assert_eq!(
-        status.provider.schema_id,
-        "runtime-qemu-media.d2bus.org/Guest/status"
     );
 }

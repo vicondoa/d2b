@@ -1,7 +1,5 @@
 //! Host-global KVM Device admission.
 
-use std::collections::BTreeMap;
-
 use d2b_contracts_resource::v3::ResourceRef;
 
 /// Observed Device phase.
@@ -110,62 +108,5 @@ impl DeviceAdmission {
             return Err(DeviceAdmissionError::MediaContractMismatch);
         }
         Ok(())
-    }
-}
-
-/// A retained Host-global authority reservation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuthorityReservation {
-    key: [u8; 32],
-    owner_ref: ResourceRef,
-}
-
-impl AuthorityReservation {
-    /// Borrow the owner of this reservation.
-    pub const fn owner_ref(&self) -> &ResourceRef {
-        &self.owner_ref
-    }
-}
-
-/// Single-owner Host-global authority index.
-#[derive(Debug, Default)]
-pub struct HostGlobalAuthorityIndex {
-    owners: BTreeMap<[u8; 32], ResourceRef>,
-}
-
-impl HostGlobalAuthorityIndex {
-    /// Construct an empty index.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Reserve a key before an asynchronous effect starts.
-    pub fn reserve(
-        &mut self,
-        key: [u8; 32],
-        owner_ref: ResourceRef,
-    ) -> Result<AuthorityReservation, DeviceAdmissionError> {
-        if let Some(existing) = self.owners.get(&key) {
-            if existing != &owner_ref {
-                return Err(DeviceAdmissionError::WrongOwner);
-            }
-            return Err(DeviceAdmissionError::WrongOwner);
-        }
-        self.owners.insert(key, owner_ref.clone());
-        Ok(AuthorityReservation { key, owner_ref })
-    }
-
-    /// Release a reservation only for its original owner.
-    pub fn release(
-        &mut self,
-        reservation: AuthorityReservation,
-    ) -> Result<(), DeviceAdmissionError> {
-        match self.owners.get(&reservation.key) {
-            Some(owner) if owner == &reservation.owner_ref => {
-                self.owners.remove(&reservation.key);
-                Ok(())
-            }
-            _ => Err(DeviceAdmissionError::WrongOwner),
-        }
     }
 }

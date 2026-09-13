@@ -1,28 +1,10 @@
 use d2b_provider_guest_qemu_media::{
-    QmpCommand, QmpError, QmpGreeting, QmpHealth, QmpReply, QmpSession, QmpTransport,
-    ScriptedQmpTransport,
+    QmpCommand, QmpError, QmpGreeting, QmpReply, QmpSession, QmpTransport, ScriptedQmpTransport,
 };
 use std::collections::VecDeque;
 
 #[test]
-fn capability_negotiation_and_boot_commands_are_typed() {
-    let transport = ScriptedQmpTransport::new()
-        .with_greeting("8.2")
-        .with_reply(QmpReply::ok())
-        .with_reply(QmpReply::ok())
-        .with_reply(QmpReply::ok());
-    let mut session = QmpSession::new(transport);
-    session.negotiate().unwrap();
-    session.cont().unwrap();
-    assert_eq!(
-        session.commands(),
-        &[QmpCommand::Capabilities, QmpCommand::Cont]
-    );
-    assert_eq!(session.health().phase(), "ready");
-}
-
-#[test]
-fn hotplug_attach_and_detach_use_ordered_qmp_commands() {
+fn negotiation_then_media_hotplug_uses_ordered_qmp_commands() {
     let transport = ScriptedQmpTransport::new()
         .with_greeting("8.2")
         .with_reply(QmpReply::ok())
@@ -35,8 +17,8 @@ fn hotplug_attach_and_detach_use_ordered_qmp_commands() {
     session.attach_media("media-0", 3, true).unwrap();
     session.detach_media("media-0").unwrap();
     assert_eq!(
-        session.commands(),
-        &[
+        session.commands().cloned().collect::<Vec<_>>(),
+        vec![
             QmpCommand::Capabilities,
             QmpCommand::BlockdevAdd {
                 node_name: "media-0".to_owned(),
@@ -58,22 +40,51 @@ fn hotplug_attach_and_detach_use_ordered_qmp_commands() {
 }
 
 #[test]
-fn health_degrades_after_bounded_failures() {
-    let mut health = QmpHealth::new(2);
-    assert!(health.record_failure().is_ok());
-    assert_eq!(health.phase(), "ready");
-    assert!(health.record_failure().is_err());
-    assert_eq!(health.phase(), "degraded");
+fn failed_device_add_rolls_the_block_node_back() {
+    let transport = ScriptedQmpTransport::new()
+        .with_greeting("8.2")
+        .with_reply(QmpReply::ok())
+        .with_reply(QmpReply::ok())
+        .with_error(QmpError::CommandFailed)
+        .with_reply(QmpReply::ok());
+    let mut session = QmpSession::new(transport);
+    session.negotiate().unwrap();
+    assert_eq!(
+        session.attach_media("media-0", 3, true).unwrap_err(),
+        QmpError::CommandFailed
+    );
+    assert_eq!(
+        session.commands().cloned().collect::<Vec<_>>(),
+        vec![
+            QmpCommand::Capabilities,
+            QmpCommand::BlockdevAdd {
+                node_name: "media-0".to_owned(),
+                fd_slot: 3,
+                read_only: true,
+            },
+            QmpCommand::DeviceAdd {
+                device_id: "media-0".to_owned(),
+                drive: "media-0".to_owned(),
+            },
+            QmpCommand::BlockdevDel {
+                node_name: "media-0".to_owned(),
+            },
+        ]
+    );
 }
 
 #[test]
-fn failed_capability_negotiation_poisoned_session_rejects_commands() {
+fn unnegotiated_session_rejects_media_commands() {
     let transport = ScriptedQmpTransport::new()
         .with_greeting("8.2")
         .with_error(QmpError::CapabilitiesFailed);
     let mut session = QmpSession::new(transport);
     assert!(session.negotiate().is_err());
-    assert_eq!(session.cont().unwrap_err(), QmpError::NotReady);
+    assert_eq!(
+        session.attach_media("media-0", 3, true).unwrap_err(),
+        QmpError::NotReady
+    );
+    assert_eq!(session.commands().count(), 1);
 }
 
 #[derive(Default)]
@@ -109,5 +120,8 @@ fn failed_renegotiation_clears_previous_session() {
     let mut session = QmpSession::new(transport);
     session.negotiate().unwrap();
     assert!(session.negotiate().is_err());
-    assert_eq!(session.cont().unwrap_err(), QmpError::NotReady);
+    assert_eq!(
+        session.attach_media("media-0", 3, true).unwrap_err(),
+        QmpError::NotReady
+    );
 }

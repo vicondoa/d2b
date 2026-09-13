@@ -4,6 +4,8 @@ use d2b_contracts_resource::v3::ResourceRef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::types::validate_token;
+
 /// Default QMP greeting timeout in seconds.
 pub const DEFAULT_QMP_READY_TIMEOUT_SECONDS: u32 = 30;
 /// Default QMP command timeout in seconds.
@@ -137,7 +139,7 @@ impl ProviderConfig {
                 .display_provider_ref
                 .as_ref()
                 .is_some_and(|reference| reference.resource_type().as_str() != "Provider")
-            || !valid_token(&self.qemu_binary_artifact_id)
+            || !validate_token(&self.qemu_binary_artifact_id)
             || !(5..=300).contains(&self.qmp_ready_timeout_seconds)
             || !(5..=300).contains(&self.qmp_operation_timeout_seconds)
             || !(1024 * 1024..=256 * 1024 * 1024).contains(&self.runtime_tmpfs_quota_bytes)
@@ -155,16 +157,12 @@ impl ProviderConfig {
             qemu_binary_artifact_id: self.qemu_binary_artifact_id.clone(),
             qmp_ready_timeout_seconds: self.qmp_ready_timeout_seconds,
             qmp_operation_timeout_seconds: self.qmp_operation_timeout_seconds,
-            paused_at_boot_default: self.paused_at_boot_default,
             display_provider_ref: self
                 .display_provider_ref
                 .as_ref()
                 .map(ResourceRef::to_canonical_string),
-            display_provider_configured: self.display_provider_ref.is_some(),
             network_provider_ref: self.network_provider_ref.to_canonical_string(),
             volume_provider_ref: self.volume_provider_ref.to_canonical_string(),
-            runtime_tmpfs_quota_bytes: self.runtime_tmpfs_quota_bytes,
-            runtime_tmpfs_quota_inodes: self.runtime_tmpfs_quota_inodes,
         }
     }
 
@@ -209,20 +207,12 @@ pub struct ControllerConfigProjection {
     pub qmp_ready_timeout_seconds: u32,
     /// QMP operation deadline.
     pub qmp_operation_timeout_seconds: u32,
-    /// Pause-at-boot default.
-    pub paused_at_boot_default: bool,
     /// Optional display Provider reference.
     pub display_provider_ref: Option<String>,
-    /// Whether display Provider configuration is available.
-    pub display_provider_configured: bool,
     /// Network Provider reference.
     pub network_provider_ref: String,
     /// Volume Provider reference.
     pub volume_provider_ref: String,
-    /// Runtime tmpfs byte quota.
-    pub runtime_tmpfs_quota_bytes: u64,
-    /// Runtime tmpfs inode quota.
-    pub runtime_tmpfs_quota_inodes: u32,
 }
 
 impl ControllerConfigProjection {
@@ -273,15 +263,6 @@ impl std::error::Error for ProviderConfigError {}
 
 fn parse_ref(value: String) -> Result<ResourceRef, ProviderConfigError> {
     ResourceRef::parse(&value).map_err(|_| ProviderConfigError::Invalid)
-}
-
-fn valid_token(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 63
-        && value.as_bytes()[0].is_ascii_lowercase()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 const fn default_true() -> bool {

@@ -1,7 +1,6 @@
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_guest_qemu_media::{
-    DeviceAdmission, DeviceObservation, DevicePhase, HostGlobalAuthorityIndex, MediaWatch,
-    PlatformClass, ProcessSpec, RuntimeVolumeSpec, VolumeObservation, WaylandSessionSpec,
+    DeviceAdmission, DeviceObservation, DevicePhase, PlatformClass, ProcessSpec, RuntimeVolumeSpec,
     build_process_spec, validate_process_spec,
 };
 
@@ -30,29 +29,13 @@ fn runtime_volume_is_ephemeral_and_waits_for_process_proof() {
 }
 
 #[test]
-fn media_watch_requires_ready_virtio_block_attachments() {
-    let boot = ResourceRef::parse("Volume/boot-media").unwrap();
-    let pending = VolumeObservation::pending(boot.clone());
-    let watch = MediaWatch::new(guest(), Some(boot.clone()), Vec::new());
-    assert_eq!(
-        watch.observe([pending]).unwrap_err().code(),
-        "media-volume-not-ready"
-    );
-
-    let ready = VolumeObservation::ready_virtio_blk(boot);
-    assert!(watch.observe([ready]).is_ok());
-}
-
-#[test]
-fn device_admission_rejects_wrong_owner_platform_and_process_contract() {
-    let key = [7_u8; 32];
-    let mut authority = HostGlobalAuthorityIndex::new();
+fn device_admission_requires_the_guest_owner() {
     let observation = DeviceObservation {
         device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
         phase: DevicePhase::Ready,
         owner_ref: Some(ResourceRef::parse("Guest/other").unwrap()),
         platform: PlatformClass::X86_64Linux,
-        authority_key: key,
+        authority_key: [7_u8; 32],
         process_identity: Some("process-a".to_owned()),
         media_contract: "qemu-media/v1".to_owned(),
     };
@@ -69,21 +52,6 @@ fn device_admission_rejects_wrong_owner_platform_and_process_contract() {
         ..owned
     };
     assert!(DeviceAdmission::validate(&guest(), &shared, "process-a", "qemu-media/v1").is_ok());
-    let _reservation = authority.reserve(key, guest()).unwrap();
-    assert!(authority.reserve(key, guest()).is_err());
-}
-
-#[test]
-fn display_session_has_no_managed_by_or_locator_fields() {
-    let spec = WaylandSessionSpec::new(
-        Some(ResourceRef::parse("Provider/display-wayland").unwrap()),
-        guest(),
-    )
-    .unwrap();
-    let json = serde_json::to_string(&spec).unwrap();
-    assert!(!json.contains("managedBy"));
-    assert!(!json.contains("socketPath"));
-    assert!(json.contains("guestRef"));
 }
 
 #[test]

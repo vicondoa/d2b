@@ -89,15 +89,6 @@ fn config() -> ProviderConfig {
 }
 
 #[test]
-fn qemu_media_publishes_the_shared_runner_contract() {
-    let contract = d2b_provider_guest_qemu_media::qemu_media_runner_contract();
-    assert_eq!(contract.resource_type(), "Guest");
-    assert_eq!(contract.finalizer(), d2b_provider_guest_qemu_media::FINALIZER);
-    assert_eq!(contract.repair_interval_secs(), 30);
-    assert!(contract.watched_configuration_is_dependency());
-}
-
-#[test]
 fn launch_ticket_rejects_duplicate_media_attachments_before_effects() {
     let process = d2b_provider_guest_qemu_media::build_process_spec(
         ResourceRef::parse("Host/host-system").unwrap(),

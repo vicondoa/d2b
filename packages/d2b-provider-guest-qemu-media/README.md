@@ -26,29 +26,29 @@ receive no root Provider config, ResourceAPI authority, or d2b-bus authority.
 
 ## Exported resource types
 
-The crate validates the locator-free Guest settings and status extension,
-including Volume media references, bounded provider phases, and the
-manual-only `paused-at-boot` state. Runtime Volumes, Process specs, Endpoint
-attachments, and Device/host-kvm observations remain opaque Core resources.
+The crate validates the locator-free Guest settings extension, including
+Volume media references and the manual-only `paused-at-boot` state. Runtime
+Volumes, Process specs, Endpoint attachments, and Device/host-kvm observations
+remain opaque Core resources.
 
 ## Controllers / services / workers / binaries
 
 `QemuMediaController` gates launch on media, Network, display, and
 Host-global KVM readiness; the QEMU worker is the signed
-`qemu-media-runner` Process template. QMP capability negotiation, health,
-media hotplug, restart adoption, and finalization are typed seams over
-Core-owned effects.
+`qemu-media-runner` Process template. QMP capability negotiation, media
+hotplug, restart adoption, and finalization are typed seams over Core-owned
+effects.
 
 ## Placement and dependencies
 
 The controller runs on the configured Host. A Guest may depend on
 Volume/virtio-blk media, Network refs, Device/host-kvm, and an optional
-display-wayland WaylandSession. No Provider state Volume is declared.
+display-wayland Endpoint. No Provider state Volume is declared.
 
 ## RBAC requirements
 
 The controller watches Guest, Volume, Network, Device, Process, and optional
-WaylandSession resources. It requests only typed Core effects and never names
+display Endpoint resources. It requests only typed Core effects and never names
 a broker operation, host path, socket path, executable path, argv, fd, or
 numeric principal.
 
@@ -56,15 +56,13 @@ numeric principal.
 
 Host-global Device ownership is reserved before effects start and held until
 media effects close. Process adoption verifies the complete identity tuple
-before pidfd acquisition; ambiguous candidates are quarantined. Audit and
-telemetry projections are bounded and redacted.
+before pidfd acquisition; ambiguous candidates are quarantined.
 
-## State and telemetry
+## State
 
-Operational state is status-first and restart-rehydratable from the Zone store,
-operation ledger, and external process observations. No Provider state Volume
-or secret/path-bearing diagnostics are used. Audit events and metric labels
-use fixed semantic vocabularies.
+No Provider state Volume is declared. The controller exports bounded
+non-secret recovery state and re-derives everything else from the Zone store,
+the operation ledger, and external process observations.
 
 ## Build and test
 

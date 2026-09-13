@@ -44,20 +44,6 @@ rust_test(
 )
 
 rust_test(
-    name = "audit_telemetry",
-    srcs = [
-        "tests/audit_telemetry.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_provider_guest_qemu_media",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "config_schema_projection",
     srcs = [
         "tests/config_schema_projection.rs",
@@ -117,20 +103,6 @@ rust_test(
     name = "lifecycle",
     srcs = [
         "tests/lifecycle.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_provider_guest_qemu_media",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "provider_layout",
-    srcs = [
-        "tests/provider_layout.rs",
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],

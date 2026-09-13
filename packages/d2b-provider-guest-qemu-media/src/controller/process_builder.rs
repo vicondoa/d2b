@@ -13,6 +13,8 @@ use d2b_contracts_resource::v3::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::types::validate_token;
+
 /// Process template id.
 pub const PROCESS_TEMPLATE: &str = "qemu-media-runner";
 
@@ -283,7 +285,7 @@ impl LaunchTicket {
         validate_process_spec(&self.process)?;
         let mut slots = std::collections::BTreeSet::new();
         for attachment in &self.attachments {
-            if !valid_slot(&attachment.slot) || !slots.insert(&attachment.slot) {
+            if !validate_token(&attachment.slot) || !slots.insert(&attachment.slot) {
                 return Err(ProcessSpecError::DuplicateAttachmentSlot);
             }
             let expected = match attachment.kind {
@@ -311,13 +313,4 @@ pub enum ProcessSpecError {
     InvalidShape,
     /// Two attachment slots have the same label.
     DuplicateAttachmentSlot,
-}
-
-fn valid_slot(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 63
-        && value.as_bytes()[0].is_ascii_lowercase()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
