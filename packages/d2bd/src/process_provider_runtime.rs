@@ -46,6 +46,7 @@ use d2b_provider_process_systemd::SystemdProcessProvider;
 use d2b_provider_toolkit::CredentialDeliveryKeyHandoff;
 use d2b_session::AuthenticatedSessionRouteBinding;
 use d2b_session_unix::{PeerCredentials, SeqpacketSocket, prearmed_seqpacket_pair};
+use d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness;
 use d2bd_runtime::target_runtime::{ControllerProcessResource, DaemonMode};
 use d2bd_runtime::vm_start_support::{
     is_durable_wayland_process_node, is_guest_owned_process_node,
@@ -791,6 +792,13 @@ impl ControllerBootstrapMarker {
 }
 
 /// Readiness-loop adapter for one Provider-managed process node.
+///
+/// The probe observes the node through the Provider's authenticated read-only
+/// path, which is async, so it has a seat for each readiness wait: the async
+/// wait awaits [`Self::probe_async`] and never drives a runtime from inside
+/// the caller's, while the synchronous wait drives [`Self::probe`] on the
+/// process-wide runtime [`crate::block_on_future`] falls back to (one per
+/// process, not one per poll).
 pub struct ProviderLivenessProbe {
     providers: Arc<ProductionProcessProviders>,
     vm: String,
@@ -810,21 +818,26 @@ impl ProviderLivenessProbe {
             node: node.clone(),
         }
     }
+
+    fn classify(liveness: Result<ProviderLiveness, String>) -> RunnerLiveness {
+        match liveness {
+            Ok(ProviderLiveness::Alive) => RunnerLiveness::Alive,
+            Ok(ProviderLiveness::Exited) => RunnerLiveness::Exited(None),
+            Ok(ProviderLiveness::Unknown) | Err(_) => RunnerLiveness::Unknown,
+        }
+    }
 }
 
+#[async_trait::async_trait]
 impl d2bd_runtime::supervisor::readiness_liveness::LivenessProbe for ProviderLivenessProbe {
-    fn probe(&self) -> d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness {
-        match crate::block_on_future(self.providers.probe_node(&self.vm, &self.node)) {
-            Ok(ProviderLiveness::Alive) => {
-                d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness::Alive
-            }
-            Ok(ProviderLiveness::Exited) => {
-                d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness::Exited(None)
-            }
-            Ok(ProviderLiveness::Unknown) | Err(_) => {
-                d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness::Unknown
-            }
-        }
+    fn probe(&self) -> RunnerLiveness {
+        Self::classify(crate::block_on_future(
+            self.providers.probe_node(&self.vm, &self.node),
+        ))
+    }
+
+    async fn probe_async(&self) -> RunnerLiveness {
+        Self::classify(self.providers.probe_node(&self.vm, &self.node).await)
     }
 }
 

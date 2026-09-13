@@ -541,14 +541,11 @@ pub(crate) fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
 /// pre-open seed (running before this store exists) cannot know. Rows this
 /// store does not hold keep their seeded identity - the ingest is about to
 /// create them exactly as seeded.
-fn corrected_committed_provider_identities(
+async fn corrected_committed_provider_identities(
     store: &Arc<SpecStore>,
     zone: &ZoneId,
     seeded: &BTreeMap<ResourceRef, (ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)>,
 ) -> BTreeMap<ResourceRef, (ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)> {
-    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-        return seeded.clone();
-    };
     let mut corrected = seeded.clone();
     for provider_ref in seeded.keys() {
         let key = ResourceKey::new(
@@ -556,7 +553,7 @@ fn corrected_committed_provider_identities(
             provider_ref.resource_type().as_str(),
             provider_ref.name().as_str(),
         );
-        let row = tokio::task::block_in_place(|| runtime.block_on(store.get(key)));
+        let row = store.get(key).await;
         if let Ok(row) = row
             && let Ok(uid) = resource_uid(&row.uid)
             && let Ok(generation) =
@@ -2050,33 +2047,44 @@ impl ResourcePlaneV3 {
 
     /// Start the zone's providers through the toolkit base.
     ///
-    /// `prepare` is a synchronous constructor, so the base's attach sequence
-    /// runs on the ambient runtime from a blocking section, exactly as the
-    /// foundation seed does. A refusal names the provider and the declared row
-    /// it refused.
-    fn start_providers(inputs: &ConstructionInputs) -> Result<ProviderRuntime, PlaneError> {
-        let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
-            PlaneError::ProviderStartup(ProviderStartupError::RuntimeUnavailable)
-        })?;
+    /// The base's attach sequence is async work, so the constructor awaits it
+    /// like any other caller instead of driving it from a blocking section: a
+    /// blocking section parks the worker that is running the plane's own
+    /// start, and on a single-threaded runtime there is no other worker to
+    /// park. A refusal names the provider and the declared row it refused.
+    async fn start_providers(inputs: &ConstructionInputs) -> Result<ProviderRuntime, PlaneError> {
         let set = Self::provider_set(inputs);
-        tokio::task::block_in_place(|| runtime.block_on(set.start()))
-            .map_err(PlaneError::ProviderStartup)
+        set.start().await.map_err(PlaneError::ProviderStartup)
     }
 
     /// Open the store, register the converted-type factories, and
     /// spawn the manager. Initial-load completion is a separate step so the
     /// readiness checklist is observable stage by stage; [`Self::open`]
     /// composes both.
-    pub fn prepare(inputs: ConstructionInputs) -> Result<Self, PlaneError> {
+    ///
+    /// Every stage here is async work the constructor awaits; the only
+    /// synchronous work left is the store's own half (a directory create and
+    /// SQLite's open + migration, neither of which has an async form), which
+    /// runs on the blocking pool so it is bounded by that pool rather than by
+    /// the worker this call would otherwise park.
+    pub async fn prepare(inputs: ConstructionInputs) -> Result<Self, PlaneError> {
         let readiness = Arc::new(NewPlaneReadinessState::new());
         // Stage 1: durable spec store.
         let store_path = Self::spec_store_path(&inputs.spec_store_dir);
-        if let Some(parent) = store_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| {
-                PlaneError::Authority(format!("spec store dir create failed: {error}"))
-            })?;
-        }
-        let store = Arc::new(SpecStore::open(store_path.clone())?);
+        let store = Arc::new(
+            tokio::task::spawn_blocking(move || {
+                if let Some(parent) = store_path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| {
+                        PlaneError::Authority(format!("spec store dir create failed: {error}"))
+                    })?;
+                }
+                SpecStore::open(store_path.clone()).map_err(PlaneError::from)
+            })
+            .await
+            .map_err(|error| {
+                PlaneError::Authority(format!("spec store open join failed: {error}"))
+            })??,
+        );
         // The registry caches store-derived rows for the production effects;
         // the store is the authority its socket-target lookups load from on
         // a miss (the manager mints derived children after `open`).
@@ -2092,7 +2100,8 @@ impl ResourcePlaneV3 {
             &store,
             &inputs.zone,
             &inputs.committed_provider_identities,
-        );
+        )
+        .await;
         for (provider_ref, (uid, generation)) in &committed_provider_identities {
             inputs
                 .registry
@@ -2106,7 +2115,7 @@ impl ResourcePlaneV3 {
         // required registration at plane open (R4), and the registered set is
         // cross-checked against the generated converted-type catalog before
         // the manager spawns.
-        let mut provider_runtime = Self::start_providers(&inputs)?;
+        let mut provider_runtime = Self::start_providers(&inputs).await?;
         let mut providers = provider_runtime.take_directory();
         tracing::debug!(
             zone = %inputs.zone.as_str(),
@@ -2122,17 +2131,13 @@ impl ResourcePlaneV3 {
         // its manager spawns, so every seeded row's actor starts from a
         // committed row (F1). The manager's pre_start loads them.
         if let Some(foundation) = &inputs.foundation {
-            // The store is a threaded handle, so the seed drives it the same
-            // way this constructor spawns the manager below: on the ambient
-            // runtime, from a blocking section.
-            let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
-                PlaneError::FoundationSeed("the foundation seed requires a tokio runtime".into())
-            })?;
             let seed = crate::foundation_seed::FoundationSeed::new(
                 foundation.declarations.clone(),
                 foundation.allocation.clone(),
             );
-            let report = tokio::task::block_in_place(|| runtime.block_on(seed.run(&store, &providers)))
+            let report = seed
+                .run(&store, &providers)
+                .await
                 .map_err(|error| PlaneError::FoundationSeed(error.to_string()))?;
             tracing::info!(
                 zone = %inputs.zone.as_str(),
@@ -2175,14 +2180,9 @@ impl ResourcePlaneV3 {
             target_resolver: Arc::new(DeclaredExecutionRef),
             backoff: PLANE_BACKOFF,
         };
-        let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|_| PlaneError::ManagerSpawn("resource plane requires a tokio runtime".into()))?;
-        let (actor, _join) = tokio::task::block_in_place(|| {
-            runtime.block_on(async {
-                ractor::Actor::spawn(None, ResourceManager::new(), args).await
-            })
-        })
-        .map_err(|error| PlaneError::ManagerSpawn(error.to_string()))?;
+        let (actor, _join) = ractor::Actor::spawn(None, ResourceManager::new(), args)
+            .await
+            .map_err(|error| PlaneError::ManagerSpawn(error.to_string()))?;
         readiness.set_manager_started(true);
         readiness.set_spec_store_ready(true);
         Ok(Self {
@@ -2224,7 +2224,7 @@ impl ResourcePlaneV3 {
 
     /// One-shot assembly (production path): prepare + initial load.
     pub async fn open(inputs: ConstructionInputs) -> Result<Self, PlaneError> {
-        let plane = Self::prepare(inputs)?;
+        let plane = Self::prepare(inputs).await?;
         plane.complete_initial_load().await?;
         Ok(plane)
     }
@@ -3058,7 +3058,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn started_providers_cover_the_converted_type_authority() {
         let (_dir, inputs, _readiness) = test_inputs();
-        let mut runtime = ResourcePlaneV3::start_providers(&inputs).expect("providers");
+        let mut runtime = ResourcePlaneV3::start_providers(&inputs).await.expect("providers");
         let providers = runtime.take_directory();
         check_registry_catalog(
             providers.registered_types(),
@@ -3073,7 +3073,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn providers_start_in_the_committed_order_and_drain_in_reverse() {
         let (_dir, inputs, _readiness) = test_inputs();
-        let runtime = ResourcePlaneV3::start_providers(&inputs).expect("providers");
+        let runtime = ResourcePlaneV3::start_providers(&inputs).await.expect("providers");
         assert_eq!(
             runtime.startup_order(),
             [
@@ -3123,7 +3123,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn the_plane_drains_its_providers() {
         let (_dir, inputs, _readiness) = test_inputs();
-        let plane = ResourcePlaneV3::prepare(inputs).expect("plane prepare");
+        let plane = ResourcePlaneV3::prepare(inputs).await.expect("plane prepare");
         let mut reversed = plane.providers().startup_order().to_vec();
         reversed.reverse();
         plane
@@ -3191,7 +3191,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn assembly_constructs_and_readiness_follows_the_checklist() {
         let (_dir, inputs, readiness) = test_inputs();
-        let plane = ResourcePlaneV3::prepare(inputs).expect("plane prepare");
+        let plane = ResourcePlaneV3::prepare(inputs).await.expect("plane prepare");
         // Before the initial load completes, the gate stays closed.
         let snapshot = plane.readiness();
         assert!(snapshot.spec_store_ready);
@@ -3215,7 +3215,7 @@ mod tests {
         let (_dir, inputs, _readiness) = test_inputs();
         let zone_token = inputs.zone_token.clone();
         let registry = Arc::clone(&inputs.registry);
-        let plane = ResourcePlaneV3::prepare(inputs).expect("plane prepare");
+        let plane = ResourcePlaneV3::prepare(inputs).await.expect("plane prepare");
 
         let volume_ref = ResourceRef::parse("Volume/state").unwrap();
         let execution_ref = ResourceRef::parse("Guest/acceptance-guest").unwrap();

@@ -317,7 +317,7 @@ impl ZonePlanePort for ProductionPlanePort {
             ));
         }
         {
-            let ledger = self
+            let mut ledger = self
                 .ledger
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -326,7 +326,8 @@ impl ZonePlanePort for ProductionPlanePort {
                 .get(provider_ref)
                 .is_some_and(|claimed| claimed.iter().any(|claimed| claimed.declared == root.path))
             {
-                return Err(self.refuse(
+                return Err(Self::refuse_locked(
+                    &mut ledger,
                     provider_ref,
                     root.path.to_owned(),
                     "storage-root-duplicate",
@@ -650,6 +651,51 @@ mod tests {
         assert_eq!(
             port.deployed_adapters(),
             vec![("endpoint", "binding"), ("endpoint", "listener")]
+        );
+    }
+
+    /// A provider may not claim one declared root twice.
+    ///
+    /// The duplicate refusal is recorded through the ledger the claim already
+    /// holds, so it must go through the seat that does not re-acquire the
+    /// (non-reentrant) ledger lock: a second claim refuses, it does not hang
+    /// the plane. The claim runs on its own thread so that a regression fails
+    /// the test with a message instead of wedging the suite.
+    #[test]
+    fn a_duplicate_claim_refuses_instead_of_re_entering_the_ledger() {
+        const ROOTS: &[StorageRoot] = &[root("state")];
+        let dir = tempfile::tempdir().expect("tempdir");
+        let port = Arc::new(port(&dir, vec![declaration("volume", &[], ROOTS)]));
+        let (done, outcome) = std::sync::mpsc::channel();
+        let claim = Arc::clone(&port);
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a current-thread runtime");
+            let message = runtime.block_on(async {
+                claim
+                    .claim_storage_root("volume", &ROOTS[0])
+                    .await
+                    .expect("the declared root is claimed");
+                claim
+                    .claim_storage_root("volume", &ROOTS[0])
+                    .await
+                    .expect_err("the duplicate is refused");
+                claim.refusal().expect("a named refusal").message()
+            });
+            let _ = done.send(message);
+        });
+        assert_eq!(
+            outcome
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the duplicate claim refuses instead of parking on the ledger lock"),
+            "storage-root-duplicate:volume:state"
+        );
+        assert_eq!(
+            port.claimed_roots().len(),
+            1,
+            "the refused duplicate records no second claim"
         );
     }
 

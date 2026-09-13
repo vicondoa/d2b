@@ -157,7 +157,9 @@ pub use d2bd_runtime::public_read_model::{
     PublicArtifactFingerprint, PublicReadModelKind, PublicStatusReadModel,
     request_invalidates_public_status_model,
 };
-pub(crate) use d2bd_runtime::readiness::{wait_for_readiness, wait_for_readiness_async};
+#[cfg(test)]
+pub(crate) use d2bd_runtime::readiness::wait_for_readiness;
+pub(crate) use d2bd_runtime::readiness::wait_for_readiness_async;
 pub(crate) use d2bd_runtime::resource_api::resource_runtime_error_frame;
 use d2bd_runtime::supervisor::pidfd_table::{
     BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, PidfdTableError, WaitTermination,
@@ -16267,7 +16269,7 @@ fn is_gateway_zone_link(link: &Value) -> bool {
 
 async fn audit_resource_plane(
     state: &ServerState,
-    zone: &d2bd_contracts_resource::v3::ZoneId,
+    zone: &d2b_contracts_resource::v3::ZoneId,
     action: d2bd_runtime::daemon_audit::ResourcePlaneAction,
     result: d2bd_runtime::daemon_audit::ResourcePlaneResult,
 ) -> Result<(), std::io::Error> {
@@ -16292,7 +16294,7 @@ async fn audit_resource_plane(
 
 async fn record_authoritative_resource_plane_audit(
     state: &ServerState,
-    zone: &d2bd_contracts_resource::v3::ZoneId,
+    zone: &d2b_contracts_resource::v3::ZoneId,
     action: d2bd_runtime::daemon_audit::ResourcePlaneAction,
     result: d2bd_runtime::daemon_audit::ResourcePlaneResult,
 ) -> Result<(), std::io::Error> {

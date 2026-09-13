@@ -496,3 +496,29 @@
   reports each removal, and `--check` fails naming them, so a context retired
   with its crate cannot strand protected files that nothing regenerates or
   verifies.
+
+### Fixed
+
+- A provider that declares one storage root twice is refused by name instead
+  of wedging the plane: the duplicate-root refusal recorded itself through
+  the same non-reentrant ledger lock the claim already held, so the claim
+  hung. The refusal now goes through the seat that writes the ledger the
+  caller holds, and every other refusal path in the port was audited for the
+  same shape.
+- The daemon's audit chain has one appender thread: callers admit a record
+  into a bounded queue and await its append, so no request or startup path
+  holds a lock across the append, the fsync, or retention pruning, and the
+  record order on disk is the order the records were admitted.
+- VM start no longer parks an async worker on readiness: the wait is awaited
+  (its interval, and the liveness probe's own async seat), the synchronous
+  predicates run on the blocking pool, and the provider-managed probe
+  observes through the async seat instead of driving a runtime per poll. The
+  same treatment reached resource-plane construction, which now awaits its
+  store open, foundation seed, provider start, and manager spawn instead of
+  driving them from blocking sections.
+- The daemon's provider effect seats run on the blocking pool behind bounded
+  admission rather than on a thread and a runtime built for each call, and a
+  call past the cap is refused rather than adding another thread. The
+  interaction accept loops park in the kernel on their listener instead of
+  sleeping per iteration, and the synchronous seat that drives async work
+  reuses one process-wide runtime instead of building one per call.

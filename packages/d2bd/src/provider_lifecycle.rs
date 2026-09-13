@@ -58,8 +58,6 @@ pub(crate) const fn family_declaration(provider_ref: &'static str) -> ProviderDe
 /// Why one provider did not start or drain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProviderStartupError {
-    /// The plane needs an ambient async runtime to run the base.
-    RuntimeUnavailable,
     /// The declared identity is absent, so the plane cannot name the
     /// provider it starts.
     IdentityMissing,
@@ -91,7 +89,6 @@ impl ProviderStartupError {
     /// The stable lower-kebab reason.
     pub(crate) const fn code(&self) -> &'static str {
         match self {
-            Self::RuntimeUnavailable => "provider-runtime-unavailable",
             Self::IdentityMissing => "provider-identity-missing",
             Self::Duplicate { .. } => "provider-duplicate",
             Self::Registration { .. } => "provider-registration-refused",
@@ -105,7 +102,7 @@ impl ProviderStartupError {
     /// The provider the failure names.
     pub(crate) const fn provider_ref(&self) -> &'static str {
         match self {
-            Self::RuntimeUnavailable | Self::IdentityMissing => "",
+            Self::IdentityMissing => "",
             Self::Duplicate { provider_ref }
             | Self::Registration { provider_ref, .. }
             | Self::Attach { provider_ref }
@@ -118,7 +115,7 @@ impl ProviderStartupError {
     /// The failure as one line: reason, provider, and the offending row.
     pub(crate) fn message(&self) -> String {
         match self {
-            Self::RuntimeUnavailable | Self::IdentityMissing => self.code().to_owned(),
+            Self::IdentityMissing => self.code().to_owned(),
             Self::Duplicate { provider_ref } => {
                 format!("{}:{}", self.code(), provider_ref)
             }

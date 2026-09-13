@@ -113,8 +113,26 @@ pub fn classify(inputs: &LivenessInputs) -> RunnerLiveness {
 /// [`LivenessProbe::probe`] each iteration; a fake implementation drives
 /// the hermetic readiness-loop tests through the same call sites as
 /// production.
+///
+/// The trait has two seats because the readiness wait has two: a synchronous
+/// seat calls [`LivenessProbe::probe`], and an async seat awaits
+/// [`LivenessProbe::probe_async`]. A probe whose observation needs async work
+/// (the Provider-managed process probe resolves a resource row) overrides the
+/// async seat instead of driving a runtime from inside the caller's, which is
+/// what made a blocking poll panic on a single-threaded runtime.
+#[async_trait::async_trait]
 pub trait LivenessProbe: Send + Sync {
+    /// Observe the runner now. Synchronous seats call this.
     fn probe(&self) -> RunnerLiveness;
+
+    /// Observe the runner from an async seat.
+    ///
+    /// The default drives the synchronous seat, which is what the pidfd
+    /// probe and the test doubles want: their observation is a bounded
+    /// read-only syscall, not async work.
+    async fn probe_async(&self) -> RunnerLiveness {
+        self.probe()
+    }
 }
 
 /// Production probe bound to one runner `(vm, role)`. Reads from the live
