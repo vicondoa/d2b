@@ -59,8 +59,6 @@ struct Row {
     capabilities: bool,
     disposition: String,
     disposition_target: String,
-    #[serde(default)]
-    stub_wave: Option<String>,
     authz: Authz,
     audit: Audit,
     payload: Payload,
@@ -85,6 +83,9 @@ struct Audit {
     fields: Vec<String>,
     required: bool,
     mode: String,
+    /// The payload fields the row's audit join is derived from.
+    #[serde(default)]
+    join: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,6 +206,12 @@ fn parse(repo_root: &Path) -> Result<Catalog, Box<dyn std::error::Error>> {
                 row.operation
             )));
         }
+        if let Some(field) = undeclared_join_field(row) {
+            return Err(render_error(format!(
+                "{POLICY_PATH}: {} joins on a payload field it does not require: {field}",
+                row.operation
+            )));
+        }
         if !["deny-only", "errors", "yes"].contains(&row.audit.mode.as_str()) {
             return Err(render_error(format!(
                 "{POLICY_PATH}: {} declares audit mode {}",
@@ -217,10 +224,10 @@ fn parse(repo_root: &Path) -> Result<Catalog, Box<dyn std::error::Error>> {
                 row.operation
             )));
         }
-        if row.disposition == "stubbed-unimplemented" && row.stub_wave.is_none() {
+        if row.disposition == "stubbed-unimplemented" && stub_target_variant(row).is_none() {
             return Err(render_error(format!(
-                "{POLICY_PATH}: {} is a stub without a reserved wave",
-                row.operation
+                "{POLICY_PATH}: {} is a reserved stub whose disposition target is outside the closed set: {}",
+                row.operation, row.disposition_target
             )));
         }
         if row.disposition_target.is_empty() {
@@ -253,6 +260,68 @@ fn string_list(items: impl IntoIterator<Item = String>, indent: &str) -> String 
         .into_iter()
         .map(|item| format!("{indent}\"{item}\",\n"))
         .collect()
+}
+
+/// The generated `StubTarget` variant a reserved stub's committed disposition
+/// target maps to.
+///
+/// A still-stubbed operation's refusal carries this marker on the wire and in
+/// its audit record, so it is a closed set: a reserved row whose disposition
+/// target is not one of these spellings fails generation instead of widening
+/// what a refusal may say.
+fn stub_target_variant(row: &Row) -> Option<&'static str> {
+    if row.disposition != "stubbed-unimplemented" {
+        return None;
+    }
+    const TARGETS: [(&str, &str); 3] = [
+        ("future work", "FutureWork"),
+        ("reserved", "Reserved"),
+        ("bootstrap-only", "BootstrapOnly"),
+    ];
+    TARGETS
+        .iter()
+        .find(|(target, _)| *target == row.disposition_target)
+        .map(|(_, variant)| *variant)
+}
+
+/// The first declared join field a row's payload does not carry as a
+/// required, non-secret property.
+fn undeclared_join_field(row: &Row) -> Option<&str> {
+    if row.audit.join.is_empty() {
+        return None;
+    }
+    let schema = row.payload.schema.as_ref()?;
+    let properties = schema.get("properties")?.as_object()?;
+    let required: BTreeSet<&str> = schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .map(|names| names.iter().filter_map(serde_json::Value::as_str).collect())
+        .unwrap_or_default();
+    row.audit.join.iter().find_map(|field| {
+        let Some(property) = properties.get(field) else {
+            return Some(field.as_str());
+        };
+        let secret = property
+            .get("writeOnly")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        (!required.contains(field.as_str()) || secret).then_some(field.as_str())
+    })
+}
+
+/// One optional string list as the generated row facet.
+fn optional_str_list(fields: &[String]) -> String {
+    if fields.is_empty() {
+        return "None".to_owned();
+    }
+    format!(
+        "Some(&[{}])",
+        fields
+            .iter()
+            .map(|field| format!("\"{field}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn profile_catalog(rows: &[Row], profile: &str) -> Vec<String> {
@@ -361,8 +430,11 @@ fn generate_catalog(catalog: &Catalog) -> String {
         rows.push_str(&format!("        capabilities: {},\n", row.capabilities));
         rows.push_str(&format!("        disposition: \"{}\",\n", row.disposition));
         rows.push_str(&format!(
-            "        stub_wave: {},\n",
-            optional_str(row.stub_wave.as_deref())
+            "        stub_target: {},\n",
+            match stub_target_variant(row) {
+                Some(variant) => format!("Some(StubTarget::{variant})"),
+                None => "None".to_owned(),
+            }
         ));
         rows.push_str(&format!(
             "        audit_fields: &[{}],\n",
@@ -411,6 +483,10 @@ fn generate_catalog(catalog: &Catalog) -> String {
         rows.push_str(&format!(
             "        payload_required: &[{}],\n",
             payload_names(&row.payload, "required")
+        ));
+        rows.push_str(&format!(
+            "        audit_join: {},\n",
+            optional_str_list(&row.audit.join)
         ));
         rows.push_str("    },\n");
     }
@@ -484,8 +560,9 @@ fn generate_triage(catalog: &Catalog) -> String {
          Every broker operation row has exactly one owner. The committed rows in\n\
          [`policy/broker-operations.json`](./policy/broker-operations.json) are the\n\
          source; this table is one of their views, and the completeness gates\n\
-         compare every other view (wire enum, profile catalogs, W3 inventory,\n\
-         authorization rows, and audit fields) against the same rows.\n\n\
+         compare every other view (the wire enum, the profile catalogs, the\n\
+         broker-operation inventory, the authorization rows, and the audit\n\
+         fields) against the same rows.\n\n\
          - `family` - a resource-family driver declares the operation's handler\n\
            (`OperationDef`) in its own crate.\n\
          - `broker-generic` - the broker itself owns the effect; the operation has\n\

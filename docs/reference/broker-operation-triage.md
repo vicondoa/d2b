@@ -7,8 +7,9 @@ regenerates this file and compares it byte-for-byte. -->
 Every broker operation row has exactly one owner. The committed rows in
 [`policy/broker-operations.json`](./policy/broker-operations.json) are the
 source; this table is one of their views, and the completeness gates
-compare every other view (wire enum, profile catalogs, W3 inventory,
-authorization rows, and audit fields) against the same rows.
+compare every other view (the wire enum, the profile catalogs, the
+broker-operation inventory, the authorization rows, and the audit
+fields) against the same rows.
 
 - `family` - a resource-family driver declares the operation's handler
 (`OperationDef`) in its own crate.
@@ -70,7 +71,7 @@ Counts: 77 family-owned, 9 broker-generic, 2 transport-excluded (87 rows carry a
 | QemuMediaQuit | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker |
 | QemuMediaAttach | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker |
 | QemuMediaDetach | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker |
-| ConsumeLifecycleLease | family | process | d2b-provider-process | host | untriaged-in-w2 | broker-generic row |
+| ConsumeLifecycleLease | family | process | d2b-provider-process | host | untriaged | broker-generic row |
 | PipeWireAudio | family | audio | d2b-provider-audio-service | host | promoted-live | live in production broker |
 | OpenVhostNet | family | device | d2b-provider-device | host | promoted-live | live in production broker |
 | PauseBroker | broker-generic | - | - | host | stubbed-unimplemented | future work |
@@ -107,5 +108,5 @@ Counts: 77 family-owned, 9 broker-generic, 2 transport-excluded (87 rows carry a
 | DiskInit | family | volume | d2b-provider-volume-local | host | promoted-live | live in production broker |
 | SecurityKeyOpenDevice | family | device-security-key | d2b-provider-device-security-key | host | stubbed-unimplemented | future work |
 | SecurityKeyApplyUdevRules | family | device-security-key | d2b-provider-device-security-key | host | stubbed-unimplemented | future work |
-| Invoke | broker-generic | - | - | host | untriaged-in-w2 | broker-generic row |
+| Invoke | broker-generic | - | - | host | untriaged | broker-generic row |
 | PrepareSwtpmDir | broker-generic | - | - | host | compile-time-only | broker `SpawnRunner` side-effect |

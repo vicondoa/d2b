@@ -36,8 +36,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ExportBrokerAudit",
@@ -74,8 +73,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ValidateBundle",
@@ -112,8 +110,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "OpenPidfd",
@@ -150,8 +147,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "OpenPeerPidfdFromAcceptedSocket",
@@ -188,8 +184,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ObserveRunner",
@@ -226,8 +221,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "StartSystemdUnit",
@@ -264,8 +258,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "CheckSystemdUserManager",
@@ -302,8 +295,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ObserveSystemdUnit",
@@ -340,8 +332,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "OpenSystemdUnitPidfd",
@@ -378,8 +369,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "StopSystemdUnit",
@@ -416,8 +406,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "PollChildReaped",
@@ -452,8 +441,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "PrepareRuntimeDir",
@@ -490,8 +478,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "PrepareStateDir",
@@ -529,8 +516,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "SetupMountNamespace",
@@ -567,8 +553,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "CgroupKill",
@@ -605,8 +590,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "SignalRunner",
@@ -643,8 +627,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "DeregisterRunnerPidfd",
@@ -682,8 +665,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "SpawnRunner",
@@ -721,8 +703,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ApplyHostGenerationHandoff",
@@ -758,8 +739,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ApplyNftables",
@@ -795,8 +775,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ApplyNftablesProjection",
@@ -832,8 +811,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ApplyNmUnmanaged",
@@ -869,8 +847,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ApplyRoute",
@@ -906,8 +883,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ApplySysctl",
@@ -943,8 +919,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "BindUnixSocket",
@@ -978,8 +953,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "W5"
+      }
     },
     {
       "operation": "CreateOrReconcileUsersGroups",
@@ -1013,8 +987,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "W3"
+      }
     },
     {
       "operation": "CreateBridge",
@@ -1050,8 +1023,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "DeleteBridge",
@@ -1087,8 +1059,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "CreatePersistentTap",
@@ -1124,8 +1095,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "DeletePersistentTap",
@@ -1161,8 +1131,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "CreateTapFd",
@@ -1198,8 +1167,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "DelegateCgroupV2",
@@ -1235,8 +1203,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "InjectSecretById",
@@ -1270,8 +1237,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "W8"
+      }
     },
     {
       "operation": "LaunchMinijailChild",
@@ -1305,8 +1271,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "W5"
+      }
     },
     {
       "operation": "ModprobeIfAllowed",
@@ -1342,8 +1307,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "OpenCgroupDir",
@@ -1379,8 +1343,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "OpenDevice",
@@ -1416,8 +1379,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "OpenFuse",
@@ -1453,8 +1415,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "OpenHidrawSecurityKey",
@@ -1490,8 +1451,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "OpenKvm",
@@ -1527,8 +1487,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "QemuMediaEnroll",
@@ -1564,8 +1523,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "QemuMediaRefreshRegistry",
@@ -1601,8 +1559,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "QemuMediaBoot",
@@ -1638,8 +1595,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "QemuMediaSystemPowerdown",
@@ -1675,8 +1631,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "QemuMediaQueryStatus",
@@ -1710,8 +1665,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "QemuMediaQuit",
@@ -1747,8 +1701,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "QemuMediaAttach",
@@ -1784,8 +1737,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "QemuMediaDetach",
@@ -1821,8 +1773,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ConsumeLifecycleLease",
@@ -1835,7 +1786,7 @@
       ],
       "w3": false,
       "capabilities": false,
-      "disposition": "untriaged-in-w2",
+      "disposition": "untriaged",
       "dispositionTarget": "broker-generic row",
       "authz": {
         "subject": "lifecycle",
@@ -1858,8 +1809,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "PipeWireAudio",
@@ -1895,8 +1845,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "OpenVhostNet",
@@ -1932,8 +1881,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "PauseBroker",
@@ -1967,8 +1915,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "W4"
+      }
     },
     {
       "operation": "MigrateLegacySwtpmState",
@@ -2004,8 +1951,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ReconcileStorageScope",
@@ -2041,8 +1987,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ValidateLockSpec",
@@ -2078,8 +2023,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "PrepareStoreView",
@@ -2115,8 +2059,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "StoreSync",
@@ -2152,8 +2095,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "StoreVerify",
@@ -2190,8 +2132,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ReadSecretById",
@@ -2225,8 +2166,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "W8"
+      }
     },
     {
       "operation": "ResumeBroker",
@@ -2260,8 +2200,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "W4"
+      }
     },
     {
       "operation": "RotateSecretById",
@@ -2295,8 +2234,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "W8"
+      }
     },
     {
       "operation": "RunHostInstall",
@@ -2332,8 +2270,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "RunMigrate",
@@ -2369,8 +2306,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "RunActivation",
@@ -2406,8 +2342,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "RunGc",
@@ -2443,8 +2378,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "RunKeysRotate",
@@ -2480,8 +2414,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "RunHostKeyTrust",
@@ -2517,8 +2450,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "RunRotateKnownHost",
@@ -2554,8 +2486,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "SetBridgePortFlags",
@@ -2591,8 +2522,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "SetSocketAcl",
@@ -2626,8 +2556,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "W5"
+      }
     },
     {
       "operation": "UpdateHostsFile",
@@ -2663,8 +2592,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "UsbipBind",
@@ -2701,8 +2629,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "UsbipBindFirewallRule",
@@ -2738,8 +2665,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "UsbipProxyReconcile",
@@ -2775,8 +2701,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "UsbipUnbind",
@@ -2812,8 +2737,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "UsbipExplicitBind",
@@ -2850,8 +2774,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "UsbipExplicitFirewallRule",
@@ -2887,8 +2810,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "ResourceActivationAudit",
@@ -2924,8 +2846,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "SeedDnsmasqLease",
@@ -2961,8 +2882,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "BindMountFromHardlinkFarm",
@@ -2998,8 +2918,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "OwnershipMatrixCheck",
@@ -3033,8 +2952,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "P2"
+      }
     },
     {
       "operation": "SshHostKeyPreflight",
@@ -3068,8 +2986,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "P2"
+      }
     },
     {
       "operation": "DiskInit",
@@ -3105,8 +3022,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "SecurityKeyOpenDevice",
@@ -3140,8 +3056,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "security-key-broker"
+      }
     },
     {
       "operation": "SecurityKeyApplyUdevRules",
@@ -3175,8 +3090,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": "security-key-broker"
+      }
     },
     {
       "operation": "Invoke",
@@ -3189,7 +3103,7 @@
       ],
       "w3": false,
       "capabilities": false,
-      "disposition": "untriaged-in-w2",
+      "disposition": "untriaged",
       "dispositionTarget": "broker-generic row",
       "authz": {
         "subject": "operation",
@@ -3217,8 +3131,7 @@
           "properties": {},
           "required": []
         }
-      },
-      "stubWave": null
+      }
     },
     {
       "operation": "PrepareSwtpmDir",
@@ -3254,8 +3167,7 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      },
-      "stubWave": null
+      }
     }
   ]
 }

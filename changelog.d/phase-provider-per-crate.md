@@ -225,9 +225,9 @@
   three-way triage (a family driver, the broker itself, or a transport concern
   the envelope does not carry), the declaring provider crate, the profiles that
   admit it, the authorization facet, and every typed audit record it can emit.
-  The wire's profile catalogs, the `W3BrokerOperation` inventory, the private
-  broker authorization rows, and the typed audit fields are generated views of
-  those rows (`xtask gen-broker-operations`, drift-checked by
+  The wire's profile catalogs, the closed broker-operation inventory, the
+  private broker authorization rows, and the typed audit fields are generated
+  views of those rows (`xtask gen-broker-operations`, drift-checked by
   `//packages/xtask:gen_broker_operations_drift`), and a completeness gate that
   runs with the broker's tests compares every view against the rows and names
   any variant, row, profile, authorization, or audit mismatch.
@@ -243,8 +243,13 @@
   grant covers each refuse with a named code and exactly one audit record, and
   the refusal response names the operation and the code.
 - `docs/reference/broker-operation-triage.md` is the operator view of the
-  triage, generated from the committed rows. The W2 dispositions table it was
-  seeded from is kept as the historical triage input.
+  triage, generated from the committed rows. The historical dispositions table
+  it was seeded from is kept as the triage input.
+- A reserved broker operation now refuses with a closed deferral marker: each
+  still-stubbed row carries one of `future-work`, `reserved`, or
+  `bootstrap-only`, and that value is what the refusal puts in `targetWave` and
+  in its `operation_fields` audit join, in place of the delivery-wave label the
+  dispatcher used to name.
 
 - The Nix closed inventories are generated from the declarations instead of
   being restated beside them. `xtask gen-nix-inventories` emits the standard
