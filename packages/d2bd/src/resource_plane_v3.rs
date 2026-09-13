@@ -46,6 +46,9 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_contracts_zone_session::v3::resource_bundle::{BundleResource, ResourceBundle};
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedStoreViewIntent, intent_id_store_view};
+use d2b_provider_activation_nixos::{
+    ActivationDriverArgs, ActivationDriverEffects, activation_descriptor,
+};
 use d2b_provider_endpoint::{
     EndpointDriverArgs, EndpointDriverEffects, GuestControlProducer, endpoint_descriptor,
 };
@@ -55,6 +58,8 @@ use d2b_provider_process::{
     GuestOwnerIdentitySource, ProcessDriverArgs, ProcessDriverEffects, decode_metadata_owner_ref,
     process_family_descriptors,
 };
+use d2b_provider_telemetry_binding::telemetry_binding_descriptor;
+use d2b_provider_telemetry_service::telemetry_service_descriptor;
 use d2b_provider_volume::{
     VolumeDriverArgs, VolumeDriverEffects, volume_descriptor,
 };
@@ -82,10 +87,7 @@ use d2bd_runtime::target_runtime::DaemonMode;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
 use sha2::{Digest, Sha256};
 
-use crate::activation_driver::{
-    ActivationDriverArgs, ActivationDriverEffects, ActivationDriverFactory,
-    ProductionActivationDriverEffects, activation_spec_decoder,
-};
+use crate::activation_effects::ProductionActivationDriverEffects;
 use crate::binding_effects::ProductionBindingDriverEffects;
 use d2b_provider_credential::{
     CredentialDriverArgs, CredentialDriverEffects, credential_descriptor,
@@ -95,10 +97,6 @@ use crate::endpoint_effects::{
     guest_control_producer, guest_control_purpose,
 };
 use crate::process_effects::ProductionProcessDriverEffects;
-use crate::semantic_binding_resource_runtime::{
-    TELEMETRY_BINDING_TYPE, TELEMETRY_SERVICE_TYPE, TelemetryDriverFactory,
-    telemetry_spec_decoder,
-};
 use crate::volume_effects::ProductionVolumeDriverEffects;
 use d2b_provider_device::{DeviceDriverArgs, device_descriptor};
 use d2b_provider_device_security_key::{SecurityKeyDriverArgs, security_key_descriptors};
@@ -1829,12 +1827,21 @@ impl ResourcePlaneV3 {
             controller_generation: inputs.authority.controller_generation,
             effects: Arc::clone(&inputs.credential_effects),
         }))?;
-        providers.register(Arc::new(ActivationDriverFactory::new(ActivationDriverArgs {
+        // The NixosGeneration type registers through its driver declaration:
+        // the registry serves the type's decoder and factory from it, and the
+        // declaration carries the family's verbs, execution domains,
+        // exportability, reads, and its one declared child creation.
+        providers.register_driver(&activation_descriptor(ActivationDriverArgs {
             zone: inputs.zone.as_str().to_owned(),
             effects: Arc::clone(&inputs.activation_effects),
             verifier: Arc::new(d2b_provider_activation_nixos::FailClosedActivationVerifier),
-        })))?;
-        providers.register(Arc::new(TelemetryDriverFactory::new()))?;
+        }))?;
+        // The telemetry pair registers through its driver declarations: one
+        // per type, each carrying that type's decoder, factory, verbs,
+        // execution domains, exportability, reads, and (for the Binding) the
+        // provider-declared child creations.
+        providers.register_driver(&telemetry_service_descriptor())?;
+        providers.register_driver(&telemetry_binding_descriptor())?;
         // The Network family registers through its own declaration, the two
         // USB types through the USB family's, the two security-key types
         // through the security-key family's, and the Device type (four
@@ -1932,18 +1939,6 @@ impl ResourcePlaneV3 {
     /// wires directly.
     fn decoders(providers: &ProviderDirectory) -> HashMap<ResourceTypeName, Arc<dyn SpecDecoder>> {
         let mut decoders = providers.decoders();
-        decoders.insert(
-            ResourceTypeName::new(crate::activation_driver::ACTIVATION_TYPE_NAME),
-            activation_spec_decoder(),
-        );
-        decoders.insert(
-            ResourceTypeName::new(TELEMETRY_SERVICE_TYPE),
-            telemetry_spec_decoder(),
-        );
-        decoders.insert(
-            ResourceTypeName::new(TELEMETRY_BINDING_TYPE),
-            telemetry_spec_decoder(),
-        );
 
         // U12: the four runtime-Provider Guests.
         for resource_type in [crate::guest_driver::GUEST_TYPE_NAME] {
@@ -2391,7 +2386,7 @@ impl ResourcePlaneV3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::activation_driver::{ActivationDriverEffects, HostHandoffResult};
+    use d2b_provider_activation_nixos::HostHandoffResult;
     use d2b_contracts_broker::host_generation::HostGenerationHandoffIntent;
     use d2b_contracts_resource::v3::ResourceName;
     use d2b_contracts_zone_session::v3::resource_bundle::BundleResourceMetadata;

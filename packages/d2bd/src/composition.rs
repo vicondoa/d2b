@@ -411,7 +411,6 @@ pub mod provider_registry;
 pub mod provider_shutdown;
 pub mod resource_runtime;
 mod security_key_effect_port;
-mod semantic_binding_resource_runtime;
 pub mod tpm_effect_port;
 pub mod usbip_production;
 

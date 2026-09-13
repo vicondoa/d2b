@@ -70,6 +70,8 @@ members = [
     "packages/d2b-broker",
     "packages/d2b-guest-shell-runner",
     "packages/d2b-provider-endpoint",
+    "packages/d2b-provider-telemetry-service",
+    "packages/d2b-provider-telemetry-binding",
     "packages/d2b-provider-volume",
     "packages/d2b-provider-volume-binding",
     "packages/d2b-provider-wayland-policy",

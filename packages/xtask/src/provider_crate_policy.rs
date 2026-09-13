@@ -592,18 +592,8 @@ struct SharedDriverExemption {
 
 const SHARED_DRIVER_EXEMPTIONS: &[SharedDriverExemption] = &[
     SharedDriverExemption {
-        module: "packages/d2bd/src/activation_driver.rs",
-        family: "activation-nixos",
-        retires_with: "the family moves into its own provider crate",
-    },
-    SharedDriverExemption {
         module: "packages/d2bd/src/guest_driver.rs",
         family: "guest",
-        retires_with: "the family moves into its own provider crate",
-    },
-    SharedDriverExemption {
-        module: "packages/d2bd/src/semantic_binding_resource_runtime.rs",
-        family: "telemetry",
         retires_with: "the family moves into its own provider crate",
     },
 ];
@@ -1707,20 +1697,22 @@ mod tests {
         let d2bd = fixture.root.join("packages/d2bd/src");
         fs::create_dir_all(&d2bd).unwrap();
         fs::write(
-            d2bd.join("guest_driver.rs"),
-            "impl ResourceDriver for GuestDriver {}\n",
+            d2bd.join("volume_driver.rs"),
+            "impl ResourceDriver for VolumeDriver {}\n",
         )
         .unwrap();
         let error = check_shared_driver_placements(&fixture.root)
             .expect_err("an exemption the tree no longer needs is refused");
         assert!(error.contains("stale-shared-driver-exemption"), "{error}");
+        // The fixture declares one module and no other, so every entry the
+        // ratchet still holds is stale and must be named.
+        let stale = SHARED_DRIVER_EXEMPTIONS
+            .first()
+            .expect("the ratchet holds an entry for this case to mean anything");
         assert!(
-            error.contains("packages/d2bd/src/activation_driver.rs"),
-            "{error}"
+            error.contains(&format!("\"module\":\"{}\"", stale.module)),
+            "the stale exemption must be named: {error}"
         );
-        if error.contains("packages/d2bd/src/guest_driver.rs") {
-            panic!("the module that still declares a driver must not be stale: {error}");
-        }
     }
 
     /// The exemption list matches the committed tree exactly: every entry

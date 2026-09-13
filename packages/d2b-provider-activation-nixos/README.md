@@ -31,6 +31,14 @@ mode, and optional prior-generation reference.
 
 ## Controllers / services / workers / binaries
 
+The crate also owns the `NixosGeneration` resource driver: the spec decoder,
+the driver factory, and the declaration
+(`activation_descriptor` -> `DriverDescriptor`) the v3 resource plane
+registers the type by, with the type's verbs, execution domains,
+exportability, reads, and the one child creation the driver performs - the
+owned activation-runner `EphemeralProcess`. The production effect
+implementation stays in the daemon behind the driver's effect port.
+
 `ActivationController` is the pure reconcile policy, the activation diagnostics
 keep host-generation handoff checks with this owner, and `ActivationRunner` is
 the typed target-local helper boundary. The existing activation helper accepts

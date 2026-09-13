@@ -72,6 +72,8 @@ test_suite(
         "//packages/d2bd-runtime:all-tests",
         "//packages/xtask:all-tests",
         "//packages/d2b-provider-endpoint:all-tests",
+        "//packages/d2b-provider-telemetry-service:all-tests",
+        "//packages/d2b-provider-telemetry-binding:all-tests",
         "//packages/d2b-provider-volume:all-tests",
         "//packages/d2b-provider-volume-binding:all-tests",
         "//packages/d2b-provider-wayland-policy:all-tests",
