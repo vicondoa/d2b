@@ -1,8 +1,9 @@
 # `d2b-provider-operation`
 
-This is the crate root for the `Operation` resource type. It owns the type's
-driver, its spec decoder, and the driver declaration the v3 resource plane
-registers the type by.
+This is the crate root for the `Operation` resource type. It owns the type's identity
+and the driver declaration the v3 resource plane registers the type by; the
+driver itself, its spec decoder, and its factory are the shared declaration-only
+metadata driver of `d2b-resource-runtime`.
 
 `Operation` is a broker operation row: payload schema, authority profile, audit facet, and the handler reference the generic envelope dispatches. This unit declares the type and ships the driver shell; the type's rows materialize in the policy-rows unit.
 
@@ -28,23 +29,24 @@ declaration carries `exportable: false`.
 
 ## Controllers / services / workers / binaries
 
-The crate ships one driver factory, not a standalone process. The driver
-serves `Operation` rows through the `ResourceDriver` verbs: `validate` decodes the
+The crate ships the type's declaration, not a standalone process. The shared
+driver serves `Operation` rows through the `ResourceDriver` verbs: `validate` decodes the
 stored spec envelope and admits the JSON spec object every core row stores,
 `recover` adopts the converged row, `reconcile` converges it as metadata,
 `finalize` drains owned children, and `delete` retires the row.
 
-`OperationDriverFactory` is the registration surface; `operation_descriptor` carries
-it with the decoder, the type's verbs, execution domains, reads, and the
-`BUILTIN` allowed-source mask the plane's presence obligation reads.
+The registration surface is `operation_descriptor`: it declares the type through the shared
+declaration of the declaration-only metadata types, which carries the decoder,
+the type's verbs, execution domains, reads, and the `BUILTIN` allowed-source
+mask the plane's presence obligation reads.
 
 ## Placement and dependencies
 
 `Operation` names no placement anchor, so a `Operation` row is reconciled on its
 containing Zone's Host.
 
-The crate depends only on `d2b-contracts-resource`, `d2b-resource-runtime`,
-and `d2b-resource-types`.
+The crate depends only on `d2b-resource-types`, which carries the type's
+declaration, and on `tokio` for its registration test.
 
 ## RBAC requirements
 
@@ -76,8 +78,8 @@ daemon logs and what tests assert.
 cargo test -p d2b-provider-operation
 ```
 
-The unit tests drive validate, recover, reconcile, finalize, and delete over
-a scripted manager; the `registration` suite proves the declaration registers
-the type through the provider registry with its decoder and factory, that a
-duplicate registration is refused, and that the declared mask cannot arrive
-after the plane opens.
+The `registration` suite proves the declaration registers the type through the
+provider registry with its decoder and factory, that a duplicate registration is
+refused, and that the declared mask cannot arrive after the plane opens. The
+driver behavior itself is covered once, by the shared driver's own tests in
+`d2b-resource-runtime`.
