@@ -169,6 +169,14 @@ generated_artifact_check(
 # rewrites. `//:packages_workspace_sources` still misses `d2b-resource-runtime`
 # and the test-controller manifest, so both are named here beside it until the
 # aggregate carries them.
+#
+# The generator shells out to `cargo metadata --locked --offline`, so the run
+# also needs the invoking environment: cargo on `PATH`, and the caller's
+# `CARGO_HOME`/`RUSTUP_HOME` caches warm enough to resolve the locked git
+# dependencies offline. A sandboxed test with an isolated home fails before it
+# compares anything. The local profile supplies `PATH`; under the remote
+# profile the fixed `--test_env=PATH` wins, so run the gate through a profile
+# that carries the toolchain.
 generated_artifact_check(
     name = "gen_package_policy_inputs_drift",
     command = "gen-package-policy-inputs",
@@ -180,6 +188,7 @@ generated_artifact_check(
         "//packages/d2b-provider-test-controller:Cargo.toml",
         "//packages/d2b-resource-runtime:cargo_workspace_sources",
     ],
+    env_inherit = ["HOME", "CARGO_HOME", "RUSTUP_HOME", "PATH"],
 )
 
 generated_artifact_generator(
