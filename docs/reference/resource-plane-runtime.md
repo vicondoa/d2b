@@ -1,28 +1,29 @@
 # Zone resource-plane runtime
 
 `d2bd` owns one [`ZoneResourceRuntime`](../../packages/d2bd/src/resource_runtime.rs)
-for each configured Zone. A runtime is opened only from the broker's
-`OpenZoneStore` response for the opaque `zone-store-<zone>` identifier. The
-response must contain the matching store identity and exactly one
-close-on-exec database descriptor; callers cannot provide a filesystem path.
+for each configured Zone. U14 removed the durable Zone store and the broker's
+`OpenZoneStore` descriptor handover: a runtime opens from the verified
+bundle's Zone authority and signed storage row alone, and callers cannot
+provide a filesystem path.
 
 ## Startup and readiness
 
-Opening a runtime consumes the descriptor with
-`RedbResourceStore::provision_owned` or `RedbResourceStore::open_owned`,
-rehydrates durable metadata, reconstructs the authority index, binds the
-native Resource API, and starts the fixed system-core process when the
-committed policy snapshot is available. The public readiness barrier requires
-all of these conditions:
+Opening a runtime validates the bundle-bound Zone authority identity,
+installs the bootstrap policy, and builds the Zone-scoped authorizer and
+authority recovery. The native Resource API, the fixed system-core process,
+and the committed policy projection are built when the composition publishes
+the Zone's plane (`ZoneResourceRuntime::attach_v3_planes`, then
+`ZoneResourceRuntime::activate_published_bundle`). The public readiness
+barrier requires all of these conditions:
 
-- the store is open and its identity is valid;
+- the bundle-bound Zone authority identity is valid;
 - the Resource API and local ComponentSession registration are ready;
 - the trusted Provider path has been configured;
 - durable Host-global authority recovery is complete; and
 - system-core and its mandatory Host/User handlers report `Ready`.
 
 `ZoneRuntimeReadiness::is_ready` and `ZoneResourceRuntime::require_ready`
-enforce this conjunction. Opening a store deliberately leaves
+enforce this conjunction. Opening a runtime deliberately leaves
 `provider_path_ready` false because Provider catalog configuration is an
 independent trusted-bundle step. A Zone is not published as ready before that
 step completes.

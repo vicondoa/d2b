@@ -44,7 +44,7 @@ Entra egress from the Host or controller.
 `user-agent` and `guest-agent` are accepted only under a Guest. `host-system`
 is rejected with `credential placement mismatch`. An exact `identityGuestRef`,
 `loginEndpointRef`, Endpoint generation, and `consumerRef` are required. The
-Endpoint has purpose `credential-entra.d2bus.org/entra-login-token`, canonical
+Endpoint has purpose `credential-entra-login`, canonical
 `provider` visibility, and exact orchestration-plus-consumer policy.
 
 ## RBAC requirements

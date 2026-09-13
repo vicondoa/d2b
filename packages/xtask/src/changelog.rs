@@ -10,8 +10,17 @@
 //! idempotent (with no fragments present the changelog is left byte-identical),
 //! and fail-closed: a fragment that does not parse aborts the run with the
 //! offending file and line instead of dropping the entry on the floor.
+//!
+//! A run resolves its own paths through symlinks before it stages anything:
+//! the Bazel entry point reaches the checkout through a symlink forest, where
+//! renaming the folded changelog onto `CHANGELOG.md` replaces the link in the
+//! execroot instead of writing the changelog (issue #519).
 
-use std::{fmt, fs, io::Write, path::Path};
+use std::{
+    fmt, fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 /// Directory holding unfolded fragments, relative to the repository root.
 pub const FRAGMENT_DIR: &str = "changelog.d";
@@ -19,10 +28,11 @@ pub const FRAGMENT_DIR: &str = "changelog.d";
 /// Changelog the fragments fold into, relative to the repository root.
 pub const CHANGELOG_FILE: &str = "CHANGELOG.md";
 
-/// Transaction directory for an in-flight fold, relative to the repository
-/// root. It lives on the same filesystem as `CHANGELOG.md` and `changelog.d/`
-/// so every rename into and out of it is atomic. A fixed (non-PID) name lets a
-/// later invocation discover an interrupted transaction and recover it.
+/// Transaction directory for an in-flight fold, created in the resolved
+/// repository root - the real directory holding `CHANGELOG.md` and
+/// `changelog.d/` - so every rename into and out of it is atomic and stays on
+/// one filesystem. A fixed (non-PID) name lets a later invocation discover an
+/// interrupted transaction and recover it.
 const TXN_DIR: &str = ".changelog-fold-txn";
 
 /// Journal file inside `TXN_DIR` recording the durable transaction state.
@@ -371,14 +381,111 @@ pub struct Outcome {
     pub sections: Vec<(String, usize)>,
 }
 
-/// Load every fragment in `<repo_root>/changelog.d`, in file-name order.
-fn load_fragments(repo_root: &Path) -> Result<Vec<Fragment>, FoldError> {
-    let dir = repo_root.join(FRAGMENT_DIR);
+/// The repository tree a fold reads and writes, resolved through symlinks once.
+///
+/// The Bazel entry point (`bazel run --config=local //packages/xtask:xtask`)
+/// reaches the checkout through a symlink forest: `CHANGELOG.md` and
+/// `changelog.d/` under the execroot are links into the real workspace. Reads
+/// follow those links, but renaming the folded changelog *onto* `CHANGELOG.md`
+/// replaces the link and leaves the real file untouched, so the fold would
+/// consume every fragment and write nowhere (issue #519). Resolving both paths
+/// up front - and deriving the transaction directory from the resolved root -
+/// makes the promotion rename into the real directory instead.
+struct FoldTree {
+    /// Real directory holding the changelog and the transaction directory.
+    root: PathBuf,
+    /// Real path of the changelog; the promotion rename target.
+    changelog: PathBuf,
+    /// Real directory holding the fragments.
+    fragment_dir: PathBuf,
+    /// Transaction directory, in `root`, so recovery looks for it exactly
+    /// where the fold stages it.
+    txn: PathBuf,
+}
+
+impl FoldTree {
+    /// Resolve `repo_root`'s changelog and fragment directory, refusing any
+    /// result that cannot be the target of a fold.
+    ///
+    /// The resolved changelog defines the repository root - the real directory
+    /// the fold writes into - and the fragment directory must live inside it.
+    /// A changelog that does not resolve (missing, dangling link) or that is
+    /// not a regular file, and a fragment directory that resolves into another
+    /// tree, are refused with no fragment reserved, so a fold never consumes
+    /// entries it cannot fold.
+    fn resolve(repo_root: &Path) -> Result<Self, FoldError> {
+        let changelog = fs::canonicalize(repo_root.join(CHANGELOG_FILE))
+            .map_err(|err| FoldError::single(format!("{CHANGELOG_FILE}: cannot resolve: {err}")))?;
+        let metadata = fs::metadata(&changelog)
+            .map_err(|err| FoldError::single(format!("{CHANGELOG_FILE}: cannot inspect: {err}")))?;
+        if !metadata.is_file() {
+            return Err(FoldError::single(format!(
+                "{CHANGELOG_FILE}: {} is not a regular file",
+                changelog.display()
+            )));
+        }
+        let root = changelog
+            .parent()
+            .ok_or_else(|| {
+                FoldError::single(format!(
+                    "{CHANGELOG_FILE}: {} has no parent directory",
+                    changelog.display()
+                ))
+            })?
+            .to_path_buf();
+        // The transaction is staged in the resolved root, so every rename into
+        // and out of it stays on one filesystem - and recovery, which resolves
+        // the same root, looks for it exactly there.
+        let txn = root.join(TXN_DIR);
+
+        let fragment_dir = match fs::canonicalize(repo_root.join(FRAGMENT_DIR)) {
+            Ok(dir) if dir.starts_with(&root) => dir,
+            Ok(dir) => {
+                return Err(FoldError::single(format!(
+                    "{FRAGMENT_DIR}: {} resolves outside the repository root {}; refusing to consume fragments the fold cannot fold",
+                    dir.display(),
+                    root.display()
+                )));
+            }
+            // An absent fragment directory is no fragments at all, the same
+            // no-op a repository without `changelog.d/` has always been.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => root.join(FRAGMENT_DIR),
+            Err(err) => {
+                return Err(FoldError::single(format!(
+                    "{FRAGMENT_DIR}: cannot resolve: {err}"
+                )));
+            }
+        };
+
+        Ok(Self {
+            root,
+            changelog,
+            fragment_dir,
+            txn,
+        })
+    }
+
+    /// `repo_root`'s paths exactly as given, without resolving symlinks.
+    ///
+    /// The read-only [`Mode::Check`] run reads through links and never mutates,
+    /// so it needs no resolution and grows no refusal of its own.
+    fn unresolved(repo_root: &Path) -> Self {
+        Self {
+            root: repo_root.to_path_buf(),
+            changelog: repo_root.join(CHANGELOG_FILE),
+            fragment_dir: repo_root.join(FRAGMENT_DIR),
+            txn: repo_root.join(TXN_DIR),
+        }
+    }
+}
+
+/// Load every fragment in `dir`, in file-name order.
+fn load_fragments(dir: &Path) -> Result<Vec<Fragment>, FoldError> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
 
-    let entries = fs::read_dir(&dir).map_err(|err| {
+    let entries = fs::read_dir(dir).map_err(|err| {
         FoldError::single(format!("{FRAGMENT_DIR}: cannot read directory: {err}"))
     })?;
 
@@ -439,6 +546,13 @@ fn load_fragments(repo_root: &Path) -> Result<Vec<Fragment>, FoldError> {
 
 /// Fold every fragment under `repo_root` into the repository changelog.
 ///
+/// The mutating mode resolves the changelog and the fragment directory through
+/// any symlinks once, before the transaction stages anything, so the fold
+/// writes the real files however the entry point reached them (issue #519). A
+/// tree whose changelog and fragments do not resolve into one repository root
+/// is refused with nothing consumed. The read-only mode reads through links
+/// exactly as given.
+///
 /// With no fragments present nothing is read, written, or deleted, so a second
 /// run is a no-op.
 pub fn fold_repo(repo_root: &Path, mode: Mode) -> Result<Outcome, FoldError> {
@@ -447,11 +561,16 @@ pub fn fold_repo(repo_root: &Path, mode: Mode) -> Result<Outcome, FoldError> {
     // restores its reserved fragments and a committed one is finished. Recovery
     // mutates the tree, so it only runs in the mutating mode; `--check` stays
     // read-only.
-    if mode == Mode::Apply {
-        recover(repo_root)?;
-    }
+    let tree = match mode {
+        Mode::Apply => {
+            let tree = FoldTree::resolve(repo_root)?;
+            recover(&tree)?;
+            tree
+        }
+        Mode::Check => FoldTree::unresolved(repo_root),
+    };
 
-    let fragments = load_fragments(repo_root)?;
+    let fragments = load_fragments(&tree.fragment_dir)?;
     if fragments.is_empty() {
         return Ok(Outcome {
             folded: Vec::new(),
@@ -459,8 +578,7 @@ pub fn fold_repo(repo_root: &Path, mode: Mode) -> Result<Outcome, FoldError> {
         });
     }
 
-    let changelog_path = repo_root.join(CHANGELOG_FILE);
-    let changelog = fs::read_to_string(&changelog_path)
+    let changelog = fs::read_to_string(&tree.changelog)
         .map_err(|err| FoldError::single(format!("{CHANGELOG_FILE}: cannot read: {err}")))?;
     let folded = fold_unreleased(&changelog, &fragments)?;
 
@@ -489,13 +607,7 @@ pub fn fold_repo(repo_root: &Path, mode: Mode) -> Result<Outcome, FoldError> {
         return Ok(outcome);
     }
 
-    apply_fold(
-        repo_root,
-        &changelog_path,
-        &changelog,
-        &folded,
-        &outcome.folded,
-    )?;
+    apply_fold(&tree, &changelog, &folded, &outcome.folded)?;
 
     Ok(outcome)
 }
@@ -629,38 +741,40 @@ fn read_journal(txn: &Path) -> Option<Journal> {
 /// the `COMMITTED` journal last (so a re-run still classifies as forward until
 /// nothing restorable remains) and every unlink tolerates an already-absent
 /// target.
-fn recover(repo_root: &Path) -> Result<(), FoldError> {
+///
+/// `tree` carries the same resolved paths the fold writes with, so recovery
+/// looks for the transaction exactly where the fold staged it - in the real
+/// directory, however the entry point reached the tree.
+fn recover(tree: &FoldTree) -> Result<(), FoldError> {
     recover_hooked(
-        repo_root,
+        tree,
         #[cfg(test)]
         &mut |_| HookOutcome::Continue,
     )
 }
 
 fn recover_hooked(
-    repo_root: &Path,
+    tree: &FoldTree,
     #[cfg(test)] hook: &mut dyn FnMut(RecoverStage) -> HookOutcome,
 ) -> Result<(), FoldError> {
-    let txn = repo_root.join(TXN_DIR);
+    let txn = &tree.txn;
     if !txn.exists() {
         return Ok(());
     }
 
-    let committed = read_journal(&txn)
+    let committed = read_journal(txn)
         .map(|journal| journal.state == STATE_COMMITTED)
         .unwrap_or(false);
 
     if committed {
         finish_forward(
-            repo_root,
-            &txn,
+            tree,
             #[cfg(test)]
             hook,
         )
     } else {
         roll_back(
-            repo_root,
-            &txn,
+            tree,
             #[cfg(test)]
             hook,
         )
@@ -683,10 +797,10 @@ fn recover_hooked(
 /// and the next recovery would roll a promoted fold back and re-fold it -
 /// duplicating or losing entries.
 fn finish_forward(
-    repo_root: &Path,
-    txn: &Path,
+    tree: &FoldTree,
     #[cfg(test)] hook: &mut dyn FnMut(RecoverStage) -> HookOutcome,
 ) -> Result<(), FoldError> {
+    let txn = &tree.txn;
     macro_rules! crash_if_hooked {
         ($stage:expr) => {
             #[cfg(test)]
@@ -743,7 +857,7 @@ fn finish_forward(
             "{TXN_DIR}: cannot finish committed fold recovery: {err}"
         ))
     })?;
-    sync_dir(repo_root).map_err(|err| {
+    sync_dir(&tree.root).map_err(|err| {
         FoldError::single(format!(
             "{TXN_DIR}: cannot durably remove transaction: {err}"
         ))
@@ -756,10 +870,10 @@ fn finish_forward(
 /// consumed so a crash mid-rollback stays recoverable on the next pass. Errors
 /// are surfaced, never swallowed.
 fn roll_back(
-    repo_root: &Path,
-    txn: &Path,
+    tree: &FoldTree,
     #[cfg(test)] hook: &mut dyn FnMut(RecoverStage) -> HookOutcome,
 ) -> Result<(), FoldError> {
+    let txn = &tree.txn;
     macro_rules! crash_if_hooked {
         ($stage:expr) => {
             #[cfg(test)]
@@ -771,7 +885,7 @@ fn roll_back(
         };
     }
 
-    let fragment_dir = repo_root.join(FRAGMENT_DIR);
+    let fragment_dir = &tree.fragment_dir;
     let reserved_dir = txn.join(TXN_RESERVED);
     if reserved_dir.exists() {
         let entries = fs::read_dir(&reserved_dir).map_err(|err| {
@@ -802,16 +916,15 @@ fn roll_back(
     crash_if_hooked!(RecoverStage::RollbackBeforeBackup);
     let backup = txn.join(TXN_BACKUP);
     if backup.exists() {
-        let changelog_path = repo_root.join(CHANGELOG_FILE);
         // Renaming the backup over the changelog is atomic and, by removing the
         // backup, makes the restore idempotent: a re-run sees no backup and
         // leaves the already-restored changelog alone.
-        fs::rename(&backup, &changelog_path).map_err(|err| {
+        fs::rename(&backup, &tree.changelog).map_err(|err| {
             FoldError::single(format!(
                 "{CHANGELOG_FILE}: cannot restore from backup: {err}"
             ))
         })?;
-        sync_dir(repo_root).map_err(|err| {
+        sync_dir(&tree.root).map_err(|err| {
             FoldError::single(format!(
                 "{CHANGELOG_FILE}: cannot durably restore backup: {err}"
             ))
@@ -824,7 +937,7 @@ fn roll_back(
             "{TXN_DIR}: cannot remove rolled-back transaction: {err}"
         ))
     })?;
-    sync_dir(repo_root).map_err(|err| {
+    sync_dir(&tree.root).map_err(|err| {
         FoldError::single(format!(
             "{TXN_DIR}: cannot durably remove transaction: {err}"
         ))
@@ -834,14 +947,18 @@ fn roll_back(
 /// Run inline recovery after a mid-fold failure, folding any recovery failure
 /// into the primary error so a failed recovery is surfaced rather than
 /// silently discarded.
-fn recover_and_chain(repo_root: &Path, primary: FoldError) -> FoldError {
-    match recover(repo_root) {
+fn recover_and_chain(tree: &FoldTree, primary: FoldError) -> FoldError {
+    match recover(tree) {
         Ok(()) => primary,
         Err(recovery) => primary.chained(recovery),
     }
 }
 
 /// Commit a computed fold to disk as a crash-recoverable transaction.
+///
+/// Every step runs against `tree`'s resolved paths, so a fold reached through
+/// symlinks writes the real changelog, reserves the real fragments, and stages
+/// its transaction beside them.
 ///
 /// The changelog rewrite and the fragment removals are made all-or-nothing,
 /// and unlike a plain staging directory the transaction survives an abrupt
@@ -857,21 +974,20 @@ fn recover_and_chain(repo_root: &Path, primary: FoldError) -> FoldError {
 /// 2. **Reserve.** Move each consumed fragment into `TXN_DIR/reserved/`,
 ///    fsyncing the directories after each move. A crash here recovers as a
 ///    rollback: the reserved fragments return and the changelog is untouched.
-/// 3. **Commit.** Promote the staged changelog over `CHANGELOG.md` with one
-///    atomic rename, then fsync a `COMMITTED` journal. The journal write is the
-///    linearization point: a crash before it rolls back (restoring the original
-///    changelog from the backup); a crash after it rolls forward.
+/// 3. **Commit.** Promote the staged changelog over the resolved `CHANGELOG.md`
+///    with one atomic rename, then fsync a `COMMITTED` journal. The journal
+///    write is the linearization point: a crash before it rolls back
+///    (restoring the original changelog from the backup); a crash after it
+///    rolls forward.
 /// 4. **Cleanup.** Remove `TXN_DIR`. A crash here is finished by recovery.
 fn apply_fold(
-    repo_root: &Path,
-    changelog_path: &Path,
+    tree: &FoldTree,
     original: &str,
     folded: &str,
     folded_names: &[String],
 ) -> Result<(), FoldError> {
     apply_fold_hooked(
-        repo_root,
-        changelog_path,
+        tree,
         original,
         folded,
         folded_names,
@@ -881,8 +997,7 @@ fn apply_fold(
 }
 
 fn apply_fold_hooked(
-    repo_root: &Path,
-    changelog_path: &Path,
+    tree: &FoldTree,
     original: &str,
     folded: &str,
     folded_names: &[String],
@@ -899,16 +1014,16 @@ fn apply_fold_hooked(
             }
         };
     }
-    // `original`, `changelog_path`, and (in non-test builds) the hook are all
-    // consumed below; nothing to silence.
+    // `original` and (in non-test builds) the hook are consumed below; nothing
+    // to silence.
 
-    let fragment_dir = repo_root.join(FRAGMENT_DIR);
-    let txn = repo_root.join(TXN_DIR);
+    let fragment_dir = &tree.fragment_dir;
+    let txn = &tree.txn;
 
     // Any leftover transaction (from an earlier crash) is resolved before a new
     // one begins, so two transactions never coexist.
     if txn.exists() {
-        recover(repo_root)?;
+        recover(tree)?;
     }
 
     // --- Prepare -----------------------------------------------------------
@@ -920,7 +1035,7 @@ fn apply_fold_hooked(
                 "{TXN_DIR}: cannot create transaction directory: {err}"
             ))
         })?;
-        sync_dir(repo_root).map_err(|err| {
+        sync_dir(&tree.root).map_err(|err| {
             FoldError::single(format!(
                 "{TXN_DIR}: cannot durably create transaction: {err}"
             ))
@@ -938,13 +1053,13 @@ fn apply_fold_hooked(
         fs::create_dir(txn.join(TXN_RESERVED)).map_err(|err| {
             FoldError::single(format!("{TXN_DIR}/{TXN_RESERVED}: cannot create: {err}"))
         })?;
-        write_journal(&txn, STATE_PREPARED).map_err(|err| {
+        write_journal(txn, STATE_PREPARED).map_err(|err| {
             FoldError::single(format!("{TXN_DIR}/{TXN_JOURNAL}: cannot write: {err}"))
         })?;
         Ok(())
     };
     if let Err(err) = prepare() {
-        return Err(recover_and_chain(repo_root, err));
+        return Err(recover_and_chain(tree, err));
     }
     crash_if_hooked!(FoldStage::AfterPrepare);
 
@@ -959,13 +1074,13 @@ fn apply_fold_hooked(
             let err = FoldError::single(format!(
                 "{FRAGMENT_DIR}/{name}: cannot reserve for removal: {err}"
             ));
-            return Err(recover_and_chain(repo_root, err));
+            return Err(recover_and_chain(tree, err));
         }
-        if let Err(err) = sync_dir(&fragment_dir).and_then(|()| sync_dir(&txn.join(TXN_RESERVED))) {
+        if let Err(err) = sync_dir(fragment_dir).and_then(|()| sync_dir(&txn.join(TXN_RESERVED))) {
             let err = FoldError::single(format!(
                 "{FRAGMENT_DIR}/{name}: cannot durably reserve: {err}"
             ));
-            return Err(recover_and_chain(repo_root, err));
+            return Err(recover_and_chain(tree, err));
         }
         crash_if_hooked!(FoldStage::AfterReserve(_index));
     }
@@ -974,19 +1089,19 @@ fn apply_fold_hooked(
     // --- Commit ------------------------------------------------------------
     // The atomic rename is the only moment CHANGELOG.md changes; the fsynced
     // COMMITTED journal that follows is the transaction's linearization point.
-    if let Err(err) = fs::rename(txn.join(TXN_STAGED), changelog_path) {
+    if let Err(err) = fs::rename(txn.join(TXN_STAGED), &tree.changelog) {
         let err = FoldError::single(format!("{CHANGELOG_FILE}: cannot promote rewrite: {err}"));
-        return Err(recover_and_chain(repo_root, err));
+        return Err(recover_and_chain(tree, err));
     }
-    if let Err(err) = sync_dir(repo_root) {
+    if let Err(err) = sync_dir(&tree.root) {
         let err = FoldError::single(format!("{CHANGELOG_FILE}: cannot durably promote: {err}"));
-        return Err(recover_and_chain(repo_root, err));
+        return Err(recover_and_chain(tree, err));
     }
     // A crash here - promotion durable, COMMITTED not yet written - must roll
     // back on recovery, undoing the visible promotion, because the journal
     // write below is the linearization point.
     crash_if_hooked!(FoldStage::AfterPromoteBeforeCommit);
-    if let Err(err) = write_journal(&txn, STATE_COMMITTED) {
+    if let Err(err) = write_journal(txn, STATE_COMMITTED) {
         // The promotion is already durable but the commit marker is not. Rather
         // than risk a rollback that would undo a visible changelog change,
         // surface the failure; a re-run's recovery sees a non-committed journal
@@ -994,14 +1109,13 @@ fn apply_fold_hooked(
         let err = FoldError::single(format!(
             "{TXN_DIR}/{TXN_JOURNAL}: cannot commit transaction: {err}"
         ));
-        return Err(recover_and_chain(repo_root, err));
+        return Err(recover_and_chain(tree, err));
     }
     crash_if_hooked!(FoldStage::AfterCommit);
 
     // --- Cleanup -----------------------------------------------------------
     finish_forward(
-        repo_root,
-        &txn,
+        tree,
         #[cfg(test)]
         &mut |_| HookOutcome::Continue,
     )
@@ -1382,6 +1496,12 @@ mod tests {
             names.sort();
             names
         }
+
+        /// The fold's resolved tree for this fixture, which has no symlinks of
+        /// its own, so the resolved paths are the fixture's paths.
+        fn tree(&self) -> FoldTree {
+            FoldTree::resolve(&self.root).expect("resolve the fixture tree")
+        }
     }
 
     impl Drop for TempRepo {
@@ -1400,7 +1520,8 @@ mod tests {
         let repo = TempRepo::new("non-md");
         repo.write_fragment("valid.md", "### Added\n\n- ok\n");
         repo.write_fragment("notes.txt", "loose text file\n");
-        let err = load_fragments(&repo.root).expect_err("non-.md entry rejected");
+        let err =
+            load_fragments(&repo.root.join(FRAGMENT_DIR)).expect_err("non-.md entry rejected");
         assert!(
             err.reasons()
                 .iter()
@@ -1419,7 +1540,7 @@ mod tests {
             repo.root.join(FRAGMENT_DIR).join("link.md"),
         )
         .expect("create symlink");
-        let err = load_fragments(&repo.root).expect_err("symlink rejected");
+        let err = load_fragments(&repo.root.join(FRAGMENT_DIR)).expect_err("symlink rejected");
         assert!(
             err.reasons()
                 .iter()
@@ -1436,7 +1557,8 @@ mod tests {
             [0xffu8, 0xfe, 0x00, 0x41],
         )
         .expect("write non-utf8 bytes");
-        let err = load_fragments(&repo.root).expect_err("invalid utf-8 rejected");
+        let err =
+            load_fragments(&repo.root.join(FRAGMENT_DIR)).expect_err("invalid utf-8 rejected");
         assert!(
             err.reasons()
                 .iter()
@@ -1450,7 +1572,7 @@ mod tests {
         let repo = TempRepo::new("readme");
         repo.write_fragment(FRAGMENT_README, "not a fragment, just docs\n");
         repo.write_fragment("change.md", "### Added\n\n- ok\n");
-        let fragments = load_fragments(&repo.root).expect("valid load");
+        let fragments = load_fragments(&repo.root.join(FRAGMENT_DIR)).expect("valid load");
         assert_eq!(fragments.len(), 1);
         assert_eq!(fragments[0].name, "change.md");
     }
@@ -1546,10 +1668,179 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fold_repo_writes_through_a_symlinked_changelog() {
+        // `bazel run` reaches the checkout through a symlink forest: the
+        // execroot's `CHANGELOG.md` is a link into the real workspace, so a
+        // promotion that renames onto it replaces the link and leaves the
+        // changelog untouched while every fragment is consumed (issue #519).
+        let repo = TempRepo::new("changelog-symlink");
+        let workspace = repo.root.join("workspace");
+        fs::create_dir_all(workspace.join(FRAGMENT_DIR)).expect("create workspace changelog.d");
+        fs::write(workspace.join(CHANGELOG_FILE), CHANGELOG).expect("write workspace changelog");
+        fs::write(
+            workspace.join(FRAGMENT_DIR).join("feature-a.md"),
+            "### Added\n\n- from a\n",
+        )
+        .expect("write workspace fragment");
+
+        let execroot = repo.root.join("execroot");
+        fs::create_dir(&execroot).expect("create execroot");
+        let changelog_link = execroot.join(CHANGELOG_FILE);
+        std::os::unix::fs::symlink(workspace.join(CHANGELOG_FILE), &changelog_link)
+            .expect("link changelog");
+        std::os::unix::fs::symlink(workspace.join(FRAGMENT_DIR), execroot.join(FRAGMENT_DIR))
+            .expect("link fragment directory");
+
+        let outcome = fold_repo(&execroot, Mode::Apply).expect("the fold applies through links");
+        assert_eq!(outcome.folded, vec!["feature-a.md".to_string()]);
+
+        let folded = fs::read_to_string(workspace.join(CHANGELOG_FILE)).expect("read changelog");
+        assert!(folded.contains("- from a\n"), "{folded}");
+        assert!(
+            fs::symlink_metadata(&changelog_link)
+                .expect("link metadata")
+                .file_type()
+                .is_symlink(),
+            "the changelog stays a symlink"
+        );
+        assert_eq!(
+            fs::read_link(&changelog_link).expect("read link"),
+            workspace.join(CHANGELOG_FILE),
+            "the link still points at the real changelog"
+        );
+        assert!(
+            fs::read_dir(workspace.join(FRAGMENT_DIR))
+                .expect("read real changelog.d")
+                .next()
+                .is_none(),
+            "the real fragments are consumed"
+        );
+        assert!(
+            !workspace.join(TXN_DIR).exists(),
+            "no transaction left in the real root"
+        );
+        assert!(
+            !execroot.join(TXN_DIR).exists(),
+            "no transaction staged in the execroot"
+        );
+    }
+
+    #[test]
+    fn fold_repo_consumes_fragments_through_a_symlinked_fragment_directory() {
+        // The execroot reaches `changelog.d/` through a link too: the fold must
+        // reserve the real fragments and leave the link in place.
+        let repo = TempRepo::new("fragment-dir-symlink");
+        repo.write_changelog(CHANGELOG);
+        let real = repo.root.join("real-changelog.d");
+        fs::create_dir(&real).expect("create the real fragment directory");
+        fs::write(real.join("feature-a.md"), "### Added\n\n- from a\n").expect("write fragment");
+        let fragment_link = repo.root.join(FRAGMENT_DIR);
+        fs::remove_dir(&fragment_link).expect("drop the empty placeholder directory");
+        std::os::unix::fs::symlink(&real, &fragment_link).expect("link fragment directory");
+
+        let outcome = fold_repo(&repo.root, Mode::Apply).expect("the fold applies through a link");
+        assert_eq!(outcome.folded, vec!["feature-a.md".to_string()]);
+
+        let folded = repo.changelog();
+        assert!(folded.contains("- from a\n"), "{folded}");
+        assert!(
+            fs::read_dir(&real)
+                .expect("read real changelog.d")
+                .next()
+                .is_none(),
+            "the real fragments are consumed"
+        );
+        assert!(
+            fs::symlink_metadata(&fragment_link)
+                .expect("link metadata")
+                .file_type()
+                .is_symlink(),
+            "changelog.d stays a symlink"
+        );
+        assert!(
+            !repo.root.join(TXN_DIR).exists(),
+            "no transaction left behind"
+        );
+    }
+
+    #[test]
+    fn fold_repo_refuses_a_changelog_that_resolves_outside_the_fragment_tree() {
+        // The changelog link escapes into a directory of its own, so the
+        // fragments and the changelog no longer describe one repository tree.
+        // The fold refuses before reserving anything rather than consuming
+        // entries into a changelog it cannot pair them with.
+        let repo = TempRepo::new("escaping-changelog");
+        let elsewhere = repo.root.join("elsewhere");
+        fs::create_dir(&elsewhere).expect("create the escaping directory");
+        fs::write(elsewhere.join(CHANGELOG_FILE), CHANGELOG).expect("write escaping changelog");
+        let changelog_link = repo.root.join(CHANGELOG_FILE);
+        std::os::unix::fs::symlink(elsewhere.join(CHANGELOG_FILE), &changelog_link)
+            .expect("link changelog");
+        repo.write_fragment("feature-a.md", "### Added\n\n- from a\n");
+
+        let err = fold_repo(&repo.root, Mode::Apply).expect_err("an escaping changelog fails");
+        assert!(
+            err.reasons()
+                .iter()
+                .any(|reason| reason.contains("resolves outside the repository root")),
+            "{err}"
+        );
+
+        assert_eq!(
+            fs::read_to_string(elsewhere.join(CHANGELOG_FILE)).expect("read escaping changelog"),
+            CHANGELOG,
+            "the changelog the link points at is untouched"
+        );
+        assert_eq!(
+            repo.fragment_names(),
+            vec!["feature-a.md".to_string()],
+            "fragments left in place"
+        );
+        assert!(
+            !repo.root.join(TXN_DIR).exists() && !elsewhere.join(TXN_DIR).exists(),
+            "no transaction staged"
+        );
+        assert!(
+            fs::symlink_metadata(&changelog_link)
+                .expect("link metadata")
+                .file_type()
+                .is_symlink(),
+            "the refusing fold leaves the link alone"
+        );
+    }
+
+    #[test]
+    fn fold_repo_refuses_a_changelog_that_does_not_resolve() {
+        // A dangling link has no writable target: the fold refuses before
+        // reserving, so the fragments survive.
+        let repo = TempRepo::new("dangling-changelog");
+        repo.write_fragment("feature-a.md", "### Added\n\n- from a\n");
+        std::os::unix::fs::symlink(
+            repo.root.join("missing-CHANGELOG.md"),
+            repo.root.join(CHANGELOG_FILE),
+        )
+        .expect("link changelog");
+
+        let err = fold_repo(&repo.root, Mode::Apply).expect_err("an unresolvable changelog fails");
+        assert!(
+            err.reasons()
+                .iter()
+                .any(|reason| reason.contains("cannot resolve")),
+            "{err}"
+        );
+        assert_eq!(
+            repo.fragment_names(),
+            vec!["feature-a.md".to_string()],
+            "fragments left in place"
+        );
+        assert!(!repo.root.join(TXN_DIR).exists(), "no transaction staged");
+    }
+
     /// Compute the fold inputs for `repo` exactly as `fold_repo` would, so a
     /// test can drive `apply_fold_hooked` directly with a crash hook.
     fn compute_fold(repo: &TempRepo) -> (String, String, Vec<String>) {
-        let fragments = load_fragments(&repo.root).expect("load fragments");
+        let fragments = load_fragments(&repo.root.join(FRAGMENT_DIR)).expect("load fragments");
         let original = fs::read_to_string(repo.root.join(CHANGELOG_FILE)).expect("read changelog");
         let folded = fold_unreleased(&original, &fragments).expect("fold");
         let names = fragments.iter().map(|f| f.name.clone()).collect();
@@ -1560,23 +1851,16 @@ mod tests {
     /// would: the transaction directory is left on disk for recovery.
     fn crash_at_boundary(repo: &TempRepo, crash_at: FoldStage) {
         let (original, folded, names) = compute_fold(repo);
-        let changelog_path = repo.root.join(CHANGELOG_FILE);
+        let tree = repo.tree();
         let mut fired = false;
-        let result = apply_fold_hooked(
-            &repo.root,
-            &changelog_path,
-            &original,
-            &folded,
-            &names,
-            &mut |stage| {
-                if stage == crash_at {
-                    fired = true;
-                    HookOutcome::Crash
-                } else {
-                    HookOutcome::Continue
-                }
-            },
-        );
+        let result = apply_fold_hooked(&tree, &original, &folded, &names, &mut |stage| {
+            if stage == crash_at {
+                fired = true;
+                HookOutcome::Crash
+            } else {
+                HookOutcome::Continue
+            }
+        });
         assert!(fired, "crash hook never fired at {crash_at:?}");
         assert!(
             result.is_err(),
@@ -1697,7 +1981,7 @@ mod tests {
     fn recover_is_a_no_op_without_a_transaction() {
         let repo = TempRepo::new("recover-noop");
         repo.write_changelog(CHANGELOG);
-        recover(&repo.root).expect("no transaction to recover");
+        recover(&repo.tree()).expect("no transaction to recover");
         assert_eq!(repo.changelog(), CHANGELOG, "changelog untouched");
         assert!(!repo.root.join(TXN_DIR).exists(), "no transaction created");
     }
@@ -1720,7 +2004,7 @@ mod tests {
         let txn = repo.root.join(TXN_DIR);
         assert!(txn.join(TXN_RESERVED).join("feature-a.md").exists());
 
-        recover(&repo.root).expect("rollback recovery");
+        recover(&repo.tree()).expect("rollback recovery");
         assert_eq!(repo.changelog(), CHANGELOG, "original changelog restored");
         assert_eq!(
             repo.fragment_names(),
@@ -1735,7 +2019,7 @@ mod tests {
     /// completion twice to prove re-running it is idempotent.
     fn interrupt_recovery_at(repo: &TempRepo, target: RecoverStage) {
         let mut fired = false;
-        let result = recover_hooked(&repo.root, &mut |stage| {
+        let result = recover_hooked(&repo.tree(), &mut |stage| {
             if stage == target {
                 fired = true;
                 HookOutcome::Crash
@@ -1752,8 +2036,8 @@ mod tests {
             repo.root.join(TXN_DIR).exists(),
             "{target:?}: the interrupted recovery leaves the transaction on disk"
         );
-        recover(&repo.root).expect("re-running recovery completes the interrupted work");
-        recover(&repo.root).expect("a second recovery pass is a no-op");
+        recover(&repo.tree()).expect("re-running recovery completes the interrupted work");
+        recover(&repo.tree()).expect("a second recovery pass is a no-op");
     }
 
     #[test]

@@ -337,16 +337,6 @@ pub enum OperationFields {
         action: String,
         stopped: Option<bool>,
     },
-    /// `OpenZoneStore` audit fields. The broker records only the opaque
-    /// storage-row id, the closed disposition, the derived store identity,
-    /// and the exact descriptor count. No database, marker, or parent path
-    /// is retained.
-    OpenZoneStore {
-        zone_store_id: String,
-        store_identity: String,
-        disposition: String,
-        fd_count: u32,
-    },
     RunHostInstall {
         bundle_installer_intent_ref: String,
         enable: bool,
@@ -734,12 +724,6 @@ impl OperationFields {
                 applied: bool,
                 host_ready: bool,
                 node_present: bool,
-            }),
-            "OpenZoneStore" => parse_fields!(value => OpenZoneStore {
-                zone_store_id: String,
-                store_identity: String,
-                disposition: String,
-                fd_count: u32,
             }),
             "RunHostInstall" => parse_fields!(value => RunHostInstall {
                 bundle_installer_intent_ref: String,

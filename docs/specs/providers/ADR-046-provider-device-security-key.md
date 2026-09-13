@@ -710,13 +710,15 @@ spec:
   producerRef: Process/device-<uid-short>-sk-relay
   endpointClass: device
   transport: vsock
-  purpose: device-security-key.d2bus.org/ctaphid-relay
+  purpose: security-key-ctaphid-relay
   serviceFingerprint: device-security-key.d2bus.org/SecurityKeyCtapRelay.v3
   locality: cross-domain
   visibility: zone
-  attachmentPolicy: component-session
+  attachmentPolicy:
+    supported: true
+    maxAttachments: 1
   consumerPolicy:
-    allowedProviderComponents: [device-security-key.d2bus.org/frontend]
+    allowedProviderComponents: [device-security-key]
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
@@ -812,6 +814,15 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ```
+
+*This sketch predates the closed `EndpointSpec`
+(`packages/d2b-contracts-resource/src/v3/endpoint.rs`): `transport`, `purpose`,
+`attachmentPolicy` and `allowedProviderComponents` are an enum, a
+`BoundedToken`, an object with `supported`/`maxAttachments`, and a
+`BoundedToken` list respectively, so the `component-session` /
+dotted-token / `launch-ticket-only` spellings shown here cannot decode.
+Re-point them at the closed vocabulary (the implemented relay Endpoint above
+is the worked example) when this frontend endpoint is actually built.*
 
 ### Guest frontend Process
 

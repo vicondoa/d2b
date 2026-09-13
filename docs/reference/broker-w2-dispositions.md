@@ -45,7 +45,6 @@ side-effect audit operation that never reaches the wire dispatcher).
 | OpenPeerPidfdFromAcceptedSocket | callable-read-only | Derives a close-on-exec pidfd only from the peer of one SCM_RIGHTS accepted Unix socket; numeric PID, credential, and subject claims are refused. | live read-only callable |
 | OpenSystemdUnitPidfd | promoted-live | Opens a pidfd for the declared systemd-owned process after identity verification and returns it over `SCM_RIGHTS`. | live in production broker |
 | OpenVhostNet | promoted-live | Opens the allowed vhost-net device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
-| OpenZoneStore | promoted-live | Resolves and validates the signed opaque storage row, provisions or opens its database inode idempotently, and returns exactly one close-on-exec descriptor over `SCM_RIGHTS` without a host path. | live in production broker |
 | OwnershipMatrixCheck | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; ownership-matrix preflight is not implemented. | future work |
 | PauseBroker | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; broker admin pause controls are not implemented. | future work |
 | PipeWireAudio | promoted-live | Applies the bounded PipeWire speaker or microphone grant/level effect for the declared runner. | live in production broker |

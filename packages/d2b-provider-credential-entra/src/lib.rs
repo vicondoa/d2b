@@ -39,7 +39,7 @@ pub use controller::{
 /// Canonical Provider reference.
 pub const PROVIDER_REF: &str = "Provider/credential-entra";
 /// Canonical identity-Guest login Endpoint purpose.
-pub const LOGIN_ENDPOINT_PURPOSE: &str = "credential-entra.d2bus.org/entra-login-token";
+pub const LOGIN_ENDPOINT_PURPOSE: &str = "credential-entra-login";
 /// Authenticated ComponentSession purpose accepted by this Provider.
 pub const CREDENTIAL_SESSION_PURPOSE: &str = "credential";
 /// Maximum active leases per Provider instance.

@@ -177,7 +177,6 @@
             "OpenPidfd",
             "OpenSystemdUnitPidfd",
             "OpenVhostNet",
-            "OpenZoneStore",
             "OwnershipMatrixCheck",
             "PauseBroker",
             "PipeWireAudio",
