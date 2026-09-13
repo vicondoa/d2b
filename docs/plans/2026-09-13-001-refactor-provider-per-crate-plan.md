@@ -416,6 +416,7 @@ Adding or changing one resource type today requires edits in four to six places 
 - The §7 policy-check allowlist is **empty** and the check runs permanently in CI (R25, KD9).
 - Every provider runs on the toolkit `ProviderBase` - no hand-rolled bootstrap/service-loop/test infrastructure remains (R22).
 - Milestone reviews recorded for §8 phases 2, 4, and 6.
+- Every completed provider crate, the shared runtime, and the toolkit carry a recorded over-engineering audit with its accepted improvements applied (U29) before the final host-integration pass.
 - The guest target ships with `ZoneBootstrap`/`ZoneEnroll` handlers landed and guest agents on the base (R24).
 
 ## Plan Extension: Control-Plane Completion (added during execution)
