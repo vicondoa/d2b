@@ -115,6 +115,12 @@ generated_artifact_check(
 )
 
 generated_artifact_check(
+    name = "gen_layer_catalogs_drift",
+    command = "gen-layer-catalogs",
+    data = ["//:generated_layer_catalogs"],
+)
+
+generated_artifact_check(
     name = "gen_resource_ttrpc_drift",
     command = "gen-resource-ttrpc",
     data = [
@@ -175,6 +181,7 @@ test_suite(
         ":gen_cli_shell_artifacts_drift",
         ":gen_daemon_api_drift",
         ":gen_error_codes_drift",
+        ":gen_layer_catalogs_drift",
         ":gen_nix_inventories_drift",
         ":gen_provider_packaging_drift",
         ":gen_resource_proto_drift",

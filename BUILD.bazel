@@ -494,6 +494,16 @@ filegroup(
 )
 
 filegroup(
+    name = "generated_layer_catalogs",
+    srcs = [
+        "//packages/d2b:generated_surface_catalog",
+        "//packages/d2b-audit:generated_audit_catalog",
+        "//packages/d2b-contracts-provider:generated_telemetry_catalog",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
     name = "generated_semantic_service_schemas",
     srcs = glob([
         "docs/reference/schemas/v3/audio.d2bus.org_*.schema.json",

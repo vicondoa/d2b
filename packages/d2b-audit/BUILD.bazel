@@ -9,6 +9,15 @@ exports_files(
 
 d2b_audit_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
+# The generated record catalog the crate validates against;
+# `gen-layer-catalogs` writes it and
+# `//packages/xtask:gen_layer_catalogs_drift` compares it byte-for-byte.
+filegroup(
+    name = "generated_audit_catalog",
+    srcs = glob(["src/generated/*.rs"]),
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_audit",
     srcs = d2b_audit_srcs,
