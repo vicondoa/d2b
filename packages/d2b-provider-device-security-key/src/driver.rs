@@ -141,9 +141,9 @@ pub const SECURITY_KEY_BINDING_CREATIONS: [ChildCreation; 2] = [
 
 /// The Provider effect surface the security-key driver needs.
 ///
-/// The production implementation owns the preserved lease/session ring, the
-/// host relay service, and the broker-backed hidraw effect; test doubles
-/// implement the same seam.
+/// The production implementation owns the preserved lease, the host relay
+/// service, and the broker-backed hidraw effect; test doubles implement the
+/// same seam.
 #[async_trait]
 pub trait SecurityKeyDriverEffects: Send + Sync + 'static {
     /// Reconcile one security-key Service or Binding row through its typed

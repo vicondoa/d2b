@@ -65,19 +65,6 @@ rust_test(
 )
 
 rust_test(
-    name = "conformance",
-    srcs = ["tests/conformance.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_provider_device_security_key",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "guest_frontend_process",
     srcs = ["tests/guest_frontend_process.rs"],
     compile_data = ["Cargo.toml"],
@@ -138,18 +125,6 @@ rust_test(
         ":d2b_provider_device_security_key",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
-
-rust_test(
-    name = "session_ring",
-    srcs = ["tests/session_ring.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [":d2b_provider_device_security_key",
-            "//packages/d2b-contracts-resource:d2b_contracts_resource",
-            "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
 
 rust_test(
     name = "exact_authority",

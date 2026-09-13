@@ -138,7 +138,8 @@ async fn read_hidraw_report_polling(
     }
 }
 
-/// Async version of [`recv_report`] for the per-VM relay stream.
+/// Read one length-prefixed 64-byte CTAPHID report from the per-VM relay
+/// stream.
 pub(crate) async fn recv_report_async<R: AsyncRead + Unpin>(
     stream: &mut R,
 ) -> std::io::Result<CtaphidReport> {
@@ -156,7 +157,8 @@ pub(crate) async fn recv_report_async<R: AsyncRead + Unpin>(
     Ok(report)
 }
 
-/// Async version of [`send_report`] for the per-VM relay stream.
+/// Write one length-prefixed 64-byte CTAPHID report to the per-VM relay
+/// stream.
 pub(crate) async fn send_report_async<W: AsyncWrite + Unpin>(
     stream: &mut W,
     report: &CtaphidReport,
@@ -592,12 +594,11 @@ pub(crate) async fn run_connection(
 mod tests {
     use super::*;
     use crate::{
-        CTAPHID_CANCEL, CTAPHID_CBOR, CTAPHID_ERR_CHANNEL_BUSY, CTAPHID_ERR_INVALID_CMD,
-        CTAPHID_ERROR, CidTranslator, LeaseId, build_error_report, build_init_packet, recv_report,
-        relay::LeaseState as RelayLeaseState, send_report,
+        CTAPHID_CANCEL, CTAPHID_ERR_CHANNEL_BUSY, CTAPHID_ERR_INVALID_CMD, CTAPHID_ERROR,
+        CidTranslator, LeaseId, build_error_report, build_init_packet,
+        relay::LeaseState as RelayLeaseState,
     };
     use std::fs;
-    use std::io::Cursor;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -846,34 +847,33 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // CTAPHID framing (recv_report / send_report round-trip)
+    // CTAPHID framing (recv_report_async / send_report_async round-trip)
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn framing_round_trip_over_buffer() {
+    #[tokio::test]
+    async fn framing_round_trip_over_buffer() {
         let mut buf = [0u8; CTAPHID_REPORT_SIZE];
         buf[0..4].copy_from_slice(&[0x01, 0x00, 0x00, 0x01]);
-        buf[4] = CTAPHID_CBOR;
+        buf[4] = CTAPHID_INIT;
         buf[5] = 0x00;
         buf[6] = 0x01;
         buf[7] = 0x04; // CBOR authenticatorGetInfo
 
         let mut wire: Vec<u8> = Vec::new();
-        send_report(&mut wire, &buf).unwrap();
+        send_report_async(&mut wire, &buf).await.unwrap();
 
-        let mut cursor = Cursor::new(wire);
-        let received = recv_report(&mut cursor).unwrap();
+        let mut cursor = wire.as_slice();
+        let received = recv_report_async(&mut cursor).await.unwrap();
         assert_eq!(received, buf);
     }
 
-    #[test]
-    fn framing_rejects_wrong_length_prefix() {
+    #[tokio::test]
+    async fn framing_rejects_wrong_length_prefix() {
         let mut wire: Vec<u8> = Vec::new();
         wire.extend_from_slice(&32u32.to_le_bytes()); // wrong: 32 instead of 64
         wire.extend_from_slice(&[0u8; 32]);
 
-        let mut cursor = Cursor::new(wire);
-        let result = recv_report(&mut cursor);
+        let result = recv_report_async(&mut wire.as_slice()).await;
         assert!(result.is_err());
     }
 

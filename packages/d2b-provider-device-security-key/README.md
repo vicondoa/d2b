@@ -1,9 +1,10 @@
 # `d2b-provider-device-security-key`
 
 This crate implements the unprivileged contracts for
-`Provider/device-security-key`. It owns the Device lease, bounded session
-observations, CID translation, and relay/frontend Process declarations. Core
-resolves physical authority and supplies opaque effect tickets.
+`Provider/device-security-key`. It owns the Device lease, the bounded
+lease/session protocol, CID translation, and relay/frontend Process
+declarations. Core resolves physical authority and supplies opaque effect
+tickets.
 
 See [Create a Provider](../../docs/how-to/create-provider.md) for the
 uniform crate layout, schema links, configuration, and test lanes.
@@ -44,23 +45,22 @@ checks.
 ## Exported resource types
 
 The crate exports the standard `Device` implementation contracts, the
-catalog-derived semantic Service/Binding descriptor and projection factory,
-and the Provider-owned `HostRelay` and `GuestFrontend` Process declaration
-helpers. The descriptor binds protocol `1.1`, the catalog projection schema
-fingerprint, the catalog factory fingerprint, and the exact Service and
-Binding base fingerprints.
+provider-neutral Service and Binding ResourceType constants, and the
+Provider-owned `HostRelay` and `GuestFrontend` Process declaration helpers.
+The semantic Service/Binding descriptor and projection factory are derived
+from the shared catalog, not re-published here.
 `FrontendProcessDeclaration` accepts only a same-Zone `Guest` ResourceRef and
 derives the deterministic `device-<uid-short>-sk-frontend` name. The relay
 uses `device-<uid-short>-sk-relay`.
 
-Lease IDs, session records, CIDs, relay tickets, and frontend attachment
-handles remain opaque bounded protocol values. They are not ResourceTypes,
-status history, or semantic projection objects.
+Lease IDs, session IDs, CIDs, relay tickets, and frontend attachment handles
+remain opaque bounded protocol values. They are not ResourceTypes, status
+history, or semantic projection objects.
 
 ## Controllers / services / workers / binaries
 
 `SecurityKeyController` sequences physical authority claim, hidraw open,
-single-session lease state, terminal recording, and authority release.
+single-session lease state, terminal lease transition, and authority release.
 `SecurityKeyEffectPort` is the only effect boundary. `SecurityKeyLease` keeps
 the Core-issued authority lease and relay LaunchTicket private.
 
@@ -105,10 +105,10 @@ unprivileged.
 
 ## State and telemetry
 
-The Provider retains only the bounded recent-session ring and the current
-lease phase. The ring evicts its oldest record at capacity and stores an
-opaque session ID plus a closed result, never CTAP bytes or credential data.
-Physical identity and host effect audit records remain with Core.
+The Provider retains only the current lease phase. The controller admits the
+configured bounded session-ring capacity and keeps no session records, CTAP
+bytes, or credential data. Physical identity and host effect audit records
+remain with Core.
 
 Metrics and diagnostics use fixed Provider, component, operation, outcome, and
 error values. Zone names, resource names, device identity, paths, PIDs, CIDs,

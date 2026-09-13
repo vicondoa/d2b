@@ -10,14 +10,10 @@ use d2b_contracts_provider::v3::semantic_services::{
 };
 use d2b_contracts_resource::v3::{ExecutionDomain, ResourceRef, ResourceUid};
 
-use crate::effect_port::{
-    DeviceId, InventoryEffectError, InventoryObservation, ObservationPolicyId,
-    SecurityKeyInventoryEffectPort,
-};
 use crate::{
-    PhysicalUsbBackingClaim, SecurityKeyAdmission, SecurityKeyEffectError, SecurityKeyEffectPort,
-    SecurityKeyLease, SecurityKeyLeaseError, SecurityKeySessionId, SessionRecord, SessionResult,
-    SessionRing, SECURITY_KEY_BINDING_RESOURCE_TYPE, SECURITY_KEY_SERVICE_RESOURCE_TYPE,
+    MAX_SESSION_RING_SIZE, MIN_SESSION_RING_SIZE, PhysicalUsbBackingClaim, SecurityKeyAdmission,
+    SecurityKeyEffectError, SecurityKeyEffectPort, SecurityKeyLease, SecurityKeyLeaseError,
+    SecurityKeySessionId, SECURITY_KEY_BINDING_RESOURCE_TYPE, SECURITY_KEY_SERVICE_RESOURCE_TYPE,
 };
 const SECURITY_KEY_PROVIDER_REF: &str = "Provider/device-security-key";
 
@@ -78,79 +74,6 @@ pub enum SecurityKeyPhase {
     Quarantined,
 }
 
-/// Exact Core assignment admission for one SecurityKey Binding.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SecurityKeyBindingAdmission {
-    zone_uid: ResourceUid,
-    device_uid: ResourceUid,
-    service_uid: ResourceUid,
-    binding_uid: ResourceUid,
-    guest_uid: ResourceUid,
-    user_uid: ResourceUid,
-    assignment_epoch: u64,
-}
-
-impl SecurityKeyBindingAdmission {
-    /// Construct a Binding admission bound to one Device and assignment.
-    pub fn new(
-        zone_uid: ResourceUid,
-        device_uid: ResourceUid,
-        service_uid: ResourceUid,
-        binding_uid: ResourceUid,
-        guest_uid: ResourceUid,
-        user_uid: ResourceUid,
-        assignment_epoch: u64,
-    ) -> Result<Self, SecurityKeyControllerError> {
-        if assignment_epoch == 0 {
-            return Err(SecurityKeyControllerError::Admission);
-        }
-        Ok(Self {
-            zone_uid,
-            device_uid,
-            service_uid,
-            binding_uid,
-            guest_uid,
-            user_uid,
-            assignment_epoch,
-        })
-    }
-
-    /// Borrow the admitted Zone identity.
-    pub const fn zone_uid(&self) -> &ResourceUid {
-        &self.zone_uid
-    }
-
-    /// Borrow the admitted Device identity.
-    pub const fn device_uid(&self) -> &ResourceUid {
-        &self.device_uid
-    }
-
-    /// Borrow the admitted Service identity.
-    pub const fn service_uid(&self) -> &ResourceUid {
-        &self.service_uid
-    }
-
-    /// Borrow the admitted Binding identity.
-    pub const fn binding_uid(&self) -> &ResourceUid {
-        &self.binding_uid
-    }
-
-    /// Borrow the admitted Guest identity.
-    pub const fn guest_uid(&self) -> &ResourceUid {
-        &self.guest_uid
-    }
-
-    /// Borrow the admitted User identity.
-    pub const fn user_uid(&self) -> &ResourceUid {
-        &self.user_uid
-    }
-
-    /// Return the exact assignment epoch.
-    pub const fn assignment_epoch(&self) -> u64 {
-        self.assignment_epoch
-    }
-}
-
 /// The cutover contract for SecurityKey Service and Binding owners.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SecurityKeyRunnerContract {
@@ -199,9 +122,9 @@ pub enum SecurityKeyControllerError {
     Lease(SecurityKeyLeaseError),
     /// Binding or Service references failed semantic admission.
     Admission,
-    /// Session ring could not be created.
+    /// The configured session-ring capacity is outside the frozen bound.
     RingCapacity,
-    /// An effect failed while recording a terminal session.
+    /// An effect failed while advancing a terminal session transition.
     Effect(SecurityKeyEffectError),
 }
 
@@ -223,40 +146,28 @@ impl std::error::Error for SecurityKeyControllerError {}
 pub enum SecurityKeyReconcileOutcome {
     /// The lease and relay are active.
     Active,
-    /// The terminal session was recorded and authority released.
+    /// The terminal session completed and its authority was released.
     Completed,
-}
-
-/// Reconcile output including the child resources owned by a Binding.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SecurityKeyReconcileResultWithChildren {
-    /// Lease/session outcome.
-    pub outcome: SecurityKeyReconcileOutcome,
-    /// UID-free Process and Endpoint intents.
-    pub children: BindingChildSet,
 }
 
 /// Device-security-key controller state.
 pub struct SecurityKeyController {
     lease: SecurityKeyLease,
-    ring: SessionRing,
     phase: SecurityKeyPhase,
-    binding_admission: Option<SecurityKeyBindingAdmission>,
 }
 
 impl SecurityKeyController {
-    /// Construct a controller with a bounded session ring.
+    /// Construct a controller after admitting the configured session-ring
+    /// capacity.
     pub fn new(
         holder: ResourceUid,
         backing: PhysicalUsbBackingClaim,
         ring_capacity: usize,
     ) -> Result<Self, SecurityKeyControllerError> {
+        admit_ring_capacity(ring_capacity)?;
         Ok(Self {
             lease: SecurityKeyLease::new(holder, backing),
-            ring: SessionRing::new(ring_capacity)
-                .map_err(|_| SecurityKeyControllerError::RingCapacity)?,
             phase: SecurityKeyPhase::Pending,
-            binding_admission: None,
         })
     }
 
@@ -266,13 +177,11 @@ impl SecurityKeyController {
         admission: SecurityKeyAdmission,
         ring_capacity: usize,
     ) -> Result<Self, SecurityKeyControllerError> {
+        admit_ring_capacity(ring_capacity)?;
         Ok(Self {
             lease: SecurityKeyLease::new_authorized(device_uid, admission)
                 .map_err(SecurityKeyControllerError::Lease)?,
-            ring: SessionRing::new(ring_capacity)
-                .map_err(|_| SecurityKeyControllerError::RingCapacity)?,
             phase: SecurityKeyPhase::Pending,
-            binding_admission: None,
         })
     }
 
@@ -284,42 +193,6 @@ impl SecurityKeyController {
     /// Return the resource-backed lifecycle phase.
     pub const fn phase(&self) -> SecurityKeyPhase {
         self.phase
-    }
-
-    /// Borrow the exact Binding assignment admission.
-    pub const fn binding_admission(&self) -> Option<&SecurityKeyBindingAdmission> {
-        self.binding_admission.as_ref()
-    }
-
-    /// Bind this controller to fresh Core Service/Binding assignment evidence.
-    pub fn bind_resource_admission(
-        &mut self,
-        admission: SecurityKeyBindingAdmission,
-    ) -> Result<(), SecurityKeyControllerError> {
-        if admission.device_uid() != self.lease.holder() || admission.assignment_epoch() == 0 {
-            self.phase = SecurityKeyPhase::Quarantined;
-            tracing::warn!(
-                device = %self.lease.holder().to_canonical_string(),
-                reason = "admission device mismatch or assignment epoch is zero",
-                "security-key binding admission rejected",
-            );
-            return Err(SecurityKeyControllerError::Admission);
-        }
-        if self
-            .binding_admission
-            .as_ref()
-            .is_some_and(|current| current != &admission)
-        {
-            self.phase = SecurityKeyPhase::Quarantined;
-            tracing::warn!(
-                device = %self.lease.holder().to_canonical_string(),
-                reason = "admission differs from the retained binding admission",
-                "security-key binding admission rejected: fence mismatch",
-            );
-            return Err(SecurityKeyControllerError::Admission);
-        }
-        self.binding_admission = Some(admission);
-        Ok(())
     }
 
     /// Quarantine the controller until Core supplies fresh matching evidence.
@@ -403,105 +276,6 @@ impl SecurityKeyController {
         })
     }
 
-    /// Return the session outcome together with the explicit Binding children.
-    pub fn reconcile_with_children(
-        &mut self,
-        binding_ref: &ResourceRef,
-        service_ref: &ResourceRef,
-        target_ref: &ResourceRef,
-        outcome: SecurityKeyReconcileOutcome,
-    ) -> Result<SecurityKeyReconcileResultWithChildren, SecurityKeyControllerError> {
-        let children = Self::child_resources(binding_ref, service_ref, target_ref)?;
-        self.phase = match outcome {
-            SecurityKeyReconcileOutcome::Active => SecurityKeyPhase::Active,
-            SecurityKeyReconcileOutcome::Completed => SecurityKeyPhase::Completed,
-        };
-        Ok(SecurityKeyReconcileResultWithChildren { outcome, children })
-    }
-
-    /// Return the reconcile output with an explicit workload User identity.
-    pub fn reconcile_with_children_for_user(
-        &mut self,
-        binding_ref: &ResourceRef,
-        service_ref: &ResourceRef,
-        target_ref: &ResourceRef,
-        user_ref: &ResourceRef,
-        outcome: SecurityKeyReconcileOutcome,
-    ) -> Result<SecurityKeyReconcileResultWithChildren, SecurityKeyControllerError> {
-        let children =
-            Self::child_resources_for_user(binding_ref, service_ref, target_ref, user_ref)?;
-        self.phase = match outcome {
-            SecurityKeyReconcileOutcome::Active => SecurityKeyPhase::Active,
-            SecurityKeyReconcileOutcome::Completed => SecurityKeyPhase::Completed,
-        };
-        Ok(SecurityKeyReconcileResultWithChildren { outcome, children })
-    }
-
-    /// Reconcile a resource-backed Binding only with its current Core
-    /// admission and explicit Guest/User target.
-    pub fn reconcile_binding_with_admission(
-        &mut self,
-        admission: &SecurityKeyBindingAdmission,
-        binding_ref: &ResourceRef,
-        service_ref: &ResourceRef,
-        target_ref: &ResourceRef,
-        user_ref: &ResourceRef,
-        outcome: SecurityKeyReconcileOutcome,
-    ) -> Result<SecurityKeyReconcileResultWithChildren, SecurityKeyControllerError> {
-        if self.binding_admission.as_ref() != Some(admission)
-            || binding_ref.resource_type().as_str() != SECURITY_KEY_BINDING_RESOURCE_TYPE
-            || service_ref.resource_type().as_str() != SECURITY_KEY_SERVICE_RESOURCE_TYPE
-            || target_ref.resource_type().as_str() != "Guest"
-            || user_ref.resource_type().as_str() != "User"
-        {
-            self.phase = SecurityKeyPhase::Quarantined;
-            tracing::warn!(
-                device = %self.lease.holder().to_canonical_string(),
-                binding = %binding_ref.to_canonical_string(),
-                reason = "admission, binding, service, target, or user reference mismatch",
-                "security-key binding reconcile rejected: admission mismatch",
-            );
-            return Err(SecurityKeyControllerError::Admission);
-        }
-        self.reconcile_with_children_for_user(
-            binding_ref,
-            service_ref,
-            target_ref,
-            user_ref,
-            outcome,
-        )
-    }
-
-    /// Whether a child belongs to this Binding's Process/Endpoint set.
-    pub fn owns_child(
-        binding_ref: &ResourceRef,
-        service_ref: &ResourceRef,
-        target_ref: &ResourceRef,
-        child_ref: &ResourceRef,
-    ) -> Result<bool, SecurityKeyControllerError> {
-        if binding_ref.resource_type().as_str() != SECURITY_KEY_BINDING_RESOURCE_TYPE
-            || service_ref.resource_type().as_str() != SECURITY_KEY_SERVICE_RESOURCE_TYPE
-            || target_ref.resource_type().as_str() != "Guest"
-        {
-            return Err(SecurityKeyControllerError::Admission);
-        }
-        let children = Self::child_resources(binding_ref, service_ref, target_ref)?;
-        Ok(matches!(
-            child_ref.resource_type().as_str(),
-            "Process" | "Endpoint"
-        ) && children.resource_refs().any(|current| current == child_ref))
-    }
-
-    /// Observe the exact physical Device through Core's injected port.
-    pub async fn observe_inventory<P: SecurityKeyInventoryEffectPort>(
-        &self,
-        device_id: &DeviceId,
-        policy_id: &ObservationPolicyId,
-        port: &P,
-    ) -> Result<InventoryObservation, InventoryEffectError> {
-        port.observe_inventory(device_id, policy_id).await
-    }
-
     /// Start a session through the authority-before-open sequence.
     pub fn acquire<P: SecurityKeyEffectPort>(
         &mut self,
@@ -528,8 +302,6 @@ impl SecurityKeyController {
                 }
                 SecurityKeyControllerError::Lease(error)
             })?;
-        self.ring
-            .push(SessionRecord::new(session, SessionResult::InProgress));
         self.phase = SecurityKeyPhase::Active;
         Ok(SecurityKeyReconcileOutcome::Active)
     }
@@ -562,8 +334,6 @@ impl SecurityKeyController {
                 }
                 SecurityKeyControllerError::Lease(error)
             })?;
-        self.ring
-            .push(SessionRecord::new(session, SessionResult::InProgress));
         self.phase = SecurityKeyPhase::Active;
         Ok(SecurityKeyReconcileOutcome::Active)
     }
@@ -593,20 +363,16 @@ impl SecurityKeyController {
         &mut self,
         port: &mut P,
     ) -> Result<SecurityKeyReconcileOutcome, SecurityKeyControllerError> {
-        let session = self
-            .lease
-            .session()
-            .copied()
-            .ok_or(SecurityKeyControllerError::Lease(
+        if self.lease.session().is_none() {
+            tracing::warn!(
+                device = %self.lease.holder().to_canonical_string(),
+                reason = "complete requested with no active session",
+                "security-key session complete refused",
+            );
+            return Err(SecurityKeyControllerError::Lease(
                 SecurityKeyLeaseError::InvalidTransition,
-            ))
-            .inspect_err(|_| {
-                tracing::warn!(
-                    device = %self.lease.holder().to_canonical_string(),
-                    reason = "complete requested with no active session",
-                    "security-key session complete refused",
-                );
-            })?;
+            ));
+        }
         self.lease
             .complete(port)
             .map_err(|error| {
@@ -617,32 +383,8 @@ impl SecurityKeyController {
                 );
                 SecurityKeyControllerError::Lease(error)
             })?;
-        self.ring
-            .push(SessionRecord::new(session, SessionResult::Success));
         self.phase = SecurityKeyPhase::Completed;
         Ok(SecurityKeyReconcileOutcome::Completed)
-    }
-
-    /// Complete a session only when the current assignment fence still
-    /// matches the admission used to start it.
-    pub fn complete_authorized(
-        &mut self,
-        session: SecurityKeySessionId,
-        admission: &SecurityKeyBindingAdmission,
-        port: &mut impl SecurityKeyEffectPort,
-    ) -> Result<SecurityKeyReconcileOutcome, SecurityKeyControllerError> {
-        if self.binding_admission.as_ref() != Some(admission)
-            || self.lease.session() != Some(&session)
-        {
-            self.phase = SecurityKeyPhase::Quarantined;
-            tracing::warn!(
-                device = %self.lease.holder().to_canonical_string(),
-                reason = "session or assignment fence does not match the current admission",
-                "security-key session complete rejected: admission mismatch",
-            );
-            return Err(SecurityKeyControllerError::Admission);
-        }
-        self.complete(port)
     }
 }
 
@@ -651,9 +393,16 @@ impl fmt::Debug for SecurityKeyController {
         formatter
             .debug_struct("SecurityKeyController")
             .field("lease", &self.lease)
-            .field("ring", &self.ring)
             .field("phase", &self.phase)
-            .field("has_binding_admission", &self.binding_admission.is_some())
             .finish()
+    }
+}
+
+/// Admit only the frozen bounded session-ring capacity.
+fn admit_ring_capacity(ring_capacity: usize) -> Result<(), SecurityKeyControllerError> {
+    if (MIN_SESSION_RING_SIZE..=MAX_SESSION_RING_SIZE).contains(&ring_capacity) {
+        Ok(())
+    } else {
+        Err(SecurityKeyControllerError::RingCapacity)
     }
 }

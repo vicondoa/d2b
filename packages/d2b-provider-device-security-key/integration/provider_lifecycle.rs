@@ -7,10 +7,9 @@
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_provider_device_security_key::{
     FrontendProcessDeclaration, LeaseState, PhysicalAuthorityLease, PhysicalUsbBackingClaim,
-    PhysicalUsbBackingToken, RelayLaunchTicket, SECURITY_KEY_PROJECTION_PROTOCOL_VERSION,
-    SECURITY_KEY_SERVICE_RESOURCE_TYPE, SecurityKeyController, SecurityKeyEffectError,
+    PhysicalUsbBackingToken, RelayLaunchTicket, SecurityKeyController, SecurityKeyEffectError,
     SecurityKeyEffectPort, SecurityKeyOpenIntent, SecurityKeyProcessRole, SecurityKeySessionId,
-    security_key_process_name, security_key_projection_factory,
+    security_key_process_name,
 };
 
 #[derive(Default)]
@@ -71,8 +70,8 @@ fn provider_lifecycle_keeps_core_effects_and_guest_placement_bounded() {
     );
 
     let backing = PhysicalUsbBackingClaim::from_core(PhysicalUsbBackingToken::from_core([3; 32]));
-    let mut controller =
-        SecurityKeyController::new(device_uid.clone(), backing, 8).expect("bounded ring");
+    let mut controller = SecurityKeyController::new(device_uid.clone(), backing, 8)
+        .expect("bounded session-ring capacity");
     let mut core = FakeCore::default();
 
     controller
@@ -86,26 +85,4 @@ fn provider_lifecycle_keeps_core_effects_and_guest_placement_bounded() {
         .expect("terminal release succeeds");
     assert_eq!(controller.lease().state(), LeaseState::Completed);
     assert_eq!(core.events, ["claim", "open", "release"]);
-}
-
-
-#[test]
-fn semantic_descriptor_is_catalog_derived_and_has_no_physical_backing_set() {
-    let factory = security_key_projection_factory().expect("catalog factory is constructible");
-    assert_eq!(
-        factory.service_type().as_str(),
-        SECURITY_KEY_SERVICE_RESOURCE_TYPE
-    );
-    assert_eq!(
-        factory.projection_protocol_version().as_str(),
-        SECURITY_KEY_PROJECTION_PROTOCOL_VERSION
-    );
-    assert!(factory.allowed_backing_ref_types().is_empty());
-    assert_eq!(factory.allowed_binding_target_ref_types().len(), 2);
-    assert!(
-        factory
-            .factory_fingerprint()
-            .as_str()
-            .starts_with("sha256:")
-    );
 }
