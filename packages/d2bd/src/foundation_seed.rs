@@ -39,8 +39,9 @@ use crate::principal_allocation::{PrincipalAllocation, valid_principal_name};
 ///
 /// The durable authority's home: the foundation plane commits these rows
 /// into its own store under the reserved zone name, and no zone-local plane
-/// may ever carry them itself.
-pub const SYSTEM_ZONE: &str = "system";
+/// may ever carry them itself. The name itself is declared once, in the
+/// identity vocabulary the readers select.
+pub const SYSTEM_ZONE: &str = d2b_contracts::identity::SYSTEM_ZONE_NAME;
 /// The system-homed policy types: rows only the foundation seed writes.
 ///
 /// The zone-control vocabulary (Zone, ZoneLink, Provider, Role, RoleBinding,
@@ -428,13 +429,18 @@ impl FoundationSeed {
 
     /// Whether one committed self-binding grants the controller `create` on
     /// `Operation` scoped to this command.
+    ///
+    /// Materialization is authorized by the controller's own self-binding
+    /// alone: an operator binding from the host contract is a grant to the
+    /// subject it names, never a second way to authorize the seed to write
+    /// the operation rows a provider's commands materialize.
     fn controller_may_materialize(
         &self,
         controller: &ResourceRef,
         command: &ResourceRef,
         committed: &CommittedSet,
     ) -> bool {
-        let binding_names = self.binding_rows();
+        let binding_names = self.self_binding_rows();
         for (name, spec) in &binding_names {
             if !spec.subjects().contains(controller) {
                 continue;
@@ -467,6 +473,15 @@ impl FoundationSeed {
 
     /// Every declared binding row (self-bindings included) as (name, spec).
     fn binding_rows(&self) -> Vec<(String, RoleBindingSpec)> {
+        let mut rows = self.self_binding_rows();
+        for binding in &self.declarations.operator_bindings {
+            rows.push((binding.name.clone(), binding.spec.clone()));
+        }
+        rows
+    }
+
+    /// Every declared provider self-binding row as (name, spec).
+    fn self_binding_rows(&self) -> Vec<(String, RoleBindingSpec)> {
         let mut rows = Vec::new();
         for provider in &self.declarations.providers {
             for binding in &provider.self_bindings {
@@ -476,9 +491,6 @@ impl FoundationSeed {
                     rows.push((name, spec));
                 }
             }
-        }
-        for binding in &self.declarations.operator_bindings {
-            rows.push((binding.name.clone(), binding.spec.clone()));
         }
         rows
     }
@@ -1457,6 +1469,39 @@ mod tests {
             .await
             .expect("authorized materialization");
         assert_eq!(report.materialized.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn materialization_is_not_authorized_by_an_operator_binding() {
+        let fixture = make_fixture();
+        let mut declarations = make_declarations(
+            vec![command("virtiofsd-worker", "Role/operation-publisher")],
+            true,
+        );
+        // The controller keeps its identity but loses its self-binding, and
+        // an operator binding names the same controller against a role that
+        // carries the commandRefs and `create` on Operation: the operator
+        // binding is a grant to its subject, not the seed's authority to
+        // write the materialized operation rows.
+        declarations.providers[0].self_bindings.clear();
+        declarations.operator_bindings = vec![SeedBinding {
+            name: "operator".to_owned(),
+            spec: serde_json::from_value(json!({
+                "roleRef": "Role/operation-publisher",
+                "subjects": ["Provider/system-minijail"]
+            }))
+            .expect("operator binding"),
+        }];
+        let error = run(&fixture, declarations)
+            .await
+            .expect_err("an operator binding must not authorize materialization");
+        assert_eq!(
+            error,
+            SeedError::UnauthorizedMaterialization {
+                controller: "Provider/system-minijail".to_owned(),
+                command: "Command/virtiofsd-worker".to_owned(),
+            }
+        );
     }
 
     #[tokio::test]
