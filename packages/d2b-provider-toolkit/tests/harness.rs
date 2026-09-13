@@ -52,6 +52,14 @@ static UNDECLARED_CREATION: ChildCreation = ChildCreation {
     order: 2,
 };
 
+/// A foreign-typed creation no driver declared.
+static UNDECLARED_FOREIGN_CREATION: ChildCreation = ChildCreation {
+    child: WellKnownType::PROCESS,
+    provider_ref: "volume-local",
+    custody: ChildCustody::DriverOwned,
+    order: 2,
+};
+
 /// A creation declared controller-owned.
 static CONTROLLER_OWNED_CREATION: ChildCreation = ChildCreation {
     child: WellKnownType::GUEST,
@@ -126,11 +134,10 @@ fn operation_ref() -> ResourceRef {
 
 fn declarations() -> HarnessDeclarations {
     HarnessDeclarations {
-        owned_types: &[
-            WellKnownType::VOLUME,
-            WellKnownType::PROCESS,
-            WellKnownType::GUEST,
-        ],
+        // The one type the fake provider serves. The child its declaration
+        // licenses is a foreign type the provider does not own, so it commits
+        // through the declaration rather than through this list.
+        owned_types: &[WellKnownType::VOLUME],
         creations: DECLARATION_ROWS,
         operations: &OPERATIONS[..],
         startup: STARTUP_ROWS,
@@ -418,6 +425,65 @@ fn an_undeclared_creation_is_refused_and_a_controller_owned_one_too() {
             .expect_err("the provider is not declared")
             .code(),
         "undeclared-creation"
+    );
+}
+
+/// A declared child of a foreign type commits: the declaration handle is the
+/// license, not the set of types the provider itself serves.
+#[test]
+fn a_declared_foreign_child_commits_through_its_declaration() {
+    let harness = harness();
+    let child = harness
+        .create_child(
+            WellKnownType::VOLUME,
+            &DECLARED_CREATIONS[0],
+            "worker-foreign",
+            CanonicalJsonObject::parse(CHILD_SPEC).expect("canonical child spec"),
+        )
+        .expect("the declaring driver's own declaration licenses the foreign child");
+    assert_eq!(child.resource_type(), WellKnownType::PROCESS);
+    assert_eq!(child.name(), "worker-foreign");
+    assert_eq!(harness.created_children().len(), 1);
+}
+
+/// A child no declaration licenses stays refused, however foreign its type:
+/// the declaring driver's own rows are the only license, and the owned-type
+/// fence still refuses a foreign row no declaration covers.
+#[test]
+fn an_undeclared_foreign_child_is_refused() {
+    let harness = harness();
+    let spec = CanonicalJsonObject::parse(CHILD_SPEC).expect("canonical child spec");
+
+    let refusal = harness
+        .create_child(
+            WellKnownType::VOLUME,
+            &UNDECLARED_FOREIGN_CREATION,
+            "worker-spare",
+            spec.clone(),
+        )
+        .expect_err("no driver declared this pair");
+    assert_eq!(refusal.code(), "undeclared-creation");
+
+    let refusal = harness
+        .create_child(
+            WellKnownType::GUEST,
+            &DECLARED_CREATIONS[0],
+            "worker-foreign",
+            spec.clone(),
+        )
+        .expect_err("another driver declared this creation");
+    assert_eq!(refusal.code(), "foreign-creation");
+
+    assert!(harness.created_children().is_empty());
+    harness
+        .commit(WellKnownType::PROCESS, "worker-spare", spec.clone())
+        .expect("a refused creation commits no row");
+    assert_eq!(
+        harness
+            .admit(WellKnownType::PROCESS, "worker-foreign", spec)
+            .expect_err("the provider owns no Process rows")
+            .code(),
+        "undeclared-type"
     );
 }
 

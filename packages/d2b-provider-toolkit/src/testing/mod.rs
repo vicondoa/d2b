@@ -363,7 +363,9 @@ impl std::fmt::Debug for FaultInjector {
 /// rows here, and the harness derives one set of tables from either source.
 #[derive(Clone, Copy)]
 pub struct HarnessDeclarations {
-    /// The resource types the provider's drivers own.
+    /// The resource types the provider's drivers own. A child another
+    /// provider serves is not listed here: `create_child` commits it through
+    /// the declaring driver's own `creations` row.
     pub owned_types: &'static [WellKnownType],
     /// One row per declaring driver: the children it may create.
     pub creations: &'static [(WellKnownType, &'static [ChildCreation])],
@@ -560,8 +562,9 @@ impl<P: ProviderBase> TestHarness<P> {
         self.port.calls()
     }
 
-    /// Commit a row the provider does not own - a Zone, Provider, Role, or
-    /// any other row a declared reference may point at.
+    /// Commit a row the provider does not own - a Zone, Provider, Role, the
+    /// child row a declared creation commits, or any other row a declared
+    /// reference may point at.
     pub fn commit(
         &self,
         resource_type: WellKnownType,
@@ -710,7 +713,12 @@ impl<P: ProviderBase> TestHarness<P> {
     /// Authorize one declared creation, then commit the child row.
     ///
     /// The creation runs through the provider's own declarations, so an
-    /// undeclared or controller-owned creation is refused terminally.
+    /// undeclared or controller-owned creation is refused terminally. The
+    /// declaration handle is the license to commit the child as well: a
+    /// declared child is normally a type another provider serves (a Guest
+    /// creates Volume, Process, and Endpoint rows; a VolumeBinding creates a
+    /// Process), so the row commits beside the provider's own rows instead of
+    /// through the owned-type fence [`TestHarness::admit`] enforces.
     pub fn create_child(
         &self,
         declaring: WellKnownType,
@@ -723,7 +731,7 @@ impl<P: ProviderBase> TestHarness<P> {
             .authorize(declaration)
             .map_err(ChildCreationFailure::Declaration)?;
         let child = self
-            .admit(declaration.child, name, spec)
+            .commit(declaration.child, name, spec)
             .map_err(|refusal| ChildCreationFailure::Spec(refusal.code()))?;
         if let Ok(mut children) = self.children.lock() {
             children.push(Arc::clone(&child));

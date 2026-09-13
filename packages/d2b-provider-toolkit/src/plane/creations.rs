@@ -276,3 +276,45 @@ impl fmt::Display for CreationRefusal {
 }
 
 impl std::error::Error for CreationRefusal {}
+
+#[cfg(test)]
+mod tests {
+    use super::{CreationRefusal, CreationTable};
+    use d2b_resource_types::{ChildCreation, ChildCustody, WellKnownType};
+
+    /// One pair two creators create, as a declaring driver carries it when
+    /// one runtime kind's children are its own and another kind's are the
+    /// controller's: the same child type and Provider, one row per creator.
+    const DRIVER_OWNED: ChildCreation = ChildCreation {
+        child: WellKnownType::VOLUME,
+        provider_ref: "core.d2bus.org",
+        custody: ChildCustody::DriverOwned,
+        order: 1,
+    };
+    const CONTROLLER_OWNED: ChildCreation = ChildCreation {
+        child: WellKnownType::VOLUME,
+        provider_ref: "core.d2bus.org",
+        custody: ChildCustody::ControllerOwned,
+        order: 1,
+    };
+    static ROWS: &[(WellKnownType, &[ChildCreation])] =
+        &[(WellKnownType::GUEST, &[DRIVER_OWNED, CONTROLLER_OWNED])];
+
+    /// The declaration handle selects the creator: the driver-owned row of a
+    /// pair authorizes, and the controller-owned claim on the same pair is
+    /// refused so the same child cannot be created twice.
+    #[test]
+    fn a_pair_two_creators_declare_authorizes_only_the_driver_owned_row() {
+        let table = CreationTable::declare(ROWS);
+        let fence = table.fence(WellKnownType::GUEST);
+        assert_eq!(fence.authorize(&DRIVER_OWNED), Ok(&DRIVER_OWNED));
+        assert_eq!(
+            fence.authorize(&CONTROLLER_OWNED),
+            Err(CreationRefusal::ControllerOwned {
+                declaring: WellKnownType::GUEST,
+                child: WellKnownType::VOLUME,
+                provider_ref: "core.d2bus.org",
+            })
+        );
+    }
+}
