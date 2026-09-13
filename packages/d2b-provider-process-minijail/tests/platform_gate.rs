@@ -6,13 +6,13 @@ use d2b_provider_process_minijail::{MinijailProcessProvider, PROVIDER_NAME, laun
 #[test]
 fn unsupported_kernel_or_cgroup_kill_refuses_before_launch() {
     assert_eq!(
-        PlatformGate::new_for_test(5, 13, true)
+        PlatformGate::from_observed(5, 13, true)
             .validate()
             .unwrap_err(),
         ProcessConformanceError::PlatformGateRejected
     );
     assert_eq!(
-        PlatformGate::new_for_test(6, 1, false)
+        PlatformGate::from_observed(6, 1, false)
             .validate()
             .unwrap_err(),
         ProcessConformanceError::PlatformGateRejected
@@ -33,7 +33,7 @@ fn injected_platform_gate_rejects_before_effect_dispatch() {
             ],
             WaitReapOwner::Local,
         ),
-        PlatformGate::new_for_test(5, 13, true),
+        PlatformGate::from_observed(5, 13, true),
     );
     let ticket = fixtures::ticket_builder()
         .selected_provider(PROVIDER_NAME)
