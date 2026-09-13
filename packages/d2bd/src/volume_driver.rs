@@ -1111,6 +1111,56 @@ mod tests {
             .expect("spawn notification after ensure")
     }
 
+    // -- adoption: an existing layout is never re-created ----------------------
+
+    /// §36 recovery (`existing volume/mount is adopted` + `missing desired
+    /// resource is recreated`): a fresh driver - the post-restart in-memory
+    /// state - adopts a layout that already exists on the host without
+    /// re-running the layout effect, and its reconcile re-attaches the
+    /// deterministic binding child instead of re-creating anything.
+    #[tokio::test]
+    async fn recover_adopts_the_existing_layout_and_never_recreates_it() {
+        let fake = FakeLayoutEffects::new();
+        let manager = RecordingManager::new();
+        let mut first = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
+        let mut d = driver(fake.clone()).await;
+        // The pre-restart lifetime realizes the layout and its binding child.
+        let outcome = reconcile_to_children(&mut d, &mut first).await;
+        assert_eq!(outcome, ReconcileOutcome::Satisfied);
+        assert!(fake.ready.load(std::sync::atomic::Ordering::SeqCst), "the host holds the layout");
+
+        // Restart: a fresh driver over the same host layout state.
+        let mut restarted = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
+        let mut adopted = driver(fake.clone()).await;
+        assert_eq!(
+            adopted.recover(&mut restarted.ctx).await.expect("recover"),
+            RecoveryOutcome::Adopted,
+            "the existing layout is adopted, not recreated"
+        );
+        assert_eq!(
+            adopted.reconcile(&mut restarted.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+
+        let layout_effects = fake
+            .call_order()
+            .iter()
+            .filter(|call| **call == "ensure-layout")
+            .count();
+        assert_eq!(layout_effects, 1, "the adopted layout is never re-created");
+        let binding_ensures = manager
+            .order()
+            .iter()
+            .filter(|entry| entry.starts_with("ensure:VolumeBinding/"))
+            .count();
+        assert_eq!(binding_ensures, 2, "the adoption pass re-attaches the same binding child");
+        assert_eq!(
+            manager.rows.lock().len(),
+            1,
+            "re-attaching the deterministic child never mints a duplicate row"
+        );
+    }
+
     // -- degraded layout: one effect per pass, retry owned by the actor --------
 
     /// A Degraded/Pending layout report (`Ok(false)`) must not complete as a

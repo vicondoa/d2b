@@ -2305,6 +2305,88 @@ mod tests {
         );
     }
 
+    /// §36 provider failure (`shared provider actor restarts` + `affected
+    /// resources reconcile after provider restart`): after a restart the
+    /// child-bearing shared provider kind adopts when its complete declared
+    /// child set is still committed; a child row missing while the provider
+    /// was down reports Missing, and the following reconcile re-commits the
+    /// whole declared set before its typed effect runs.
+    #[tokio::test]
+    async fn recover_adopts_the_committed_child_set_and_reconcile_recommits_a_missing_child() {
+        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let spec = d2b_contracts_resource::v3::network::NetworkSpec::minimal(
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse("10.20.0.0/24").expect("lan"),
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse("192.0.2.0/30").expect("uplink"),
+            d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base")
+                .expect("token"),
+        )
+        .expect("network spec");
+        let mut value = serde_json::to_value(&spec).expect("network spec json");
+        value
+            .as_object_mut()
+            .expect("spec object")
+            .insert("providerRef".to_owned(), json!("Provider/network-local"));
+        // The deterministic child set the row declares (F1).
+        let uid = super::resource_uid(&[0x42; 16]).expect("test row uid");
+        let vm = d2b_provider_network_local::ifname::derive_network_child_name(&uid, "vm");
+        let agent = d2b_provider_network_local::ifname::derive_network_child_name(&uid, "agent");
+        let manager = RecordingManager::with_owned(
+            Arc::clone(&log),
+            vec![
+                owned_row("dev", "Volume", "net-config"),
+                owned_row("dev", "Guest", &vm),
+                owned_row("dev", "Process", &agent),
+            ],
+        );
+        let mut fixture = fixture(
+            NETWORK_TYPE_NAME,
+            "net-main",
+            value,
+            Arc::clone(&manager),
+            Arc::new(RecordingRequeue::default()),
+            Arc::clone(&log),
+            SharedProviderEffectPhase::Ready,
+            SharedProviderFinalize::Complete,
+        );
+        let mut driver = driver(&fixture).await;
+
+        // Restart with the complete child set still committed: adopt.
+        assert_eq!(
+            driver.recover(&mut fixture.ctx).await.expect("recover"),
+            RecoveryOutcome::Adopted
+        );
+
+        // One declared child row retired while the provider was down: the
+        // restart reports Missing instead of pretending it converged.
+        manager.owned.lock().retain(|row| row.key.name != vm);
+        assert_eq!(
+            driver.recover(&mut fixture.ctx).await.expect("recover"),
+            RecoveryOutcome::Missing
+        );
+        assert!(
+            !log.lock().iter().any(|entry| entry.starts_with("effect:")),
+            "recovery adoption runs no provider effect"
+        );
+
+        // The next reconcile re-commits every declared child before the
+        // effect that consumes them runs.
+        driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
+        let entries = log.lock().clone();
+        let effect_at =
+            entries.iter().position(|entry| entry == "effect:network").expect("effect ran");
+        for id in [
+            "ensure:Volume/net-config".to_owned(),
+            format!("ensure:Guest/{vm}"),
+            format!("ensure:Process/{agent}"),
+        ] {
+            let at = entries
+                .iter()
+                .position(|entry| entry == &id)
+                .expect("the declared child set is re-committed");
+            assert!(at < effect_at, "the child set re-commits before the effect: {entries:?}");
+        }
+    }
+
     /// KTD13: this driver's only mutation surface is the manager child
     /// endpoint - reconcile of a Process-owning kind records manager ensures
     /// and the typed effect and nothing else (no spawn/launch surface exists

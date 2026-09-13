@@ -1372,6 +1372,114 @@ mod tests {
         );
     }
 
+    /// §36 targeting/ZoneLink separation (`ordinary Guest-targeted resource
+    /// does not create or modify a ZoneLink`): realizing an ordinary resource
+    /// on a Guest never mints a ZoneLink assignment and leaves the live
+    /// link's own assignment and realization untouched.
+    #[tokio::test]
+    async fn ordinary_guest_realization_never_creates_or_moves_a_zone_link() {
+        let directory = TargetDirectory::new();
+        let runtime = Arc::new(GuestTargetRuntime::new(guest()));
+        connected(&runtime, &directory, 1);
+        let link = key("ZoneLink", "work-edge");
+        let worker = key("Process", "worker");
+        let link_assignment =
+            directory.assign(&link, &[3; 16], 1, "Guest/work-vm").expect("assign link");
+        let link_handle = guest_handle(&directory, &link);
+        directory
+            .realize(&link_handle, &link, spec(), digest(), "/run/d2b/edge.sock")
+            .await
+            .expect("realize link");
+        runtime.mark_ready(&link).expect("link ready");
+
+        // The ordinary resource runs its whole target lifecycle alongside the
+        // link: assigned, realized, observed, deleted, released.
+        directory.assign(&worker, &[7; 16], 4, "Guest/work-vm").expect("assign worker");
+        let worker_handle = guest_handle(&directory, &worker);
+        directory
+            .realize(&worker_handle, &worker, spec(), digest(), "/run/d2b/worker.sock")
+            .await
+            .expect("realize worker");
+        assert_eq!(
+            directory.observe(&worker_handle, &worker).await.expect("observe"),
+            TargetObservation::Realizing { session_generation: 1 }
+        );
+        directory.delete(&worker_handle, &worker).await.expect("delete worker realization");
+        directory.release(&worker).expect("release worker");
+
+        assert_eq!(
+            directory.assignment(&link),
+            Some(link_assignment),
+            "the ordinary resource's lifecycle never rewrites the ZoneLink assignment"
+        );
+        assert_eq!(
+            directory.assignments_for(&guest()),
+            vec![link.clone()],
+            "no second ZoneLink (or any other) assignment is synthesized"
+        );
+        assert_eq!(
+            directory.observe(&link_handle, &link).await.expect("observe"),
+            TargetObservation::Ready { session_generation: 1 },
+            "the link's realization is untouched"
+        );
+        assert_eq!(runtime.instances().len(), 1, "only the link remains realized");
+        assert_eq!(runtime.instances()[0].source(), &link);
+    }
+
+    /// §36 targeting/ZoneLink separation (`ZoneLink topology state and Guest
+    /// target availability can change independently`): a Guest session drop
+    /// and reconnect move availability and adoption, never the link's
+    /// assignment or realization; the link's own release never moves
+    /// availability.
+    #[tokio::test]
+    async fn zone_link_topology_and_guest_availability_move_independently() {
+        let directory = TargetDirectory::new();
+        let runtime = Arc::new(GuestTargetRuntime::new(guest()));
+        connected(&runtime, &directory, 1);
+        let link = key("ZoneLink", "work-edge");
+        let link_assignment =
+            directory.assign(&link, &[3; 16], 1, "Guest/work-vm").expect("assign link");
+        let link_handle = guest_handle(&directory, &link);
+        directory
+            .realize(&link_handle, &link, spec(), digest(), "/run/d2b/edge.sock")
+            .await
+            .expect("realize link");
+
+        // Availability drops; the link keeps its assignment and realization.
+        directory.disconnect_guest(&guest(), 1).expect("disconnect");
+        assert_eq!(
+            directory.availability(&guest()),
+            TargetAvailability::Unavailable { last_session_generation: 1 }
+        );
+        assert_eq!(directory.assignment(&link), Some(link_assignment));
+        assert_eq!(runtime.instances().len(), 1, "the drop never deletes the link's realization");
+
+        // Availability returns on a new generation; only adoption may cross it.
+        runtime.bind_session(2).expect("reconnect");
+        let reconnected = directory
+            .connect_guest(&guest(), 2, runtime.control(2).expect("control"))
+            .expect("connect guest");
+        assert_eq!(
+            directory.availability(&guest()),
+            TargetAvailability::Connected { session_generation: 2 }
+        );
+        assert_eq!(reconnected.pending_adoption(), [link.clone()], "the link re-adopts");
+        assert_eq!(
+            directory.assignment(&link).expect("assignment").session_generation(),
+            Some(1),
+            "availability moved; the link assignment did not"
+        );
+
+        // The link's own lifecycle never moves availability.
+        directory.release(&link).expect("release link");
+        assert_eq!(
+            directory.availability(&guest()),
+            TargetAvailability::Connected { session_generation: 2 },
+            "link topology state and target availability are independent"
+        );
+        assert_eq!(runtime.instances().len(), 1, "releasing the assignment keeps the realization");
+    }
+
     #[tokio::test]
     async fn a_resource_carries_exactly_one_target_assignment() {
         let directory = TargetDirectory::new();

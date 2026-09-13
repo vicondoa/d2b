@@ -2006,6 +2006,43 @@ list them, flagged for the same follow-up.
 - **Test scenarios:** the §36 checklist verbatim as the coverage matrix; each AE has at least one automatable proof.
 - **Verification:** `make check`; `make test-host-integration`.
 
+**Status (2026-09-13): complete.** The runtime-crate half mapped §36 48/48
+with nine tests when the U17 wave landed; the daemon/fixture half is now
+discharged row by row, with the evidence named (test name, or fixture path
+plus stage):
+
+| Deferred §36 row | Evidence |
+| --- | --- |
+| Process adoption + recreation across a restart | `process_driver::tests::recover_adopts_a_live_matching_process_without_launching` (no launch on adopt) and `launch_reaches_ready_with_expected_ticket_inputs` (Missing -> signed-ticket launch -> Ready); `tests/host-integration/resource-operator-activation.nix` stages `restart` -> `process-adopted-after-restart` (same controller pid) -> `process-resynced-after-restart` (`observedGeneration == generation`). |
+| VM adoption + recreation | `guest_driver::tests::recover_adopts_a_cloud_hypervisor_guest_with_a_live_vmm_child`, `recover_adopts_a_qemu_guest_with_its_complete_child_set`, `reconcile_ensures_the_qemu_child_graph_and_publishes_the_status`; `runtime-cloud-hypervisor-guest-preflight.nix` stages `restart-adoption`, `session-generation-advance`, `guest-vmm-process-ready`. |
+| Volume adoption + recreation | **new** `volume_driver::tests::recover_adopts_the_existing_layout_and_never_recreates_it` (fresh driver over an existing layout adopts, re-attaches the binding child, exactly one layout effect across both lifetimes) plus `ensure_creates_binding_children_after_the_layout_effect`; `virtiofsd-volume-runtime.nix` `volume-realized`/`binding-realized`/`worker-realized`/`endpoint-realized`/`binding-deleting` and the no-child-outlives-parent sampling. |
+| ZoneLink product rows (11 sub-rows) | **new** `target::tests::ordinary_guest_realization_never_creates_or_moves_a_zone_link` and `zone_link_topology_and_guest_availability_move_independently`, plus the cited `host_targeting_host_realizes_locally_through_the_directory`, `guest_target_assignment_binds_the_session_generation`, `frames_round_trip_over_a_real_authenticated_session`, `a_reconnect_rebinds_the_assignment_and_the_gate_reads_target_evidence`, `guest_targeting_realizes_through_the_guest_path_without_a_duplicate`, `realization_is_idempotent_per_source_and_never_a_second_resource`, `zone_link_deletion_leaves_unrelated_resources_targeting_the_same_guest_alone`. |
+| Shared provider restart rows | **new** `shared_provider_driver::tests::recover_adopts_the_committed_child_set_and_reconcile_recommits_a_missing_child`, plus `manager::tests::actor_crash_respawns_and_notifies_dependents` and `restart_rebuilds_watch_edges_through_reconcile` for the generic machinery. |
+| Shared-backend limit | `d2b-provider-system-systemd` `controller_rejects_launches_when_the_bounded_permit_is_saturated`, `d2b-core-controller` `host_global_hardware_matrix_cannot_be_bypassed_by_zone_or_private_class` (two holders admitted, third refused `AuthorityCapacityExceeded`), `d2bd` `host_network_admission_rejects_same_zone_exclusive_external_reuse`. |
+| Runtime-level child re-parent guard | **new code + test**: `reparent_refusal` (`packages/d2b-resource-runtime/src/manager.rs`) refuses a `ChildEnsure`/declarative child diff whose parent uid differs from the row's committed `owner_uid`, and `child_ensure_refuses_a_different_parent_and_keeps_its_committed_owner` pins it (pre-fix, the re-parent commits). Backs the driver-level `binding_driver::tests::child_cannot_silently_change_owner`. |
+
+Gates on the completed matrix: `make check` 453/453; the lane re-run of
+`resource-operator-activation` PASS 79s and
+`runtime-cloud-hypervisor-guest-preflight` PASS 337s on the tree carrying the
+new guard.
+
+**Named residuals (tracked here, not silently dropped).** (1) Rows 1-3 cite
+the fixture stages rather than executing them from the daemon tests; the
+stages themselves now run green (79s/337s above). (2) Row 4 is partial at
+three seams: no test enumerates the guest-side Resource API to prove no
+duplicate API-visible row (uniqueness is proven at the directory and
+guest-runtime level), production `session_target_control` is not wired into a
+test (the ComponentSession path is proven over a real authenticated session),
+and sub-row 11's reverse direction is asserted for assignment/realization, not
+for the ZoneLink controller's own route state. (3) Row 5 has no
+`ProviderChanged` event and no fixture restarts a provider runtime; the row is
+discharged as provider reconcile re-committing every declared child plus the
+generic actor-restart notification. (4) Row 6's daemon plumbing of a spec's
+`maxConcurrentClaims` into the shared-claim admission is not covered
+end-to-end; the ceiling refusal is proven at the authority layer. (5) The
+re-parent guard deliberately pins an existing child's owner only; binding a
+not-yet-owned row remains the authored `Ensure { owner }` path's decision.
+
 ### U16. PR merge and post-merge host-integration
 
 - **Goal:** The full change set lands on v3 through a merged PR, and host-integration re-runs on the merged v3 as the final validation gate.
@@ -2071,8 +2108,12 @@ for the slice). That slice did not run `make check` or the VM lane itself;
 the whole-tree runs recorded under U11/U12 cover the tree it landed on.
 
 **Status (2026-09-12): sweep landed - the reachable launcher sites are
-converted or deleted, and the two remaining spawn sites are documented
-exceptions.** The 2026-09-11 launch-path slice is unchanged:
+converted or deleted; the two sites still open at this point were the TPM
+effect (`RunnerRole::Swtpm`/`SwtpmFlush`) and the GPU effect worker
+(`RunnerRole::Gpu`/`Video`).** *(Superseded by the final status below: both
+are converted, so no spawn site is excepted by this unit any more - this
+paragraph is kept only as the dated record of the intermediate state.)* The
+2026-09-11 launch-path slice is unchanged:
 `PlaneChildMutations` (`resource_runtime/plane_controller_bridge.rs:257`)
 routes converted child types through the manager (`child_mutation_route`),
 `CloudHypervisorResourceSession` commits its converted children (VMM
@@ -2463,33 +2504,49 @@ and the open items at the end are the current list.
   U15's runtime half have landed and the branch's lane is green, but the branch
   is still unpushed and no PR exists, so U16 - fold the fragments, open the PR
   against v3, let PR CI run, merge, then `make check` and the lane on the merged
-  v3 - remains the ship tail.
+  v3 - remains the ship tail. **Update (2026-09-13):** the branch is pushed at
+  `282deb5f2` and PR #517 is open against v3 (the side-branch heartbeat fix
+  rides its own PR #518); what remains of the ship tail is PR CI, the merge,
+  and the post-merge `make check` plus lane on the merged v3.
 
 **Open at `17976bbc0`.** The DoD items that are not closed, each with the unit
 it belongs to:
 
-- **U15's daemon/fixture half.** The runtime-crate half landed with the wave
-  (`packages/d2b-resource-runtime`: §36 mapped 48/48 rows, nine tests added),
-  and the rows that need daemon or VM evidence are deferred with their named
-  dependency: real process/VM/volume adoption and recreation (needs the d2bd
-  drivers plus the `runtime-cloud-hypervisor-guest-preflight` and
-  `virtiofsd-volume-runtime` fixtures), the ZoneLink product rows, the shared
-  provider restart rows, the shared-backend limit, and the runtime-level child
-  re-parent guard (the ownership-integrity finding that half reported).
-- **U16's PR and merge.** No PR exists and the branch is unpushed; the merge,
-  PR CI, and the post-merge `make check` plus lane on v3 are the ship tail.
-- **The two consistency items.** The duplicated predicates the pre-PR review
-  left behind - the serving-worker condition's provider literal in
-  `packages/d2b-core/src/bundle_resolver.rs` and the binding-worker lookup in
-  `packages/d2bd/src/process_resource_runtime.rs`. They are in flight in this
-  session, not part of the landed wave.
-- **The store-preflight declaration decision.**
+- **U15's daemon/fixture half: closed** (2026-09-13). The runtime-crate half
+  landed with the wave (`packages/d2b-resource-runtime`: §36 mapped 48/48 rows,
+  nine tests added); the seven deferred rows are discharged with named evidence
+  in the U15 status block above (new tests for volume adoption, the ZoneLink
+  product rows, the shared-provider restart rows and the runtime-level child
+  re-parent guard - which needed new guard code in `manager.rs` - plus citations
+  for the process/VM rows and the shared-backend limits). The block also records
+  the five named residuals. Gates on the completed matrix: `make check` 453/453,
+  `resource-operator-activation` PASS 79s, and
+  `runtime-cloud-hypervisor-guest-preflight` PASS 337s.
+- **U16's PR and merge: PR opened.** PR #517 is open against v3 at
+  `282deb5f2` (branch pushed; #518 carries the side-branch heartbeat test fix).
+  What is left of this item is PR CI, the merge, and the post-merge `make check`
+  plus the lane on the merged v3.
+- **The two consistency items: landed** (`d024e6bc1`). The serving-worker
+  predicate is spelled once in `packages/d2b-core/src/bundle_resolver.rs` with
+  the broker's deliberate cross-crate spelling documented in
+  `packages/d2b-broker/src/runtime.rs` and pinned by a divergence test, and the
+  binding-worker split keys on the declared template rather than the owner kind
+  (the stale broker comment corrected in the same commit).
+- **The store-preflight declaration decision (decided 2026-09-13: keep).**
   `packages/d2b-provider-volume-virtiofs/nix/default.nix` still declares the
   legacy Guest-owned `EphemeralProcess/store-preflight-<guest>` row (a pre-v3
   VM-DAG preflight intent that the EphemeralProcess conversion made
-  manager-served). Keep the declaration - the row now converges through the
-  terminal classification of `guest-process-not-vmm` - or delete it as dead
-  intent; the decision is open.
+  manager-served). It is kept, with the reasoning recorded in the module's
+  header: the row is the declared intent for the VM start DAG's store
+  preflight, the plane cannot realize it yet because the Guest-owned guard
+  refuses it, so reconcile classifies that refusal terminally and a one-shot
+  delete converges without provider effects; retiring the declaration would
+  empty the projection entirely (its `enabled` gate and its only process row),
+  which is a larger change than this cleanup item. The two follow-ons, when
+  the VM bring-up DAG nodes are converted or when the projection is retired:
+  realize the preflight through the plane with a realizable owner/identity, or
+  retire the declaration together with `providerProjectionVolumeVirtiofs` and
+  its registration entries.
 
 U14's own open items (the broker's consumerless `OpenZoneStore` handover and the
 toolkit's now-orphan helpers) are recorded in the U14 status above and are not

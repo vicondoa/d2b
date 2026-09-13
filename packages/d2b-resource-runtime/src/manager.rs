@@ -1065,25 +1065,31 @@ impl Actor for ResourceManager {
                             child.type_name.as_str().to_owned(),
                             child.name.clone(),
                         );
-                        let row = StoredDesiredResource {
-                            key,
-                            uid: deterministic_uid(&ResourceKey::new(
-                                parent.zone.clone(),
-                                child.type_name.as_str().to_owned(),
-                                child.name.clone(),
-                            )),
-                            generation: 1,
-                            owner_uid: Some(parent_row.uid),
-                            provenance: ResourceProvenance::Resource,
-                            deleting: false,
-                            spec: child.spec.clone(),
-                            metadata: child.metadata.clone(),
-                            created_at: 0,
-                        };
-                        state
-                            .ensure_internal(myself, &subject, row)
-                            .await
-                            .map(|(outcome, _actor)| outcome)
+                        // Ownership integrity (R8, §36 `child cannot silently
+                        // change owner`): an owned child keeps the owner its
+                        // row already committed, so a child ensure that names
+                        // a different parent is refused instead of re-parenting
+                        // the durable row under the caller.
+                        match reparent_refusal(state, &parent, parent_row.uid, &key) {
+                            Some(error) => Err(error),
+                            None => {
+                                let row = StoredDesiredResource {
+                                    uid: deterministic_uid(&key),
+                                    key,
+                                    generation: 1,
+                                    owner_uid: Some(parent_row.uid),
+                                    provenance: ResourceProvenance::Resource,
+                                    deleting: false,
+                                    spec: child.spec.clone(),
+                                    metadata: child.metadata.clone(),
+                                    created_at: 0,
+                                };
+                                state
+                                    .ensure_internal(myself, &subject, row)
+                                    .await
+                                    .map(|(outcome, _actor)| outcome)
+                            }
+                        }
                     }
                     None => Err(ResourceError::ManagerRpc(format!(
                         "parent {parent} is not known to the manager"
@@ -1261,6 +1267,33 @@ fn owned_row(
     }
 }
 
+/// Ownership integrity (R8, §36 `child cannot silently change owner`): a
+/// child key another resource already committed keeps its owner, so a
+/// derived owned-child ensure that names a different owner is refused
+/// instead of re-parenting the durable row under the caller. A key with no
+/// owner yet is not a re-parent: binding a top-level row under an owner is
+/// the authored `Ensure { owner }` path's decision (Nix `ownerRef`), not a
+/// driver's.
+fn reparent_refusal(
+    state: &ResourceManagerState,
+    parent: &ResourceKey,
+    parent_uid: [u8; 16],
+    key: &ResourceKey,
+) -> Option<ResourceError> {
+    let existing_owner = state.rows.get(key).and_then(|row| row.owner_uid)?;
+    if existing_owner == parent_uid {
+        return None;
+    }
+    let owner = state
+        .by_uid
+        .get(&existing_owner)
+        .map(ResourceKey::to_string)
+        .unwrap_or_else(|| "an unknown owner".to_owned());
+    Some(ResourceError::ManagerRpc(format!(
+        "child {key} is owned by {owner}; refusing re-parent to {parent}"
+    )))
+}
+
 fn handle_from_outcome(outcome: &EnsureOutcome, actor: ActorRef<ResourceMsg>) -> ResourceHandle {
     let committed = outcome.row();
     ResourceHandle {
@@ -1318,6 +1351,11 @@ async fn reconcile_children(
     let mut diff = ChildrenDiff::default();
     for child in &desired {
         let key = ResourceKey::new(owner.zone.clone(), child.type_name.as_str().to_owned(), child.name.clone());
+        // Ownership integrity (R8): the declarative diff obeys the same
+        // re-parent refusal as the single child ensure.
+        if let Some(error) = reparent_refusal(state, owner, parent_row.uid, &key) {
+            return Err(error);
+        }
         let row = StoredDesiredResource {
             key: key.clone(),
             uid: deterministic_uid(&key),
@@ -3264,6 +3302,72 @@ mod tests {
             harness_over(h.store.clone(), "test", &["Volume", "Worker"], Duration::from_millis(200))
                 .await;
         wait_status(&restarted.client, &child, ResourceStatus::Ready).await;
+    }
+
+    /// §36 ownership (`child cannot silently change owner`) + R8: a child
+    /// ensure that names a different parent than the row's committed owner is
+    /// refused, so the durable owner and the live ownership edge survive the
+    /// attempt; the committed owner can still update its own child in place.
+    #[tokio::test]
+    async fn child_ensure_refuses_a_different_parent_and_keeps_its_committed_owner() {
+        let h = harness(&["Volume", "Worker"]).await;
+        let owner = key("test", "Volume", "data");
+        let other = key("test", "Volume", "other");
+        h.client.ensure(subject(), None, desired("Volume", "data", b"vol")).await.expect("owner");
+        h.client.ensure(subject(), None, desired("Volume", "other", b"vol")).await.expect("other");
+        let child = |spec: &[u8]| ChildEnsure {
+            type_name: ResourceTypeName::new("Worker"),
+            name: "helper".to_owned(),
+            spec: spec.to_vec(),
+            metadata: Vec::new(),
+        };
+        h.client.ensure_child(owner.clone(), child(b"w")).await.expect("first child ensure");
+
+        let child_key = key("test", "Worker", "helper");
+        let error = h
+            .client
+            .ensure_child(other.clone(), child(b"w"))
+            .await
+            .expect_err("a different parent cannot claim the child");
+        assert!(
+            error.to_string().contains("refusing re-parent"),
+            "the refusal names the re-parent: {error}"
+        );
+
+        // The committed owner survives the refused ensure, durably and live.
+        let row = h
+            .client
+            .get_row(child_key.clone())
+            .await
+            .expect("get_row")
+            .expect("the child row is still there");
+        assert_eq!(row.owner_uid, Some(crate::manager::deterministic_uid(&owner)));
+        assert_eq!(row.generation, 1, "the refused ensure commits nothing");
+        assert_eq!(row.spec, b"w".to_vec(), "the refused ensure leaves the spec alone");
+        let view = h.client.get(child_key.clone()).await.expect("get").expect("view");
+        assert_eq!(view.owner_key, Some(owner.clone()), "the live edge keeps the first owner");
+
+        // The declarative child diff obeys the same ownership rule.
+        let error = h
+            .client
+            .reconcile_children(other.clone(), vec![child(b"w")])
+            .await
+            .expect_err("the diff cannot claim another owner's child");
+        assert!(
+            error.to_string().contains("refusing re-parent"),
+            "the refusal names the re-parent: {error}"
+        );
+
+        // The committed owner still updates its own child in place.
+        let updated = h
+            .client
+            .ensure_child(owner.clone(), child(b"w2"))
+            .await
+            .expect("the committed owner's ensure still lands");
+        assert!(matches!(updated, EnsureOutcome::Updated(_)), "got {updated:?}");
+        let row = h.client.get_row(child_key).await.expect("get_row").expect("row");
+        assert_eq!(row.owner_uid, Some(crate::manager::deterministic_uid(&owner)));
+        assert_eq!(row.spec, b"w2".to_vec());
     }
 
     /// An owned-child ensure whose spec bytes match but whose authored

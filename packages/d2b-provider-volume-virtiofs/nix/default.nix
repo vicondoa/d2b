@@ -7,6 +7,18 @@
 # ticket. No Guest-owned `Process` is projected: the Process driver refuses a
 # Guest-owned row that is not the Guest's `<guest>-vmm` process, so a
 # projected worker row could only retry a ticket that can never be issued.
+#
+# The preflight row is kept deliberately (decision recorded in the plan's
+# Definition-of-Done leftover list). It is the declared intent for the VM
+# start DAG's store preflight; the plane cannot realize it yet, because the
+# same Guest-owned guard refuses it, so reconcile classifies the refusal
+# terminally and a one-shot delete converges without provider effects (see
+# `packages/d2bd/src/process_driver.rs`, the `guest-process-not-vmm`
+# classification). Retiring the declaration would empty this projection
+# entirely (its `enabled` gate and its only process row), which is a larger
+# decision than the cleanup item that raised it: the two follow-ons are to
+# realize the preflight through the plane (a realizable owner/identity) or to
+# retire the declaration together with this projection.
 { config, lib, ... }:
 
 let
