@@ -147,6 +147,16 @@ generated_artifact_check(
     data = ["//:generated_semantic_service_schemas"],
 )
 
+generated_artifact_check(
+    name = "gen_nix_inventories_drift",
+    command = "gen-nix-inventories",
+    data = [
+        "//:committed_v3_schema_artifacts",
+        "//:docs/reference/policy/principal-allocation.json",
+        "//:generated_nix_inventories",
+    ],
+)
+
 generated_artifact_generator(
     name = "generate",
     data = [
@@ -165,6 +175,7 @@ test_suite(
         ":gen_cli_shell_artifacts_drift",
         ":gen_daemon_api_drift",
         ":gen_error_codes_drift",
+        ":gen_nix_inventories_drift",
         ":gen_provider_packaging_drift",
         ":gen_resource_proto_drift",
         ":gen_resource_schemas_drift",

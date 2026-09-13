@@ -22,6 +22,13 @@ pub const MAX_ROLE_BINDING_RESOURCE_REFS: usize = 64;
 pub const MAX_ROLE_BINDING_ZONE_REFS: usize = 8;
 /// Maximum execution references in one RoleBinding.
 pub const MAX_ROLE_BINDING_EXECUTION_REFS: usize = 32;
+/// The closed subject vocabulary a RoleBinding may name.
+///
+/// This is the one declaration of the set: the Nix authoring surface and the
+/// generator that projects these rows into it both read this list instead of
+/// restating the six types.
+pub const BINDABLE_SUBJECT_TYPES: [&str; 6] =
+    ["Zone", "User", "Provider", "Host", "Guest", "Process"];
 
 /// RoleBinding schema failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,10 +271,7 @@ impl RoleBindingSpec {
             return Err(RoleBindingContractError::TooManySubjects);
         }
         if subjects.iter().any(|reference| {
-            !matches!(
-                reference.resource_type().as_str(),
-                "Zone" | "User" | "Provider" | "Host" | "Guest" | "Process"
-            )
+            !BINDABLE_SUBJECT_TYPES.contains(&reference.resource_type().as_str())
         }) {
             return Err(RoleBindingContractError::UnsupportedSubjectType);
         }

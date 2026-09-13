@@ -58,6 +58,7 @@ in
     ./host-polkit.nix
     ./host-sccache.nix
     ./host-users.nix
+    ./host-contract.nix
     ./host-daemon.nix
     (import ./host-broker.nix { inherit inputs; })
   ];

@@ -11,6 +11,7 @@ GENERATED_ARTIFACT_COMMANDS = [
     "gen-resource-type-catalog",
     "gen-error-codes",
     "gen-provider-packaging",
+    "gen-nix-inventories",
     "gen-semantic-service-schemas",
     "gen-cli-shell-artifacts",
     "gen-resource-proto",

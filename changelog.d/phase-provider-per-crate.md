@@ -245,3 +245,33 @@
 - `docs/reference/broker-operation-triage.md` is the operator view of the
   triage, generated from the committed rows. The W2 dispositions table it was
   seeded from is kept as the historical triage input.
+
+- The Nix closed inventories are generated from the declarations instead of
+  being restated beside them. `xtask gen-nix-inventories` emits the standard
+  ResourceType registry (projected from the resource contract's own list, the
+  one declaration the resource plane already serves), the Provider projection
+  ownership table and the compiler option key each projection lands on (one
+  table consumed by the three bundle/compiler folds instead of three copies),
+  and the resource vocabularies: the zone-control type set, the RoleBinding
+  subject vocabulary and the relay-bound types, the Role resource and session
+  verb sets, the shared envelope field lists, the committed schema pointers,
+  and the qualified types the compiler schema farm carries. The hand copies in
+  `resources.nix`, `resources-bundle.nix`, `resources-zone-control.nix`,
+  `options-zones-resources.nix`, `bundle-zones.nix`, `zone-resources.nix`,
+  `resources-zones-processes.nix`, `resource-compiler.nix`, and
+  `provider-projection-validate.nix` are gone, and
+  `//packages/xtask:gen_nix_inventories_drift` compares every generated file
+  byte-for-byte against the generator.
+- `nixos-modules/host-users.nix` is generated from the committed principal
+  allocation: `d2b-zonert`'s uid/gid come from the allocation instead of a
+  hash derivation, and the per-Device TPM accounts stay derived from the
+  trusted bundle rows. The daemon principal stays the module that runs the
+  daemon's account, with its allocated id pinned for the layout owner and the
+  broker.
+- The host contract aggregates the host-side rows into one document with the
+  bundle's framing: the operator RoleBinding rows authored in Nix (each with
+  the Zone and owner reference it was authored with), the committed principal
+  allocation, and the declared storage trees with their ACL rows and posture
+  owners. One preimage, one `d2b-digest/v1` frame, one digest beside it, and a
+  golden digest pinned by the `host-contract` unit surface, so a row that
+  moves without regenerating the document fails the gate.

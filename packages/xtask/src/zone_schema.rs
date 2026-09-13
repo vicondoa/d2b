@@ -52,36 +52,14 @@ const MOUNT_PATH_MAX_BYTES: usize = 255;
 const API_VERSION: &str = "resources.d2bus.org/v3";
 const CORE_SCHEMA_NAMESPACE: &str = "core.d2bus.org";
 
-/// The canonical 20-type registry from `ADR-046-resource-object-model`. The
-/// unit test below pins it against `nixos-modules/resources.nix`, which is the
-/// hand-maintained registry the structural option base already uses.
-pub const STANDARD_RESOURCE_TYPES: [&str; 23] = [
-    "Zone",
-    "ZoneLink",
-    "Provider",
-    "Role",
-    "RoleBinding",
-    "Quota",
-    "EmergencyPolicy",
-    "Host",
-    "Guest",
-    "Process",
-    "EphemeralProcess",
-    "Volume",
-    "VolumeBinding",
-    "Network",
-    "Device",
-    "User",
-    "Credential",
-    "Endpoint",
-    "ResourceExport",
-    "ResourceImport",
-    // The controller family's policy types: unqualified, always-committed
-    // vocabulary whose rows the foundation seed writes.
-    "Command",
-    "Operation",
-    "SeccompProfile",
-];
+/// The canonical standard ResourceType registry from
+/// `ADR-046-resource-object-model`.
+///
+/// The registry has one declaration - `d2b_contracts::identity` - and this
+/// generator projects it into the committed Nix registry that every consumer
+/// imports. Nothing here restates a type name, so a type cannot be authorable
+/// in Nix while the resource plane refuses it.
+pub use d2b_contracts::identity::STANDARD_RESOURCE_TYPES;
 
 /// U12 Provider-owned qualified ResourceTypes. They are generated from their
 /// signed Provider schemas and must never enter the Core standard registry.
@@ -1647,34 +1625,18 @@ mod tests {
     }
 
     #[test]
-    fn standard_registry_matches_hand_maintained_nix_registry() {
-        let source = fs::read_to_string(repo_root().join("nixos-modules/resources.nix"))
-            .expect("resources.nix is readable");
-        let start = source
-            .find("standardResourceTypes = [")
-            .expect("standardResourceTypes list is present");
-        let rest = &source[start..];
-        let end = rest
-            .find("];")
-            .expect("standardResourceTypes list terminates");
-        let body = &rest[..end];
-        let found: Vec<String> = body
-            .lines()
-            .skip(1)
-            .filter_map(|line| {
-                let trimmed = line.trim();
-                trimmed
-                    .strip_prefix('"')
-                    .and_then(|rest| rest.strip_suffix('"'))
-                    .map(str::to_owned)
-            })
+    fn standard_registry_is_projected_into_the_committed_nix_registry() {
+        let authority: Vec<String> = STANDARD_RESOURCE_TYPES
+            .iter()
+            .map(|name| format!("  \"{name}\"\n"))
             .collect();
-        assert_eq!(
-            found,
-            STANDARD_RESOURCE_TYPES
-                .iter()
-                .map(|name| (*name).to_owned())
-                .collect::<Vec<String>>()
+        let generated = generated_resource_types_module();
+        let mut expected = String::from("[\n");
+        expected.push_str(&authority.concat());
+        expected.push_str("]\n");
+        assert!(
+            generated.ends_with(&expected),
+            "the generated registry is the authority list entry for entry"
         );
     }
 

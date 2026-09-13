@@ -14,45 +14,16 @@ let
   artifactIdPattern = "^[a-z][a-z0-9-]*$";
   digestPattern = "^sha256:[0-9a-f]{64}$";
 
-  runtimeFields = [
-    "uid"
-    "generation"
-    "revision"
-    "status"
-    "managedBy"
-    "configurationGeneration"
-    "timestamp"
-    "createdAt"
-    "updatedAt"
-    "finalizers"
-  ];
+  # The shared resource vocabularies: the Role/RoleBinding subject and verb
+  # sets and the runtime-managed field list. Generated from the contracts, so
+  # the authoring surface cannot drift from the validator that enforces them.
+  vocabulary = import ./generated/resource-inventories.nix;
 
-  resourceVerbSet = [
-    "get"
-    "list"
-    "watch"
-    "create"
-    "update-spec"
-    "update-status"
-    "update-metadata"
-    "update-finalizers"
-    "delete"
-    "use-credential"
-    "admin-credential"
-  ];
-  sessionVerbSet = [
-    "connect"
-    "invoke"
-    "open-stream"
-    "relay"
-    "attach"
-    "cancel"
-    "observe"
-    "audit-export"
-    "support-bundle"
-  ];
-  relayBoundTypes = [ "ZoneLink" ];
-  subjectTypes = [ "Zone" "Provider" "Host" "Guest" "Process" "User" ];
+  runtimeFields = vocabulary.runtimeFields;
+  resourceVerbSet = vocabulary.resourceVerbs;
+  sessionVerbSet = vocabulary.sessionVerbs;
+  relayBoundTypes = vocabulary.relayBoundTypes;
+  subjectTypes = vocabulary.subjectTypes;
 
   parseRef = value:
     let parts = if builtins.isString value then lib.splitString "/" value else [ ];
@@ -386,7 +357,8 @@ let
           }
           {
             assertion = !relay || exactZoneBounds
-              && builtins.elem "ZoneLink" (rule.resourceTypes or [ ])
+              && lib.any (boundType: builtins.elem boundType (rule.resourceTypes or [ ]))
+                relayBoundTypes
               && builtins.elem relayAuthority [ "core-generated" "durable-local-admin" ];
             message = "${row.path}.spec.rules relay grants require exact ZoneLink-scoped bounds.";
           }

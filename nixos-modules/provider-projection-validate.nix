@@ -11,24 +11,11 @@ let
   schemaRoot = ../docs/reference/schemas/v3;
   legacyProtocolVersion = "1.0";
 
-  schemaDefinitions = [
-    {
-      serviceType = "audio.d2bus.org.AudioService";
-      file = "audio.d2bus.org_projection_spec.schema.json";
-    }
-    {
-      serviceType = "security-key.d2bus.org.SecurityKeyService";
-      file = "security-key.d2bus.org_projection_spec.schema.json";
-    }
-    {
-      serviceType = "telemetry.d2bus.org.TelemetryService";
-      file = "telemetry.d2bus.org_projection_spec.schema.json";
-    }
-    {
-      serviceType = "usb.d2bus.org.UsbService";
-      file = "usb.d2bus.org_projection_spec.schema.json";
-    }
-  ];
+  # The published projection schemas, one row per semantic service type,
+  # generated from the frozen semantic catalog beside the standard registry.
+  schemaDefinitions = lib.mapAttrsToList
+    (serviceType: file: { inherit serviceType file; })
+    (import ./generated/resource-inventories.nix).projectionSchemaPointers;
 
   publishedSchemas = lib.listToAttrs (map
     (definition: lib.nameValuePair definition.serviceType

@@ -40,6 +40,7 @@ mod gen_broker_operations;
 mod gen_resource_schemas;
 mod gen_resource_type_catalog;
 mod inventory;
+mod nix_inventories;
 mod production_closure;
 mod provider_crate_policy;
 mod provider_packaging;
@@ -141,6 +142,11 @@ fn main() -> std::process::ExitCode {
                 gen_broker_operations::gen_broker_operations(repo_root()?)
             })
         }
+        [command] if command == "gen-nix-inventories" => {
+            run_task("gen-nix-inventories", || {
+                nix_inventories::gen_nix_inventories(repo_root()?)
+            })
+        }
         [command] if command == "gen-semantic-service-schemas" => {
             run_task("gen-semantic-service-schemas", || {
                 semantic_service_schemas::gen_semantic_service_schemas(repo_root()?)
@@ -194,7 +200,7 @@ fn main() -> std::process::ExitCode {
         [command] if command == "check-provider-layout" => run_provider_layout(),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-resource-type-catalog [--check|--write]|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-resource-type-catalog [--check|--write]|gen-error-codes|gen-provider-packaging|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
             );
             std::process::ExitCode::FAILURE
         }

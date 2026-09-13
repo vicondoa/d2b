@@ -49,8 +49,8 @@ pub use role::{
     RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec, RoleStatus, RoleStatusResource,
 };
 pub use role_binding::{
-    ExternalPrincipalSelector, RelayAuthority, RoleBindingConditionType, RoleBindingSpec,
-    RoleBindingStatus, RoleBindingStatusResource, ScopeNarrowing,
+    BINDABLE_SUBJECT_TYPES, ExternalPrincipalSelector, RelayAuthority, RoleBindingConditionType,
+    RoleBindingSpec, RoleBindingStatus, RoleBindingStatusResource, ScopeNarrowing,
 };
 pub use services::*;
 pub use zone::*;
