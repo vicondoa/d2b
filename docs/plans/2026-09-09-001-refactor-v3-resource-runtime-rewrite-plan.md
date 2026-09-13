@@ -2055,6 +2055,19 @@ not-yet-owned row remains the authored `Ensure { owner }` path's decision.
   - After merge, `make test-host-integration` on merged v3 passes with the midpoint and final vmChecks run (not skipped).
 - **Verification:** PR merged; post-merge `make check` and `make test-host-integration` green on v3.
 
+**Status (2026-09-13): complete.** The change set landed on v3 as PR #517
+(squash `6874a7454`), with the side-branch heartbeat repair as PR #518
+(`513323f90`). On the merged v3: `make check` 453/453, and
+`make test-host-integration` ran the complete discovered set - all eleven
+vmChecks executed and passed (`bridge-isolation` 10s, `daemon-smoke` 50s,
+`device-worker-launch` 50s, `guest-agent-cap-confinement` 9s,
+`guest-shell-service` 74s, `privilege-oracle` 35s,
+`resource-operator-activation` 68s,
+`runtime-cloud-hypervisor-guest-preflight` 345s, `state-posture-contract`
+193s, `virtiofsd-volume-runtime` 40s, `wayland-proxy` 58s) - none skipped.
+The branch fragments were folded into `CHANGELOG.md` at merge time per
+`changelog.d/README.md`. The rewrite branch was left in place (not deleted).
+
 ### U17. Process-controller ownership of every process launch
 
 - **Goal:** every controller that needs a running process gets it by creating (or adopting) a Process resource; the Process controller owns that process's lifetime end to end, and no controller spawns a child through the provider/supervisor/broker surface itself (KTD13).
