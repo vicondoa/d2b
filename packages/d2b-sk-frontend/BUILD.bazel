@@ -76,7 +76,4 @@ filegroup(
 test_suite(
     name = "all-tests",
     tags = ["-local", "-no-remote-exec"],
-    tests = [
-        ":d2b-sk-frontend_test",
-    ],
 )
