@@ -1,5 +1,18 @@
 ### Changed
 
+- The broker's operation envelope now forwards a validated, authorized
+  invocation to the process that declares the operation's handler. The
+  broker links no provider crate, so the dispatch step crosses the
+  invocation over a dialed Unix seqpacket socket as the committed
+  `ForwardOperationRequest` shape - the operation name, the Zone, the
+  invocation identifier, and the payload the envelope already validated -
+  and returns the peer's canonical result. The live envelope commits every
+  row a declaring crate owns as well as the broker's own, so a family row
+  is reachable; a peer that has not registered the operation, a peer that
+  is absent, and a broker started with no peer all refuse named as the
+  missing handler rather than serving the wrong process. The peer's socket
+  is `--forward-socket`, else `D2B_BROKER_FORWARD_SOCKET`, else no peer at
+  all.
 - The Process family now lives in its own `d2b-provider-process` crate: the
   driver for `Process` and `EphemeralProcess`, the family's declarations, the
   spec decoder and driver factory the registry serves, the one canonical

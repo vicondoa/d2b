@@ -363,6 +363,62 @@ pub struct ApplyHostGenerationHandoffResponse {
     pub summary: String,
 }
 
+/// One validated, authorized operation forwarded to the process that
+/// declares it.
+///
+/// The broker holds the committed rows and the declaring crate holds the
+/// handler, so the dispatch step of the operation envelope forwards rather
+/// than serving a family row locally. The payload crosses as the canonical
+/// object the envelope already validated against the row's declared shape:
+/// the receiving process re-derives no authority from it and the broker
+/// never forwards a payload it did not admit.
+///
+/// The invocation identifier travels with the payload so the peer's record
+/// and the broker's record name the same invocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForwardOperationRequest {
+    /// The committed operation name the call resolved, exactly as the
+    /// committed row declares it.
+    pub operation: String,
+    /// The Zone the invocation runs in.
+    pub zone: String,
+    /// The invocation identifier the broker's audit record carries.
+    pub invocation_id: String,
+    /// The canonical payload object the row validated.
+    pub payload: serde_json::Value,
+}
+
+/// How one forwarded invocation ended.
+///
+/// A refusal keeps the two outcomes apart that a boolean or a unit reply
+/// would merge: no process serves the operation (the peer never answers, or
+/// answers [`ForwardOperationOutcome::Refused`] with the row's own code),
+/// and a served operation that failed carries its own refusal code rather
+/// than being reported as an unregistered handler.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum ForwardOperationOutcome {
+    /// The declared handler ran and returned its canonical result.
+    Result {
+        /// The canonical result payload the handler returned.
+        result: serde_json::Value,
+    },
+    /// The invocation reached no handler, or the handler refused it.
+    Refused {
+        /// The closed refusal code the refusing process decided.
+        code: String,
+    },
+}
+
+/// The reply to one [`ForwardOperationRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForwardOperationResponse {
+    /// How the forwarded invocation ended.
+    pub outcome: ForwardOperationOutcome,
+}
+
 impl BrokerRequest {
     /// Stable operation name for audit records.
     ///

@@ -139,6 +139,16 @@ pub struct ServerConfig {
     /// `/var/lib/d2b/observability/store-sync`; override via
     /// `--store-sync-export-dir`.
     pub store_sync_export_dir: PathBuf,
+    /// The process that serves the declared handlers of family-owned
+    /// operations.
+    ///
+    /// The broker links no provider crate, so a committed family row's
+    /// handler runs in the declaring crate's process: the dispatch step
+    /// dials this socket and crosses the validated invocation to whoever
+    /// answers there. `None` means no peer is configured, and every
+    /// forwarded operation is then refused fail-closed. Resolved from
+    /// `--forward-socket`, else `D2B_BROKER_FORWARD_SOCKET`.
+    pub forward_socket_path: Option<PathBuf>,
     pub test_mode: bool,
 }
 
@@ -430,6 +440,7 @@ where
         BrokerProfile::Guest => PathBuf::from("/var/lib/d2b/guest-audit/store-sync"),
     };
     let mut authority_id = profile.as_str().to_owned();
+    let mut forward_socket_override: Option<PathBuf> = None;
     let mut d2bd_uid = None;
     let mut d2bd_gid = None;
     let mut test_mode = false;
@@ -477,6 +488,11 @@ where
                 index += 1;
                 store_sync_export_dir =
                     PathBuf::from(expect_arg(&rest, index, "--store-sync-export-dir")?);
+            }
+            "--forward-socket" => {
+                index += 1;
+                forward_socket_override =
+                    Some(PathBuf::from(expect_arg(&rest, index, "--forward-socket")?));
             }
             "--authority-id" => {
                 index += 1;
@@ -563,6 +579,14 @@ where
         d2bd_uid: d2bd_uid.unwrap_or(fallback_uid),
         d2bd_gid: d2bd_gid.unwrap_or(fallback_gid),
         store_sync_export_dir,
+        // The declaring process that serves family handlers: the flag wins,
+        // otherwise the environment names it, otherwise no peer is wired and
+        // every forwarded operation refuses fail-closed.
+        forward_socket_path: forward_socket_override.or_else(|| {
+            env::var(crate::forwarding::FORWARD_SOCKET_ENV)
+                .ok()
+                .map(PathBuf::from)
+        }),
         test_mode,
     };
     Ok(match profile {
@@ -2653,6 +2677,7 @@ fn dispatch_request_with_request_fds(
         daemon_gid: config.d2bd_gid,
         profile: config.profile,
         state_dir: config.state_dir.clone(),
+        forward_socket_path: config.forward_socket_path.clone(),
         // The tree the broker's own private socket lives in: the bound every
         // Device-owned worker's per-Guest socket directory is derived under.
         runtime_root: config
@@ -8378,6 +8403,9 @@ struct LiveDispatchBackend {
     /// Device-owned worker's per-Guest socket directory must strictly live
     /// under before the broker opens it to the worker's principal.
     runtime_root: PathBuf,
+    /// The declaring process that serves family-owned operation handlers, as
+    /// the server resolved it from its configuration.
+    forward_socket_path: Option<PathBuf>,
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -8527,7 +8555,9 @@ fn prepare_runner_preopened_fds(
 #[cfg(not(feature = "layer1-bootstrap"))]
 impl DispatchBackend for LiveDispatchBackend {
     fn operation_envelope(&self) -> &crate::envelope::BrokerEnvelope {
-        live_operation_envelope(self.profile)
+        // The forward socket is fixed at process start, so the cell's runtime
+        // input cannot change after the first call.
+        live_operation_envelope(self.profile, self.forward_socket_path.as_deref())
     }
 
     fn apply_nftables(
@@ -9094,22 +9124,31 @@ impl DispatchBackend for LiveDispatchBackend {
 /// The committed-operation envelope of this broker instance.
 ///
 /// The rows are the committed catalog; the handlers live in the declaring
-/// crates' processes. The envelope is built once per process so an
-/// invocation identifier is unique across the instance's lifetime.
+/// crates' processes, so the dispatch step forwards to the peer that serves
+/// them. The envelope is built once per process so an invocation identifier
+/// is unique across the instance's lifetime.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn live_operation_envelope(profile: BrokerProfile) -> &'static crate::envelope::BrokerEnvelope {
+fn live_operation_envelope(
+    profile: BrokerProfile,
+    forward_socket_path: Option<&Path>,
+) -> &'static crate::envelope::BrokerEnvelope {
     static ENVELOPE: OnceLock<crate::envelope::BrokerEnvelope> = OnceLock::new();
     ENVELOPE.get_or_init(|| {
         let profile = match profile {
             BrokerProfile::Host => crate::catalog::BrokerProfileId::Host,
             BrokerProfile::Guest => crate::catalog::BrokerProfileId::Guest,
         };
-        crate::envelope::BrokerEnvelope::over(
-            profile,
-            Box::new(crate::envelope::ForwardingDispatcher),
-        )
-        .commit_broker_generic()
-        .build()
+        let forwarder = match forward_socket_path {
+            Some(path) => crate::envelope::ForwardingDispatcher::new(
+                crate::forwarding::SocketForwarder::new(path),
+            ),
+            // No peer is configured: every forwarded operation refuses rather
+            // than being served by a process that does not declare it.
+            None => crate::envelope::ForwardingDispatcher::default(),
+        };
+        crate::envelope::BrokerEnvelope::over(profile, Box::new(forwarder))
+            .commit_forwarded()
+            .build()
     })
 }
 
@@ -14699,6 +14738,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_command_binds_the_forward_socket_flag() {
+        // The flag is the one deterministic input: the environment is only a
+        // fallback, and a broker that names no peer must stay fail-closed
+        // rather than picking a path of its own.
+        let mode = parse_command([
+            "host".to_owned(),
+            "--test-mode".to_owned(),
+            "--forward-socket".to_owned(),
+            "/run/d2b/d2bd-forward.sock".to_owned(),
+        ])
+        .expect("a host command with a forward socket");
+        let BrokerMode::Host(config) = mode else {
+            panic!("host subcommand must build a host config");
+        };
+        assert_eq!(
+            config.forward_socket_path.as_deref(),
+            Some(Path::new("/run/d2b/d2bd-forward.sock"))
+        );
+    }
+
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn write_json_file<T: Serialize>(path: &Path, value: &T) {
         use std::os::unix::fs::PermissionsExt;
@@ -15241,6 +15301,9 @@ mod tests {
             d2bd_uid: 1000,
             d2bd_gid: Gid::current().as_raw(),
             store_sync_export_dir: root.join("observability").join("store-sync"),
+            // No forwarding peer in a broker unit test: the envelope refuses
+            // every forwarded operation, which is the fail-closed default.
+            forward_socket_path: None,
             test_mode: true,
         }
     }
@@ -21509,13 +21572,13 @@ mod tests {
             Box::new(
                 crate::envelope::HandlerTable::new().with(
                     "ZoneEchoOperation",
-                    |ctx, payload| {
+                    |invocation| {
                         Ok(crate::envelope::DispatchOutcome {
                             result: serde_json::from_value(serde_json::json!({
-                                "operation": ctx.operation,
-                                "invocation": ctx.invocation_id,
-                                "zone": ctx.zone,
-                                "fields": payload.len(),
+                                "operation": invocation.ctx.operation,
+                                "invocation": invocation.ctx.invocation_id,
+                                "zone": invocation.ctx.zone,
+                                "fields": invocation.payload.len(),
                             }))
                             .expect("canonical result"),
                         })

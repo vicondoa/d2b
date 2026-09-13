@@ -19,7 +19,9 @@
 //! so a family-owned row's handler runs in the declaring crate's process and
 //! the dispatch step forwards to it; [`OperationDispatcher`] is that seam, and
 //! a row whose declaring process has not registered is refused rather than
-//! served locally.
+//! served locally. [`ForwardedOperation`](crate::forwarding::ForwardedOperation)
+//! is the shape that crosses to the declaring process, and
+//! [`DirectInvocation`] is the shape a local handler is handed.
 
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -48,6 +50,8 @@ pub const INVALID_PAYLOAD: &str = "invalid-payload";
 /// The refusal code for an operation whose declaring process has not
 /// registered a handler.
 pub const UNREGISTERED_HANDLER: &str = "unregistered-handler";
+/// The failure code for a dispatch the broker could not complete.
+pub const ERRORED: &str = "errored";
 
 /// The closed set of codes the envelope itself refuses with.
 pub const ENVELOPE_REFUSALS: [&str; 6] = [
@@ -68,14 +72,30 @@ pub struct EnvelopeRefusal {
     pub invocation_id: String,
     /// The closed refusal code.
     pub code: &'static str,
+    /// Redacted detail a refusing peer contributed, when it contributed one.
+    ///
+    /// The code the caller sees is this envelope's own closed set; a peer's
+    /// refusal code is not one of them, so it travels here and never widens
+    /// the vocabulary a caller can observe.
+    pub detail: Option<String>,
 }
 
 impl EnvelopeRefusal {
     fn new(invocation_id: String, operation: &str, code: &'static str) -> Self {
+        Self::with_detail(invocation_id, operation, code, None)
+    }
+
+    fn with_detail(
+        invocation_id: String,
+        operation: &str,
+        code: &'static str,
+        detail: Option<String>,
+    ) -> Self {
         Self {
             operation: operation.to_owned(),
             invocation_id,
             code,
+            detail,
         }
     }
 
@@ -85,6 +105,7 @@ impl EnvelopeRefusal {
             "operation": self.operation,
             "invocation_id": self.invocation_id,
             "reason": self.code,
+            "detail": self.detail,
         })
     }
 }
@@ -149,6 +170,43 @@ pub struct DispatchOutcome {
     pub result: CanonicalJsonObject,
 }
 
+/// Why one dispatch produced no result.
+///
+/// The two cases stay apart because the envelope reports them differently:
+/// an operation no handler serves is the fail-closed
+/// [`UNREGISTERED_HANDLER`] refusal, while a handler that ran and failed has
+/// its own code and must never be reported as a missing handler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DispatchFailure {
+    /// The closed refusal code.
+    pub code: String,
+    /// Redacted detail for the operator's log.
+    pub detail: Option<String>,
+}
+
+impl DispatchFailure {
+    /// A refusal with the code the refusing side decided.
+    pub fn new(code: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            detail: None,
+        }
+    }
+
+    /// A refusal with the code the refusing side decided and its detail.
+    pub fn with_detail(code: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            detail: Some(detail.into()),
+        }
+    }
+
+    /// The refusal of an operation no handler serves.
+    pub fn unregistered_handler(detail: impl Into<String>) -> Self {
+        Self::with_detail(UNREGISTERED_HANDLER, detail)
+    }
+}
+
 /// One granted invocation as the caller and the audit log see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invocation {
@@ -164,6 +222,15 @@ pub struct Invocation {
     pub outcome: DispatchOutcome,
 }
 
+/// One validated, authorized invocation as a local handler sees it.
+#[derive(Debug)]
+pub struct DirectInvocation<'a> {
+    /// The invocation's context.
+    pub ctx: InvocationCtx<'a>,
+    /// The canonical payload the envelope validated against the row.
+    pub payload: &'a CanonicalJsonObject,
+}
+
 /// The handler-table seam of one committed operation.
 ///
 /// The broker holds the committed rows; the handler code lives in the
@@ -174,9 +241,8 @@ pub trait OperationDispatcher: Send + Sync {
     /// Run one validated, authorized invocation.
     fn dispatch(
         &self,
-        ctx: &InvocationCtx<'_>,
-        payload: &CanonicalJsonObject,
-    ) -> Result<DispatchOutcome, String>;
+        invocation: DirectInvocation<'_>,
+    ) -> Result<DispatchOutcome, DispatchFailure>;
 }
 
 /// The broker-side operation envelope.
@@ -275,9 +341,26 @@ impl BrokerEnvelope {
             zone,
             invocation_id: &invocation_id,
         };
-        let outcome = self.dispatcher.dispatch(&ctx, &payload).map_err(|_| {
-            EnvelopeRefusal::new(invocation_id.clone(), operation, UNREGISTERED_HANDLER)
-        })?;
+        let outcome = self
+            .dispatcher
+            .dispatch(DirectInvocation {
+                ctx,
+                payload: &payload,
+            })
+            .map_err(|failure| {
+                // The envelope's refusals are a closed set of broker-side
+                // codes; a failure a forwarder raised carries the peer's own
+                // code, which is not one of them. The closed code the caller
+                // sees stays the fail-closed missing-handler refusal, and the
+                // peer's code rides along as the detail the audit record
+                // keeps for an operator.
+                EnvelopeRefusal::with_detail(
+                    invocation_id.clone(),
+                    operation,
+                    UNREGISTERED_HANDLER,
+                    failure.detail.or_else(|| Some(failure.code)),
+                )
+            })?;
         Ok(Invocation {
             audit_join_identity: row.audit_join_identity(&payload),
             invocation_id,
@@ -360,6 +443,28 @@ impl BrokerEnvelopeBuilder {
         self
     }
 
+    /// Commit every broker-generic row and every row a declaring crate owns.
+    ///
+    /// This is the live set: the broker's own operations plus the family rows
+    /// whose handler the declaring process serves, which the dispatch step
+    /// forwards to it. A row that names no declaring process stays
+    /// uncommitted - the envelope has nowhere to send it, so admitting it
+    /// would turn a wiring gap into a refusal that looks like the caller's
+    /// fault.
+    pub fn commit_forwarded(mut self) -> Self {
+        self.committed.extend(
+            BROKER_OPERATION_CATALOG
+                .iter()
+                .filter(|row| {
+                    (row.owner == OperationOwner::BrokerGeneric
+                        && row.payload_provenance == PayloadProvenance::Request)
+                        || (row.owner == OperationOwner::Family && row.declaring_provider.is_some())
+                })
+                .map(|row| row.operation),
+        );
+        self
+    }
+
     /// Commit every row in the catalog.
     pub fn commit_all(mut self) -> Self {
         self.committed
@@ -401,7 +506,14 @@ impl BrokerEnvelopeBuilder {
 /// served by the declaring crate's process, not here.
 #[derive(Default)]
 pub struct HandlerTable {
-    handlers: Vec<(&'static str, Box<dyn Fn(&InvocationCtx<'_>, &CanonicalJsonObject) -> Result<DispatchOutcome, String> + Send + Sync>)>,
+    handlers: Vec<(
+        &'static str,
+        Box<
+            dyn Fn(&DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure>
+                + Send
+                + Sync,
+        >,
+    )>,
 }
 
 impl std::fmt::Debug for HandlerTable {
@@ -423,7 +535,7 @@ impl HandlerTable {
     pub fn with(
         mut self,
         operation: &'static str,
-        handler: impl Fn(&InvocationCtx<'_>, &CanonicalJsonObject) -> Result<DispatchOutcome, String>
+        handler: impl Fn(&DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure>
         + Send
         + Sync
         + 'static,
@@ -436,17 +548,19 @@ impl HandlerTable {
 impl OperationDispatcher for HandlerTable {
     fn dispatch(
         &self,
-        ctx: &InvocationCtx<'_>,
-        payload: &CanonicalJsonObject,
-    ) -> Result<DispatchOutcome, String> {
+        invocation: DirectInvocation<'_>,
+    ) -> Result<DispatchOutcome, DispatchFailure> {
         let Some((_, handler)) = self
             .handlers
             .iter()
-            .find(|(operation, _)| *operation == ctx.operation)
+            .find(|(operation, _)| *operation == invocation.ctx.operation)
         else {
-            return Err(format!("no handler for {}", ctx.operation));
+            return Err(DispatchFailure::unregistered_handler(format!(
+                "no local handler for {}",
+                invocation.ctx.operation
+            )));
         };
-        handler(ctx, payload)
+        handler(&invocation)
     }
 }
 
@@ -466,20 +580,50 @@ impl Default for BrokerEnvelope {
 /// The dispatcher of the broker's own process.
 ///
 /// The broker links no provider crate, so a family row's handler runs in the
-/// declaring crate's process and this dispatcher forwards to it over the
-/// bus. Until that forwarding is wired, a row without a local handler is
-/// refused rather than served by the wrong process - a handler table is
-/// never authority, and a missing handler is never a silent success.
-#[derive(Debug, Default)]
-pub struct ForwardingDispatcher;
+/// declaring crate's process and this dispatcher forwards to it; the
+/// forwarder is the peer-mediated leg, and a row whose peer has not
+/// registered is refused rather than served by the wrong process - a handler
+/// table is never authority, and a missing handler is never a silent success.
+pub struct ForwardingDispatcher {
+    forwarder: Box<dyn crate::forwarding::OperationForwarder>,
+}
+
+impl std::fmt::Debug for ForwardingDispatcher {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ForwardingDispatcher")
+            .finish_non_exhaustive()
+    }
+}
+
+impl ForwardingDispatcher {
+    /// Forward through one peer-mediated leg.
+    pub fn new(forwarder: impl crate::forwarding::OperationForwarder) -> Self {
+        Self {
+            forwarder: Box::new(forwarder),
+        }
+    }
+}
+
+impl Default for ForwardingDispatcher {
+    /// A forwarder whose peer serves nothing, so every forwarded operation
+    /// is refused until the broker is given a peer.
+    fn default() -> Self {
+        Self::new(crate::forwarding::UnroutedForwarder)
+    }
+}
 
 impl OperationDispatcher for ForwardingDispatcher {
     fn dispatch(
         &self,
-        _ctx: &InvocationCtx<'_>,
-        _payload: &CanonicalJsonObject,
-    ) -> Result<DispatchOutcome, String> {
-        Err(UNREGISTERED_HANDLER.to_owned())
+        invocation: DirectInvocation<'_>,
+    ) -> Result<DispatchOutcome, DispatchFailure> {
+        self.forwarder.forward(crate::forwarding::ForwardedOperation {
+            operation: invocation.ctx.operation,
+            zone: invocation.ctx.zone,
+            invocation_id: invocation.ctx.invocation_id,
+            payload: invocation.payload,
+        })
     }
 }
 
@@ -487,6 +631,104 @@ impl OperationDispatcher for ForwardingDispatcher {
 mod tests {
     use super::*;
     use crate::catalog::{BrokerAuthzFacets, OperationOwner};
+    use crate::forwarding::SocketForwarder;
+    use std::io;
+    use std::os::fd::{AsRawFd, OwnedFd};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// The declaring process a test broker forwards to.
+    ///
+    /// The loopback listens on a real socket and answers from a real
+    /// [`OperationDispatcher`], so a forwarded invocation that never crossed
+    /// the socket - or that arrived with a different operation or zone -
+    /// cannot produce the caller's result.
+    struct LoopbackPeer {
+        path: PathBuf,
+        calls: Arc<AtomicUsize>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl LoopbackPeer {
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::Acquire)
+        }
+
+        fn forwarder(&self) -> SocketForwarder {
+            SocketForwarder::new(self.path.clone())
+        }
+    }
+
+    fn loopback_peer(dispatcher: impl OperationDispatcher + 'static) -> LoopbackPeer {
+        let dir = tempfile::tempdir().expect("peer socket dir");
+        let path = dir.path().join("forward.sock");
+        let listener = crate::protocol::bind_seqpacket(&path).expect("bind peer socket");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        let dispatcher: Box<dyn OperationDispatcher> = Box::new(dispatcher);
+        std::thread::spawn(move || {
+            while let Ok(fd) = accept_peer(&listener) {
+                let Some(request) = crate::protocol::recv_json_frame::<
+                    d2b_contracts_broker::broker_wire::ForwardOperationRequest,
+                >(fd.as_raw_fd())
+                .expect("read forwarded call") else {
+                    continue;
+                };
+                observed.fetch_add(1, Ordering::AcqRel);
+                let response = answer_from(
+                    dispatcher.as_ref(),
+                    &request.operation,
+                    &request.zone,
+                    &request.invocation_id,
+                    request.payload,
+                );
+                crate::protocol::send_json_frame(fd.as_raw_fd(), &response)
+                    .expect("write forward reply");
+            }
+        });
+        LoopbackPeer {
+            path,
+            calls,
+            _dir: dir,
+        }
+    }
+
+    fn answer_from(
+        dispatcher: &dyn OperationDispatcher,
+        operation: &str,
+        zone: &str,
+        invocation_id: &str,
+        payload: Value,
+    ) -> d2b_contracts_broker::broker_wire::ForwardOperationResponse {
+        use d2b_contracts_broker::broker_wire::{
+            ForwardOperationOutcome, ForwardOperationResponse,
+        };
+        let payload: CanonicalJsonObject =
+            serde_json::from_value(payload).expect("canonical payload");
+        let outcome = match dispatcher.dispatch(DirectInvocation {
+            ctx: InvocationCtx {
+                operation,
+                zone,
+                invocation_id,
+            },
+            payload: &payload,
+        }) {
+            Ok(DispatchOutcome { result }) => ForwardOperationOutcome::Result {
+                result: serde_json::to_value(&result).expect("render result"),
+            },
+            Err(failure) => ForwardOperationOutcome::Refused {
+                code: failure.code,
+            },
+        };
+        ForwardOperationResponse { outcome }
+    }
+
+    fn accept_peer(listener: &OwnedFd) -> io::Result<OwnedFd> {
+        nix::sys::socket::accept4(listener.as_raw_fd(), nix::sys::socket::SockFlag::empty())
+            .map(crate::sys::owned_fd_from_raw)
+            .map_err(|errno| io::Error::from_raw_os_error(errno as i32))
+    }
 
     /// A row a test declares: a broker-generic operation the committed
     /// catalog does not carry, reached by name and never by a wire variant.
@@ -525,13 +767,13 @@ mod tests {
     }
 
     fn echo_table() -> HandlerTable {
-        HandlerTable::new().with("ProbeOperation", |ctx, payload| {
+        HandlerTable::new().with("ProbeOperation", |invocation| {
             Ok(DispatchOutcome {
                 result: serde_json::from_value(serde_json::json!({
-                    "operation": ctx.operation,
-                    "invocation": ctx.invocation_id,
-                    "zone": ctx.zone,
-                    "fields": payload.len(),
+                    "operation": invocation.ctx.operation,
+                    "invocation": invocation.ctx.invocation_id,
+                    "zone": invocation.ctx.zone,
+                    "fields": invocation.payload.len(),
                 }))
                 .expect("canonical result"),
             })
@@ -773,23 +1015,125 @@ mod tests {
     }
 
     #[test]
-    fn the_committed_entry_point_has_no_local_handler_yet() {
-        // The broker links no provider crate: a committed row without a local
-        // handler refuses rather than serving the wrong process.
+    fn a_forwarded_invocation_reaches_the_peer_and_returns_its_result() {
+        // The broker links no provider crate: a committed row's handler runs
+        // in the declaring process, so the dispatch step crosses to the peer
+        // that serves it and comes back with the peer's result.
+        let peer = loopback_peer(echo_table());
         let envelope = BrokerEnvelope::over(
             BrokerProfileId::Host,
-            Box::new(ForwardingDispatcher),
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
         )
-        .commit_broker_generic()
+        .declare(declared_row(
+            "ProbeOperation",
+            &["label"],
+            &["label"],
+            &["d2bd"],
+        ))
+        .build();
+        let invocation = envelope
+            .call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            )
+            .expect("the peer served the forwarded invocation");
+        assert_eq!(peer.calls(), 1, "the call must have crossed the socket");
+        let rendered = String::from_utf8(invocation.outcome.result.to_canonical_bytes())
+            .expect("canonical json is utf-8");
+        assert!(rendered.contains("\"operation\":\"ProbeOperation\""), "{rendered}");
+        assert!(rendered.contains("\"zone\":\"zone-a\""), "{rendered}");
+        assert!(rendered.contains("\"fields\":1"), "{rendered}");
+    }
+
+    #[test]
+    fn a_forwarded_row_whose_peer_serves_nothing_refuses() {
+        // The peer is reachable but registered no handler for the row, so the
+        // invocation must refuse rather than succeed with the wrong process's
+        // answer.
+        let peer = loopback_peer(HandlerTable::new());
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
+        )
+        .declare(declared_row(
+            "ProbeOperation",
+            &["label"],
+            &["label"],
+            &["d2bd"],
+        ))
         .build();
         let refusal = envelope
             .call(
                 CallerAuthority::Daemon,
-                "Invoke",
+                "ProbeOperation",
                 "zone-a",
-                &serde_json::json!({}),
+                &serde_json::json!({ "label": "x" }),
             )
-            .expect_err("no forwarding is wired yet");
+            .expect_err("a row no peer serves is refused");
         assert_eq!(refusal.code, UNREGISTERED_HANDLER);
+        assert_eq!(peer.calls(), 1, "the call must have crossed the socket");
+    }
+
+    #[test]
+    fn an_unwired_broker_refuses_every_forwarded_row() {
+        // The fail-closed default: no peer configured means no forwarded row
+        // is served, named as the missing handler rather than a local guess.
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::default()),
+        )
+        .declare(declared_row(
+            "ProbeOperation",
+            &["label"],
+            &["label"],
+            &["d2bd"],
+        ))
+        .build();
+        let refusal = envelope
+            .call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            )
+            .expect_err("no forwarding peer is wired");
+        assert_eq!(refusal.code, UNREGISTERED_HANDLER);
+    }
+
+    #[test]
+    fn the_live_set_commits_every_row_a_declaring_process_owns() {
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::default()),
+        )
+        .commit_forwarded()
+        .build();
+        let committed: BTreeSet<&str> = envelope
+            .committed_rows()
+            .map(|row| row.operation)
+            .collect();
+        for row in BROKER_OPERATION_CATALOG.iter().filter(|row| {
+            row.owner == OperationOwner::Family && row.declaring_provider.is_some()
+        }) {
+            assert!(
+                committed.contains(row.operation),
+                "{} names a declaring process and must be committed",
+                row.operation
+            );
+        }
+        // A row that names no declaring process has nowhere to be forwarded,
+        // so committing it would turn a wiring gap into the caller's fault.
+        for row in BROKER_OPERATION_CATALOG
+            .iter()
+            .filter(|row| row.declaring_provider.is_none())
+        {
+            assert!(
+                !committed.contains(row.operation) || row.owner == OperationOwner::BrokerGeneric,
+                "{} names no declaring process and must not be committed",
+                row.operation
+            );
+        }
     }
 }
