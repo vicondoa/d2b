@@ -10,7 +10,10 @@
 //! Allocation (generator side) hands each unseen name the next free id inside
 //! the reserved range and refuses a candidate that some host account already
 //! owns, so a generated allocation cannot collide with the host account
-//! table.
+//! table. The same refusal is reachable from the document side:
+//! [`check_committed_against`] is handed a host account table and refuses a
+//! committed allocation that table already overlaps, which is what
+//! `d2bd principal-allocation` runs.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -194,6 +197,170 @@ impl PrincipalAllocation {
         }
         Ok(allocated)
     }
+
+    /// Every committed principal one host account table overlaps.
+    ///
+    /// The rule is the allocator's, seen from the document side: an id the
+    /// host account table already hands to a differently named account is a
+    /// collision, and so is a principal name the host declares with another
+    /// id - the host would run that principal under an identity the document
+    /// does not name.
+    pub fn host_overlaps(&self, host: &HostAccounts) -> Vec<HostAccountOverlap> {
+        let mut overlaps = Vec::new();
+        for (principal, id) in &self.principals {
+            if let Some(account) = host.account_of(id.uid)
+                && account != principal.as_str()
+            {
+                overlaps.push(HostAccountOverlap {
+                    principal: principal.clone(),
+                    id: id.uid,
+                    host_account: account.to_owned(),
+                    host_id: id.uid,
+                    kind: HostOverlapKind::IdOwnedByOtherAccount,
+                });
+            }
+            if let Some(host_id) = host.uid_of(principal)
+                && host_id != id.uid
+            {
+                overlaps.push(HostAccountOverlap {
+                    principal: principal.clone(),
+                    id: id.uid,
+                    host_account: principal.clone(),
+                    host_id,
+                    kind: HostOverlapKind::NameDeclaredWithOtherId,
+                });
+            }
+        }
+        overlaps
+    }
+}
+
+/// The host account table one allocation check is handed.
+///
+/// The daemon loads no host table at load time: whether a uid the committed
+/// allocation pins is free is a property of the host the build deploys to,
+/// and that host's account table is an explicit input of the check rather
+/// than an assumption of the load path.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostAccounts {
+    by_name: BTreeMap<String, u32>,
+}
+
+impl HostAccounts {
+    /// Parse one `passwd`-format account table.
+    ///
+    /// Blank lines and comments are skipped. An account line that carries no
+    /// name and numeric uid is a refusal rather than a silently dropped
+    /// account, so a truncated table cannot pass for an empty one.
+    pub fn parse_passwd(table: &str) -> Result<Self, PrincipalAllocationError> {
+        let mut by_name = BTreeMap::new();
+        for line in table.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut fields = line.split(':');
+            let name = fields.next().unwrap_or_default();
+            let uid = fields.nth(1).and_then(|uid| uid.parse::<u32>().ok());
+            let Some(uid) = uid.filter(|_| !name.is_empty()) else {
+                return Err(PrincipalAllocationError::MalformedHostAccounts);
+            };
+            by_name.insert(name.to_owned(), uid);
+        }
+        Ok(Self { by_name })
+    }
+
+    /// The uid one host account owns.
+    pub fn uid_of(&self, account: &str) -> Option<u32> {
+        self.by_name.get(account).copied()
+    }
+
+    /// The host account that owns one uid, in name order.
+    pub fn account_of(&self, uid: u32) -> Option<&str> {
+        self.by_name
+            .iter()
+            .find(|(_, held)| **held == uid)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Whether the table names no accounts at all.
+    pub fn is_empty(&self) -> bool {
+        self.by_name.is_empty()
+    }
+}
+
+/// How a committed principal overlaps a host account table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostOverlapKind {
+    /// The host account table hands the committed id to another account.
+    IdOwnedByOtherAccount,
+    /// The host account table declares the principal's own name with another
+    /// id.
+    NameDeclaredWithOtherId,
+}
+
+/// One overlap between the committed allocation and a host account table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostAccountOverlap {
+    /// The allocated principal.
+    pub principal: String,
+    /// The id the allocation pins for it.
+    pub id: u32,
+    /// The host account the overlap is with.
+    pub host_account: String,
+    /// The id the host account table hands that account.
+    pub host_id: u32,
+    /// Which overlap this is.
+    pub kind: HostOverlapKind,
+}
+
+impl core::fmt::Display for HostAccountOverlap {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let text = match self.kind {
+            HostOverlapKind::IdOwnedByOtherAccount => format!(
+                "principal {} pins uid {} which host account {} already owns",
+                self.principal, self.id, self.host_account
+            ),
+            HostOverlapKind::NameDeclaredWithOtherId => format!(
+                "principal {} pins uid {} while the host account table declares it as {}",
+                self.principal, self.id, self.host_id
+            ),
+        };
+        formatter.write_str(&text)
+    }
+}
+
+/// The outcome of one allocation check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllocationCheck {
+    overlaps: Vec<HostAccountOverlap>,
+}
+
+impl AllocationCheck {
+    /// Every overlap the check refused.
+    pub fn overlaps(&self) -> &[HostAccountOverlap] {
+        &self.overlaps
+    }
+
+    /// Whether the committed allocation is clear of the host account table.
+    pub fn is_clear(&self) -> bool {
+        self.overlaps.is_empty()
+    }
+}
+
+/// Check the committed allocation against one host account table.
+///
+/// This is the reachable half of the allocator's host-uid refusal: the
+/// generator refuses to hand a candidate id the host already owns, and this
+/// check refuses a committed document that already carries one, against a
+/// table the caller supplies.
+pub fn check_committed_against(
+    host: &HostAccounts,
+) -> Result<AllocationCheck, PrincipalAllocationError> {
+    let allocation = PrincipalAllocation::committed()?;
+    Ok(AllocationCheck {
+        overlaps: allocation.host_overlaps(host),
+    })
 }
 
 /// One invalid allocation document or allocation request.
@@ -207,6 +374,8 @@ pub enum PrincipalAllocationError {
     DuplicateId,
     /// The reserved range holds no free id.
     RangeExhausted,
+    /// The host account table is not a `passwd`-format account table.
+    MalformedHostAccounts,
 }
 
 impl core::fmt::Display for PrincipalAllocationError {
@@ -216,6 +385,7 @@ impl core::fmt::Display for PrincipalAllocationError {
             Self::InvalidName => "principal name is not a bounded token",
             Self::DuplicateId => "principal allocation reuses one uid for two names",
             Self::RangeExhausted => "principal allocation range holds no free id",
+            Self::MalformedHostAccounts => "host account table is malformed",
         })
     }
 }
@@ -301,5 +471,72 @@ mod tests {
             PrincipalAllocation::from_json(duplicate.as_bytes()),
             Err(PrincipalAllocationError::DuplicateId)
         );
+    }
+
+    #[test]
+    fn a_host_account_table_that_owns_a_committed_id_is_refused() {
+        // The committed document pins d2bd at 997; a host that hands 997 to
+        // another account would run the principal as the wrong identity.
+        let host = HostAccounts::parse_passwd("root:x:0:0::/root:/bin/sh\nnm-iodine:x:997:57::/var/empty:/\n")
+            .expect("host table parses");
+        let check = check_committed_against(&host).expect("the committed document loads");
+        assert!(!check.is_clear());
+        assert_eq!(
+            check.overlaps()[0],
+            HostAccountOverlap {
+                principal: "d2bd".to_owned(),
+                id: 997,
+                host_account: "nm-iodine".to_owned(),
+                host_id: 997,
+                kind: HostOverlapKind::IdOwnedByOtherAccount,
+            }
+        );
+
+        // A host that declares the principal's own name under another id is
+        // the other half of the same refusal.
+        let host = HostAccounts::parse_passwd("d2bd:x:978:978::/var/empty:/\n").expect("parses");
+        let check = check_committed_against(&host).expect("the committed document loads");
+        assert_eq!(
+            check.overlaps(),
+            [HostAccountOverlap {
+                principal: "d2bd".to_owned(),
+                id: 997,
+                host_account: "d2bd".to_owned(),
+                host_id: 978,
+                kind: HostOverlapKind::NameDeclaredWithOtherId,
+            }]
+        );
+        assert!(check.overlaps()[0].to_string().contains("978"));
+    }
+
+    #[test]
+    fn a_host_account_table_that_owns_none_of_the_committed_ids_is_accepted() {
+        let host = HostAccounts::parse_passwd(
+            "# accounts the allocation does not name\nroot:x:0:0::/root:/bin/sh\nnixbld1:x:30001:30000::/var/empty:/\n",
+        )
+        .expect("host table parses");
+        assert!(!host.is_empty());
+        assert_eq!(host.uid_of("root"), Some(0));
+        assert_eq!(host.account_of(30001), Some("nixbld1"));
+        let check = check_committed_against(&host).expect("the committed document loads");
+        assert!(check.is_clear(), "{:?}", check.overlaps());
+
+        // The deployment's own table - one account per committed principal,
+        // under the committed id - is clear as well.
+        let host = HostAccounts::parse_passwd("d2bd:x:997:997::/var/empty:/\n")
+            .expect("parses");
+        let check = check_committed_against(&host).expect("the committed document loads");
+        assert!(check.is_clear(), "{:?}", check.overlaps());
+    }
+
+    #[test]
+    fn a_malformed_host_account_table_is_refused() {
+        for table in ["d2bd:x:not-a-uid:997::/var/empty:/\n", "x:!:\n"] {
+            assert_eq!(
+                HostAccounts::parse_passwd(table),
+                Err(PrincipalAllocationError::MalformedHostAccounts),
+                "{table:?} must be refused"
+            );
+        }
     }
 }
