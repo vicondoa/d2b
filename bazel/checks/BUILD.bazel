@@ -33,6 +33,7 @@ test_suite(
         "//packages/d2b-provider-credential-managed-identity:all-tests",
         "//packages/d2b-provider-credential-secret-service:all-tests",
         "//packages/d2b-provider-device-gpu:all-tests",
+        "//packages/d2b-provider-device:all-tests",
         "//packages/d2b-provider-device-security-key:all-tests",
         "//packages/d2b-provider-device-tpm:all-tests",
         "//packages/d2b-provider-device-usbip:all-tests",

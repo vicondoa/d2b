@@ -26,3 +26,18 @@
   from the declaration instead of a daemon-side table. Operator-visible
   behavior is unchanged: the same endpoint shapes are admitted, and the same
   validate, recover, reconcile, finalize, and delete verbs run.
+- The Network, USB, and security-key families left the daemon's shared
+  provider driver. Network now lives in `d2b-provider-network-local` beside
+  the reconciler it drives, the USB Service/Binding types in
+  `d2b-provider-device-usbip`, the security-key Service/Binding types in
+  `d2b-provider-device-security-key`, and the `Device` type - one
+  ResourceType served by four hardware Providers - in the new
+  `d2b-provider-device` crate. Each crate declares its own rows, children,
+  dependency references, and effect port; the daemon keeps the production
+  effects behind those ports and registers every type through its declaration.
+  The shared driver flow (row resolution, child ensures, owned-child
+  retirement, status projection) lives in `d2b-provider-toolkit`, so no two
+  families can diverge on it. Operator-visible behavior is unchanged: the same
+  rows, Provider identities, controller references, repair cadences, and
+  teardown ordering run, and `packages/d2bd/src/shared_provider_driver.rs` is
+  gone.

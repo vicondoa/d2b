@@ -97,10 +97,10 @@ use crate::semantic_binding_resource_runtime::{
 use crate::volume_driver::{
     ProductionVolumeDriverEffects, VolumeDriverArgs, VolumeDriverEffects, volume_spec_decoder,
 };
-use crate::shared_provider_driver::{
-    SharedProviderDriverArgs, SharedProviderDriverEffects, SharedProviderDriverFactory,
-    shared_provider_spec_decoder,
-};
+use d2b_provider_device::{DeviceDriverArgs, device_descriptor};
+use d2b_provider_device_security_key::{SecurityKeyDriverArgs, security_key_descriptors};
+use d2b_provider_device_usbip::{UsbipDriverArgs, usbip_descriptors};
+use d2b_provider_network_local::{NetworkDriverArgs, network_descriptor};
 use crate::guest_driver::{
     GuestDriverArgs, GuestDriverEffects, GuestDriverFactory, guest_spec_decoder,
 };
@@ -1354,7 +1354,7 @@ pub struct ConstructionInputs {
     pub endpoint_effects: Arc<dyn EndpointDriverEffects>,
     pub activation_effects: Arc<dyn ActivationDriverEffects>,
     pub credential_effects: Arc<dyn CredentialDriverEffects>,
-    pub shared_provider_effects: Arc<dyn SharedProviderDriverEffects>,
+    pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
     pub guest_effects: Arc<dyn GuestDriverEffects>,
     pub interaction_effects: Arc<dyn InteractionDriverEffects>,
 }
@@ -1534,11 +1534,13 @@ impl ConstructionInputs {
             },
             activation_effects: Arc::new(ProductionActivationDriverEffects::new(Arc::clone(state))),
             credential_effects,
-            shared_provider_effects: Arc::new(ProductionSharedProviderEffects::new(
-                Arc::clone(state),
-                zone.clone(),
-                controller_generation,
-            )),
+            shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects::production(
+                Arc::new(ProductionSharedProviderEffects::new(
+                    Arc::clone(state),
+                    zone.clone(),
+                    controller_generation,
+                )),
+            ),
             guest_effects: Arc::new(ProductionGuestDriverEffects::new(
                 Arc::clone(state),
                 zone.clone(),
@@ -1785,13 +1787,35 @@ impl ResourcePlaneV3 {
             verifier: Arc::new(d2b_provider_activation_nixos::FailClosedActivationVerifier),
         })))?;
         providers.register(Arc::new(TelemetryDriverFactory::new()))?;
-        providers.register(Arc::new(SharedProviderDriverFactory::new(
-            SharedProviderDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                controller_generation: inputs.authority.controller_generation,
-                effects: Arc::clone(&inputs.shared_provider_effects),
-            },
-        )))?;
+        // The Network family registers through its own declaration, the two
+        // USB types through the USB family's, the two security-key types
+        // through the security-key family's, and the Device type (four
+        // hardware Providers) through the Device family's. Each declaration
+        // carries its decoder, so the registry serves it for the type.
+        providers.register_driver(&network_descriptor(NetworkDriverArgs {
+            zone: inputs.zone.as_str().to_owned(),
+            controller_generation: inputs.authority.controller_generation,
+            effects: Arc::clone(&inputs.shared_provider_effects.network),
+        }))?;
+        for descriptor in usbip_descriptors(UsbipDriverArgs {
+            zone: inputs.zone.as_str().to_owned(),
+            controller_generation: inputs.authority.controller_generation,
+            effects: Arc::clone(&inputs.shared_provider_effects.usbip),
+        }) {
+            providers.register_driver(&descriptor)?;
+        }
+        for descriptor in security_key_descriptors(SecurityKeyDriverArgs {
+            zone: inputs.zone.as_str().to_owned(),
+            controller_generation: inputs.authority.controller_generation,
+            effects: Arc::clone(&inputs.shared_provider_effects.security_key),
+        }) {
+            providers.register_driver(&descriptor)?;
+        }
+        providers.register_driver(&device_descriptor(DeviceDriverArgs {
+            zone: inputs.zone.as_str().to_owned(),
+            controller_generation: inputs.authority.controller_generation,
+            effects: Arc::clone(&inputs.shared_provider_effects.device),
+        }))?;
         providers.register(Arc::new(GuestDriverFactory::new(GuestDriverArgs {
             zone: inputs.zone.as_str().to_owned(),
             controller_generation: inputs.authority.controller_generation,
@@ -1832,12 +1856,6 @@ impl ResourcePlaneV3 {
             ResourceTypeName::new("Credential"),
             credential_spec_decoder(),
         );
-        for resource_type in crate::shared_provider_driver::SHARED_PROVIDER_TYPES {
-            decoders.insert(
-                ResourceTypeName::new(resource_type),
-                shared_provider_spec_decoder(),
-            );
-        }
         // U12: the four runtime-Provider Guests.
         for resource_type in [crate::guest_driver::GUEST_TYPE_NAME] {
             decoders.insert(ResourceTypeName::new(resource_type), guest_spec_decoder());
@@ -2600,79 +2618,109 @@ mod tests {
 
     struct FakeSharedProviderEffects;
 
+    fn fake_outcome() -> d2b_provider_toolkit::SharedProviderEffectOutcome {
+        d2b_provider_toolkit::SharedProviderEffectOutcome::phase(
+            d2b_provider_toolkit::SharedProviderEffectPhase::Pending,
+        )
+    }
+
     #[async_trait::async_trait]
-    impl crate::shared_provider_driver::SharedProviderDriverEffects for FakeSharedProviderEffects {
+    impl d2b_provider_network_local::NetworkDriverEffects for FakeSharedProviderEffects {
         async fn reconcile_network(
             &self,
-            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
         ) -> Result<
-            crate::shared_provider_driver::SharedProviderEffectOutcome,
-            crate::shared_provider_driver::SharedProviderEffectError,
+            d2b_provider_toolkit::SharedProviderEffectOutcome,
+            d2b_provider_toolkit::SharedProviderEffectError,
         > {
-            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
-                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
-            ))
-        }
-
-        async fn reconcile_tpm(
-            &self,
-            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            crate::shared_provider_driver::SharedProviderEffectOutcome,
-            crate::shared_provider_driver::SharedProviderEffectError,
-        > {
-            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
-                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
-            ))
-        }
-
-        async fn reconcile_usbip(
-            &self,
-            _component: crate::shared_provider_driver::UsbipComponent,
-            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            crate::shared_provider_driver::SharedProviderEffectOutcome,
-            crate::shared_provider_driver::SharedProviderEffectError,
-        > {
-            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
-                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
-            ))
-        }
-
-        async fn reconcile_security_key(
-            &self,
-            _component: crate::shared_provider_driver::SecurityKeyComponent,
-            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            crate::shared_provider_driver::SharedProviderEffectOutcome,
-            crate::shared_provider_driver::SharedProviderEffectError,
-        > {
-            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
-                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
-            ))
-        }
-
-        async fn reconcile_gpu(
-            &self,
-            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            crate::shared_provider_driver::SharedProviderEffectOutcome,
-            crate::shared_provider_driver::SharedProviderEffectError,
-        > {
-            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
-                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
-            ))
+            Ok(fake_outcome())
         }
 
         async fn finalize(
             &self,
-            _kind: crate::shared_provider_driver::SharedProviderKind,
-            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
         ) -> Result<
-            crate::shared_provider_driver::SharedProviderFinalize,
-            crate::shared_provider_driver::SharedProviderEffectError,
+            d2b_provider_toolkit::SharedProviderFinalize,
+            d2b_provider_toolkit::SharedProviderEffectError,
         > {
-            Ok(crate::shared_provider_driver::SharedProviderFinalize::Complete)
+            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl d2b_provider_device_usbip::UsbipDriverEffects for FakeSharedProviderEffects {
+        async fn reconcile_usbip(
+            &self,
+            _component: d2b_provider_device_usbip::UsbipComponent,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            d2b_provider_toolkit::SharedProviderEffectOutcome,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(fake_outcome())
+        }
+
+        async fn finalize(
+            &self,
+            _component: d2b_provider_device_usbip::UsbipComponent,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            d2b_provider_toolkit::SharedProviderFinalize,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl d2b_provider_device_security_key::SecurityKeyDriverEffects for FakeSharedProviderEffects {
+        async fn reconcile_security_key(
+            &self,
+            _component: d2b_provider_device_security_key::SecurityKeyComponent,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            d2b_provider_toolkit::SharedProviderEffectOutcome,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(fake_outcome())
+        }
+
+        async fn finalize(
+            &self,
+            _component: d2b_provider_device_security_key::SecurityKeyComponent,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            d2b_provider_toolkit::SharedProviderFinalize,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl d2b_provider_device::DeviceDriverEffects for FakeSharedProviderEffects {
+        async fn reconcile_device(
+            &self,
+            _component: d2b_provider_device::DeviceComponent,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
+            _state: &d2b_provider_device::DeviceResourceState,
+        ) -> Result<
+            d2b_provider_toolkit::SharedProviderEffectOutcome,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(fake_outcome())
+        }
+
+        async fn finalize_device(
+            &self,
+            _component: d2b_provider_device::DeviceComponent,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
+            _state: &d2b_provider_device::DeviceResourceState,
+        ) -> Result<
+            d2b_provider_toolkit::SharedProviderFinalize,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
         }
     }
 
@@ -2737,7 +2785,15 @@ mod tests {
                 endpoint_effects: Arc::new(FakeEndpointEffects),
                 activation_effects: Arc::new(FakeActivationEffects),
                 credential_effects: Arc::new(FakeCredentialEffects),
-                shared_provider_effects: Arc::new(FakeSharedProviderEffects),
+                shared_provider_effects: {
+                    let effects = Arc::new(FakeSharedProviderEffects);
+                    crate::shared_provider_effects::SharedProviderEffects {
+                        network: effects.clone(),
+                        usbip: effects.clone(),
+                        security_key: effects.clone(),
+                        device: effects,
+                    }
+                },
                 guest_effects: Arc::new(FakeGuestEffects),
                 interaction_effects: Arc::new(FakeInteractionEffects),
             },

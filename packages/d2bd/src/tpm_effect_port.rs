@@ -42,7 +42,7 @@ use d2b_resource_runtime::manager::ResourceView;
 use serde_json::Value;
 
 use crate::provider_effects::{GuestLifecycleOperation, LifecycleAuthorization};
-use crate::shared_provider_driver::SharedProviderChildSurface;
+use d2b_provider_toolkit::SharedProviderChildSurface;
 
 fn map_legacy_migration_outcome(
     outcome: d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome,
@@ -675,20 +675,20 @@ impl SharedProviderChildSurface for NoManagerChildSurface {
     async fn ensure(
         &self,
         _child: ChildEnsure,
-    ) -> Result<d2b_resource_runtime::spec_store::EnsureOutcome, crate::shared_provider_driver::SharedProviderEffectError>
+    ) -> Result<d2b_resource_runtime::spec_store::EnsureOutcome, d2b_provider_toolkit::SharedProviderEffectError>
     {
-        Err(crate::shared_provider_driver::SharedProviderEffectError::Unavailable)
+        Err(d2b_provider_toolkit::SharedProviderEffectError::Unavailable)
     }
 
-    async fn delete(&self, _key: &ResourceKey) -> Result<(), crate::shared_provider_driver::SharedProviderEffectError> {
-        Err(crate::shared_provider_driver::SharedProviderEffectError::Unavailable)
+    async fn delete(&self, _key: &ResourceKey) -> Result<(), d2b_provider_toolkit::SharedProviderEffectError> {
+        Err(d2b_provider_toolkit::SharedProviderEffectError::Unavailable)
     }
 
     async fn view(
         &self,
         _key: &ResourceKey,
-    ) -> Result<Option<ResourceView>, crate::shared_provider_driver::SharedProviderEffectError> {
-        Err(crate::shared_provider_driver::SharedProviderEffectError::Unavailable)
+    ) -> Result<Option<ResourceView>, d2b_provider_toolkit::SharedProviderEffectError> {
+        Err(d2b_provider_toolkit::SharedProviderEffectError::Unavailable)
     }
 }
 
@@ -842,7 +842,7 @@ mod tests {
         async fn ensure(
             &self,
             child: ChildEnsure,
-        ) -> Result<EnsureOutcome, crate::shared_provider_driver::SharedProviderEffectError> {
+        ) -> Result<EnsureOutcome, d2b_provider_toolkit::SharedProviderEffectError> {
             self.rows
                 .lock()
                 .expect("rows")
@@ -851,7 +851,7 @@ mod tests {
             Ok(EnsureOutcome::Created(stored_row(&child)))
         }
 
-        async fn delete(&self, key: &ResourceKey) -> Result<(), crate::shared_provider_driver::SharedProviderEffectError> {
+        async fn delete(&self, key: &ResourceKey) -> Result<(), d2b_provider_toolkit::SharedProviderEffectError> {
             self.rows
                 .lock()
                 .expect("rows")
@@ -863,7 +863,7 @@ mod tests {
         async fn view(
             &self,
             key: &ResourceKey,
-        ) -> Result<Option<ResourceView>, crate::shared_provider_driver::SharedProviderEffectError> {
+        ) -> Result<Option<ResourceView>, d2b_provider_toolkit::SharedProviderEffectError> {
             Ok(self
                 .rows
                 .lock()

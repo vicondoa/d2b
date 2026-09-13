@@ -611,11 +611,6 @@ const SHARED_DRIVER_EXEMPTIONS: &[SharedDriverExemption] = &[
         retires_with: "the family moves into its own provider crate",
     },
     SharedDriverExemption {
-        module: "packages/d2bd/src/shared_provider_driver.rs",
-        family: "usb/security-key/network",
-        retires_with: "the family moves into its own provider crate",
-    },
-    SharedDriverExemption {
         module: "packages/d2bd/src/system_core_driver.rs",
         family: "host/user",
         retires_with: "the family moves into its own provider crate",

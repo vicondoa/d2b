@@ -6,7 +6,6 @@ pub mod credential_driver;
 pub mod binding_driver;
 pub mod volume_driver;
 pub mod activation_driver;
-pub(crate) mod shared_provider_driver;
 pub(crate) mod shared_provider_effects;
 pub(crate) mod guest_driver;
 pub(crate) mod guest_effects;

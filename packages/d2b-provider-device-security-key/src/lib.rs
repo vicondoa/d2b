@@ -11,10 +11,12 @@ mod authority;
 mod cid;
 mod controller;
 mod descriptor;
+mod driver;
 pub mod effect_port;
 mod lease;
 mod process;
 pub mod relay;
+mod relay_service;
 mod session_ring;
 
 pub use authority::{
@@ -35,6 +37,12 @@ pub use descriptor::{
     security_key_factory_fingerprint, security_key_projection_factory,
     security_key_projection_schema_fingerprint, security_key_semantic_descriptor,
 };
+pub use driver::{
+    SECURITY_KEY_BINDING_CONTROLLER_REF, SECURITY_KEY_BINDING_CREATIONS,
+    SECURITY_KEY_REGISTRATIONS, SECURITY_KEY_RESYNC, SECURITY_KEY_SERVICE_CONTROLLER_REF,
+    SECURITY_KEY_SERVICE_CREATIONS, SecurityKeyComponent, SecurityKeyDriverArgs,
+    SecurityKeyDriverEffects, declared_dependency_refs, security_key_descriptors,
+};
 pub use effect_port::{
     DeviceId, InventoryEffectError, InventoryObservation, ObservationPolicyId,
     SecurityKeyInventoryEffectPort,
@@ -51,6 +59,10 @@ pub use relay::{
     CTAPHID_WINK, CidTranslator, CtaphidContPacket, CtaphidInitPacket, CtaphidPacket,
     CtaphidReport, LeaseId, QUEUE_WAIT_TIMEOUT, SecurityKeyState, build_cancel_packet,
     build_error_report, build_init_packet, parse_ctaphid_report, recv_report, send_report,
+};
+pub use relay_service::{
+    AsyncHidrawDevice, HidrawDevice, PeerAuthError, SkAcceptAbort, SkAcceptHandle, SkSessionTable,
+    authenticate_peer, bind_accept_socket, spawn_accept_loop,
 };
 pub use session_ring::{SessionRecord, SessionResult, SessionRing, SessionRingError};
 

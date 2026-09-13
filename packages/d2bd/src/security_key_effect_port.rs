@@ -256,23 +256,23 @@ impl SecurityKeyEffectPort for LiveSecurityKeyEffectPort<'_> {
             }
         };
         crate::close_received_fds(&fds);
-        let listener = crate::security_key::bind_accept_socket(&self.target.socket_path)
+        let listener = d2b_provider_device_security_key::bind_accept_socket(&self.target.socket_path)
             .map_err(|_| SecurityKeyEffectError::Transient)?;
-        let mut relay_state = crate::security_key::SecurityKeyState::new(self.selector_id.clone());
+        let mut relay_state = d2b_provider_device_security_key::SecurityKeyState::new(self.selector_id.clone());
         relay_state.enable_vm(self.vm_id.as_str());
         let state = Arc::new(parking_lot::Mutex::new(relay_state));
-        let abort = crate::security_key::spawn_accept_loop(
+        let abort = d2b_provider_device_security_key::spawn_accept_loop(
             listener,
             self.vm_id.as_str().to_owned(),
             self.target.uid,
             self.target.gid,
             Arc::clone(&state),
-            crate::security_key::HidrawDevice::from_owned_fd(fd),
+            d2b_provider_device_security_key::HidrawDevice::from_owned_fd(fd),
         )
         .map_err(|_| SecurityKeyEffectError::Transient)?;
         self.state.security_key_sessions.lock().register(
             self.vm_id.as_str().to_owned(),
-            crate::security_key::SkAcceptHandle { state, abort },
+            d2b_provider_device_security_key::SkAcceptHandle { state, abort },
         );
         Ok(RelayLaunchTicket::from_core(ticket_bytes(
             b"d2b:security-key-relay/v1",

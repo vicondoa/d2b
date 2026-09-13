@@ -1,10 +1,10 @@
-//! Daemon-side security-key effect adapter.
+//! The host-side security-key relay service.
 //!
-//! The provider owns CTAPHID framing, CID translation, and ceremony state.
-//! This module owns only the broker fd, socket, peer-credential, and task
-//! effects needed to run the relay.
-
-#![allow(missing_docs)]
+//! The family owns CTAPHID framing, CID translation, and ceremony state; this
+//! module owns the fd, socket, peer-credential, and task mechanics the
+//! production effect port needs to run the relay: the hidraw handle handed
+//! over by the broker, the per-VM accept loop, the kernel-verified peer
+//! authentication, and the bounded session table.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -16,10 +16,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub use d2b_provider_device_security_key::SecurityKeyState;
-use d2b_provider_device_security_key::{
+use crate::{
     CTAPHID_BROADCAST_CID, CTAPHID_INIT, CTAPHID_REPORT_SIZE, CtaphidPacket, CtaphidReport,
-    QUEUE_WAIT_TIMEOUT, build_cancel_packet, parse_ctaphid_report,
+    QUEUE_WAIT_TIMEOUT, SecurityKeyState, build_cancel_packet, parse_ctaphid_report,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, unix::AsyncFd};
 use tracing::info;
@@ -40,6 +39,7 @@ pub struct HidrawDevice {
 }
 
 impl HidrawDevice {
+    /// Wrap the broker-handed `OwnedFd` as the relay's hidraw device.
     pub fn from_owned_fd(fd: OwnedFd) -> Self {
         Self {
             file: File::from(fd),
@@ -54,6 +54,7 @@ impl HidrawDevice {
 }
 
 #[derive(Debug)]
+/// The async hidraw handle the per-VM relay reads and writes reports on.
 pub struct AsyncHidrawDevice {
     file: AsyncFd<File>,
 }
@@ -175,10 +176,18 @@ pub(crate) async fn send_report_async<W: AsyncWrite + Unpin>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerAuthError {
     /// `SO_PEERCRED` could not be read from the connected socket.
-    PeerCredentialIo { detail: String },
+    PeerCredentialIo {
+        /// The kernel error text.
+        detail: String,
+    },
     /// The connecting peer's uid/gid did not match the per-VM socket's
     /// expected owner (the CH VSOCK↔Unix bridge process for that VM).
-    PeerCredentialMismatch { peer_uid: u32, peer_gid: u32 },
+    PeerCredentialMismatch {
+        /// The connecting peer's uid.
+        peer_uid: u32,
+        /// The connecting peer's gid.
+        peer_gid: u32,
+    },
 }
 
 impl std::fmt::Display for PeerAuthError {
@@ -219,6 +228,7 @@ pub fn authenticate_peer<F: std::os::fd::AsFd>(
     Ok(())
 }
 
+/// Bind (and tighten) the per-VM relay socket the accept loop serves.
 pub fn bind_accept_socket(path: &Path) -> std::io::Result<StdUnixListener> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -233,6 +243,7 @@ pub fn bind_accept_socket(path: &Path) -> std::io::Result<StdUnixListener> {
     Ok(listener)
 }
 
+/// The stop handle of one per-VM accept loop; dropping it stops the loop.
 pub struct SkAcceptAbort {
     stop: parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
@@ -254,6 +265,7 @@ impl SkAcceptAbort {
         )
     }
 
+    /// Signal the accept loop to stop (idempotent).
     pub fn abort(&self) {
         if let Some(tx) = self.stop.lock().take() {
             let _ = tx.send(());
@@ -268,15 +280,22 @@ impl Drop for SkAcceptAbort {
 }
 
 #[derive(Debug)]
+/// One registered VM relay: its ceremony state and its accept-loop handle.
 pub struct SkAcceptHandle {
+    /// The VM's relay ceremony state, shared with the connection loop.
     pub state: Arc<parking_lot::Mutex<SecurityKeyState>>,
+    /// The accept loop's stop handle.
     pub abort: SkAcceptAbort,
 }
 
 #[derive(Debug, Default)]
+/// The host relay's bounded per-VM session and physical-key table.
+///
+/// One relay per VM and one VM per resolved physical key: the table is the
+/// single admission point both the effect port and the accept loop consult.
 pub struct SkSessionTable {
     sessions: HashMap<String, SkAcceptHandle>,
-    backing_holders: HashMap<d2b_provider_device_security_key::PhysicalUsbBackingToken, String>,
+    backing_holders: HashMap<crate::PhysicalUsbBackingToken, String>,
 }
 
 impl SkSessionTable {
@@ -286,7 +305,7 @@ impl SkSessionTable {
     pub fn claim_backing(
         &mut self,
         vm_id: &str,
-        backing: d2b_provider_device_security_key::PhysicalUsbBackingToken,
+        backing: crate::PhysicalUsbBackingToken,
     ) -> bool {
         if self.has_live_claim(vm_id, &backing) {
             return true;
@@ -305,7 +324,7 @@ impl SkSessionTable {
     pub fn has_live_claim(
         &self,
         vm_id: &str,
-        backing: &d2b_provider_device_security_key::PhysicalUsbBackingToken,
+        backing: &crate::PhysicalUsbBackingToken,
     ) -> bool {
         self.sessions.contains_key(vm_id)
             && self
@@ -319,7 +338,7 @@ impl SkSessionTable {
     pub fn release_backing(
         &mut self,
         vm_id: &str,
-        backing: &d2b_provider_device_security_key::PhysicalUsbBackingToken,
+        backing: &crate::PhysicalUsbBackingToken,
     ) {
         if self
             .backing_holders
@@ -333,12 +352,14 @@ impl SkSessionTable {
         }
     }
 
+    /// Register one VM's relay handle, stopping any relay it replaces.
     pub fn register(&mut self, vm_id: String, handle: SkAcceptHandle) {
         if let Some(previous) = self.sessions.insert(vm_id, handle) {
             previous.abort.abort();
         }
     }
 
+    /// Remove one VM's relay handle and its physical-key reservation.
     pub fn remove(&mut self, vm_id: &str) -> Option<SkAcceptHandle> {
         self.backing_holders.retain(|_, holder| holder != vm_id);
         self.sessions.remove(vm_id)
@@ -352,6 +373,7 @@ impl SkSessionTable {
     }
 }
 
+/// Spawn the per-VM accept loop over one bound relay socket.
 pub fn spawn_accept_loop(
     listener: StdUnixListener,
     vm_id: String,
@@ -569,7 +591,7 @@ pub(crate) async fn run_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_provider_device_security_key::{
+    use crate::{
         CTAPHID_CANCEL, CTAPHID_CBOR, CTAPHID_ERR_CHANNEL_BUSY, CTAPHID_ERR_INVALID_CMD,
         CTAPHID_ERROR, CidTranslator, LeaseId, build_error_report, build_init_packet, recv_report,
         relay::LeaseState as RelayLeaseState, send_report,
@@ -1076,7 +1098,7 @@ mod tests {
     #[test]
     fn physical_backing_claim_excludes_other_vms_until_release() {
         let mut table = SkSessionTable::default();
-        let backing = d2b_provider_device_security_key::PhysicalUsbBackingToken::from_core([7; 32]);
+        let backing = crate::PhysicalUsbBackingToken::from_core([7; 32]);
 
         assert!(table.claim_backing("vm-a", backing.clone()));
         assert!(!table.claim_backing("vm-b", backing.clone()));
@@ -1088,7 +1110,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn live_same_vm_claim_is_adopted() {
         let mut table = SkSessionTable::default();
-        let backing = d2b_provider_device_security_key::PhysicalUsbBackingToken::from_core([3; 32]);
+        let backing = crate::PhysicalUsbBackingToken::from_core([3; 32]);
         let state = Arc::new(parking_lot::Mutex::new(SecurityKeyState::new("selector")));
         let (abort, _stopped) = SkAcceptAbort::new();
 
@@ -1102,7 +1124,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn stopping_vm_releases_backing_and_aborts_relay() {
         let mut table = SkSessionTable::default();
-        let backing = d2b_provider_device_security_key::PhysicalUsbBackingToken::from_core([9; 32]);
+        let backing = crate::PhysicalUsbBackingToken::from_core([9; 32]);
         let state = Arc::new(parking_lot::Mutex::new(SecurityKeyState::new("selector")));
         let (abort, stopped) = SkAcceptAbort::new();
 
