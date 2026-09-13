@@ -17,6 +17,7 @@
 mod allowed_sources;
 mod child_creation;
 mod descriptor;
+mod metadata;
 mod operation;
 mod provider;
 mod resource_type;
@@ -26,6 +27,7 @@ mod startup;
 pub use allowed_sources::AllowedSources;
 pub use child_creation::{ChildCreation, ChildCustody};
 pub use descriptor::DriverDescriptor;
+pub use metadata::{assert_metadata_registration, metadata_descriptor};
 pub use operation::{
     OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult,
     ValidatedPayload,
