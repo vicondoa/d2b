@@ -430,6 +430,32 @@ because nothing calls it and the envelope entry point needs no committed row of 
 **Scope:** the control plane only. Device data paths, guest-runtime helpers, provider-ref
 literals, doc drift, and cosmetic duplication are out of scope for this extension.
 
+### Parallelism map (execution order for the extension)
+
+The remaining units are ordered as **lanes**, not a queue: a lane is a serial chain
+because its units share files, and lanes run concurrently. Start a lane's head unit
+immediately; never start a unit behind a lane's head until the head is committed. A unit
+that touches a file another lane holds waits for that lane, or hands the edit to it.
+
+| Lane | Chain (in order) | Files it holds | Can start |
+|---|---|---|---|
+| Control plane | U21 | `packages/d2bd/src/**` (plane port, provider start-up), `packages/d2b-provider-toolkit/src/{base,plane}/`, provider entry points | now |
+| Enrollment | U24 | `packages/d2b-zone-routing/src/**`, `packages/d2b-bus/src/session/**`, the daemon's enrollment serving | now, serialized with the control plane on `packages/d2bd/src/**` |
+| Broker | U22 then U23 then U26 | `packages/d2b-broker/src/**`, `packages/d2b-bus/src/**`, `packages/d2b-contracts-broker/src/broker_wire.rs`, `docs/reference/policy/broker-operations.json` and its generated views | after the in-flight review fixes in those files land |
+| Shell removal | U25 then U28 | helper shell modules, `d2bd-runtime` unsafe-local terminal, the unsafe-local wire shapes and `composition.rs`'s helper arms, `packages/d2b-guest-shell-runner/**`, the guest image wiring | U25 after the shell family's parity check passes; U28 now (disjoint files) |
+| Adjacent surfaces | U27 | `packages/d2b-resource-compiler/src/**`, `packages/d2b/src/**`, `packages/d2b-telemetry/**` | now |
+| Audit | U29 | read-only everywhere; its improvements edit provider crates, the shared runtime, and the toolkit | audits now; improvements per family as each audit reports |
+| Closing | U19 | the policy check and its allowlists | last - its allowlists can only empty once every lane above is committed |
+
+**Rules that keep the lanes honest**
+
+1. One writer per file at a time. Two lanes needing one file agree an order over `hub` and the second rebases; do not interleave edits to a file across workers.
+2. Generated artifacts are only ever changed by running their generator, then committed with the source that produced them.
+3. A lane whose head is blocked does not skip ahead to its next unit; blocked lanes report and the other lanes keep going.
+4. Review fixes land inside their own lane's files. When one lands, the lane rebases its in-flight work on the new head, and that head needs re-review - a fix is not signed off by the review it invalidated.
+5. U29's improvements to a provider crate wait for that crate's lane to commit, so a simplification never races the change that made the code.
+6. Every lane's work is gated by the same `make check` before commit; lanes do not validate mid-wave beyond their own crate.
+
 ### U21. Instantiate the provider lifecycle
 - **Goal:** providers run through the framework they declare.
 - **Requirements:** R22, R14.
