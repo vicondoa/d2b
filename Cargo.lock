@@ -1448,6 +1448,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-host"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-system-core",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-provider-network-local"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1873,6 +1887,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-user"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-system-core",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-provider-volume"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -2204,6 +2232,7 @@ dependencies = [
  "d2b-provider-display-wayland",
  "d2b-provider-emergency-policy",
  "d2b-provider-endpoint",
+ "d2b-provider-host",
  "d2b-provider-network-local",
  "d2b-provider-notification-desktop",
  "d2b-provider-observability-otel",
@@ -2229,6 +2258,7 @@ dependencies = [
  "d2b-provider-system-core",
  "d2b-provider-toolkit",
  "d2b-provider-transport-azure-relay",
+ "d2b-provider-user",
  "d2b-provider-volume",
  "d2b-provider-volume-binding",
  "d2b-provider-volume-local",

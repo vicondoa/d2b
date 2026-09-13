@@ -354,6 +354,8 @@ filegroup(
         "//packages/d2b-provider-command:cargo_workspace_sources",
         "//packages/d2b-provider-operation:cargo_workspace_sources",
         "//packages/d2b-provider-seccomp-profile:cargo_workspace_sources",
+        "//packages/d2b-provider-host:cargo_workspace_sources",
+        "//packages/d2b-provider-user:cargo_workspace_sources",
     ],
     visibility = ["//visibility:public"],
 )

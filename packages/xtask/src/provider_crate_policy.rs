@@ -606,11 +606,6 @@ const SHARED_DRIVER_EXEMPTIONS: &[SharedDriverExemption] = &[
         family: "telemetry",
         retires_with: "the family moves into its own provider crate",
     },
-    SharedDriverExemption {
-        module: "packages/d2bd/src/system_core_driver.rs",
-        family: "host/user",
-        retires_with: "the family moves into its own provider crate",
-    },
 ];
 
 /// The crate source root one shared module path belongs to.

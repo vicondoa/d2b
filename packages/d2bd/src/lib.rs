@@ -9,7 +9,7 @@ pub mod activation_driver;
 pub(crate) mod shared_provider_effects;
 pub(crate) mod guest_driver;
 pub(crate) mod guest_effects;
-pub(crate) mod system_core_driver;
+pub(crate) mod system_core_effects;
 pub(crate) mod interaction_child_sources;
 
 pub(crate) mod guest_target_control;

@@ -56,3 +56,14 @@
   rows, Provider identities, controller references, repair cadences, and
   teardown ordering run, and `packages/d2bd/src/shared_provider_driver.rs` is
   gone.
+- The Host and User bootstrap drivers now live in their own
+  `d2b-provider-host` and `d2b-provider-user` crates, each with the type's
+  spec decoder, its effect port, and the driver declaration the resource plane
+  registers the type by; `d2b-provider-system-core` keeps the Host/User
+  reconciler realizers the daemon's effect implementations drive. The daemon
+  registers both types through their declarations, so the daemon-side
+  `system_core_driver` module and the per-type decoder table entries that only
+  existed for these two types are gone. Operator-visible behavior is
+  unchanged: the same Host Provider fence, the same bounded probe with its
+  degraded fallback, the same local User discovery, and the same failure
+  kinds.

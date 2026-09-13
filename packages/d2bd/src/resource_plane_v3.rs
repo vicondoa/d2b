@@ -49,6 +49,8 @@ use d2b_core::bundle_resolver::{BundleResolver, ResolvedStoreViewIntent, intent_
 use d2b_provider_endpoint::{
     EndpointDriverArgs, EndpointDriverEffects, GuestControlProducer, endpoint_descriptor,
 };
+use d2b_provider_host::host_descriptor;
+use d2b_provider_user::user_descriptor;
 use d2b_provider_process::{
     GuestOwnerIdentitySource, ProcessDriverArgs, ProcessDriverEffects, decode_metadata_owner_ref,
     process_family_descriptors,
@@ -107,7 +109,7 @@ use crate::guest_driver::{
 };
 use crate::guest_effects::ProductionGuestDriverEffects;
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
-use crate::system_core_driver::{SystemCoreDriverFactory, system_core_spec_decoder};
+use crate::system_core_effects::{ProductionHostDriverEffects, ProductionUserDriverEffects};
 use d2b_provider_command::command_descriptor;
 use d2b_provider_emergency_policy::emergency_policy_descriptor;
 use d2b_provider_operation::operation_descriptor;
@@ -1867,7 +1869,12 @@ impl ResourcePlaneV3 {
             controller_generation: inputs.authority.controller_generation,
             effects: Arc::clone(&inputs.guest_effects),
         })))?;
-        providers.register(Arc::new(SystemCoreDriverFactory::new()))?;
+        // The Host and User bootstrap types register through their driver
+        // declarations: the registry serves each type's decoder and factory
+        // from its declaration, and the declarations carry the types' verbs,
+        // execution domains, exportability, and reads.
+        providers.register_driver(&host_descriptor(Arc::new(ProductionHostDriverEffects)))?;
+        providers.register_driver(&user_descriptor(Arc::new(ProductionUserDriverEffects)))?;
         // The controller family registers through its per-type declarations:
         // each crate serves exactly one type, and the registry resolves that
         // type's decoder, factory, verbs, execution domains, exportability,
@@ -1920,8 +1927,9 @@ impl ResourcePlaneV3 {
     }
 
     /// The manager's per-type decode hooks: the registered drivers'
-    /// decoders first (the Process family rides its descriptors), then the
-    /// families whose builders this plane still wires directly.
+    /// decoders first (the Process, Endpoint, Host, and User families ride
+    /// their descriptors), then the families whose builders this plane still
+    /// wires directly.
     fn decoders(providers: &ProviderDirectory) -> HashMap<ResourceTypeName, Arc<dyn SpecDecoder>> {
         let mut decoders = providers.decoders();
         decoders.insert(
@@ -1941,14 +1949,7 @@ impl ResourcePlaneV3 {
         for resource_type in [crate::guest_driver::GUEST_TYPE_NAME] {
             decoders.insert(ResourceTypeName::new(resource_type), guest_spec_decoder());
         }
-        decoders.insert(
-            ResourceTypeName::new("Host"),
-            system_core_spec_decoder(),
-        );
-        decoders.insert(
-            ResourceTypeName::new("User"),
-            system_core_spec_decoder(),
-        );
+
         decoders
     }
 

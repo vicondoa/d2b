@@ -92,6 +92,8 @@ test_suite(
         "//packages/d2b-provider-command:all-tests",
         "//packages/d2b-provider-operation:all-tests",
         "//packages/d2b-provider-seccomp-profile:all-tests",
+        "//packages/d2b-provider-host:all-tests",
+        "//packages/d2b-provider-user:all-tests",
     ],
 )
 
