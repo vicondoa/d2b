@@ -66,9 +66,13 @@ _SURFACES = {
     },
     "host-contract": {
         "cases": ["host-contract-digest"],
+        "package": "packages/d2b-broker",
         "files": [
             "docs/reference/policy/principal-allocation.json",
+            "nixos-modules/generated/resource-inventories.nix",
+            "nixos-modules/generated/resource-types.nix",
             "nixos-modules/resources-bundle.nix",
+            "nixos-modules/resources.nix",
             "packages/d2b-broker/src/ops/state-posture-contract.json",
         ],
         "modules": [
@@ -81,6 +85,9 @@ _SURFACES = {
         "package": "packages/d2b-provider-volume-local",
         "files": [
             "nixos-modules/generated/provider-catalog-shape.nix",
+            "nixos-modules/generated/provider-projections.nix",
+            "nixos-modules/generated/resource-inventories.nix",
+            "nixos-modules/generated/resource-types.nix",
             "nixos-modules/generated/zone-spec-canonical.nix",
             "nixos-modules/resources-bundle.nix",
             "nixos-modules/resources.nix",
@@ -324,6 +331,9 @@ nix_surface_test(
         "files": [
             "packages/d2b-provider-guest-cloud-hypervisor/nix/default.nix",
             "nixos-modules/bundle-zones.nix",
+            "nixos-modules/generated/provider-projections.nix",
+            "nixos-modules/generated/resource-inventories.nix",
+            "nixos-modules/generated/resource-types.nix",
             "nixos-modules/generated/zone-spec-canonical.nix",
             "nixos-modules/resources-bundle.nix",
             "nixos-modules/resources-zones-processes.nix",

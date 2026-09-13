@@ -11,6 +11,7 @@ exports_files(
 exports_files(
     [
         "src/live_handlers.rs",
+        "src/ops/state-posture-contract.json",
         "src/runtime.rs",
     ],
     visibility = ["//visibility:public"],
