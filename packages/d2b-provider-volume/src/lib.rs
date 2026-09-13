@@ -21,5 +21,5 @@ mod driver;
 
 pub use driver::{
     VOLUME_CREATIONS, VOLUME_TYPE_NAME, VolumeDriverArgs, VolumeDriverEffects, volume_descriptor,
-    volume_spec_decoder,
+    volume_provider_declaration, volume_spec_decoder,
 };

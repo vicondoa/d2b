@@ -4699,6 +4699,37 @@ fn read_public_key32(path: &Path) -> Result<[u8; 32], TypedError> {
     Ok(bytes)
 }
 
+/// Drain the published v3 planes' providers.
+///
+/// Each plane drains its providers through the base in the reverse of the
+/// order it started them. The planes are visited in zone order so the
+/// sequence is deterministic; a refusal is logged with the provider and the
+/// row the base named, and the remaining planes still drain.
+async fn drain_v3_providers(state: &ServerState) {
+    let mut planes: Vec<(String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>)> = state
+        .v3_planes
+        .lock()
+        .iter()
+        .map(|(zone, plane)| (zone.clone(), std::sync::Arc::clone(plane)))
+        .collect();
+    planes.sort_by(|left, right| left.0.cmp(&right.0));
+    for (zone, plane) in planes {
+        match plane.drain_providers().await {
+            Ok(()) => tracing::debug!(
+                zone = %zone,
+                providers = ?plane.providers().drain_order(),
+                "v3 providers drained in the reverse of their startup order"
+            ),
+            Err(error) => tracing::warn!(
+                zone = %zone,
+                provider = %error.provider_ref(),
+                error = %error,
+                "v3 provider drain refused"
+            ),
+        }
+    }
+}
+
 async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedError> {
     if let Some(listeners) = state
         .interaction_listeners
@@ -4730,6 +4761,7 @@ async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedEr
     // Arc::try_unwrap shutdown gate runs.
     drop(runtime);
     let resource_result = shutdown_resource_plane(state).await;
+    drain_v3_providers(state).await;
     if let Some(error) = interaction_error {
         if let Err(resource_error) = resource_result {
             tracing::error!(

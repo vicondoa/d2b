@@ -217,7 +217,7 @@ pub trait GuestAgent: Send + Sync + 'static {
     fn declaration(&self) -> &ProviderDeclaration;
 
     /// What this agent serves, one descriptor per resource type.
-    fn drivers(&self) -> &'static [DriverDescriptor];
+    fn drivers(&self) -> &[DriverDescriptor];
 
     /// Serve one admitted frame from the enrolled session.
     ///

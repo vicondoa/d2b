@@ -36,7 +36,7 @@ pub struct PlannedStep {
 
 impl StartupPlan {
     /// Derive the order from the drivers' declared steps.
-    pub fn derive(drivers: &'static [DriverDescriptor]) -> Result<Self, StartupPlanRefusal> {
+    pub fn derive(drivers: &[DriverDescriptor]) -> Result<Self, StartupPlanRefusal> {
         let mut declared: Vec<(WellKnownType, &'static StartupStep)> = Vec::new();
         for driver in drivers {
             for step in driver.startup {

@@ -29,7 +29,7 @@ struct DeclaredCreation {
 
 impl CreationTable {
     /// Collect the declared creations of every driver.
-    pub fn over(drivers: &'static [DriverDescriptor]) -> Self {
+    pub fn over(drivers: &[DriverDescriptor]) -> Self {
         let mut entries = Vec::new();
         for driver in drivers {
             for declaration in driver.creations {

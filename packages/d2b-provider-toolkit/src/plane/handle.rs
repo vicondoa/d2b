@@ -113,14 +113,15 @@ impl ZonePlanePort for UnavailablePlanePort {
 /// The zone-plane handle one provider attaches through.
 ///
 /// It carries only what the provider declared about itself, so an attach body
-/// cannot act on a fact the declaration does not state.
-pub struct ZonePlaneHandle {
+/// cannot act on a fact the declaration does not state. The declared facts are
+/// borrowed from the provider for the handle's lifetime.
+pub struct ZonePlaneHandle<'a> {
     zone: ZoneId,
     provider_ref: &'static str,
     adapters: &'static [PlaneAdapter],
     principals: &'static [PrincipalName],
     storage_roots: &'static [StorageRoot],
-    services: PlaneServices,
+    services: PlaneServices<'a>,
     port: Arc<dyn ZonePlanePort>,
 }
 
@@ -130,18 +131,18 @@ pub struct ZonePlaneHandle {
 /// from a second table, so a service is published exactly where it is
 /// declared.
 #[derive(Clone, Copy)]
-pub struct PlaneServices {
-    drivers: &'static [d2b_resource_types::DriverDescriptor],
+pub struct PlaneServices<'a> {
+    drivers: &'a [d2b_resource_types::DriverDescriptor],
 }
 
-impl PlaneServices {
+impl<'a> PlaneServices<'a> {
     /// Union the service declarations of every driver.
-    pub const fn over(drivers: &'static [d2b_resource_types::DriverDescriptor]) -> Self {
+    pub const fn over(drivers: &'a [d2b_resource_types::DriverDescriptor]) -> Self {
         Self { drivers }
     }
 
     /// Every declared service, in driver declaration order.
-    pub fn iter(&self) -> impl Iterator<Item = &'static ServiceDecl> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = &'a ServiceDecl> + 'a {
         self.drivers
             .iter()
             .flat_map(|driver| driver.services.iter())
@@ -153,7 +154,7 @@ impl PlaneServices {
     }
 }
 
-impl fmt::Debug for PlaneServices {
+impl fmt::Debug for PlaneServices<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PlaneServices")
@@ -172,7 +173,7 @@ impl fmt::Debug for DrainDeadline {
     }
 }
 
-impl fmt::Debug for ZonePlaneHandle {
+impl fmt::Debug for ZonePlaneHandle<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ZonePlaneHandle")
@@ -184,12 +185,12 @@ impl fmt::Debug for ZonePlaneHandle {
     }
 }
 
-impl ZonePlaneHandle {
+impl<'a> ZonePlaneHandle<'a> {
     /// Build the handle for one provider in one zone.
     pub fn new(
         zone: ZoneId,
         declaration: &ProviderDeclaration,
-        drivers: &'static [d2b_resource_types::DriverDescriptor],
+        drivers: &'a [d2b_resource_types::DriverDescriptor],
         port: Arc<dyn ZonePlanePort>,
     ) -> Self {
         Self {
@@ -238,7 +239,7 @@ impl ZonePlaneHandle {
     }
 
     /// Borrow the services the provider's drivers declared.
-    pub const fn services(&self) -> &PlaneServices {
+    pub const fn services(&self) -> &PlaneServices<'a> {
         &self.services
     }
 

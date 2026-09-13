@@ -87,7 +87,7 @@ impl OperationEnvelope {
     pub fn over(
         zone: ZoneId,
         provider_ref: ResourceRef,
-        drivers: &'static [DriverDescriptor],
+        drivers: &[DriverDescriptor],
         audit: Arc<Mutex<ProviderAgentAuditLog>>,
     ) -> Result<Self, ProviderToolkitError> {
         let mut handlers = Vec::new();

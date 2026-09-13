@@ -45,7 +45,8 @@ use d2b_resource_runtime::error::{
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{
-    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
+    AllowedSources, Cardinality, ChildCreation, ChildCustody, DriverDescriptor, IsolationPosture,
+    ProviderDeclaration, WellKnownType,
 };
 
 /// The one resource type this factory serves.
@@ -697,6 +698,32 @@ const VOLUME_EXECUTION_DOMAINS: &[&str] = &["host"];
 /// The driver derives every child from its own stored spec plus the layout
 /// intents that spec admits, so it reads no other row.
 const VOLUME_READS: &[WellKnownType] = &[];
+
+/// The declaration the Volume family makes about its zone plane.
+///
+/// The declared reference names the family (the crate that declares it), not
+/// the concrete `Provider/<name>` a Volume row selects: which Provider serves
+/// a row stays a row fact (`spec.providerRef`), and the family serves every
+/// one of them.
+///
+/// The family's plane integration is its registered drivers: the volume-local
+/// layout root is resolved per Volume row through the trusted bundle source
+/// policy the driver's effect port carries, and the family serves no broker
+/// operation and no ComponentSession service, so it claims no storage root of
+/// its own and declares no plane adapter, principal, or service. A plane
+/// action outside that declaration is refused rather than realized.
+pub const fn volume_provider_declaration() -> ProviderDeclaration {
+    ProviderDeclaration {
+        provider_ref: "volume",
+        self_bindings: &[],
+        required: true,
+        cardinality: Cardinality::AtMostOne,
+        isolation_posture: IsolationPosture::Standard,
+        plane_adapters: &[],
+        principals: &[],
+        storage_roots: &[],
+    }
+}
 
 /// The Volume type's driver declaration.
 ///

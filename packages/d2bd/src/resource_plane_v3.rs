@@ -78,7 +78,6 @@ use d2b_resource_runtime::manager::{
     DesiredResource, ResourceManager, ResourceManagerArgs, ResourceManagerClient,
     ResourceManagerMsg, ResourceSelector,
 };
-use d2b_resource_runtime::provider::ProviderDirectory;
 use d2b_resource_runtime::spec_store::{SpecSelector, SpecStore, StoredDesiredResource};
 use d2b_resource_runtime::GuestTargetControl;
 use d2b_resource_runtime::target::{TargetDirectory, TargetRef, TargetResolver};
@@ -99,6 +98,9 @@ use crate::endpoint_effects::{
 };
 use crate::process_effects::ProductionProcessDriverEffects;
 use crate::volume_effects::ProductionVolumeDriverEffects;
+use crate::provider_lifecycle::{
+    ProviderRuntime, ProviderSet, ProviderStartupError, family_declaration,
+};
 use d2b_provider_device::{DeviceDriverArgs, device_descriptor};
 use d2b_provider_device_security_key::{SecurityKeyDriverArgs, security_key_descriptors};
 use d2b_provider_device_usbip::{UsbipDriverArgs, usbip_descriptors};
@@ -1716,6 +1718,10 @@ pub enum PlaneError {
     ProviderRegistration(
         #[from] d2b_resource_runtime::provider::ProviderDirectoryError,
     ),
+    /// A provider did not start through the base. The failure names the
+    /// provider and the declared row it refused.
+    #[error("provider startup refused: {0}")]
+    ProviderStartup(#[from] crate::provider_lifecycle::ProviderStartupError),
     /// The registry and the generated converted-type catalog disagree (R4).
     /// Both sides are named: the catalog types with no registered driver, and
     /// the registered types the catalog does not list.
@@ -1773,6 +1779,10 @@ pub struct ResourcePlaneV3 {
     targets: Arc<TargetDirectory>,
     registry: Arc<PlaneResourceRegistry>,
     client: ResourceManagerClient,
+    /// The providers this zone started, in the order they started. The plane
+    /// keeps them so it can report the order it ran and drain them in the
+    /// mirror of it.
+    providers: Arc<ProviderRuntime>,
     readiness: Arc<NewPlaneReadinessState>,
 }
 
@@ -1793,164 +1803,264 @@ impl ResourcePlaneV3 {
         spec_store_dir.join("spec-store.sqlite3")
     }
 
-    fn build_providers(inputs: &ConstructionInputs) -> Result<ProviderDirectory, PlaneError> {
-        let mut providers = ProviderDirectory::new();
-        // The Process family registers through its driver declarations: one
+    /// The providers one zone starts, in the committed startup order.
+    ///
+    /// Each family states its declaration and the drivers it serves; the base
+    /// realizes the declared plane facts and then runs the family's own
+    /// attach, which registers the drivers it declared. The order of the
+    /// groups below is the order the registry has been assembled in since the
+    /// family moves landed.
+    fn provider_set(inputs: &ConstructionInputs) -> ProviderSet {
+        // The Process family starts through its driver declarations: one
         // descriptor per member type, both over the family's shared decoder
         // and factory. The family's verbs, execution domains, exportability,
         // and reads travel on the descriptor.
-        for descriptor in process_family_descriptors(ProcessDriverArgs {
-            zone: inputs.zone.clone(),
-            effects: Arc::clone(&inputs.process_effects),
-            zone_uid: inputs.authority.zone_uid.clone(),
-            policy_revision: inputs.authority.policy_revision,
-            provider_assignment_generation: inputs.authority.provider_assignment_generation,
-            controller_generation: inputs.authority.controller_generation,
-            guest_execution: inputs.authority.guest_execution.clone(),
-            mode: crate::process_provider_runtime::execution_mode(inputs.authority.mode),
-        }) {
-            providers.register_driver(&descriptor)?;
-        }
-        // The Volume and VolumeBinding types register through their driver
-        // declarations: the registry serves each type's decoder and factory
-        // from its declaration, and the declaration carries the family's
-        // verbs, execution domains, exportability, reads, and the children it
-        // may create.
-        providers.register_driver(&volume_descriptor(VolumeDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            effects: Arc::clone(&inputs.volume_effects),
-        }))?;
-        providers.register_driver(&binding_descriptor(BindingDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            effects: Arc::clone(&inputs.binding_effects),
-            vcpu_count: inputs.authority.vcpu_count,
-        }))?;
-        // The Endpoint type registers through its driver declaration: the
+        let mut set = ProviderSet::new(inputs.zone.clone(), inputs.spec_store_dir.clone()).with(
+            family_declaration("process"),
+            Vec::from(process_family_descriptors(ProcessDriverArgs {
+                zone: inputs.zone.clone(),
+                effects: Arc::clone(&inputs.process_effects),
+                zone_uid: inputs.authority.zone_uid.clone(),
+                policy_revision: inputs.authority.policy_revision,
+                provider_assignment_generation: inputs.authority.provider_assignment_generation,
+                controller_generation: inputs.authority.controller_generation,
+                guest_execution: inputs.authority.guest_execution.clone(),
+                mode: crate::process_provider_runtime::execution_mode(inputs.authority.mode),
+            })),
+        );
+        // The Volume family states its own declaration; the Binding family
+        // states its own. The registry serves each type's decoder and factory
+        // from its driver declaration, and the declaration carries the
+        // family's verbs, execution domains, exportability, reads, and the
+        // children it may create.
+        set = set.with(
+            d2b_provider_volume::volume_provider_declaration(),
+            vec![volume_descriptor(VolumeDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                effects: Arc::clone(&inputs.volume_effects),
+            })],
+        );
+        set = set.with(
+            family_declaration("volume-binding"),
+            vec![binding_descriptor(BindingDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                effects: Arc::clone(&inputs.binding_effects),
+                vcpu_count: inputs.authority.vcpu_count,
+            })],
+        );
+        // The Endpoint type starts through its driver declaration: the
         // registry serves the type's decoder and factory from it, and the
         // declaration carries the family's verbs, execution domains,
         // exportability, and reads.
-        providers.register_driver(&endpoint_descriptor(EndpointDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            effects: Arc::clone(&inputs.endpoint_effects),
-        }))?;
-        // The Credential type registers through its driver declaration: the
+        set = set.with(
+            family_declaration("endpoint"),
+            vec![endpoint_descriptor(EndpointDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                effects: Arc::clone(&inputs.endpoint_effects),
+            })],
+        );
+        // The Credential type starts through its driver declaration: the
         // registry serves the type's decoder and factory from it, and the
         // declaration carries the family's verbs, execution domains,
         // exportability, reads, and the one declared agent Process child.
-        providers.register_driver(&credential_descriptor(CredentialDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            controller_generation: inputs.authority.controller_generation,
-            effects: Arc::clone(&inputs.credential_effects),
-        }))?;
-        // The NixosGeneration type registers through its driver declaration:
-        // the registry serves the type's decoder and factory from it, and the
-        // declaration carries the family's verbs, execution domains,
-        // exportability, reads, and its one declared child creation.
-        providers.register_driver(&activation_descriptor(ActivationDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            effects: Arc::clone(&inputs.activation_effects),
-            verifier: Arc::new(d2b_provider_activation_nixos::FailClosedActivationVerifier),
-        }))?;
-        // The telemetry pair registers through its driver declarations: one
-        // per type, each carrying that type's decoder, factory, verbs,
-        // execution domains, exportability, reads, and (for the Binding) the
-        // provider-declared child creations.
-        providers.register_driver(&telemetry_service_descriptor())?;
-        providers.register_driver(&telemetry_binding_descriptor())?;
-        // The Network family registers through its own declaration, the two
-        // USB types through the USB family's, the two security-key types
-        // through the security-key family's, and the Device type (four
-        // hardware Providers) through the Device family's. Each declaration
-        // carries its decoder, so the registry serves it for the type.
-        providers.register_driver(&network_descriptor(NetworkDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            controller_generation: inputs.authority.controller_generation,
-            effects: Arc::clone(&inputs.shared_provider_effects.network),
-        }))?;
-        for descriptor in usbip_descriptors(UsbipDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            controller_generation: inputs.authority.controller_generation,
-            effects: Arc::clone(&inputs.shared_provider_effects.usbip),
-        }) {
-            providers.register_driver(&descriptor)?;
-        }
-        for descriptor in security_key_descriptors(SecurityKeyDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            controller_generation: inputs.authority.controller_generation,
-            effects: Arc::clone(&inputs.shared_provider_effects.security_key),
-        }) {
-            providers.register_driver(&descriptor)?;
-        }
-        providers.register_driver(&device_descriptor(DeviceDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            controller_generation: inputs.authority.controller_generation,
-            effects: Arc::clone(&inputs.shared_provider_effects.device),
-        }))?;
-        // The Guest type registers through its driver declaration: the
+        set = set.with(
+            family_declaration("credential"),
+            vec![credential_descriptor(CredentialDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                effects: Arc::clone(&inputs.credential_effects),
+            })],
+        );
+        // The NixosGeneration type starts through its driver declaration: the
         // registry serves the type's decoder and factory from it, and the
         // declaration carries the family's verbs, execution domains,
-        // exportability, reads, and the children its runtime Providers
-        // create.
-        providers.register_driver(&guest_descriptor(GuestDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            controller_generation: inputs.authority.controller_generation,
-            effects: Arc::clone(&inputs.guest_effects),
-        }))?;
-        // The Host and User bootstrap types register through their driver
+        // exportability, reads, and its one declared child creation.
+        set = set.with(
+            family_declaration("activation-nixos"),
+            vec![activation_descriptor(ActivationDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                effects: Arc::clone(&inputs.activation_effects),
+                verifier: Arc::new(d2b_provider_activation_nixos::FailClosedActivationVerifier),
+            })],
+        );
+        // The telemetry pair starts through its driver declarations: one per
+        // type, each carrying that type's decoder, factory, verbs, execution
+        // domains, exportability, reads, and (for the Binding) the
+        // provider-declared child creations.
+        set = set.with(
+            family_declaration("telemetry-service"),
+            vec![telemetry_service_descriptor()],
+        );
+        set = set.with(
+            family_declaration("telemetry-binding"),
+            vec![telemetry_binding_descriptor()],
+        );
+        // The Network family starts through its own declaration, the two USB
+        // types through the USB family's, the two security-key types through
+        // the security-key family's, and the Device type (four hardware
+        // Providers) through the Device family's. Each declaration carries its
+        // decoder, so the registry serves it for the type.
+        set = set.with(
+            family_declaration("network-local"),
+            vec![network_descriptor(NetworkDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                effects: Arc::clone(&inputs.shared_provider_effects.network),
+            })],
+        );
+        set = set.with(
+            family_declaration("device-usbip"),
+            Vec::from(usbip_descriptors(UsbipDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                effects: Arc::clone(&inputs.shared_provider_effects.usbip),
+            })),
+        );
+        set = set.with(
+            family_declaration("device-security-key"),
+            Vec::from(security_key_descriptors(SecurityKeyDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                effects: Arc::clone(&inputs.shared_provider_effects.security_key),
+            })),
+        );
+        set = set.with(
+            family_declaration("device"),
+            vec![device_descriptor(DeviceDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                effects: Arc::clone(&inputs.shared_provider_effects.device),
+            })],
+        );
+        // The Guest type starts through its driver declaration: the registry
+        // serves the type's decoder and factory from it, and the declaration
+        // carries the family's verbs, execution domains, exportability, reads,
+        // and the children its runtime Providers create.
+        set = set.with(
+            family_declaration("guest"),
+            vec![guest_descriptor(GuestDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                effects: Arc::clone(&inputs.guest_effects),
+            })],
+        );
+        // The Host and User bootstrap types start through their driver
         // declarations: the registry serves each type's decoder and factory
         // from its declaration, and the declarations carry the types' verbs,
         // execution domains, exportability, and reads.
-        providers.register_driver(&host_descriptor(Arc::new(ProductionHostDriverEffects)))?;
-        providers.register_driver(&user_descriptor(Arc::new(ProductionUserDriverEffects)))?;
-        // The controller family registers through its per-type declarations:
+        set = set.with(
+            family_declaration("host"),
+            vec![host_descriptor(Arc::new(ProductionHostDriverEffects))],
+        );
+        set = set.with(
+            family_declaration("user"),
+            vec![user_descriptor(Arc::new(ProductionUserDriverEffects))],
+        );
+        // The controller family starts through its per-type declarations:
         // each crate serves exactly one type, and the registry resolves that
         // type's decoder, factory, verbs, execution domains, exportability,
         // and reads from the declaration.
-        providers.register_driver(&zone_descriptor())?;
-        providers.register_driver(&zone_link_descriptor())?;
-        providers.register_driver(&provider_descriptor(ProviderDriverArgs {
-            effects: Arc::clone(&inputs.provider_effects),
-        }))?;
-        providers.register_driver(&role_descriptor())?;
-        providers.register_driver(&role_binding_descriptor())?;
-        providers.register_driver(&quota_descriptor())?;
-        providers.register_driver(&emergency_policy_descriptor())?;
-        providers.register_driver(&resource_export_descriptor())?;
-        providers.register_driver(&resource_import_descriptor())?;
+        set = set.with(family_declaration("zone"), vec![zone_descriptor()]);
+        set = set.with(
+            family_declaration("zone-link"),
+            vec![zone_link_descriptor()],
+        );
+        set = set.with(
+            family_declaration("provider"),
+            vec![provider_descriptor(ProviderDriverArgs {
+                effects: Arc::clone(&inputs.provider_effects),
+            })],
+        );
+        set = set.with(family_declaration("role"), vec![role_descriptor()]);
+        set = set.with(
+            family_declaration("role-binding"),
+            vec![role_binding_descriptor()],
+        );
+        set = set.with(family_declaration("quota"), vec![quota_descriptor()]);
+        set = set.with(
+            family_declaration("emergency-policy"),
+            vec![emergency_policy_descriptor()],
+        );
+        set = set.with(
+            family_declaration("resource-export"),
+            vec![resource_export_descriptor()],
+        );
+        set = set.with(
+            family_declaration("resource-import"),
+            vec![resource_import_descriptor()],
+        );
         // The policy types are declared with their drivers; their rows commit
         // with the committed policy rows, and the presence obligation is what
         // keeps a plane from opening without their drivers.
-        providers.register_driver(&command_descriptor())?;
-        providers.register_driver(&operation_descriptor())?;
-        providers.register_driver(&seccomp_profile_descriptor())?;
-        // The six interaction types register through their driver
-        // declarations: the registry serves each type's decoder and factory
-        // from its own crate's descriptor, and no daemon table names them.
-        providers.register_driver(&wayland_policy_descriptor(interaction_driver_args(
-            inputs,
-            WaylandPolicy,
-        )))?;
-        providers.register_driver(&wayland_session_descriptor(interaction_driver_args(
-            inputs,
-            WaylandSession::new(Arc::new(ProductionDisplayChildSource)),
-        )))?;
-        providers.register_driver(&audio_service_descriptor(interaction_driver_args(
-            inputs,
-            AudioService,
-        )))?;
-        providers.register_driver(&audio_binding_descriptor(interaction_driver_args(
-            inputs,
-            AudioBinding::new(Arc::new(ProductionAudioBindingChildSource)),
-        )))?;
-        providers.register_driver(&shell_pool_descriptor(interaction_driver_args(
-            inputs,
-            ShellPool,
-        )))?;
-        providers.register_driver(&shell_session_descriptor(interaction_driver_args(
-            inputs,
-            ShellSession,
-        )))?;
-        Ok(providers)
+        set = set.with(family_declaration("command"), vec![command_descriptor()]);
+        set = set.with(
+            family_declaration("operation"),
+            vec![operation_descriptor()],
+        );
+        set = set.with(
+            family_declaration("seccomp-profile"),
+            vec![seccomp_profile_descriptor()],
+        );
+        // The six interaction types start through their driver declarations:
+        // the registry serves each type's decoder and factory from its own
+        // crate's descriptor, and no daemon table names them.
+        set = set.with(
+            family_declaration("wayland-policy"),
+            vec![wayland_policy_descriptor(interaction_driver_args(
+                inputs,
+                WaylandPolicy,
+            ))],
+        );
+        set = set.with(
+            family_declaration("wayland-session"),
+            vec![wayland_session_descriptor(interaction_driver_args(
+                inputs,
+                WaylandSession::new(Arc::new(ProductionDisplayChildSource)),
+            ))],
+        );
+        set = set.with(
+            family_declaration("audio-service"),
+            vec![audio_service_descriptor(interaction_driver_args(
+                inputs,
+                AudioService,
+            ))],
+        );
+        set = set.with(
+            family_declaration("audio-binding"),
+            vec![audio_binding_descriptor(interaction_driver_args(
+                inputs,
+                AudioBinding::new(Arc::new(ProductionAudioBindingChildSource)),
+            ))],
+        );
+        set = set.with(
+            family_declaration("shell-pool"),
+            vec![shell_pool_descriptor(interaction_driver_args(
+                inputs,
+                ShellPool,
+            ))],
+        );
+        set.with(
+            family_declaration("shell-session"),
+            vec![shell_session_descriptor(interaction_driver_args(
+                inputs,
+                ShellSession,
+            ))],
+        )
+    }
+
+    /// Start the zone's providers through the toolkit base.
+    ///
+    /// `prepare` is a synchronous constructor, so the base's attach sequence
+    /// runs on the ambient runtime from a blocking section, exactly as the
+    /// foundation seed does. A refusal names the provider and the declared row
+    /// it refused.
+    fn start_providers(inputs: &ConstructionInputs) -> Result<ProviderRuntime, PlaneError> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+            PlaneError::ProviderStartup(ProviderStartupError::RuntimeUnavailable)
+        })?;
+        let set = Self::provider_set(inputs);
+        tokio::task::block_in_place(|| runtime.block_on(set.start()))
+            .map_err(PlaneError::ProviderStartup)
     }
 
     /// Open the store, register the converted-type factories, and
@@ -1989,11 +2099,23 @@ impl ResourcePlaneV3 {
                 .register_committed_provider_identity(provider_ref, uid.clone(), *generation);
         }
         readiness.set_spec_store_ready(true);
-        // Stage 2: provider directory with production effects wired. The
-        // registry closes for late required registration at plane open (R4),
-        // and the registered set is cross-checked against the generated
-        // converted-type catalog before the manager spawns.
-        let mut providers = Self::build_providers(&inputs)?;
+        // Stage 2: start the zone's providers through the toolkit base. Each
+        // provider states its declaration and drivers; the base realizes the
+        // declared plane facts and runs the provider's own attach, which
+        // registers the drivers it declared. The registry closes for late
+        // required registration at plane open (R4), and the registered set is
+        // cross-checked against the generated converted-type catalog before
+        // the manager spawns.
+        let mut provider_runtime = Self::start_providers(&inputs)?;
+        let mut providers = provider_runtime.take_directory();
+        tracing::debug!(
+            zone = %inputs.zone.as_str(),
+            providers = provider_runtime.startup_order().len(),
+            claimed_roots = provider_runtime.claimed_roots().len(),
+            deployed_adapters = provider_runtime.deployed_adapters().len(),
+            published_services = provider_runtime.published_services().len(),
+            "the zone's providers started through the base"
+        );
         // The foundation plane commits its declared policy rows - the system
         // zone itself, the postures, roles, commands, self-bindings, the
         // materialized spawn operations, and the operator bindings - before
@@ -2023,7 +2145,7 @@ impl ResourcePlaneV3 {
         providers.mark_plane_open();
         check_registry_catalog(
             providers.registered_types(),
-            &d2b_contracts::generated::resource_type_catalog::CONVERTED_RESOURCE_TYPES,
+            &d2b_contracts::identity::V3_CONVERTED_RESOURCE_TYPES,
         )?;
         readiness.set_providers_registered(true);
         // Stage 3: per-zone manager spawn (KTD5), with the target layer
@@ -2071,6 +2193,7 @@ impl ResourcePlaneV3 {
             targets,
             registry: inputs.registry,
             client: ResourceManagerClient::new(actor),
+            providers: Arc::new(provider_runtime),
             readiness,
         })
     }
@@ -2104,6 +2227,20 @@ impl ResourcePlaneV3 {
         let plane = Self::prepare(inputs)?;
         plane.complete_initial_load().await?;
         Ok(plane)
+    }
+
+    /// The providers this zone started, in the order they started.
+    pub(crate) fn providers(&self) -> &ProviderRuntime {
+        &self.providers
+    }
+
+    /// Drain the zone's providers in the reverse of the order they started.
+    ///
+    /// The daemon runs this once on shutdown, after the interaction
+    /// providers have finalized, so a provider gives back the plane facts it
+    /// claimed before the process that owns them goes away.
+    pub(crate) async fn drain_providers(&self) -> Result<(), ProviderStartupError> {
+        self.providers.drain().await
     }
 
     /// The plane's public surface: the U9 readiness checklist and the
@@ -2905,18 +3042,87 @@ mod tests {
     }
 
 
-    /// The production assembly registers exactly the generated converted-type
-    /// catalog: no cataloged type is missing a driver, and no driver serves a
-    /// type outside the catalog.
-    #[test]
-    fn build_providers_covers_the_generated_catalog() {
+    /// The providers the plane starts register exactly the converted-type
+    /// authority list: no listed type is missing a driver, no driver serves a
+    /// type outside the list, and every provider drains through the base in
+    /// the reverse of the order it started.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn started_providers_cover_the_converted_type_authority() {
         let (_dir, inputs, _readiness) = test_inputs();
-        let providers = ResourcePlaneV3::build_providers(&inputs).expect("providers");
+        let mut runtime = ResourcePlaneV3::start_providers(&inputs).expect("providers");
+        let providers = runtime.take_directory();
         check_registry_catalog(
             providers.registered_types(),
-            &d2b_contracts::generated::resource_type_catalog::CONVERTED_RESOURCE_TYPES,
+            &d2b_contracts::identity::V3_CONVERTED_RESOURCE_TYPES,
         )
-        .expect("the assembled registry covers the generated catalog");
+        .expect("the assembled registry covers the converted-type authority list");
+        runtime.drain().await.expect("the providers drain");
+    }
+
+    /// The committed startup order is the order the registry has been
+    /// assembled in since the family moves landed; drain is its mirror.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn providers_start_in_the_committed_order_and_drain_in_reverse() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let runtime = ResourcePlaneV3::start_providers(&inputs).expect("providers");
+        assert_eq!(
+            runtime.startup_order(),
+            [
+                "process",
+                "volume",
+                "volume-binding",
+                "endpoint",
+                "credential",
+                "activation-nixos",
+                "telemetry-service",
+                "telemetry-binding",
+                "network-local",
+                "device-usbip",
+                "device-security-key",
+                "device",
+                "guest",
+                "host",
+                "user",
+                "zone",
+                "zone-link",
+                "provider",
+                "role",
+                "role-binding",
+                "quota",
+                "emergency-policy",
+                "resource-export",
+                "resource-import",
+                "command",
+                "operation",
+                "seccomp-profile",
+                "wayland-policy",
+                "wayland-session",
+                "audio-service",
+                "audio-binding",
+                "shell-pool",
+                "shell-session",
+            ]
+        );
+        runtime.drain().await.expect("the providers drain");
+        let mut reversed = runtime.startup_order().to_vec();
+        reversed.reverse();
+        assert_eq!(runtime.drain_order(), reversed);
+    }
+
+    /// A plane's providers drain in the mirror of their startup order, and
+    /// the plane reports the same sequence it ran.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_plane_drains_its_providers() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let plane = ResourcePlaneV3::prepare(inputs).expect("plane prepare");
+        let mut reversed = plane.providers().startup_order().to_vec();
+        reversed.reverse();
+        plane
+            .drain_providers()
+            .await
+            .expect("the providers drain through the base");
+        assert_eq!(plane.providers().drain_order(), reversed);
+        plane.shutdown().await;
     }
 
     /// The startup cross-check fails when the registry and the catalog

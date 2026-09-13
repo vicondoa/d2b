@@ -419,15 +419,14 @@ impl<P: ProviderBase> TestHarness<P> {
 
     /// Build the harness over one provider and one clock.
     pub fn with_clock(provider: P, clock: Arc<DeterministicClock>) -> Self {
-        let drivers = provider.drivers();
-        let owned_types = drivers.iter().map(|driver| driver.resource_type).collect();
-        Self::assemble(
-            provider,
-            clock,
-            owned_types,
-            CreationTable::over(drivers),
-            None,
-        )
+        let lifecycle = Lifecycle::with_clock(provider, Arc::clone(&clock) as SharedClock);
+        let owned_types = lifecycle
+            .drivers()
+            .iter()
+            .map(|driver| driver.resource_type)
+            .collect();
+        let creations = CreationTable::over(lifecycle.drivers());
+        Self::assemble(lifecycle, clock, owned_types, creations, None)
     }
 
     /// Build the harness over explicit declaration rows.
@@ -445,8 +444,9 @@ impl<P: ProviderBase> TestHarness<P> {
         clock: Arc<DeterministicClock>,
         declarations: HarnessDeclarations,
     ) -> Self {
+        let lifecycle = Lifecycle::with_clock(provider, Arc::clone(&clock) as SharedClock);
         Self::assemble(
-            provider,
+            lifecycle,
             clock,
             declarations.owned_types.to_vec(),
             CreationTable::declare(declarations.creations),
@@ -455,7 +455,7 @@ impl<P: ProviderBase> TestHarness<P> {
     }
 
     fn assemble(
-        provider: P,
+        lifecycle: Lifecycle<P>,
         clock: Arc<DeterministicClock>,
         owned_types: Vec<WellKnownType>,
         creations: CreationTable,
@@ -463,9 +463,11 @@ impl<P: ProviderBase> TestHarness<P> {
     ) -> Self {
         let audit = Arc::new(Mutex::new(ProviderAgentAuditLog::new()));
         let zone = ZoneId::parse("dev").expect("the harness zone label is valid");
-        let provider_ref =
-            ResourceRef::parse(&format!("Provider/{}", provider.declaration().provider_ref))
-                .expect("a declared provider reference is a valid resource reference");
+        let provider_ref = ResourceRef::parse(&format!(
+            "Provider/{}",
+            lifecycle.declaration().provider_ref
+        ))
+        .expect("a declared provider reference is a valid resource reference");
         let envelope = match declarations {
             Some(declarations) => OperationEnvelope::from_operations(
                 zone.clone(),
@@ -476,14 +478,13 @@ impl<P: ProviderBase> TestHarness<P> {
             None => OperationEnvelope::over(
                 zone.clone(),
                 provider_ref,
-                provider.drivers(),
+                lifecycle.drivers(),
                 Arc::clone(&audit),
             ),
         }
         .expect("the harness zone label forms a valid zone path");
-        let shared: SharedClock = Arc::clone(&clock) as SharedClock;
         Self {
-            lifecycle: Lifecycle::with_clock(provider, shared),
+            lifecycle,
             clock,
             zone,
             port: Arc::new(RecordingPlanePort::default()),
@@ -511,7 +512,7 @@ impl<P: ProviderBase> TestHarness<P> {
     }
 
     /// Borrow the provider's declarations.
-    pub fn drivers(&self) -> &'static [DriverDescriptor] {
+    pub fn drivers(&self) -> &[DriverDescriptor] {
         self.lifecycle.drivers()
     }
 
@@ -790,7 +791,7 @@ impl<P: ProviderBase> TestHarness<P> {
     }
 
     /// Build the zone-plane handle this provider attaches through.
-    pub fn plane_handle(&self) -> ZonePlaneHandle {
+    pub fn plane_handle(&self) -> ZonePlaneHandle<'_> {
         self.lifecycle.plane_handle(
             self.zone.clone(),
             Arc::clone(&self.port) as Arc<dyn ZonePlanePort>,
@@ -957,7 +958,7 @@ mod tests {
             &[]
         }
 
-        async fn attach(&self, _zone: &ZonePlaneHandle) -> Result<(), AttachError> {
+        async fn attach(&self, _zone: &ZonePlaneHandle<'_>) -> Result<(), AttachError> {
             Ok(())
         }
 

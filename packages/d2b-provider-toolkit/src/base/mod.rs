@@ -66,11 +66,16 @@ pub trait ProviderBase: Send + Sync + 'static {
     fn declaration(&self) -> &ProviderDeclaration;
 
     /// What this provider serves, one descriptor per resource type.
-    fn drivers(&self) -> &'static [DriverDescriptor];
+    ///
+    /// The descriptors are borrowed from the provider rather than required to
+    /// be `'static`: a provider crate's descriptors are statics, while a
+    /// composition root that wires runtime effect ports holds its own
+    /// descriptors for the provider's lifetime.
+    fn drivers(&self) -> &[DriverDescriptor];
 
     /// Attach to a zone plane: claim storage roots, deploy adapters, publish
     /// services - each backed by the declared facts.
-    async fn attach(&self, zone: &ZonePlaneHandle) -> Result<(), AttachError>;
+    async fn attach(&self, zone: &ZonePlaneHandle<'_>) -> Result<(), AttachError>;
 
     /// Tear down in the order this provider requires, within the deadline.
     async fn drain(&self, deadline: DrainDeadline) -> Result<(), DrainError>;
@@ -202,7 +207,7 @@ impl<P: ProviderBase> Lifecycle<P> {
     }
 
     /// Borrow the provider's drivers.
-    pub fn drivers(&self) -> &'static [DriverDescriptor] {
+    pub fn drivers(&self) -> &[DriverDescriptor] {
         self.provider.drivers()
     }
 
@@ -211,7 +216,7 @@ impl<P: ProviderBase> Lifecycle<P> {
         &self,
         zone: ZoneId,
         port: Arc<dyn crate::plane::ZonePlanePort>,
-    ) -> ZonePlaneHandle {
+    ) -> ZonePlaneHandle<'_> {
         ZonePlaneHandle::new(zone, self.declaration(), self.drivers(), port)
     }
 
@@ -221,7 +226,7 @@ impl<P: ProviderBase> Lifecycle<P> {
     /// the declared adapters are deployed in declared dependency order, the
     /// declared services are published, and only then does the provider's own
     /// [`ProviderBase::attach`] body run.
-    pub async fn attach(&self, zone: &ZonePlaneHandle) -> Result<(), AttachError> {
+    pub async fn attach(&self, zone: &ZonePlaneHandle<'_>) -> Result<(), AttachError> {
         zone.claim_declared_storage_roots()
             .await
             .map_err(AttachError::Plane)?;

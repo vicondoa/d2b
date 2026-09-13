@@ -156,7 +156,7 @@ impl ProviderBase for FakePortProvider {
         &[]
     }
 
-    async fn attach(&self, _zone: &ZonePlaneHandle) -> Result<(), AttachError> {
+    async fn attach(&self, _zone: &ZonePlaneHandle<'_>) -> Result<(), AttachError> {
         Ok(())
     }
 
