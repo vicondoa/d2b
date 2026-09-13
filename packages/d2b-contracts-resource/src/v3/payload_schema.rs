@@ -39,6 +39,7 @@ impl PayloadSchema {
             return Err(PayloadSchemaError::TooLarge);
         }
         validate_object_schema(&value, 0)?;
+        validate_write_only_values(&value, 0)?;
         Ok(Self(value))
     }
 
@@ -217,11 +218,7 @@ fn validate_object_schema(schema: &Value, depth: usize) -> Result<(), PayloadSch
         let Some(fields) = property.as_object() else {
             return Err(PayloadSchemaError::InvalidProperty);
         };
-        if fields.get("writeOnly").and_then(Value::as_bool) == Some(true)
-            && WRITE_ONLY_VALUE_KEYS
-                .iter()
-                .any(|key| fields.contains_key(*key))
-        {
+        if write_only_carries_value(fields) {
             return Err(PayloadSchemaError::WriteOnlyCarriesValue);
         }
         if fields.get("type").and_then(Value::as_str) == Some("object") {
@@ -229,6 +226,65 @@ fn validate_object_schema(schema: &Value, depth: usize) -> Result<(), PayloadSch
                 return Err(PayloadSchemaError::TooDeep);
             }
             validate_object_schema(property, depth + 1)?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether one schema object declares secret material and an inferable value.
+fn write_only_carries_value(fields: &Map<String, Value>) -> bool {
+    fields.get("writeOnly").and_then(Value::as_bool) == Some(true)
+        && WRITE_ONLY_VALUE_KEYS
+            .iter()
+            .any(|key| fields.contains_key(*key))
+}
+
+/// Refuse a `writeOnly` declaration that carries an inferable value,
+/// wherever in the document it sits.
+///
+/// The ban belongs to the declaration rather than to its position: a secret
+/// nested under `items`, a combinator, or a definition is as inferable as one
+/// declared at the top level, so the scan follows every schema-bearing
+/// keyword instead of only object-typed properties. The walk is bounded by
+/// the same depth budget the structural validation applies, so a document no
+/// reader can descend is refused rather than recursed into.
+fn validate_write_only_values(schema: &Value, depth: usize) -> Result<(), PayloadSchemaError> {
+    if depth >= MAX_PAYLOAD_SCHEMA_DEPTH {
+        return Err(PayloadSchemaError::TooDeep);
+    }
+    let Value::Object(object) = schema else {
+        return Ok(());
+    };
+    if write_only_carries_value(object) {
+        return Err(PayloadSchemaError::WriteOnlyCarriesValue);
+    }
+    for (key, value) in object {
+        match key.as_str() {
+            "properties" | "$defs" | "definitions" => {
+                if let Value::Object(named) = value {
+                    for nested in named.values() {
+                        validate_write_only_values(nested, depth + 1)?;
+                    }
+                }
+            }
+            "items" => {
+                if let Value::Array(entries) = value {
+                    for entry in entries {
+                        validate_write_only_values(entry, depth + 1)?;
+                    }
+                } else {
+                    validate_write_only_values(value, depth + 1)?;
+                }
+            }
+            "anyOf" | "oneOf" | "allOf" => {
+                if let Value::Array(branches) = value {
+                    for branch in branches {
+                        validate_write_only_values(branch, depth + 1)?;
+                    }
+                }
+            }
+            "not" => validate_write_only_values(value, depth + 1)?,
+            _ => {}
         }
     }
     Ok(())
@@ -263,6 +319,78 @@ mod tests {
         assert!(schema.declares("supervisorToken"));
         assert!(schema.is_write_only("supervisorToken"));
         assert!(!schema.is_write_only("socketPath"));
+    }
+
+    #[test]
+    fn write_only_properties_nested_under_containers_are_refused() {
+        // The ban follows the declaration, not the nesting: a secret under
+        // `items`, a combinator, or a definition is as inferable as one
+        // declared at the top level.
+        let secret = json!({ "type": "string", "writeOnly": true, "default": "x" });
+        let property = |value: Value| {
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "creds": value }
+            })
+        };
+        for nested in [
+            json!({ "type": "array", "items": {
+                "type": "object", "properties": { "token": secret.clone() } } }),
+            json!({ "type": "array", "items": [
+                { "type": "object", "properties": { "token": secret.clone() } } ] }),
+            json!({ "anyOf": [
+                { "type": "object", "properties": { "token": secret.clone() } } ] }),
+            json!({ "oneOf": [
+                { "type": "object", "properties": { "token": secret.clone() } } ] }),
+            json!({ "allOf": [
+                { "type": "object", "properties": { "token": secret.clone() } } ] }),
+            json!({ "$defs": {
+                "Credentials": { "type": "object", "properties": { "token": secret.clone() } } } }),
+            json!({ "definitions": {
+                "Credentials": { "type": "object", "properties": { "token": secret.clone() } } } }),
+            json!({ "not": {
+                "type": "object", "properties": { "token": secret.clone() } } }),
+            json!({ "type": "array", "items": { "type": "array", "items": {
+                "type": "object", "properties": { "token": secret.clone() } } } }),
+        ] {
+            assert_eq!(
+                PayloadSchema::parse(property(nested.clone())),
+                Err(PayloadSchemaError::WriteOnlyCarriesValue),
+                "{nested} must be refused"
+            );
+        }
+        // A nested secret with no inferable value stays admitted, and so does
+        // a nested default on a property that is not secret.
+        let admitted = PayloadSchema::parse(property(json!({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "token": { "type": "string", "writeOnly": true, "minLength": 32 },
+                    "verbosity": { "type": "string", "default": "quiet" }
+                }
+            }
+        })))
+        .expect("a nested secret without an inferable value is admitted");
+        assert!(admitted.declares("creds"));
+    }
+
+    #[test]
+    fn an_over_deep_nested_schema_is_refused() {
+        let mut nested = json!({ "type": "string" });
+        for _ in 0..MAX_PAYLOAD_SCHEMA_DEPTH + 1 {
+            nested = json!({ "type": "array", "items": nested });
+        }
+        assert_eq!(
+            PayloadSchema::parse(json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "chain": nested }
+            })),
+            Err(PayloadSchemaError::TooDeep)
+        );
     }
 
     #[test]
