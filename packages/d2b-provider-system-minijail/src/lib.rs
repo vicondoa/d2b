@@ -48,6 +48,9 @@ use tracing::{debug, warn};
 /// The Provider name this controller implements.
 pub const PROVIDER_NAME: &str = "system-minijail";
 
+/// The canonical `Provider/<name>` reference this controller implements.
+pub const PROVIDER_REF: &str = "Provider/system-minijail";
+
 /// The `system-minijail` Process Provider controller.
 #[derive(Debug)]
 pub struct MinijailProcessProvider<P: ProcessLaunchEffectPort> {

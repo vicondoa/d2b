@@ -10,9 +10,19 @@
 
 mod backend;
 
+pub mod effects;
+pub mod identity;
+pub mod worker_launch;
+
 pub use backend::{
     BackendLaunch, BackendObservation, ProcessEffectBackend, ProcessEffectError,
     ProcessLaunchRequest, ProcessRequest, ProcessStopClass,
+};
+pub use effects::{ProcessDriverEffects, ProviderAdoption, ProviderLiveness};
+pub use identity::{ProcessFamilySpec, ProcessResourceIdentity};
+pub use worker_launch::{
+    DeviceWorkerLaunch, GpuWorkerParams, ServingWorkerLaunch, ServingWorkerRoot, SwtpmFlushParams,
+    SwtpmWorkerParams, VideoWorkerParams,
 };
 
 pub use d2b_process_conformance::{

@@ -1116,7 +1116,11 @@ dependencies = [
 name = "d2b-process"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
  "d2b-process-conformance",
+ "d2b-resource-runtime",
+ "serde_json",
 ]
 
 [[package]]

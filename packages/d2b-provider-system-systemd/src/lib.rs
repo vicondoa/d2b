@@ -55,6 +55,9 @@ use tracing::{debug, warn};
 /// The Provider name this controller implements.
 pub const PROVIDER_NAME: &str = "system-systemd";
 
+/// The canonical `Provider/<name>` reference this controller implements.
+pub const PROVIDER_REF: &str = "Provider/system-systemd";
+
 /// The `system-systemd` Process Provider controller.
 #[derive(Debug)]
 pub struct SystemdProcessProvider<P: ProcessLaunchEffectPort> {

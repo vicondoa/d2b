@@ -46,6 +46,7 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_contracts_zone_session::v3::resource_bundle::{BundleResource, ResourceBundle};
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedStoreViewIntent, intent_id_store_view};
+use d2b_process::ProcessDriverEffects;
 use d2b_provider_volume_local::{VolumeLocalController, VolumeLocalProfile};
 use d2b_provider_volume_virtiofs::{MAX_SOCKET_PATH_BYTES, SocketIdentity, StoredBinding};
 use d2b_resource_api::manager_backend::nix_bundle_subject;
@@ -80,7 +81,7 @@ use crate::credential_driver::{
 };
 use crate::endpoint_driver::{AsyncSocketEffect, EndpointDriverArgs, EndpointDriverFactory, endpoint_spec_decoder};
 use crate::process_driver::{
-    GuestOwnerIdentitySource, ProcessDriverArgs, ProcessDriverEffects, ProcessDriverFactory,
+    GuestOwnerIdentitySource, ProcessDriverArgs, ProcessDriverFactory,
     ProductionProcessDriverEffects, process_spec_decoder,
 };
 use crate::semantic_binding_resource_runtime::{
@@ -2309,7 +2310,7 @@ mod tests {
     impl ProcessDriverEffects for FakeProcessEffects {
         async fn launch(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
@@ -2320,7 +2321,7 @@ mod tests {
 
         async fn adopt(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
         ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
             Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
@@ -2328,7 +2329,7 @@ mod tests {
 
         async fn probe(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
         ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
             Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
@@ -2336,7 +2337,7 @@ mod tests {
 
         async fn launch_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
@@ -2347,7 +2348,7 @@ mod tests {
 
         async fn adopt_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
         ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
             Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
@@ -2355,7 +2356,7 @@ mod tests {
 
         async fn probe_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
         ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
             Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
@@ -2363,7 +2364,7 @@ mod tests {
 
         async fn stop_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -2373,7 +2374,7 @@ mod tests {
 
         async fn stop(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -2389,7 +2390,7 @@ mod tests {
             Ok(())
         }
 
-        async fn finalize(&self, _identity: &crate::process_driver::ProcessResourceIdentity) -> Result<(), String> {
+        async fn finalize(&self, _identity: &d2b_process::ProcessResourceIdentity) -> Result<(), String> {
             Ok(())
         }
 
@@ -3154,7 +3155,7 @@ mod tests {
     impl ProcessDriverEffects for AdoptingProcessEffects {
         async fn launch(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
@@ -3164,7 +3165,7 @@ mod tests {
 
         async fn adopt(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
         ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
             if self.launched.load(std::sync::atomic::Ordering::SeqCst) {
@@ -3178,7 +3179,7 @@ mod tests {
 
         async fn probe(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
         ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
             Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
@@ -3186,7 +3187,7 @@ mod tests {
 
         async fn launch_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
@@ -3196,7 +3197,7 @@ mod tests {
 
         async fn adopt_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
         ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
             Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
@@ -3204,7 +3205,7 @@ mod tests {
 
         async fn probe_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
         ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
             Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
@@ -3212,7 +3213,7 @@ mod tests {
 
         async fn stop_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -3222,7 +3223,7 @@ mod tests {
 
         async fn stop(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -3240,7 +3241,7 @@ mod tests {
 
         async fn finalize(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_process::ProcessResourceIdentity,
         ) -> Result<(), String> {
             Ok(())
         }

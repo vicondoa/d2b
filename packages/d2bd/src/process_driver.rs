@@ -51,17 +51,19 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::{
-    AdoptionPolicy, ControllerGeneration, DurationMs, ResourceGeneration, ResourceName, ResourceRef,
+    AdoptionPolicy, ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef,
     ResourceSpec, ResourceTypeName as ContractResourceTypeName, ResourceUid, SchemaFingerprint,
     ZoneId, ZoneRevision,
     process::{
-        DesiredLifecycle, EphemeralProcessSpec, ExecutionSpec, ProcessClass, ProcessSpec,
-        RestartClass, RestartPolicySpec,
+        DesiredLifecycle, EphemeralProcessSpec, ProcessClass, ProcessSpec, RestartClass,
     },
 };
+use d2b_process::{
+    DeviceWorkerLaunch, ProcessDriverEffects, ProcessFamilySpec, ProcessResourceIdentity,
+    ServingWorkerLaunch, ServingWorkerRoot,
+};
 use d2b_process_conformance::{
-    AdoptionCandidate, GuestExecutionBinding, LaunchIdentity, ProcessIdentityDigest,
-    ProcessStatusReport,
+    AdoptionCandidate, GuestExecutionBinding, ProcessIdentityDigest, ProcessStatusReport,
 };
 use d2b_resource_runtime::context::{
     EffectCompleted, EffectResult, ResourceContext, SpecDecoder, typed_spec_decoder,
@@ -87,9 +89,6 @@ pub(crate) const PROCESS_TYPE_NAME: &str = "Process";
 
 /// The one-shot Process resource type this factory serves (KTD4 Phase A).
 pub(crate) const EPHEMERAL_PROCESS_TYPE_NAME: &str = "EphemeralProcess";
-
-const MINIJAIL_PROVIDER: &str = "system-minijail";
-const SYSTEMD_PROVIDER: &str = "system-systemd";
 
 /// Preserved launch budget for durable Process resources (old
 /// `launch_timeout`).
@@ -307,149 +306,6 @@ pub(crate) fn process_spec_decoder() -> Arc<dyn SpecDecoder> {
     })
 }
 
-/// The typed Process-family spec: one row is either the durable `Process`
-/// contract or the one-shot `EphemeralProcess` contract. The two share the
-/// execution fields, so the driver decodes once and dispatches on the row's
-/// type name.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ProcessFamilySpec {
-    Process(ProcessSpec),
-    Ephemeral(EphemeralProcessSpec),
-}
-
-impl ProcessFamilySpec {
-    /// Borrow the shared execution fields.
-    fn execution(&self) -> &ExecutionSpec {
-        match self {
-            Self::Process(spec) => spec.execution(),
-            Self::Ephemeral(spec) => spec.execution(),
-        }
-    }
-
-    /// The declared process class (ephemeral rows are workers by contract).
-    fn process_class(&self) -> ProcessClass {
-        self.execution().process_class()
-    }
-
-    /// Whether the desired steady state is a live process. A one-shot
-    /// `EphemeralProcess` is always Running (the old `DesiredProcess::
-    /// is_running` ephemeral arm).
-    fn wants_running(&self) -> bool {
-        match self {
-            Self::Process(spec) => spec.desired_lifecycle() == DesiredLifecycle::Running,
-            Self::Ephemeral(_) => true,
-        }
-    }
-
-    /// The adoption policy. A one-shot row has no policy field and always
-    /// adopts on restart (the old ephemeral arm called
-    /// `adopt_ephemeral_resource` unconditionally).
-    fn adoption_policy(&self) -> AdoptionPolicy {
-        match self {
-            Self::Process(spec) => spec.adoption_policy(),
-            Self::Ephemeral(_) => AdoptionPolicy::AdoptOnRestart,
-        }
-    }
-
-    /// The restart policy, when the family member has one. A one-shot row
-    /// never restarts (old `restart_delay` returned zero and every ephemeral
-    /// restart decision was `false`).
-    fn restart_policy(&self) -> Option<&RestartPolicySpec> {
-        match self {
-            Self::Process(spec) => Some(spec.restart_policy()),
-            Self::Ephemeral(_) => None,
-        }
-    }
-
-    /// The bounded graceful-drain timeout, when the family member has one.
-    fn drain_timeout(&self) -> Option<&DurationMs> {
-        match self {
-            Self::Process(spec) => Some(spec.drain_timeout()),
-            Self::Ephemeral(_) => None,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Adoption / launch identity (KTD7)
-// ---------------------------------------------------------------------------
-
-/// The identity inputs every provider ticket is derived from: the durable
-/// adoption identity (zone, type, name, uid, generation) plus the
-/// zone-authority ticket inputs from the bundle resolver /
-/// `ZoneAuthorityIdentity` path (KTD7). Nothing is read from or written to the
-/// spec store at runtime.
-#[derive(Debug, Clone)]
-pub(crate) struct ProcessResourceIdentity {
-    pub(crate) zone: ZoneId,
-    pub(crate) resource_ref: ResourceRef,
-    pub(crate) resource_uid: ResourceUid,
-    pub(crate) resource_generation: ResourceGeneration,
-    /// Spec `processClass` (decoded from the same durable row). Only
-    /// controller rows take the committed controller-provider identity, and
-    /// the effects cannot re-read the spec at finalize time (KTD7).
-    pub(crate) process_class: ProcessClass,
-    pub(crate) provider_ref: ResourceRef,
-    /// The canonical launch identity (KTD7), resolved once from this row:
-    /// semantic owner ref/UID, execution target, cross-target selector, VM
-    /// scope, and the legacy runner role. The ticket, the broker fence, and
-    /// this driver's adopt/probe path all consume this one value; none of
-    /// them re-derives its fields.
-    pub(crate) launch: LaunchIdentity,
-    pub(crate) zone_uid: Option<ResourceUid>,
-    pub(crate) policy_revision: Option<u64>,
-    pub(crate) provider_assignment_generation: Option<ResourceGeneration>,
-    pub(crate) controller_generation: ControllerGeneration,
-    pub(crate) controller_provider_uid: Option<ResourceUid>,
-    pub(crate) controller_provider_generation: Option<ResourceGeneration>,
-    pub(crate) guest_execution: Option<GuestExecutionBinding>,
-    /// Binding-declared serving-worker launch inputs (VolumeBinding-owned
-    /// virtiofsd workers only).
-    pub(crate) worker_launch: Option<crate::process_provider_runtime::ServingWorkerLaunch>,
-    /// Device-declared worker launch parameters (the four declared
-    /// Device-owned worker rows only; `U17` gap closure).
-    pub(crate) device_worker_launch:
-        Option<crate::process_provider_runtime::DeviceWorkerLaunch>,
-}
-
-impl ProcessResourceIdentity {
-    /// Build the borrowed provider-layer context. The ticket machinery is
-    /// entirely inside the provider layer; the driver never assembles a
-    /// ticket.
-    fn resource_context(&self) -> ProcessResourceContext<'_> {
-        ProcessResourceContext::new(
-            self.zone.clone(),
-            &self.resource_ref,
-            &self.resource_uid,
-            self.resource_generation,
-            // The new store has no zone-wide commit revision: the durable
-            // revision of a row is its generation. The launch ticket requires
-            // a non-zero resource revision, and the provider identity fence
-            // compares generations, not revisions, so the row generation is
-            // the honest binding here.
-            ZoneRevision::new(self.resource_generation.get()),
-            &self.provider_ref,
-            self.controller_generation,
-            self.launch.target_ref().cloned(),
-        )
-        .with_guest_execution(self.guest_execution.as_ref())
-        .with_lifecycle_identity(
-            self.zone_uid.clone(),
-            self.policy_revision,
-            self.provider_assignment_generation,
-        )
-        .with_owner_ref(self.launch.owner_ref().cloned())
-        .with_owner_uid(self.launch.owner_uid().cloned())
-        .with_provider_identity(
-            self.controller_provider_uid.as_ref(),
-            self.controller_provider_generation,
-        )
-        .with_worker_launch(self.worker_launch.clone())
-        .with_device_worker_launch(self.device_worker_launch.clone())
-        .with_launch_identity(self.launch.clone())
-    }
-}
-
 /// The four declared Device-owned worker template families (`U17`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeviceWorkerFamily {
@@ -596,123 +452,6 @@ fn resource_uid_from_bytes(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
 // ---------------------------------------------------------------------------
 // Provider effect port
 // ---------------------------------------------------------------------------
-
-/// The provider-facing effect surface the Process driver needs. The production
-/// implementation delegates to the already-composed
-/// [`ProductionProcessProviders`]; test doubles implement the same seam
-/// (R4: the conversion is mechanical, the provider effects are preserved).
-///
-/// Object-erased on purpose: the driver holds the port as
-/// `Arc<dyn ProcessDriverEffects>` so one factory serves every Process row.
-#[async_trait::async_trait]
-pub(crate) trait ProcessDriverEffects: Send + Sync + 'static {
-    /// Launch through the signed provider-ticket path.
-    async fn launch(
-        &self,
-        identity: &ProcessResourceIdentity,
-        spec: &ProcessSpec,
-        timeout: Duration,
-    ) -> Result<ProcessIdentityDigest, String>;
-
-    /// Launch one one-shot process through the preserved ephemeral ticket
-    /// (old `launch_ephemeral_resource`; `start_deadline` is the timeout).
-    async fn launch_ephemeral(
-        &self,
-        identity: &ProcessResourceIdentity,
-        spec: &EphemeralProcessSpec,
-        timeout: Duration,
-    ) -> Result<ProcessIdentityDigest, String>;
-
-    /// Probe-and-adopt over pidfd/proc evidence with the preserved
-    /// Adopt/Stale/Quarantined classification.
-    async fn adopt(
-        &self,
-        identity: &ProcessResourceIdentity,
-        spec: &ProcessSpec,
-    ) -> Result<ProviderAdoption, String>;
-
-    /// Probe one already-started durable process (old `probe_record`): the
-    /// Alive/Exited/Unknown liveness classification drives the steady-state
-    /// observation of a process this actor adopted or launched, and the
-    /// provider clears its exact local authority when the process is gone.
-    async fn probe(
-        &self,
-        identity: &ProcessResourceIdentity,
-        spec: &ProcessSpec,
-    ) -> Result<ProviderLiveness, String>;
-
-    /// Probe-and-adopt one one-shot process (old
-    /// `adopt_ephemeral_resource`): `Absent` is also the observed exit of a
-    /// process this driver launched, because the provider clears its local
-    /// authority for the missing identity.
-    async fn adopt_ephemeral(
-        &self,
-        identity: &ProcessResourceIdentity,
-        spec: &EphemeralProcessSpec,
-    ) -> Result<ProviderAdoption, String>;
-
-    /// Probe one already-started one-shot identity (old
-    /// `probe_ephemeral_resource`): the Alive/Exited/Unknown liveness
-    /// classification drives the steady-state observation, and the provider
-    /// clears its local authority when the exact process is gone.
-    async fn probe_ephemeral(
-        &self,
-        identity: &ProcessResourceIdentity,
-        spec: &EphemeralProcessSpec,
-    ) -> Result<ProviderLiveness, String>;
-
-    /// Preserved term-then-kill escalation with pidfd retry; `Ok(killed)`
-    /// reports whether the kill stage ran.
-    async fn stop(
-        &self,
-        identity: &ProcessResourceIdentity,
-        spec: &ProcessSpec,
-        term_timeout: Duration,
-        kill_timeout: Duration,
-    ) -> Result<bool, String>;
-
-    /// Derive the typed launch parameters of one declared Device-owned worker
-    /// row (`U17` gap closure). The production effects hold the trusted bundle
-    /// and the daemon runtime paths the derivation needs, so the derivation
-    /// lives behind this seam; a row no Device worker template declares yields
-    /// `Ok(None)`, and a declared template whose trusted inputs cannot be
-    /// resolved yields the named refusal code.
-    async fn device_worker_launch(
-        &self,
-        _ctx: &mut ResourceContext,
-        _identity: &ProcessResourceIdentity,
-        _spec: &ProcessFamilySpec,
-    ) -> Result<Option<crate::process_provider_runtime::DeviceWorkerLaunch>, &'static str> {
-        Ok(None)
-    }
-
-    /// Stop one exact one-shot identity (old `stop_ephemeral_resource`).
-    async fn stop_ephemeral(
-        &self,
-        identity: &ProcessResourceIdentity,
-        spec: &EphemeralProcessSpec,
-        term_timeout: Duration,
-        kill_timeout: Duration,
-    ) -> Result<bool, String>;
-
-    /// Stop one exactly-identified stale candidate before a fresh launch.
-    async fn stop_stale(
-        &self,
-        provider_ref: &ResourceRef,
-        candidate: &AdoptionCandidate,
-    ) -> Result<(), String>;
-
-    /// Remove the provider's exact local authority after a terminal exit.
-    async fn finalize(&self, identity: &ProcessResourceIdentity) -> Result<(), String>;
-
-    /// Whether this zone retains a verified identity for the resource.
-    fn has_active(
-        &self,
-        zone: &ZoneId,
-        zone_uid: Option<&ResourceUid>,
-        resource_ref: &ResourceRef,
-    ) -> bool;
-}
 
 /// KTD7 committed Provider identity source: the committed `Provider` rows
 /// (uid + generation) the per-zone plane publishes, resolved from the old
@@ -936,6 +675,48 @@ pub(crate) fn process_resource_context<'a>(
     }
 }
 
+/// Build the borrowed provider-layer context of one row from its identity
+/// alone. The ticket machinery is entirely inside the provider layer; the
+/// driver never assembles a ticket.
+///
+/// A free function rather than an inherent method because
+/// [`ProcessResourceIdentity`] lives in `d2b-process` and no inherent impl can
+/// be written for a foreign type.
+pub(crate) fn identity_resource_context(
+    identity: &ProcessResourceIdentity,
+) -> ProcessResourceContext<'_> {
+    ProcessResourceContext::new(
+        identity.zone.clone(),
+        &identity.resource_ref,
+        &identity.resource_uid,
+        identity.resource_generation,
+        // The new store has no zone-wide commit revision: the durable
+        // revision of a row is its generation. The launch ticket requires
+        // a non-zero resource revision, and the provider identity fence
+        // compares generations, not revisions, so the row generation is
+        // the honest binding here.
+        ZoneRevision::new(identity.resource_generation.get()),
+        &identity.provider_ref,
+        identity.controller_generation,
+        identity.launch.target_ref().cloned(),
+    )
+    .with_guest_execution(identity.guest_execution.as_ref())
+    .with_lifecycle_identity(
+        identity.zone_uid.clone(),
+        identity.policy_revision,
+        identity.provider_assignment_generation,
+    )
+    .with_owner_ref(identity.launch.owner_ref().cloned())
+    .with_owner_uid(identity.launch.owner_uid().cloned())
+    .with_provider_identity(
+        identity.controller_provider_uid.as_ref(),
+        identity.controller_provider_generation,
+    )
+    .with_worker_launch(identity.worker_launch.clone())
+    .with_device_worker_launch(identity.device_worker_launch.clone())
+    .with_launch_identity(identity.launch.clone())
+}
+
 /// Bind the committed Provider row's identity (KTD7) onto one controller
 /// row's provider context: a controller Process owned by a `Provider` takes
 /// that Provider's committed uid/generation when the driver left the identity
@@ -946,7 +727,7 @@ fn bind_committed_controller_provider_identity<'a>(
     identity: &'a ProcessResourceIdentity,
     source: Option<&dyn CommittedProviderIdentitySource>,
 ) -> ProcessResourceContext<'a> {
-    let context = identity.resource_context();
+    let context = identity_resource_context(identity);
     if identity.process_class != ProcessClass::Controller
         || identity.controller_provider_uid.is_some()
         || identity.controller_provider_generation.is_some()
@@ -1125,11 +906,8 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
         ctx: &mut ResourceContext,
         identity: &ProcessResourceIdentity,
         spec: &ProcessFamilySpec,
-    ) -> Result<Option<crate::process_provider_runtime::DeviceWorkerLaunch>, &'static str> {
-        use crate::process_provider_runtime::{
-            DeviceWorkerLaunch, GpuWorkerParams, SwtpmFlushParams, SwtpmWorkerParams,
-            VideoWorkerParams,
-        };
+    ) -> Result<Option<DeviceWorkerLaunch>, &'static str> {
+        use d2b_process::{GpuWorkerParams, SwtpmFlushParams, SwtpmWorkerParams, VideoWorkerParams};
         let execution = spec.execution();
         let template = execution.template().as_str();
         let family = device_worker_family(template);
@@ -1261,37 +1039,43 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
                 // path no trusted artifact names.
                 let wayland_sock =
                     gpu_worker_wayland_sock(self.providers.bundle().site.as_ref())?;
+                // The family crate cannot depend on the realizer provider
+                // crate, so the Device's declared settings travel as the
+                // canonical JSON of the provider's own `GpuParams` and the
+                // argv seat decodes them back.
+                let params = serde_json::to_value(d2b_provider_device_gpu::GpuParams {
+                    context_types: settings
+                        .context_types
+                        .iter()
+                        .map(|context| match context {
+                            d2b_provider_device_gpu::ContextType::Virgl => {
+                                d2b_provider_device_gpu::GpuContextType::Virgl
+                            }
+                            d2b_provider_device_gpu::ContextType::Virgl2 => {
+                                d2b_provider_device_gpu::GpuContextType::Virgl2
+                            }
+                            d2b_provider_device_gpu::ContextType::CrossDomain => {
+                                d2b_provider_device_gpu::GpuContextType::CrossDomain
+                            }
+                        })
+                        .collect(),
+                    displays: settings
+                        .displays
+                        .iter()
+                        .map(|display| d2b_provider_device_gpu::GpuDisplayConfig {
+                            hidden: display.hidden,
+                        })
+                        .collect(),
+                    egl: settings.egl,
+                    vulkan: settings.vulkan,
+                })
+                .map_err(|_| "device-worker-gpu-settings-invalid")?;
                 DeviceWorkerLaunch::Gpu(Box::new(GpuWorkerParams {
                     binary_path: intent.binary_path.clone(),
                     vm_name: vm_name.clone(),
                     socket_path: device_runtime_socket(&socket_runtime_dir, &vm_name, "gpu.sock"),
                     wayland_sock,
-                    params: d2b_provider_device_gpu::GpuParams {
-                        context_types: settings
-                            .context_types
-                            .iter()
-                            .map(|context| match context {
-                                d2b_provider_device_gpu::ContextType::Virgl => {
-                                    d2b_provider_device_gpu::GpuContextType::Virgl
-                                }
-                                d2b_provider_device_gpu::ContextType::Virgl2 => {
-                                    d2b_provider_device_gpu::GpuContextType::Virgl2
-                                }
-                                d2b_provider_device_gpu::ContextType::CrossDomain => {
-                                    d2b_provider_device_gpu::GpuContextType::CrossDomain
-                                }
-                            })
-                            .collect(),
-                        displays: settings
-                            .displays
-                            .iter()
-                            .map(|display| d2b_provider_device_gpu::GpuDisplayConfig {
-                                hidden: display.hidden,
-                            })
-                            .collect(),
-                        egl: settings.egl,
-                        vulkan: settings.vulkan,
-                    },
+                    params,
                 }))
             }
             DeviceWorkerFamily::Video => {
@@ -1723,7 +1507,11 @@ impl ProcessDriver {
         envelope: &ProcessSpecEnvelope,
         op: DriverOp,
     ) -> Result<(), ProcessDriverError> {
-        let expected = format!("Provider/{MINIJAIL_PROVIDER} or Provider/{SYSTEMD_PROVIDER}");
+        let expected = format!(
+            "{} or {}",
+            d2b_provider_system_minijail::PROVIDER_REF,
+            d2b_provider_system_systemd::PROVIDER_REF
+        );
         let Some(provider_ref) = envelope.provider_ref.as_ref() else {
             return Err(self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
                 FailureDetail::at("spec/provider").comparison(FailureComparison::new(
@@ -1744,7 +1532,7 @@ impl ProcessDriver {
         }
         if !matches!(
             provider_ref.name().as_str(),
-            MINIJAIL_PROVIDER | SYSTEMD_PROVIDER
+            d2b_provider_system_minijail::PROVIDER_NAME | d2b_provider_system_systemd::PROVIDER_NAME
         ) {
             return Err(self.error(ProcessDriverErrorKind::ProviderUnsupported, op).with_detail(
                 FailureDetail::at("spec/provider").comparison(FailureComparison::new(
@@ -1904,7 +1692,7 @@ impl ProcessDriver {
         ctx: &mut ResourceContext,
         binding: &d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec,
         op: DriverOp,
-    ) -> Option<crate::process_provider_runtime::ServingWorkerLaunch> {
+    ) -> Option<ServingWorkerLaunch> {
         let (_, spec) = self.decoded_spec(ctx, op).ok()?;
         if spec.execution().template().as_str() != d2b_provider_volume_virtiofs::WORKER_TEMPLATE {
             return None;
@@ -1933,7 +1721,7 @@ impl ProcessDriver {
         let root = match source.settings().kind() {
             d2b_contracts_resource::v3::volume::SourceKind::LocalPath => {
                 let policy = source.settings().source_policy_id()?.as_str().to_owned();
-                Some(crate::process_provider_runtime::ServingWorkerRoot::StoragePath(
+                Some(ServingWorkerRoot::StoragePath(
                     if policy == "state-root" || policy == "default-state" {
                         "path:state-root".to_owned()
                     } else {
@@ -1947,11 +1735,11 @@ impl ProcessDriver {
             // view root from it (the `ro-store` share's preserved
             // `store-view/live` redirect).
             d2b_contracts_resource::v3::volume::SourceKind::NixClosure => {
-                Some(crate::process_provider_runtime::ServingWorkerRoot::StoreViewFarm)
+                Some(ServingWorkerRoot::StoreViewFarm)
             }
             _ => None,
         };
-        Some(crate::process_provider_runtime::ServingWorkerLaunch {
+        Some(ServingWorkerLaunch {
             volume_ref: binding.volume_ref().clone(),
             view: binding.view().clone(),
             guest_ref: binding.execution_ref().clone(),
@@ -2887,8 +2675,8 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::{
-        ProcessDriver, ProcessDriverArgs, ProcessDriverErrorKind, ProcessDriverFactory,
-        ProcessDriverStatus, process_spec_decoder,
+        DeviceWorkerLaunch, ProcessDriver, ProcessDriverArgs, ProcessDriverErrorKind,
+        ProcessDriverFactory, ProcessDriverStatus, process_spec_decoder,
     };
     use crate::process_provider_runtime::{ProviderAdoption, ProviderLiveness};
 
@@ -3157,7 +2945,7 @@ mod tests {
             _ctx: &mut ResourceContext,
             _identity: &super::ProcessResourceIdentity,
             spec: &super::ProcessFamilySpec,
-        ) -> Result<Option<crate::process_provider_runtime::DeviceWorkerLaunch>, &'static str> {
+        ) -> Result<Option<DeviceWorkerLaunch>, &'static str> {
             let template = spec.execution().template().as_str();
             if super::device_worker_family(template).is_none() {
                 return Ok(None);
