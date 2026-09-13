@@ -82,8 +82,8 @@ use crate::binding_driver::{
     BindingDriverArgs, BindingDriverEffects, BindingDriverFactory, ProductionBindingDriverEffects,
     binding_spec_decoder,
 };
-use crate::credential_driver::{
-    CredentialDriverArgs, CredentialDriverEffects, CredentialDriverFactory, credential_spec_decoder,
+use d2b_provider_credential::{
+    CredentialDriverArgs, CredentialDriverEffects, credential_descriptor,
 };
 use crate::endpoint_effects::{
     AsyncSocketEffect, ProductionEndpointDriverEffects, device_worker_purpose,
@@ -1774,11 +1774,15 @@ impl ResourcePlaneV3 {
             zone: inputs.zone.as_str().to_owned(),
             effects: Arc::clone(&inputs.endpoint_effects),
         }))?;
-        providers.register(Arc::new(CredentialDriverFactory::new(CredentialDriverArgs {
+        // The Credential type registers through its driver declaration: the
+        // registry serves the type's decoder and factory from it, and the
+        // declaration carries the family's verbs, execution domains,
+        // exportability, reads, and the one declared agent Process child.
+        providers.register_driver(&credential_descriptor(CredentialDriverArgs {
             zone: inputs.zone.as_str().to_owned(),
             controller_generation: inputs.authority.controller_generation,
             effects: Arc::clone(&inputs.credential_effects),
-        })))?;
+        }))?;
         providers.register(Arc::new(ActivationDriverFactory::new(ActivationDriverArgs {
             zone: inputs.zone.as_str().to_owned(),
             effects: Arc::clone(&inputs.activation_effects),
@@ -1827,10 +1831,6 @@ impl ResourcePlaneV3 {
         decoders.insert(
             ResourceTypeName::new(TELEMETRY_BINDING_TYPE),
             telemetry_spec_decoder(),
-        );
-        decoders.insert(
-            ResourceTypeName::new("Credential"),
-            credential_spec_decoder(),
         );
         for resource_type in crate::shared_provider_driver::SHARED_PROVIDER_TYPES {
             decoders.insert(
@@ -2546,14 +2546,14 @@ mod tests {
             &self,
             _provider_ref: &ResourceRef,
             _execution_ref: &ResourceRef,
-        ) -> Option<crate::credential_driver::CredentialDependencyFacts> {
+        ) -> Option<d2b_provider_credential::CredentialDependencyFacts> {
             None
         }
 
         async fn lease_facts(
             &self,
             _credential_ref: &ResourceRef,
-        ) -> Option<crate::credential_driver::CredentialLeaseFacts> {
+        ) -> Option<d2b_provider_credential::CredentialLeaseFacts> {
             None
         }
 
@@ -2564,7 +2564,7 @@ mod tests {
         fn session(
             &self,
             _provider_ref: &ResourceRef,
-        ) -> Option<Arc<dyn crate::credential_resource_runtime::CredentialSession>> {
+        ) -> Option<Arc<dyn d2b_provider_credential::CredentialSession>> {
             None
         }
     }

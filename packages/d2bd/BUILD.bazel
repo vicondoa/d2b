@@ -54,6 +54,7 @@ d2bd_shared_deps = [
     "//packages/d2b-provider-credential-secret-service:d2b_provider_credential_secret_service",
     "//packages/d2b-provider-credential-entra:d2b_provider_credential_entra",
     "//packages/d2b-provider-credential-managed-identity:d2b_provider_credential_managed_identity",
+    "//packages/d2b-provider-credential:d2b_provider_credential",
     "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
     "//packages/d2b-provider-runtime-qemu-media:d2b_provider_runtime_qemu_media",
     "//packages/d2b-provider-runtime-azure-virtual-machine:d2b_provider_runtime_azure_virtual_machine",
