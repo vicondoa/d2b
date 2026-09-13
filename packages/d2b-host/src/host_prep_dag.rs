@@ -176,7 +176,7 @@ pub enum HostPrepStepKind {
     /// `d2b-net-route-preflight.service` host singleton (retired in
     /// v1.0). This is a typed-only step in the host-prep enum: the
     /// daemon executes the check in its
-    /// startup path and in `dispatch_broker_host_reconcile`; it is
+    /// startup path and in `dispatch_broker_host_reconcile_as`; it is
     /// NOT scheduled per-VM in the DAG today.
     HostNetRoutePreflight,
 }
