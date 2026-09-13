@@ -39,6 +39,7 @@
 //! anything that does not match the composed expectation.
 
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -240,12 +241,35 @@ pub(crate) fn serve_guest_enrollments(
 }
 
 /// Accept guest enrollment connections on one bound endpoint.
+///
+/// Binding needs no reactor and the endpoint is therefore handed over as the
+/// standard-library listener; accepting does, so the reactor enters here,
+/// where the daemon's runtime already is.
 fn spawn_accept_loop(
-    listener: UnixListener,
+    listener: StdUnixListener,
     server: Arc<Mutex<ZoneEnrollmentServer>>,
     path: PathBuf,
 ) {
     tokio::spawn(async move {
+        if let Err(error) = listener.set_nonblocking(true) {
+            tracing::warn!(
+                endpoint = %path.display(),
+                error = %error,
+                "guest enrollment endpoint could not be made nonblocking"
+            );
+            return;
+        }
+        let listener = match UnixListener::from_std(listener) {
+            Ok(listener) => listener,
+            Err(error) => {
+                tracing::warn!(
+                    endpoint = %path.display(),
+                    error = %error,
+                    "guest enrollment endpoint refused by the runtime"
+                );
+                return;
+            }
+        };
         loop {
             let (stream, _peer) = match listener.accept().await {
                 Ok(accepted) => accepted,
@@ -279,9 +303,13 @@ fn spawn_accept_loop(
 }
 
 /// Bind one endpoint, replacing a socket no live listener holds.
-fn bind_enrollment_endpoint(path: &Path, owner: (u32, u32)) -> std::io::Result<UnixListener> {
+///
+/// The bind is a plain socket operation, so it needs no reactor and is
+/// callable from any context; the accept loop converts the listener where the
+/// runtime is.
+fn bind_enrollment_endpoint(path: &Path, owner: (u32, u32)) -> std::io::Result<StdUnixListener> {
     replace_stale_socket(path)?;
-    let listener = UnixListener::bind(path)?;
+    let listener = StdUnixListener::bind(path)?;
     set_socket_owner(path, owner);
     Ok(listener)
 }
