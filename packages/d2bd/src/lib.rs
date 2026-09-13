@@ -1,6 +1,6 @@
 #![allow(clippy::result_large_err)]
 
-pub mod endpoint_driver;
+pub(crate) mod endpoint_effects;
 pub mod process_effects;
 pub mod credential_driver;
 pub mod binding_driver;

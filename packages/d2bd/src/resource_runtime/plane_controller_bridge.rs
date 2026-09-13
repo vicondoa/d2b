@@ -862,6 +862,27 @@ mod tests {
         );
     }
 
+    /// The Endpoint family's committed purpose vocabulary: the purposes the
+    /// declaring provider crates commit, read through the daemon's own
+    /// derivation.
+    struct CommittedEndpointPurposes;
+
+    impl d2b_provider_endpoint::EndpointPurposeVocabulary for CommittedEndpointPurposes {
+        fn guest_control_producer(
+            &self,
+            purpose: &str,
+        ) -> Option<d2b_provider_endpoint::GuestControlProducer> {
+            crate::endpoint_effects::guest_control_producer(purpose)
+        }
+
+        fn device_worker_endpoint_class(
+            &self,
+            purpose: &str,
+        ) -> Option<d2b_contracts_resource::v3::endpoint::EndpointClass> {
+            crate::endpoint_effects::device_worker_endpoint_class(purpose)
+        }
+    }
+
     /// One Cloud Hypervisor controller Endpoint child envelope as
     /// `materialize_child_payload` renders it for a Guest's control endpoint:
     /// the authored create body plus the provider's materialized defaults.
@@ -936,8 +957,8 @@ mod tests {
             &ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("provider")
         );
         assert_eq!(
-            crate::endpoint_driver::endpoint_realization(&spec),
-            Some(crate::endpoint_driver::EndpointRealization::GuestControl),
+            d2b_provider_endpoint::endpoint_realization(&spec, &CommittedEndpointPurposes),
+            Some(d2b_provider_endpoint::EndpointRealization::GuestControl),
             "the committed row must be the shape the Endpoint driver realizes"
         );
     }
@@ -1019,8 +1040,8 @@ mod tests {
             d2b_contracts_resource::v3::endpoint::EndpointLocality::HostLocal
         );
         assert_eq!(
-            crate::endpoint_driver::endpoint_realization(&spec),
-            Some(crate::endpoint_driver::EndpointRealization::GuestControl),
+            d2b_provider_endpoint::endpoint_realization(&spec, &CommittedEndpointPurposes),
+            Some(d2b_provider_endpoint::EndpointRealization::GuestControl),
             "the committed ch-api row must be the shape the Endpoint driver realizes"
         );
     }

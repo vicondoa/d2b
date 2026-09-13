@@ -1,43 +1,44 @@
-//! Endpoint resource driver (U7): the v3 `ResourceDriver` conversion of the
-//! daemon-owned Endpoint realization path (R4, R8, R9; F4).
+//! The Endpoint resource driver: the v3 `ResourceDriver` conversion of the
+//! daemon-owned Endpoint realization path.
 //!
 //! The driver covers the endpoint shapes the v3 plane realizes, per
 //! preserved behavior:
 //!
 //! - the transport-unix / purpose `virtiofsd` socket (the binding-owned
-//!   virtiofsd socket, old `binding_child_resource_runtime`): recover probes
-//!   the socket on the host target, reconcile realizes the socket through
-//!   the provider port as a long effect, and delete participates in the
-//!   preserved endpoint-first teardown ordering - the endpoint is removed
-//!   BEFORE the worker Process child (the binding driver deletes its own
-//!   endpoint child first, then the worker; the drain finalizer and
-//!   recycle-with-producer semantics are preserved: an endpoint with
-//!   `recycle-with-producer` lifecycle goes away with its producer and
-//!   nothing outlives it);
+//!   virtiofsd socket): recover probes the socket on the host target,
+//!   reconcile realizes the socket through the provider port as a long
+//!   effect, and delete participates in the preserved endpoint-first teardown
+//!   ordering - the endpoint is removed BEFORE the worker Process child (the
+//!   binding driver deletes its own endpoint child first, then the worker;
+//!   the drain finalizer and recycle-with-producer semantics are preserved:
+//!   an endpoint with `recycle-with-producer` lifecycle goes away with its
+//!   producer and nothing outlives it);
 //! - the guest-runtime control endpoints the Cloud Hypervisor provider's
 //!   fixed child roles declare (`ch-api` on the guest's VMM Process,
 //!   `guest-control` on the Guest): the nested VMM carries both private
 //!   rendezvous, so the same recover/reconcile/delete verbs run against the
 //!   guest's committed VMM Process row instead of a socket this daemon
-//!   creates (U17: the row's actor owns its status; the old publication
-//!   stage wrote both rows from exactly that evidence);
+//!   creates (the row's actor owns its status; the old publication stage
+//!   wrote both rows from exactly that evidence);
 //! - the Device TPM Provider's worker-socket endpoints (`swtpm-tpm-socket`
 //!   on the Device-class row, `swtpm-control-socket` on the Control-class
 //!   one): one swtpm launch composes both sockets, so the producer Process
 //!   row's `Ready` status is the evidence - the same rule as the control
 //!   family, and the daemon creates and removes nothing for this shape.
 //!
-//! Conversion mapping (spec section 13):
+//! Conversion mapping:
 //! - `describe` -> [`EndpointDriverFactory`] registration under `Endpoint`.
 //! - `validate_spec` -> [`ResourceDriver::validate`].
 //! - `observe` -> [`ResourceDriver::recover`].
 //! - socket realization -> [`ResourceDriver::reconcile`].
 //! - socket removal -> [`ResourceDriver::delete`].
-//! - `UpdateStatus` -> `ctx.set_status` (in-memory only, R11).
-#![allow(dead_code)]
+//! - `UpdateStatus` -> `ctx.set_status` (in-memory only).
+//!
+//! Which purposes a declaring provider commits, and on which producer, is not
+//! this crate's knowledge: it arrives through
+//! [`EndpointPurposeVocabulary`], which the daemon implements over the
+//! declaring provider crates.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use d2b_contracts_resource::v3::{
@@ -56,20 +57,20 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
 
-/// The one resource type this factory serves (KTD4 Phase A).
-pub(crate) const ENDPOINT_TYPE_NAME: &str = "Endpoint";
+/// The one resource type this factory serves.
+pub const ENDPOINT_TYPE_NAME: &str = "Endpoint";
 
 /// The frozen purpose of the binding-owned virtiofsd socket.
 const VIRTIOFSD_PURPOSE: &str = "virtiofsd";
 
 /// The producer one guest-runtime control purpose is declared with, exactly
-/// as the Cloud Hypervisor provider's fixed child roles commit it
-/// (`GuestChildBatch::from_descriptor`): `ch-api` is created on the guest's
-/// VMM Process (`process_ref`), `guest-control` on the Guest itself
-/// (`owner_ref`).
+/// as the Cloud Hypervisor provider's fixed child roles commit it: `ch-api`
+/// is created on the guest's VMM Process, `guest-control` on the Guest
+/// itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GuestControlProducer {
+pub enum GuestControlProducer {
     /// The guest's VMM Process child (`Process/<guest>-vmm`).
     VmmProcess,
     /// The Guest itself.
@@ -78,19 +79,18 @@ pub(crate) enum GuestControlProducer {
 
 impl GuestControlProducer {
     /// The producer ResourceType the provider's role vocabulary declares.
-    pub(crate) const fn resource_type(self) -> &'static str {
+    pub const fn resource_type(self) -> &'static str {
         match self {
-            Self::VmmProcess => d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess
-                .resource_type(),
+            Self::VmmProcess => "Process",
             Self::Guest => "Guest",
         }
     }
 
-    /// The locality the provider materializes for this producer
-    /// (`materialize_child_payload`: `cross-domain` exactly for the
-    /// Guest-produced endpoint, `host-local` for the VMM-Process-produced
-    /// one, whose API socket lives on the host beside the VMM).
-    pub(crate) const fn locality(self) -> EndpointLocality {
+    /// The locality the provider materializes for this producer:
+    /// `cross-domain` exactly for the Guest-produced endpoint, `host-local`
+    /// for the VMM-Process-produced one, whose API socket lives on the host
+    /// beside the VMM.
+    pub const fn locality(self) -> EndpointLocality {
         match self {
             Self::VmmProcess => EndpointLocality::HostLocal,
             Self::Guest => EndpointLocality::CrossDomain,
@@ -98,51 +98,30 @@ impl GuestControlProducer {
     }
 }
 
-/// The producer the Cloud Hypervisor provider's own child-role vocabulary
-/// declares for one guest-runtime control purpose, or `None` for any other
-/// purpose. Derived from the provider's role list, so the closed family
-/// cannot drift from the children a guest's provider controller commits.
-pub(crate) fn guest_control_producer(purpose: &str) -> Option<GuestControlProducer> {
-    use d2b_provider_runtime_cloud_hypervisor::ChildRole;
-    for (role, producer) in [
-        (ChildRole::ChApiEndpoint, GuestControlProducer::VmmProcess),
-        (ChildRole::GuestControlEndpoint, GuestControlProducer::Guest),
-    ] {
-        if role.purpose() == Some(purpose) {
-            return Some(producer);
-        }
-    }
-    None
-}
-
-/// Whether one purpose belongs to the guest-runtime control family.
-pub(crate) fn guest_control_purpose(purpose: &str) -> bool {
-    guest_control_producer(purpose).is_some()
-}
-
-/// The Endpoint class the Device TPM Provider declares for one of its
-/// device-worker purposes, or `None` for any other purpose.
+/// The per-provider purpose derivation the Endpoint family port answers with.
 ///
-/// Derived from the provider's own constants (`TPM_SERVER_ENDPOINT_PURPOSE`,
-/// `TPM_CONTROL_ENDPOINT_PURPOSE`), so the closed realization set cannot
-/// drift from the rows the provider declares in its projection.
-pub(crate) fn device_worker_endpoint_class(purpose: &str) -> Option<EndpointClass> {
-    match purpose {
-        d2b_provider_device_tpm::TPM_SERVER_ENDPOINT_PURPOSE => Some(EndpointClass::Device),
-        d2b_provider_device_tpm::TPM_CONTROL_ENDPOINT_PURPOSE => Some(EndpointClass::Control),
-        _ => None,
-    }
-}
+/// The family admits exactly the endpoint shapes its declaring providers
+/// commit, and that commitment lives in provider crates this crate does not
+/// depend on. The daemon implements this derivation over those providers'
+/// own vocabularies - the Cloud Hypervisor provider's child roles and the
+/// Device TPM Provider's declared purposes - so the closed admission set
+/// cannot drift from the children a guest's provider controller commits.
+/// Test doubles answer with the same closed set.
+pub trait EndpointPurposeVocabulary: Send + Sync {
+    /// The producer one guest-runtime control purpose is committed on, or
+    /// `None` for any purpose outside that family.
+    fn guest_control_producer(&self, purpose: &str) -> Option<GuestControlProducer>;
 
-/// Whether one purpose belongs to the device-worker family.
-pub(crate) fn device_worker_purpose(purpose: &str) -> bool {
-    device_worker_endpoint_class(purpose).is_some()
+    /// The Endpoint class a declaring provider declares for one of its
+    /// device-worker purposes, or `None` for any purpose outside that
+    /// family.
+    fn device_worker_endpoint_class(&self, purpose: &str) -> Option<EndpointClass>;
 }
 
 /// The realization the v3 plane owns for one admitted Endpoint spec. Anything
 /// outside this closed set is refused at validate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EndpointRealization {
+pub enum EndpointRealization {
     /// The binding-owned virtiofsd socket: transport unix, purpose
     /// `virtiofsd`, realized by the serving worker Process child on the host.
     VirtiofsdSocket,
@@ -165,7 +144,10 @@ pub(crate) enum EndpointRealization {
 }
 
 /// Classify one Endpoint spec onto the realization the plane owns.
-pub(crate) fn endpoint_realization(spec: &EndpointSpec) -> Option<EndpointRealization> {
+pub fn endpoint_realization(
+    spec: &EndpointSpec,
+    vocabulary: &dyn EndpointPurposeVocabulary,
+) -> Option<EndpointRealization> {
     if spec.endpoint_class() == EndpointClass::Service
         && spec.transport() == EndpointTransport::Unix
         && spec.purpose().as_str() == VIRTIOFSD_PURPOSE
@@ -173,18 +155,18 @@ pub(crate) fn endpoint_realization(spec: &EndpointSpec) -> Option<EndpointRealiz
     {
         return Some(EndpointRealization::VirtiofsdSocket);
     }
-    // The control family is exactly the shape the provider's own child roles
-    // commit, per purpose: the producer role's ResourceType and the locality
-    // the provider materializes for that producer. `ch-api` is produced by
-    // the VMM Process (host-local: the API socket lives on the host beside
-    // the VMM), `guest-control` by the Guest (cross-domain). No other
-    // producer/purpose pairing is admitted, and nothing else about the
+    // The control family is exactly the shape the declaring provider's own
+    // child roles commit, per purpose: the producer role's ResourceType and
+    // the locality the provider materializes for that producer. `ch-api` is
+    // produced by the VMM Process (host-local: the API socket lives on the
+    // host beside the VMM), `guest-control` by the Guest (cross-domain). No
+    // other producer/purpose pairing is admitted, and nothing else about the
     // Endpoint family is relaxed.
     if spec.endpoint_class() == EndpointClass::Control
         && spec.transport() == EndpointTransport::OpaqueCarriage
         && spec.visibility() == EndpointVisibility::Provider
         && spec.lifecycle_policy() == EndpointLifecyclePolicy::RecycleWithProducer
-        && let Some(producer) = guest_control_producer(spec.purpose().as_str())
+        && let Some(producer) = vocabulary.guest_control_producer(spec.purpose().as_str())
         && spec.producer_ref().resource_type().as_str() == producer.resource_type()
         && spec.locality() == producer.locality()
     {
@@ -199,7 +181,8 @@ pub(crate) fn endpoint_realization(spec: &EndpointSpec) -> Option<EndpointRealiz
         && spec.locality() == EndpointLocality::HostLocal
         && spec.lifecycle_policy() == EndpointLifecyclePolicy::RecycleWithProducer
         && spec.producer_ref().resource_type().as_str() == "Process"
-        && device_worker_endpoint_class(spec.purpose().as_str()) == Some(spec.endpoint_class())
+        && vocabulary.device_worker_endpoint_class(spec.purpose().as_str())
+            == Some(spec.endpoint_class())
     {
         return Some(EndpointRealization::DeviceWorkerSocket);
     }
@@ -230,7 +213,7 @@ impl EndpointDriverErrorKind {
         }
     }
 
-    /// The registered failure kind this classification reports (issue #508).
+    /// The registered failure kind this classification reports.
     const fn failure_kind(self) -> FailureKind {
         match self {
             Self::SpecInvalid => FailureKinds::ENDPOINT_SPEC_INVALID,
@@ -242,10 +225,9 @@ impl EndpointDriverErrorKind {
 }
 
 /// Typed driver failure; mapped onto the structured failure surface at the
-/// erased boundary through [`ResourceDriver::classify_error`] (R13, issue
-/// #508).
+/// erased boundary through [`ResourceDriver::classify_error`].
 #[derive(Debug, Clone)]
-pub(crate) struct EndpointDriverError {
+pub struct EndpointDriverError {
     kind: EndpointDriverErrorKind,
     op: DriverOp,
     detail: FailureDetail,
@@ -275,9 +257,9 @@ impl core::fmt::Display for EndpointDriverError {
 
 impl std::error::Error for EndpointDriverError {}
 
-/// Typed in-memory status projection (R11: never persisted).
+/// Typed in-memory status projection (never persisted).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EndpointDriverStatus {
+pub enum EndpointDriverStatus {
     /// A socket realization effect is in flight.
     Realizing,
     /// The endpoint is realized and observable.
@@ -288,10 +270,9 @@ pub(crate) enum EndpointDriverStatus {
 // Decoded spec envelope
 // ---------------------------------------------------------------------------
 
-/// The spec-store envelope for one Endpoint row (KTD2), exactly as
-/// persisted.
+/// The spec-store envelope for one Endpoint row, exactly as persisted.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EndpointSpecEnvelope {
+struct EndpointSpecEnvelope {
     raw: Vec<u8>,
     base: d2b_contracts_resource::v3::CanonicalJsonObject,
 }
@@ -299,7 +280,7 @@ pub(crate) struct EndpointSpecEnvelope {
 /// The manager-wired decode hook for Endpoint rows. The Endpoint base
 /// carries `providerRef` inside its typed contract, so the decoder
 /// reconstructs the complete typed object.
-pub(crate) fn endpoint_spec_decoder() -> Arc<dyn SpecDecoder> {
+pub fn endpoint_spec_decoder() -> Arc<dyn SpecDecoder> {
     typed_spec_decoder(|bytes| {
         serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| EndpointSpecEnvelope {
             raw: bytes.to_vec(),
@@ -312,11 +293,11 @@ pub(crate) fn endpoint_spec_decoder() -> Arc<dyn SpecDecoder> {
 // Provider effect port
 // ---------------------------------------------------------------------------
 
-/// The provider-facing socket effect surface the Endpoint driver needs.
-/// The production implementation delegates to the preserved virtiofs
-/// endpoint realization; test doubles implement the same seam (R4).
+/// The provider-facing effect surface the Endpoint driver needs. The
+/// production implementation delegates to the preserved endpoint realization
+/// in the daemon; test doubles implement the same seam.
 #[async_trait::async_trait]
-pub(crate) trait EndpointDriverEffects: Send + Sync + 'static {
+pub trait EndpointDriverEffects: EndpointPurposeVocabulary {
     /// Whether the endpoint's socket is currently realized and observable.
     async fn socket_present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool;
 
@@ -325,84 +306,34 @@ pub(crate) trait EndpointDriverEffects: Send + Sync + 'static {
         -> Result<(), String>;
 
     /// Remove the endpoint realization - endpoint-first teardown. Idempotent
-    /// under retry (R10).
+    /// under retry.
     async fn remove_socket(&self, producer_ref: &ResourceRef, purpose: &str)
         -> Result<(), String>;
 }
 
-/// Boxed future returned by the production presence probe: resolving the
-/// socket target is store-backed (the registry loads derived-child rows from
-/// the authority on a miss), so the port cannot be a sync closure.
-pub(crate) type SocketPresenceFuture<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
-
-/// Production effects over the preserved endpoint realization. U9 wires the
-/// adapter construction (the same inputs the old serving effect adapter
-/// assembled).
-pub(crate) struct ProductionEndpointDriverEffects {
-    present: Arc<dyn for<'a> Fn(&'a ResourceRef, &'a str) -> SocketPresenceFuture<'a> + Send + Sync>,
-    ensure: Arc<dyn AsyncSocketEffect + Send + Sync>,
-    remove: Arc<dyn AsyncSocketEffect + Send + Sync>,
-}
-
-/// A boxed async socket effect (ensure or remove).
-#[async_trait::async_trait]
-pub(crate) trait AsyncSocketEffect: Send + Sync {
-    async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String>;
-}
-
-impl ProductionEndpointDriverEffects {
-    pub(crate) fn new(
-        present: Arc<dyn for<'a> Fn(&'a ResourceRef, &'a str) -> SocketPresenceFuture<'a> + Send + Sync>,
-        ensure: Arc<dyn AsyncSocketEffect + Send + Sync>,
-        remove: Arc<dyn AsyncSocketEffect + Send + Sync>,
-    ) -> Self {
-        Self { present, ensure, remove }
-    }
-}
-
-#[async_trait::async_trait]
-impl EndpointDriverEffects for ProductionEndpointDriverEffects {
-    async fn socket_present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
-        (self.present)(producer_ref, purpose).await
-    }
-
-    async fn ensure_socket(
-        &self,
-        producer_ref: &ResourceRef,
-        purpose: &str,
-    ) -> Result<(), String> {
-        self.ensure.run(producer_ref, purpose).await
-    }
-
-    async fn remove_socket(
-        &self,
-        producer_ref: &ResourceRef,
-        purpose: &str,
-    ) -> Result<(), String> {
-        self.remove.run(producer_ref, purpose).await
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Factory (U9 wiring shape)
+// Factory
 // ---------------------------------------------------------------------------
 
-/// Everything the composition unit (U9) must construct to instantiate the
-/// Endpoint driver factory for one zone.
-pub(crate) struct EndpointDriverArgs {
-    pub(crate) zone: String,
-    pub(crate) effects: Arc<dyn EndpointDriverEffects>,
+/// Everything the composition must construct to instantiate the Endpoint
+/// driver factory for one zone.
+pub struct EndpointDriverArgs {
+    /// The zone the driver serves.
+    pub zone: String,
+    /// The daemon-realized effect port the driver drives.
+    pub effects: Arc<dyn EndpointDriverEffects>,
 }
 
 /// [`ResourceDriverFactory`] for the `Endpoint` resource type. Construction
-/// is infallible by contract (R3).
-pub(crate) struct EndpointDriverFactory {
+/// is infallible by contract.
+pub struct EndpointDriverFactory {
     types: [ResourceTypeName; 1],
     args: EndpointDriverArgs,
 }
 
 impl EndpointDriverFactory {
-    pub(crate) fn new(args: EndpointDriverArgs) -> Self {
+    /// Build the factory over the zone's effect port.
+    pub fn new(args: EndpointDriverArgs) -> Self {
         Self {
             types: [ResourceTypeName::new(ENDPOINT_TYPE_NAME)],
             args,
@@ -428,17 +359,17 @@ impl ResourceDriverFactory for EndpointDriverFactory {
 // Driver
 // ---------------------------------------------------------------------------
 
-/// One Endpoint resource's driver.
+/// One Endpoint resource's driver. It drives the resource through the
+/// zone's effect port; the zone travels on [`EndpointDriverArgs`].
 #[derive(Clone)]
-pub(crate) struct EndpointDriver {
-    zone: String,
+pub struct EndpointDriver {
     effects: Arc<dyn EndpointDriverEffects>,
 }
 
 impl EndpointDriver {
-    pub(crate) fn new(args: EndpointDriverArgs) -> Self {
+    /// Build one resource's driver over the zone's effect port.
+    pub fn new(args: EndpointDriverArgs) -> Self {
         Self {
-            zone: args.zone,
             effects: args.effects,
         }
     }
@@ -461,11 +392,11 @@ impl EndpointDriver {
     }
 
     /// The closed set of Endpoint shapes the v3 plane realizes: the
-    /// binding-owned virtiofsd socket and the Guest-produced control
-    /// endpoints the Cloud Hypervisor provider declares. Any other shape
-    /// stays on the old reconciler until its conversion unit.
+    /// binding-owned virtiofsd socket and the guest-runtime control
+    /// endpoints the declaring providers commit. Any other shape stays on
+    /// the old reconciler until its conversion unit.
     fn check_shape(&self, spec: &EndpointSpec, op: DriverOp) -> Result<(), EndpointDriverError> {
-        if endpoint_realization(spec).is_none() {
+        if endpoint_realization(spec, &*self.effects).is_none() {
             return Err(self
                 .error(EndpointDriverErrorKind::ShapeUnsupported, op)
                 .with_detail(
@@ -487,15 +418,6 @@ impl EndpointDriver {
         }
         Ok(())
     }
-
-    fn producer_ref(&self, ctx: &ResourceContext, op: DriverOp) -> Result<ResourceRef, EndpointDriverError> {
-        let envelope = ctx
-            .spec::<EndpointSpecEnvelope>()
-            .map_err(|_| self.error(EndpointDriverErrorKind::SpecInvalid, op))?;
-        let spec = serde_json::from_slice::<EndpointSpec>(&envelope.base.to_canonical_bytes())
-            .map_err(|_| self.error(EndpointDriverErrorKind::SpecInvalid, op))?;
-        Ok(spec.producer_ref().clone())
-    }
 }
 
 #[async_trait::async_trait]
@@ -510,7 +432,7 @@ impl ResourceDriver for EndpointDriver {
             EndpointDriverErrorKind::SocketEffect => DriverFailure::error(
                 error.op,
                 error.kind.failure_kind(),
-                FailureClass::Retryable,
+                error.kind.class(),
             ),
             EndpointDriverErrorKind::DrainPending => {
                 DriverFailure::not_yet(error.op, error.kind.failure_kind())
@@ -544,8 +466,8 @@ impl ResourceDriver for EndpointDriver {
     }
 
     /// One reconcile pass: the socket present converges; otherwise the
-    /// realization effect spawns as a long effect (R5: the mailbox never
-    /// blocks on it).
+    /// realization effect spawns as a long effect (the mailbox never blocks
+    /// on it).
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, Self::Error> {
         let spec = self.decoded_spec(ctx, DriverOp::Reconcile)?;
         self.check_shape(&spec, DriverOp::Reconcile)?;
@@ -590,10 +512,10 @@ impl ResourceDriver for EndpointDriver {
         Ok(ReconcileOutcome::InProgress { operation })
     }
 
-    /// Drain step (R10, F3): every owned child finalizes before this
-    /// resource's own teardown. The call nudges each owned child through its
-    /// own finalize-before-delete pass and requeues this pass while any child
-    /// row is still live. Idempotent under retry.
+    /// Drain step: every owned child finalizes before this resource's own
+    /// teardown. The call nudges each owned child through its own
+    /// finalize-before-delete pass and requeues this pass while any child row
+    /// is still live. Idempotent under retry.
     async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         ctx.finalize_owned_resources()
             .await
@@ -605,7 +527,7 @@ impl ResourceDriver for EndpointDriver {
     /// preserved: the endpoint driver's own effect runs BEFORE the worker
     /// Process child is deleted (the binding driver's delete encodes the
     /// full ordering; this driver supplies the endpoint leg of it).
-    /// Idempotent under retry (R10).
+    /// Idempotent under retry.
     async fn delete(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         let Ok(spec) = self.decoded_spec(ctx, DriverOp::Delete) else {
             // Nothing durable to clean up; converged without effects.
@@ -631,7 +553,79 @@ impl ResourceDriver for EndpointDriver {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: driver unit tests over a scripted socket port (R4; ordering and
+// Registration: the type's driver declaration
+// ---------------------------------------------------------------------------
+
+/// The resource verbs the Endpoint type supports.
+///
+/// Derived from the v3 resource plane's converted-type verb surface: the
+/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
+/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
+/// `Credential` type. Every converted type is served by the same manager
+/// verbs, and Role rules and the typed CLI nouns resolve their gating from
+/// this declaration.
+const ENDPOINT_VERBS: &[&str] = &[
+    "get",
+    "list",
+    "watch",
+    "create",
+    "update-spec",
+    "update-status",
+    "update-metadata",
+    "update-finalizers",
+    "delete",
+];
+
+/// The execution domains the Endpoint type can be reconciled in.
+///
+/// Derived from the placement contract: `Endpoint` names no placement anchor
+/// (`PlacementAnchor::canonical_for` resolves none), so an Endpoint row never
+/// carries the canonical `spec.executionRef` and the plane reconciles it on
+/// its own Host domain. A realized producer may live in a Guest; the effects
+/// reach that row through the manager, not through this row's placement.
+const ENDPOINT_EXECUTION_DOMAINS: &[&str] = &["host"];
+
+/// The resource types the Endpoint realization reads while reconciling.
+///
+/// Derived from the driver's row reads: the guest-runtime control evidence
+/// reads the producer's committed `Process` row (the guest's VMM child for
+/// the Guest-produced purpose), the device-worker evidence reads the producer
+/// `Process` row, and the virtiofsd socket target resolves through the
+/// binding's committed `VolumeBinding` row.
+const ENDPOINT_READS: &[WellKnownType] = &[
+    WellKnownType::PROCESS,
+    WellKnownType::GUEST,
+    WellKnownType::VOLUME_BINDING,
+];
+
+/// The Endpoint type's driver declaration.
+///
+/// `Endpoint` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot serve
+/// the converted endpoint shapes without it, so it must be registered before
+/// the plane opens. The type is not exportable: `ResourceExport` admits only
+/// qualified `*.d2bus.org.*Service` types, so an endpoint can never be an
+/// export subject. The driver serves no broker operations and creates no
+/// children through this declaration; the endpoint children the volume
+/// binding realizes are created by that family.
+pub fn endpoint_descriptor(args: EndpointDriverArgs) -> DriverDescriptor {
+    DriverDescriptor {
+        resource_type: WellKnownType::ENDPOINT,
+        allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+        verbs: ENDPOINT_VERBS,
+        execution: ENDPOINT_EXECUTION_DOMAINS,
+        exportable: false,
+        reads: ENDPOINT_READS,
+        operations: &[],
+        creations: &[],
+        startup: &[],
+        services: &[],
+        decoder: endpoint_spec_decoder(),
+        factory: Arc::new(EndpointDriverFactory::new(args)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: driver unit tests over a scripted socket port (ordering and
 // idempotence observed through the recorded calls).
 // ---------------------------------------------------------------------------
 
@@ -660,11 +654,16 @@ mod tests {
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
 
-    use super::{EndpointDriverArgs, EndpointDriverFactory, endpoint_spec_decoder};
+    use super::{
+        EndpointDriverArgs, EndpointDriverFactory, EndpointPurposeVocabulary,
+        GuestControlProducer, endpoint_spec_decoder,
+    };
 
     // -- fakes ---------------------------------------------------------------
 
-    /// Scripted socket port: records every call in order.
+    /// Scripted socket port: records every call in order, and answers the
+    /// purpose derivations with the purposes the declaring providers commit
+    /// (the Cloud Hypervisor child roles and the Device TPM worker sockets).
     struct FakeSocketEffects {
         calls: parking_lot::Mutex<Vec<&'static str>>,
         present: std::sync::atomic::AtomicBool,
@@ -684,6 +683,24 @@ mod tests {
 
         fn make_present(&self) {
             self.present.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl EndpointPurposeVocabulary for FakeSocketEffects {
+        fn guest_control_producer(&self, purpose: &str) -> Option<GuestControlProducer> {
+            match purpose {
+                "ch-api" => Some(GuestControlProducer::VmmProcess),
+                "guest-control" => Some(GuestControlProducer::Guest),
+                _ => None,
+            }
+        }
+
+        fn device_worker_endpoint_class(&self, purpose: &str) -> Option<EndpointClass> {
+            match purpose {
+                "swtpm-tpm-socket" => Some(EndpointClass::Device),
+                "swtpm-control-socket" => Some(EndpointClass::Control),
+                _ => None,
+            }
         }
     }
 
@@ -802,7 +819,6 @@ mod tests {
 
     // -- fixtures ------------------------------------------------------------
 
-
     fn test_row(spec: &EndpointSpec) -> StoredDesiredResource {
         StoredDesiredResource {
             key: ResourceKey::new("work", "Endpoint", "endpoint"),
@@ -878,8 +894,7 @@ mod tests {
             "socket absent: nothing to adopt"
         );
 
-        // Pass one spawns the realization effect; the mailbox never blocks
-        // (R5).
+        // Pass one spawns the realization effect; the mailbox never blocks.
         match d.reconcile(&mut ctx).await.expect("reconcile") {
             ReconcileOutcome::InProgress { .. } => {}
             other => panic!("expected InProgress, got {other:?}"),
@@ -942,7 +957,7 @@ mod tests {
         );
     }
 
-    // -- finalize: owned children retire before the socket teardown (F3) ------
+    // -- finalize: owned children retire before the socket teardown ----------
 
     #[tokio::test]
     async fn finalize_finalizes_owned_children_before_the_socket_teardown() {
@@ -993,7 +1008,7 @@ mod tests {
             "endpoint driver removes the socket; the binding driver's delete runs \
              this endpoint leg BEFORE the worker Process deletion"
         );
-        // Retry is idempotent (R10).
+        // Retry is idempotent.
         d.delete(&mut ctx).await.expect("delete retry");
         assert_eq!(
             fake.call_order(),
@@ -1047,24 +1062,22 @@ mod tests {
 
     // -- guest-runtime control endpoints ------------------------------------------
 
-    /// The producer and locality the Cloud Hypervisor provider's own child-role
-    /// vocabulary declares for one guest-runtime control purpose
-    /// (`GuestChildBatch::from_descriptor` + `materialize_child_payload`):
-    /// `ch-api` is created on the guest's VMM Process and materialized
-    /// host-local (the Cloud Hypervisor API socket lives on the host beside
-    /// the VMM), `guest-control` on the Guest and materialized cross-domain.
+    /// The producer and locality the Cloud Hypervisor provider's own child
+    /// roles commit for one guest-runtime control purpose: `ch-api` is
+    /// created on the guest's VMM Process and materialized host-local (the
+    /// Cloud Hypervisor API socket lives on the host beside the VMM),
+    /// `guest-control` on the Guest and materialized cross-domain.
     fn provider_control_shape(purpose: &str) -> (ResourceRef, EndpointLocality) {
-        let guest = ResourceRef::parse("Guest/acceptance-guest").expect("guest");
-        match super::guest_control_producer(purpose).expect("declared control purpose") {
-            super::GuestControlProducer::VmmProcess => (
-                d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
-                    &guest,
-                    d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess,
-                )
-                .expect("deterministic VMM child"),
+        match purpose {
+            "ch-api" => (
+                ResourceRef::parse("Process/acceptance-guest-vmm").expect("VMM child"),
                 EndpointLocality::HostLocal,
             ),
-            super::GuestControlProducer::Guest => (guest, EndpointLocality::CrossDomain),
+            "guest-control" => (
+                ResourceRef::parse("Guest/acceptance-guest").expect("guest"),
+                EndpointLocality::CrossDomain,
+            ),
+            other => panic!("no committed control shape for {other:?}"),
         }
     }
 
@@ -1110,29 +1123,31 @@ mod tests {
     /// never reached Ready.
     #[test]
     fn provider_committed_control_shapes_are_admitted() {
+        let vocabulary = FakeSocketEffects::new();
         for purpose in ["ch-api", "guest-control"] {
             let spec = guest_control_endpoint_spec(purpose);
             assert_eq!(
-                super::endpoint_realization(&spec),
+                super::endpoint_realization(&spec, &*vocabulary),
                 Some(super::EndpointRealization::GuestControl),
                 "{purpose} is one of the provider's fixed child-role endpoints",
             );
         }
-        // The family is derived from the provider's own vocabulary: the
-        // admitted purposes are exactly the role purposes it declares.
+        // The family is derived from the port's vocabulary: the admitted
+        // purposes are exactly the control purposes the port answers for.
         for purpose in ["ch-api", "guest-control"] {
-            assert!(super::guest_control_purpose(purpose));
+            assert!(vocabulary.guest_control_producer(purpose).is_some());
         }
-        assert!(!super::guest_control_purpose("virtiofsd"));
-        assert!(!super::guest_control_purpose("aca-sandbox-agent"));
+        assert!(vocabulary.guest_control_producer("virtiofsd").is_none());
+        assert!(vocabulary.guest_control_producer("aca-sandbox-agent").is_none());
     }
 
     /// One device-worker endpoint exactly as the Device TPM Provider's
     /// projection declares it: purpose names the class, the swtpm worker
     /// Process is the producer, and the posture is owner-scoped host-local.
     fn device_worker_endpoint_spec(purpose: &str) -> EndpointSpec {
-        let class =
-            super::device_worker_endpoint_class(purpose).expect("declared device-worker purpose");
+        let class = FakeSocketEffects::new()
+            .device_worker_endpoint_class(purpose)
+            .expect("declared device-worker purpose");
         EndpointSpec::new(
             ResourceRef::parse("Provider/device-tpm").expect("provider"),
             ResourceRef::parse("Process/swtpm-tpm").expect("producer"),
@@ -1160,20 +1175,18 @@ mod tests {
     /// rows reach a defined state instead of `endpoint-shape-unsupported`.
     #[test]
     fn provider_committed_device_worker_shapes_are_admitted() {
-        for purpose in [
-            d2b_provider_device_tpm::TPM_SERVER_ENDPOINT_PURPOSE,
-            d2b_provider_device_tpm::TPM_CONTROL_ENDPOINT_PURPOSE,
-        ] {
+        let vocabulary = FakeSocketEffects::new();
+        for purpose in ["swtpm-tpm-socket", "swtpm-control-socket"] {
             let spec = device_worker_endpoint_spec(purpose);
             assert_eq!(
-                super::endpoint_realization(&spec),
+                super::endpoint_realization(&spec, &*vocabulary),
                 Some(super::EndpointRealization::DeviceWorkerSocket),
                 "{purpose} is one of the Device TPM Provider's worker sockets",
             );
-            assert!(super::device_worker_purpose(purpose));
+            assert!(vocabulary.device_worker_endpoint_class(purpose).is_some());
         }
-        assert!(!super::device_worker_purpose("virtiofsd"));
-        assert!(!super::device_worker_purpose("ch-api"));
+        assert!(vocabulary.device_worker_endpoint_class("virtiofsd").is_none());
+        assert!(vocabulary.device_worker_endpoint_class("ch-api").is_none());
     }
 
     /// A device-worker look-alike stays refused at validate: the purpose must
@@ -1183,7 +1196,7 @@ mod tests {
     /// class or producer type.
     #[tokio::test]
     async fn device_worker_look_alikes_stay_refused() {
-        let server = d2b_provider_device_tpm::TPM_SERVER_ENDPOINT_PURPOSE;
+        let server = "swtpm-tpm-socket";
         let with = |class, producer: &str, locality, visibility| {
             EndpointSpec::new(
                 ResourceRef::parse("Provider/device-tpm").expect("provider"),
@@ -1315,7 +1328,7 @@ mod tests {
         }
     }
 
-    /// U17: the guest's nested VMM carries the `ch-api` and `guest-control`
+    /// The guest's nested VMM carries the `ch-api` and `guest-control`
     /// rendezvous, so their converted rows are the plane's to realize; the
     /// driver admits both (their row's actor owns the status the guest's
     /// provider controller gates on) and runs the same

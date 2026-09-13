@@ -65,6 +65,7 @@ members = [
     "packages/xtask",
     "packages/d2b-broker",
     "packages/d2b-guest-shell-runner",
+    "packages/d2b-provider-endpoint",
 ]
 
 [workspace.package]
