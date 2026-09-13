@@ -20,6 +20,7 @@ use crate::target_runtime::{
     DeploymentError, ProviderDeployment,
 };
 use d2b_bus::{BusIngress, ZoneRegistrar};
+use d2b_contracts::identity::SYSTEM_ZONE_NAME;
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts_resource::v3::identity::{
@@ -580,7 +581,7 @@ pub fn compile_committed_policy_with_subjects(
     let mut bindings = vec![binding];
     let mut subject_evidence = BTreeMap::new();
     for resource in resources {
-        let envelope = validated_stored_resource_envelope(resource, zone)?;
+        let envelope = validated_plane_policy_envelope(resource, zone)?;
         if ROLE_BINDING_SUBJECT_RESOURCE_TYPES
             .contains(&resource.resource_ref.resource_type().as_str())
         {
@@ -606,7 +607,7 @@ pub fn compile_committed_policy_with_subjects(
         }
     }
     for resource in resources {
-        let envelope = validated_stored_resource_envelope(resource, zone)?;
+        let envelope = validated_plane_policy_envelope(resource, zone)?;
         if matches!(
             envelope.status().phase(),
             ResourcePhase::Deleted | ResourcePhase::Failed
@@ -825,6 +826,40 @@ pub fn compile_committed_policy_with_subjects(
         now_tick: 1,
     };
     Ok((policy, state))
+}
+
+/// Whether two committed policy rows are homed where one Zone plane reads:
+/// the same Zone, or either of them the reserved system Zone the foundation
+/// seed commits the system vocabulary under.
+///
+/// A plane reads the system vocabulary read-only; it never writes there, and
+/// a row homed in any third Zone is outside every plane's read.
+fn policy_rows_share_a_plane(left: &ZoneId, right: &ZoneId) -> bool {
+    left == right
+        || left.as_str() == SYSTEM_ZONE_NAME
+        || right.as_str() == SYSTEM_ZONE_NAME
+}
+
+/// Validate one committed policy row a Zone plane may read.
+///
+/// The row must be readable by this plane - homed in the plane's own Zone or
+/// in the reserved system Zone - and must match the envelope the manager
+/// served for it. A row homed in any other Zone fails the compile closed.
+fn validated_plane_policy_envelope(
+    resource: &StoredResource,
+    zone: &ZoneId,
+) -> Result<ResourceEnvelope, ResourceRuntimeError> {
+    if !policy_rows_share_a_plane(&resource.zone, zone) {
+        tracing::warn!(
+            zone = zone.as_str(),
+            row_zone = resource.zone.as_str(),
+            resource = resource.resource_ref.to_canonical_string(),
+            reason = "policy resource is homed in a Zone this plane does not read",
+            "policy resource validation failed",
+        );
+        return Err(ResourceRuntimeError::AuthorizationUnavailable);
+    }
+    validated_stored_resource_envelope(resource, &resource.zone)
 }
 
 fn validated_stored_resource_envelope(
@@ -1508,7 +1543,7 @@ pub fn committed_policy_subject_fingerprints_with_retained(
                 continue;
             };
             let subject_envelope =
-                validated_stored_resource_envelope(subject, envelope.metadata().zone())?;
+                validated_plane_policy_envelope(subject, envelope.metadata().zone())?;
             if !subject_is_bindable(&subject_envelope) {
                 continue;
             }

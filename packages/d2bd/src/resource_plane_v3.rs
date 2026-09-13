@@ -3767,4 +3767,247 @@ mod tests {
             .await
             .expect("the foundation plane admits the write");
     }
+
+    /// The one declared spawn command, under the seed's publisher role.
+    fn seeded_command(name: &str) -> crate::foundation_seed::SeedCommand {
+        let spec = d2b_contracts_resource::v3::canonical_json_bytes(&serde_json::json!({
+            "exec": "/usr/lib/d2b/libexec/virtiofsd",
+            "argv": ["--socket-path", "{socketPath}"],
+            "params": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "socketPath": { "type": "string" } }
+            },
+            "roleRef": "Role/operation-publisher",
+            "intent": { "grammar": "<zone>/<name>", "mint": "per-bundle-entry" }
+        }))
+        .expect("canonical command spec");
+        crate::foundation_seed::SeedCommand {
+            name: name.to_owned(),
+            spec: serde_json::from_slice(&spec).expect("command spec"),
+        }
+    }
+
+    /// The seed's own vocabulary, plus one declared command so the controller
+    /// materializes an `Operation` row to resolve.
+    fn seeded_declarations(command: &str) -> crate::foundation_seed::FoundationDeclarations {
+        let mut declarations = crate::foundation_seed::core_declarations();
+        let command = seeded_command(command);
+        declarations.roles[0].spec = serde_json::from_value(serde_json::json!({
+            "rules": [{
+                "resourceTypes": ["Operation"],
+                "verbs": ["create"],
+                "subresources": [],
+                "resourceNames": [],
+                "zones": [],
+                "executionRefs": [],
+                "sessionVerbs": []
+            }],
+            "commandRefs": [format!("Command/{}", command.name)],
+        }))
+        .expect("publisher role scoped to the declared command");
+        declarations.commands = vec![command];
+        declarations
+    }
+
+    /// The `Provider` row the seeded self-binding's subject resolves through.
+    ///
+    /// The seed homes its rows in the reserved system Zone and publishes the
+    /// provider identity without a row, so the plane's own Zone carries the
+    /// subject row: the two-Zone shape the policy read path must span. The
+    /// row is committed before the plane opens so the manager indexes it.
+    async fn seed_provider_row(inputs: &ConstructionInputs, provider_ref: &ResourceRef) -> ResourceUid {
+        let key = ResourceKey::new("test", "Provider", provider_ref.name().as_str());
+        let uid = d2b_resource_runtime::manager::deterministic_uid(&key);
+        let store =
+            SpecStore::open(ResourcePlaneV3::spec_store_path(&inputs.spec_store_dir)).expect("store");
+        store
+            .ensure(StoredDesiredResource {
+                uid,
+                key,
+                generation: 1,
+                owner_uid: None,
+                provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+                deleting: false,
+                spec: b"{}".to_vec(),
+                metadata: br#"{"annotations":{},"labels":{},"ownerRef":null}"#.to_vec(),
+                created_at: 0,
+            })
+            .await
+            .expect("provider row committed");
+        drop(store);
+        d2b_provider_process::resource_uid_from_bytes(&uid).expect("UUIDv4-shaped provider uid")
+    }
+
+    /// The committed controller subject: the provider the seed self-bound.
+    fn controller_subject(
+        provider_ref: &ResourceRef,
+        provider_uid: ResourceUid,
+        zone: &ZoneId,
+    ) -> d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext {
+        use d2b_contracts_resource::v3::SchemaFingerprint;
+        use d2b_contracts_resource::v3::identity::{
+            AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality,
+            ReconnectGeneration, ServiceName, SessionBinding, SessionPurpose, TranscriptHash,
+            TransportBinding,
+        };
+
+        AuthenticatedSubjectContext::new(
+            provider_ref.clone(),
+            provider_uid,
+            ResourceRef::parse(&format!("Zone/{}", zone.as_str())).expect("zone ref"),
+            EvidenceClass::UnixPeer,
+            SessionPurpose::parse("resource-api").expect("purpose"),
+            ServiceName::parse("d2b.resource.v3").expect("service"),
+            SessionBinding::new(
+                SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64)))
+                    .expect("schema fingerprint"),
+                TransportBinding::new(
+                    Locality::Local,
+                    BindingDigest::parse(format!("sha256:{}", "2".repeat(64)))
+                        .expect("binding digest"),
+                ),
+                ReconnectGeneration::new(1).expect("reconnect generation"),
+                TranscriptHash::from_bytes([3; 32]),
+            ),
+        )
+    }
+
+    /// The whole committed authority chain resolves through the read path.
+    ///
+    /// The seed commits the built-in role, the provider self-binding, the
+    /// declared command, and the operation it materializes into the reserved
+    /// system Zone. A read that selected the plane's own Zone alone would see
+    /// none of them, so this pins that the committed policy compile and the
+    /// row reads reach the system Zone - and that the grant the chain exists
+    /// for (the controller creating its operations) is installed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_seeded_system_vocabulary_resolves_through_the_policy_read_path() {
+        use d2b_resource_api::authz::{
+            ApiCatalog, ApiMethod, AuthorizationRequest, AuthorizationTarget, NativeAuthorizer,
+            ResourceVerb,
+        };
+
+        let command = "virtiofsd-worker";
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        let declarations = seeded_declarations(command);
+        let provider_ref = declarations
+            .providers
+            .first()
+            .expect("the seed declares the process provider")
+            .provider_ref
+            .clone();
+        let provider_uid = seed_provider_row(&inputs, &provider_ref).await;
+        inputs.foundation = Some(FoundationInputs {
+            declarations,
+            allocation: crate::principal_allocation::PrincipalAllocation::committed()
+                .expect("committed allocation"),
+        });
+        let zone = inputs.zone.clone();
+        let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
+        let view = crate::resource_runtime::plane_controller_bridge::ManagerControllerPlaneView::new(
+            plane.client().clone(),
+            zone.clone(),
+        );
+
+        // Every row of the chain is read back, homed in the reserved Zone.
+        let resources = crate::resource_runtime::committed_policy_resources(&view)
+            .await
+            .expect("committed policy read");
+        let homed = |reference: &str| {
+            resources
+                .iter()
+                .find(|row| row.resource_ref.to_canonical_string() == reference)
+                .map(|row| row.zone.as_str().to_owned())
+        };
+        // Every policy row of the chain is read back, homed in the system Zone.
+        let chain = [
+            "Role/operation-publisher".to_owned(),
+            "RoleBinding/system-minijail-self-operation-publisher".to_owned(),
+            format!("Zone/{}", crate::foundation_seed::SYSTEM_ZONE),
+        ];
+        for reference in &chain {
+            assert_eq!(
+                homed(reference).as_deref(),
+                Some(crate::foundation_seed::SYSTEM_ZONE),
+                "the policy read resolves {reference}: {:?}",
+                resources
+                    .iter()
+                    .map(|row| row.resource_ref.to_canonical_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        // The declared command and the operation it materialized are read back
+        // by reference, the shape an invocation resolves them in.
+        let declared = [
+            format!("Command/{command}"),
+            format!("Operation/process-run-{command}"),
+        ];
+        for reference in &declared {
+            let target = ResourceRef::parse(reference).expect("resource reference");
+            let row = crate::resource_runtime::bridge_manager_row(&view, &target)
+                .await
+                .expect("row read")
+                .unwrap_or_else(|| panic!("the read path resolves {reference}"));
+            assert_eq!(row.zone.as_str(), crate::foundation_seed::SYSTEM_ZONE);
+        }
+        // The self-binding's subject resolves through the same read, so the
+        // binding is not dropped as unresolved.
+        let fingerprints =
+            d2bd_runtime::resource_runtime_support::committed_policy_subject_fingerprints(
+                &resources,
+            )
+            .expect("subject fingerprints");
+        assert!(
+            fingerprints.contains_key(&(
+                ResourceRef::parse("RoleBinding/system-minijail-self-operation-publisher")
+                    .expect("binding ref"),
+                provider_ref.clone(),
+            )),
+            "the seeded binding resolved its subject, fingerprints: {}",
+            fingerprints.len(),
+        );
+
+        // The compiled policy installs the grant the chain exists for: the
+        // self-bound provider creates the operation its command materialized.
+        let snapshot = d2bd_runtime::resource_runtime_support::initial_policy_snapshot()
+            .expect("bootstrap snapshot");
+        let (policy, state) =
+            d2bd_runtime::resource_runtime_support::compile_committed_policy_with_subjects(
+                &zone,
+                snapshot,
+                ZoneRevision::new(snapshot.policy_revision),
+                &[],
+                &resources,
+                std::iter::empty(),
+            )
+            .expect("committed policy compiles");
+        let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy))
+            .expect("authorizer over the compiled policy");
+        let grant = authorizer.authorize(
+            &controller_subject(&provider_ref, provider_uid, &zone),
+            &AuthorizationRequest {
+                method: ApiMethod::Create,
+                zone: zone.clone(),
+                targets: vec![AuthorizationTarget {
+                    resource_type: d2b_contracts_resource::v3::ResourceTypeName::parse(
+                        "Operation".to_owned(),
+                    )
+                    .expect("operation type"),
+                    resource_name: Some(
+                        ResourceName::parse(format!("process-run-{command}"))
+                            .expect("operation name"),
+                    ),
+                    verb: ResourceVerb::Create,
+                    subresource: None,
+                    execution_ref: None,
+                }],
+            },
+            &state,
+        );
+        assert!(
+            grant.is_ok(),
+            "the seeded self-binding grants the controller its operation: {grant:?}"
+        );
+    }
 }

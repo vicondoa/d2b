@@ -26,6 +26,13 @@ const UUID_V4_PATTERN: &str =
 const SHA256_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
 const RESOURCE_TYPE_QUALIFIER: &str = ".d2bus.org.";
 
+/// The reserved Zone name the foundation seed homes the system vocabulary in.
+///
+/// The durable authority's home: the foundation plane commits the system rows
+/// into its own store under this name, and every Zone plane reads them
+/// read-only alongside its own rows. A Zone-local plane never writes here.
+pub const SYSTEM_ZONE_NAME: &str = "system";
+
 /// The complete standard ResourceType catalog.
 pub const STANDARD_RESOURCE_TYPES: [&str; 23] = [
     "Zone",

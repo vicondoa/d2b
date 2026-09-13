@@ -76,6 +76,18 @@ pub(crate) trait ControllerPlaneView: Send + Sync + 'static {
     async fn all_rows(&self) -> Result<Vec<ResourceView>, ResourceError> {
         Ok(Vec::new())
     }
+
+    /// Every manager row of one named Zone.
+    ///
+    /// The reserved system Zone - the durable authority's home, where the
+    /// foundation seed commits the system vocabulary - is read this way: a
+    /// plane's own reads select its own Zone, so the system rows would
+    /// otherwise be committed to a row set no plane reads back. The read is
+    /// read-only, and the default is empty for a fixture that serves one
+    /// Zone; an RPC failure is never reported as absence.
+    async fn all_rows_in_zone(&self, _zone: &str) -> Result<Vec<ResourceView>, ResourceError> {
+        Ok(Vec::new())
+    }
 }
 
 /// Production seam over one zone's manager client (the plane's published
@@ -124,6 +136,16 @@ impl ControllerPlaneView for ManagerControllerPlaneView {
         self.client
             .list(ResourceSelector {
                 zone: Some(self.zone.as_str().to_owned()),
+                type_name: None,
+                owner: None,
+            })
+            .await
+    }
+
+    async fn all_rows_in_zone(&self, zone: &str) -> Result<Vec<ResourceView>, ResourceError> {
+        self.client
+            .list(ResourceSelector {
+                zone: Some(zone.to_owned()),
                 type_name: None,
                 owner: None,
             })
@@ -181,6 +203,15 @@ impl ControllerPlaneView for PublishedPlaneControllerView {
         };
         ManagerControllerPlaneView::new(plane.client().clone(), self.zone.clone())
             .all_rows()
+            .await
+    }
+
+    async fn all_rows_in_zone(&self, zone: &str) -> Result<Vec<ResourceView>, ResourceError> {
+        let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
+            return Ok(Vec::new());
+        };
+        ManagerControllerPlaneView::new(plane.client().clone(), self.zone.clone())
+            .all_rows_in_zone(zone)
             .await
     }
 }

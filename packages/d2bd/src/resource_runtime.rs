@@ -254,6 +254,34 @@ async fn bridge_manager_rows(
         .collect()
 }
 
+/// Every manager row of one named Zone, rendered through the same projection
+/// the manager-backed API serves.
+///
+/// The reserved system Zone - the durable authority's home, where the
+/// foundation seed commits the system vocabulary - is read this way: a plane's
+/// own reads select its own Zone, so a row homed in the system Zone would
+/// otherwise never be read back.
+async fn bridge_zone_rows(
+    plane: &dyn ControllerPlaneView,
+    zone: &str,
+) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
+    let views = plane.all_rows_in_zone(zone).await.map_err(|error| {
+        tracing::warn!(
+            zone,
+            error = %error,
+            "manager reader bridge: Zone row list failed",
+        );
+        ResourceRuntimeError::StoreReadFailed
+    })?;
+    views
+        .iter()
+        .map(|view| {
+            d2b_resource_api::manager_backend::manager_row_stored(view)
+                .map_err(|_| ResourceRuntimeError::StoreReadFailed)
+        })
+        .collect()
+}
+
 /// One row read from its authority (the manager).
 ///
 /// - the manager holds the row: it is returned;
@@ -261,30 +289,65 @@ async fn bridge_manager_rows(
 ///   answer, never a store `ResourceNotFound` for a row the store does not
 ///   own;
 /// - the manager RPC fails: an error the caller retries - never absence.
-async fn bridge_manager_row(
+///
+/// The system-homed types are homed in the reserved system Zone, so the read
+/// falls back to that Zone when the plane's own Zone does not hold the row.
+/// A row homed in any other Zone stays out of reach: no reader inherits a
+/// second Zone's rows by accident.
+pub(crate) async fn bridge_manager_row(
     plane: &dyn ControllerPlaneView,
     target: &ResourceRef,
 ) -> Result<Option<StoredResource>, ResourceRuntimeError> {
-    Ok(bridge_manager_rows(plane, target.resource_type().as_str())
+    let resource_type = target.resource_type().as_str();
+    if let Some(row) = bridge_manager_rows(plane, resource_type)
+        .await?
+        .into_iter()
+        .find(|row| row.resource_ref == *target)
+    {
+        return Ok(Some(row));
+    }
+    if !crate::foundation_seed::SYSTEM_HOMED_TYPES.contains(&resource_type) {
+        return Ok(None);
+    }
+    Ok(bridge_zone_rows(plane, crate::foundation_seed::SYSTEM_ZONE)
         .await?
         .into_iter()
         .find(|row| row.resource_ref == *target))
 }
 
 /// The committed policy inputs for one Zone: the manager-served rows of the
-/// closed policy type set (U12 bridge).
+/// closed policy type set (U12 bridge), plus the system vocabulary the
+/// foundation seed homes in the reserved system Zone.
 ///
 /// Role/RoleBinding/Zone/Provider and the subject rows are manager rows, so
 /// without them a RoleBinding whose Role row moved returns
 /// `AuthorizationUnavailable` and its subjects are dropped - i.e. the Zone's
 /// committed policy would empty out. A miss stays the loud, fail-closed
 /// compile failure it is today.
-async fn committed_policy_resources(
+///
+/// The seed commits the system vocabulary - the built-in roles, their
+/// self-bindings, and the system Zone row itself - under the reserved Zone
+/// name rather than under the plane's own, so a read that selected the
+/// plane's Zone alone would leave the whole committed authority chain
+/// unresolvable. The projection is read-only: a zone-local plane refuses to
+/// write these rows, and a row the plane holds in its own Zone wins over the
+/// system copy.
+pub(crate) async fn committed_policy_resources(
     plane: &dyn ControllerPlaneView,
 ) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
     let mut resources = Vec::new();
     for resource_type in d2bd_runtime::resource_runtime_support::COMMITTED_POLICY_RESOURCE_TYPES {
         resources.extend(bridge_manager_rows(plane, resource_type).await?);
+    }
+    for row in bridge_zone_rows(plane, crate::foundation_seed::SYSTEM_ZONE).await? {
+        if d2bd_runtime::resource_runtime_support::COMMITTED_POLICY_RESOURCE_TYPES
+            .contains(&row.resource_ref.resource_type().as_str())
+            && !resources
+                .iter()
+                .any(|held| held.resource_ref == row.resource_ref)
+        {
+            resources.push(row);
+        }
     }
     Ok(resources)
 }
