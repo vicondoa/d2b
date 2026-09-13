@@ -1518,18 +1518,6 @@ impl SecretServiceCredentialProvider {
             })
     }
 
-    pub(crate) fn poll_port<T: Send>(
-        future: SecretServiceFuture<'_, T>,
-        deadline: Instant,
-    ) -> Result<T, CredentialServiceError> {
-        Self::poll_port_sync(future, deadline).map_err(|error| match error {
-            SecretServicePollError::Port(error) => Self::map_port_error(error),
-            SecretServicePollError::Deadline => {
-                CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
-            }
-        })
-    }
-
     pub(crate) fn poll_port_sync<T: Send>(
         mut future: SecretServiceFuture<'_, T>,
         deadline: Instant,
@@ -1565,26 +1553,6 @@ impl SecretServiceCredentialProvider {
                 }
             }
         }
-    }
-
-    pub(crate) fn ensure_unlocked(
-        &self,
-        user_ref: &ResourceRef,
-        deadline: Instant,
-    ) -> Result<(), CredentialServiceError> {
-        if Self::poll_port(self.port.state_for_user(user_ref), deadline)?
-            == SecretServiceState::Locked
-        {
-            tracing::warn!(
-                provider = crate::PROVIDER_REF,
-                user = %user_ref.to_canonical_string(),
-                "secret-service collection locked; provider unavailable",
-            );
-            return Err(CredentialServiceError::new(
-                CredentialServiceErrorCode::ProviderUnavailable,
-            ));
-        }
-        Self::deadline_remaining(deadline)
     }
 
     pub(crate) async fn ensure_unlocked_async(
