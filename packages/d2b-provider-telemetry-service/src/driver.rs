@@ -99,16 +99,6 @@ impl TelemetryServiceDriverError {
     const fn new(kind: TelemetryServiceDriverErrorKind, op: DriverOp) -> Self {
         Self { kind, op }
     }
-
-    /// The closed failure classification.
-    pub const fn kind(self) -> TelemetryServiceDriverErrorKind {
-        self.kind
-    }
-
-    /// The verb that failed.
-    pub const fn op(self) -> DriverOp {
-        self.op
-    }
 }
 
 impl core::fmt::Display for TelemetryServiceDriverError {
@@ -360,21 +350,6 @@ impl ResourceDriver for TelemetryServiceDriver {
         let op = DriverOp::Reconcile;
         let envelope = self.envelope(ctx, op)?;
         self.reconcile_service(ctx, &envelope).await
-    }
-
-    /// Drain step (R10, F3): every owned child finalizes before this
-    /// resource's own teardown. A Service owns no child, so the call
-    /// converges immediately; the erased boundary runs the same step.
-    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
-        ctx.finalize_owned_resources()
-            .await
-            .map_err(|_| {
-                self.error(
-                    TelemetryServiceDriverErrorKind::Reconcile,
-                    DriverOp::Delete,
-                )
-            })?;
-        Ok(())
     }
 
     /// Teardown (old `prepare_finalize` + `execute_finalize` + `finalize`).

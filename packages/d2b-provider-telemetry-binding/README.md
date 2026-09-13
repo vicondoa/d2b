@@ -38,8 +38,8 @@ The crate ships one driver factory, not a standalone process. The driver
 serves Binding rows through the `ResourceDriver` verbs: `validate` decodes the
 stored spec, `recover` adopts only a current owned child set, `reconcile`
 ensures the provider-declared children and retires the ones the desired set no
-longer derives, `finalize` drains the owned children, and `delete` leaves the
-teardown to the manager's cascade.
+longer derives, the erased boundary drains the owned children before the
+finalize pass, and `delete` leaves the teardown to the manager's cascade.
 
 `TelemetryBindingDriverFactory` is the registration surface;
 `telemetry_binding_descriptor` carries it with the decoder, the type's verbs,
@@ -88,7 +88,7 @@ the preserved reconciler classified them.
 cargo test -p d2b-provider-telemetry-binding
 ```
 
-The unit tests drive validate, recover, reconcile, finalize, and delete over a
+The unit tests drive validate, recover, reconcile, and delete over a
 recording manager endpoint; the `registration` suite proves the declaration
 registers the type through the provider registry with its decoder and factory,
 that a duplicate registration is refused, and that the declared mask cannot

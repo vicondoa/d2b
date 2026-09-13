@@ -7,7 +7,7 @@
 //! deleting), the provider-declared child set materialized as owned manager
 //! rows, the preserved endpoint-first / process-last retirement of children
 //! the desired set no longer derives, the driver's validate, recover,
-//! reconcile, finalize, and delete verbs, and the
+//! reconcile, and delete verbs, and the
 //! [`DriverDescriptor`](d2b_resource_types::DriverDescriptor) the plane
 //! registers the type by.
 //!

@@ -4,7 +4,7 @@
 //! The crate owns the `telemetry.d2bus.org.TelemetryService` type's complete
 //! resource knowledge: the observed-phase projection the old reconciler
 //! published, the admission rule over the spec's declared `serviceRole`, the
-//! driver's validate, recover, reconcile, finalize, and delete verbs, and the
+//! driver's validate, recover, reconcile, and delete verbs, and the
 //! [`DriverDescriptor`](d2b_resource_types::DriverDescriptor) the plane
 //! registers the type by.
 //!

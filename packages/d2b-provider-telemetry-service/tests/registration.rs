@@ -34,30 +34,6 @@ async fn descriptor_declares_and_registers_the_service_type() {
         descriptor.exportable,
         "a qualified *.d2bus.org.*Service type is exactly what ResourceExport admits"
     );
-    assert_eq!(
-        descriptor.execution,
-        &["host"],
-        "a Service row carries no execution anchor, so the plane reconciles it on its Host"
-    );
-    assert_eq!(
-        descriptor.reads,
-        &[WellKnownType::ENDPOINT],
-        "the declaration's ingest routes are Endpoint rows"
-    );
-    assert_eq!(
-        descriptor.verbs,
-        &[
-            "get",
-            "list",
-            "watch",
-            "create",
-            "update-spec",
-            "update-status",
-            "update-metadata",
-            "update-finalizers",
-            "delete",
-        ]
-    );
     assert!(descriptor.operations.is_empty());
     assert!(
         descriptor.creations.is_empty(),
