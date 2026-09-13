@@ -85,11 +85,6 @@ impl AuditQueue {
         Ok(())
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "test-only queue inspection"))]
-    pub fn len_for_realm(&self, realm: &str) -> usize {
-        self.per_realm.get(realm).map_or(0, VecDeque::len)
-    }
-
     pub fn drain_all(&mut self) -> Vec<AuditEvent> {
         let mut events = Vec::new();
         for queue in self.per_realm.values_mut() {
@@ -139,25 +134,10 @@ impl MetricsQueue {
         }
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "test-only queue inspection"))]
-    pub fn dropped_count(&self) -> u64 {
-        self.dropped
-    }
-
     pub fn take_dropped_count(&mut self) -> u64 {
         let dropped = self.dropped;
         self.dropped = 0;
         dropped
-    }
-
-    #[cfg_attr(not(test), expect(dead_code, reason = "test-only queue inspection"))]
-    pub fn len(&self) -> usize {
-        self.queue.len()
-    }
-
-    #[cfg_attr(not(test), expect(dead_code, reason = "test-only queue inspection"))]
-    pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
     }
 
     pub fn drain_all(&mut self) -> Vec<MetricEvent> {
@@ -192,8 +172,12 @@ mod tests {
             Err(ReasonCode::AuditFailure)
         );
         assert_eq!(queue.enqueue_fail_closed(event("vm-b", "r3")), Ok(()));
-        assert_eq!(queue.len_for_realm("vm-a"), 1);
-        assert_eq!(queue.len_for_realm("vm-b"), 1);
+        let drained = queue.drain_all();
+        let realms: Vec<&str> = drained
+            .iter()
+            .map(|event| event.source_realm.as_str())
+            .collect();
+        assert_eq!(realms, ["vm-a", "vm-b"]);
     }
 
     #[test]
@@ -207,8 +191,7 @@ mod tests {
             name: MetricName::PickerTimeout,
             reason: Some(ReasonCode::PickerTimeout),
         });
-        assert_eq!(queue.len(), 1);
-        assert_eq!(queue.dropped_count(), 1);
+        assert_eq!(queue.drain_all().len(), 1);
         assert_eq!(queue.take_dropped_count(), 1);
         assert_eq!(queue.take_dropped_count(), 0);
     }

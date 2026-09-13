@@ -216,11 +216,6 @@ pub enum AttributionQuality {
     BrokerInjectedDebug,
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "test-only negotiation model"))]
-pub fn negotiate_version(range: &ProtocolVersionRange, daemon_supported: u16) -> Option<u16> {
-    (range.min <= daemon_supported && daemon_supported <= range.max).then_some(daemon_supported)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,17 +352,5 @@ mod tests {
         assert!(json.contains(r#""canonical_target":"builder.local.d2b""#));
         assert!(json.contains(r#""source_canonical_target":"builder.local.d2b""#));
         assert!(json.contains(r#""authority":"picker_clipd""#));
-    }
-
-    #[test]
-    fn negotiates_supported_protocol() {
-        assert_eq!(
-            negotiate_version(&ProtocolVersionRange { min: 1, max: 1 }, 1),
-            Some(1)
-        );
-        assert_eq!(
-            negotiate_version(&ProtocolVersionRange { min: 2, max: 3 }, 1),
-            None
-        );
     }
 }

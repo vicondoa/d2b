@@ -1279,10 +1279,8 @@ impl WlRegistryHandler for FilterRegistryHandler {
                         return;
                     }
                     if let Some(subcompositor) = id.try_downcast::<WlSubcompositor>() {
-                        if let Some(decoration) = &self.decoration {
-                            subcompositor.set_handler(FilterSubcompositorHandler {
-                                decoration: decoration.clone(),
-                            });
+                        if self.decoration.is_some() {
+                            subcompositor.set_handler(FilterSubcompositorHandler);
                         }
                         slf.send_bind(name, subcompositor);
                         return;
@@ -2052,9 +2050,7 @@ where
         .is_some_and(|object_client| Rc::ptr_eq(&object_client, &receiver))
 }
 
-struct FilterSubcompositorHandler {
-    decoration: SharedDecorationManager,
-}
+struct FilterSubcompositorHandler;
 
 impl WlSubcompositorHandler for FilterSubcompositorHandler {
     fn handle_destroy(&mut self, slf: &Rc<WlSubcompositor>) {
@@ -2068,44 +2064,16 @@ impl WlSubcompositorHandler for FilterSubcompositorHandler {
         surface: &Rc<WlSurface>,
         parent: &Rc<WlSurface>,
     ) {
-        id.set_handler(FilterSubsurfaceHandler {
-            decoration: self.decoration.clone(),
-            parent: Rc::downgrade(parent),
-            surface: Rc::downgrade(surface),
-        });
+        id.set_handler(FilterSubsurfaceHandler);
         slf.send_get_subsurface(id, surface, parent);
-        self.decoration
-            .borrow_mut()
-            .register_guest_subsurface(surface, parent);
     }
 }
 
-struct FilterSubsurfaceHandler {
-    decoration: SharedDecorationManager,
-    parent: Weak<WlSurface>,
-    surface: Weak<WlSurface>,
-}
-
-impl FilterSubsurfaceHandler {
-    fn raise_decoration(&self) {
-        if let Some(parent) = self.parent.upgrade() {
-            if let Some(surface) = self.surface.upgrade() {
-                self.decoration
-                    .borrow_mut()
-                    .register_guest_subsurface(&surface, &parent);
-            } else {
-                self.decoration
-                    .borrow_mut()
-                    .raise_decoration_above_guest_subsurfaces(&parent);
-            }
-        }
-    }
-}
+struct FilterSubsurfaceHandler;
 
 impl WlSubsurfaceHandler for FilterSubsurfaceHandler {
     fn handle_destroy(&mut self, slf: &Rc<WlSubsurface>) {
         slf.send_destroy();
-        self.raise_decoration();
     }
 
     fn handle_set_position(&mut self, slf: &Rc<WlSubsurface>, x: i32, y: i32) {
@@ -2114,12 +2082,10 @@ impl WlSubsurfaceHandler for FilterSubsurfaceHandler {
 
     fn handle_place_above(&mut self, slf: &Rc<WlSubsurface>, sibling: &Rc<WlSurface>) {
         slf.send_place_above(sibling);
-        self.raise_decoration();
     }
 
     fn handle_place_below(&mut self, slf: &Rc<WlSubsurface>, sibling: &Rc<WlSurface>) {
         slf.send_place_below(sibling);
-        self.raise_decoration();
     }
 
     fn handle_set_sync(&mut self, slf: &Rc<WlSubsurface>) {

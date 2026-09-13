@@ -5,8 +5,6 @@
 //!
 //! No clipboard content, previews, or paths are logged anywhere in this module.
 
-use std::time::Instant;
-
 use crate::clipd_host::niri::{
     FocusedWindowSnapshot, HostClipboardAttributor, HostSelectionAttribution,
 };
@@ -21,11 +19,7 @@ pub struct HostSelection {
     /// The Wayland offer proxy; `None` when all MIME types were denied by policy.
     pub offer: Option<DataControlOffer>,
     pub allowed_mimes: Vec<String>,
-    #[expect(dead_code, reason = "reserved selection inspection")]
-    pub has_secret: bool,
     pub attribution: HostSelectionAttribution,
-    #[expect(dead_code, reason = "reserved selection inspection")]
-    pub observed_at: Instant,
 }
 
 // ─── Host clipboard state ─────────────────────────────────────────────────────
@@ -53,11 +47,6 @@ impl<P: crate::clipd_host::niri::FocusedWindowProvider> HostClipboard<P> {
         self.attributor.cache_mut().apply_event(event)
     }
 
-    #[expect(dead_code, reason = "reserved attribution inspection")]
-    pub fn focused_window_snapshot(&mut self) -> Option<FocusedWindowSnapshot> {
-        self.attributor.cache_mut().focused_window()
-    }
-
     pub fn refresh_focused_window_snapshot(&mut self) -> Option<FocusedWindowSnapshot> {
         self.attributor.refresh_from_provider().window
     }
@@ -82,9 +71,7 @@ impl<P: crate::clipd_host::niri::FocusedWindowProvider> HostClipboard<P> {
         self.current_selection = Some(HostSelection {
             offer,
             allowed_mimes,
-            has_secret,
             attribution,
-            observed_at: Instant::now(),
         });
         // New selection supersedes any armed fallback.
     }

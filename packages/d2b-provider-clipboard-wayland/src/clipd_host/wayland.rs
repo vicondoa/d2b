@@ -101,14 +101,6 @@ impl DataControlSource {
             Self::Zwlr(s) => s.offer(mime),
         }
     }
-
-    #[expect(dead_code, reason = "reserved explicit lifecycle helper")]
-    pub fn destroy(self) {
-        match self {
-            Self::Ext(s) => s.destroy(),
-            Self::Zwlr(s) => s.destroy(),
-        }
-    }
 }
 
 // ─── Internal state ──────────────────────────────────────────────────────────
@@ -654,22 +646,6 @@ impl DataControlClient {
     /// Borrowed fd suitable for use with `rustix::io::poll`.
     pub fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
         self.conn.as_fd()
-    }
-
-    /// Raw Wayland socket fd (deprecated; prefer `as_fd`).
-    #[expect(dead_code, reason = "reserved fd inspection")]
-    pub fn as_raw_fd(&self) -> std::os::unix::io::RawFd {
-        use std::os::fd::AsRawFd;
-        self.conn.as_fd().as_raw_fd()
-    }
-
-    /// Whether the data-control protocol is available.
-    #[expect(dead_code, reason = "reserved availability inspection")]
-    pub fn is_available(&self) -> bool {
-        !matches!(
-            self.state.manager_state,
-            DataControlManagerState::Unavailable | DataControlManagerState::Probing
-        )
     }
 }
 

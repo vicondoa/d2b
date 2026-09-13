@@ -1,21 +1,7 @@
 use d2b_provider_clipboard_wayland::{
-    ClipboardAuditEvent, ClipboardAuditQueue, ClipboardConfig, ClipboardEntry, ClipboardHistory,
-    ClipboardReason, SizeBucket,
+    ClipboardAuditEvent, ClipboardConfig, ClipboardEntry, ClipboardHistory, ClipboardReason,
+    SizeBucket,
 };
-
-#[test]
-fn audit_never_contains_payload_bytes() {
-    let mut queue = ClipboardAuditQueue::new(1);
-    queue
-        .push(ClipboardAuditEvent::new(
-            "zone-a",
-            "zone-b",
-            ClipboardReason::Allowed,
-            SizeBucket::Lt1K,
-        ))
-        .unwrap();
-    assert!(!queue.to_wire().contains("payload"));
-}
 
 #[test]
 fn payload_canary_stays_out_of_clipboard_debug_and_audit() {

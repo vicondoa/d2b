@@ -5,12 +5,10 @@
 
 mod audit;
 mod controller;
-mod descriptor;
 mod fd;
 mod history;
 mod picker;
 mod policy;
-mod rbac;
 mod runtime;
 mod service;
 
@@ -22,17 +20,15 @@ pub use controller::{
     ClipboardController, ClipboardRunnerContract, DependencyStatus, DisplayDependencyEvidence,
     ProcessPlan, clipboard_runner_contract,
 };
-pub use descriptor::{ClipboardDescriptorError, ClipboardProviderDescriptor};
 pub use fd::{
     AcceptedTransferFdKind, AttachmentClass, FdAccessMode, FdCapModel, FdMetadata, FdObjectKind,
     FdPermitPool, FdReadError, FdSafetyError, FdStatModel, FileSystemKind, ReceivedFdBatch,
-    classify_fd_model, inspect_fd, read_bounded, read_owned_fd_bounded, validate_fd_cap,
-    validate_fd_metadata, validate_received_fd, validate_recvmsg_control,
+    classify_fd, classify_fd_model, inspect_fd, read_bounded, read_owned_fd_bounded,
+    validate_fd_cap, validate_fd_metadata, validate_received_fd, validate_recvmsg_control,
 };
 pub use history::{ClipboardEntry, ClipboardHistory, HistoryError};
 pub use picker::{PickerAuthority, PickerError, PickerReceipt, PickerRequest, PickerResult};
 pub use policy::{ALLOWED_MIME_TYPES, ClipboardPolicyError, Policy, SECRET_HINT_MIME_TYPES};
-pub use rbac::{ClipboardRbac, ClipboardRole, ClipboardRoleBinding};
 pub use runtime::{
     ClipboardFinalizationReport, ClipboardProcessEffectPort, ClipboardRuntime,
     ClipboardRuntimeError,

@@ -27,7 +27,6 @@ use crate::clipd_host::audit::{
     bounded_mime,
 };
 use crate::clipd_host::fallback::{FallbackArming, FallbackState, FallbackTransition};
-use crate::clipd_host::fd::{FdCapModel, classify_fd, validate_fd_cap};
 use crate::clipd_host::framing::{
     OpenRequestFrameCaps, PICKER_TO_DAEMON_MAX_FRAME_BYTES, decode_frame, encode_frame,
 };
@@ -53,6 +52,7 @@ use crate::clipd_host::protocol::{
 use crate::clipd_host::wayland::{DataControlClient, DataControlSource, HostClipboardEvent};
 use d2b_contracts::workload_identity::WorkloadTarget;
 use d2b_contracts_resource::v3::WorkloadProviderKind;
+use d2b_provider_clipboard_wayland::{FdCapModel, classify_fd, validate_fd_cap};
 use rustix::event::{PollFd, PollFlags, poll};
 use serde::Deserialize;
 
@@ -4607,7 +4607,7 @@ mod tests {
 
         flush_audit_events(&mut queue);
 
-        assert_eq!(queue.len_for_realm("host"), 0);
+        assert!(queue.drain_all().is_empty());
     }
 
     #[test]
@@ -4625,7 +4625,7 @@ mod tests {
         flush_metric_events(&mut queue);
 
         assert_eq!(queue.take_dropped_count(), 0);
-        assert!(queue.is_empty());
+        assert!(queue.drain_all().is_empty());
     }
 
     #[test]

@@ -37,7 +37,7 @@ The display bridge is a typed effect port, not a filesystem or compositor
 socket.
 
 Runtime process admission and supervision are daemon-owned. The package owns
-the compatibility `d2b-clipd` and `d2b-clip-debug` binaries while `d2bd`
+the compatibility `d2b-clipd` binary while `d2bd`
 launches signed provider workers through authenticated ComponentSession and
 ProviderSupervisor effect ports.
 
