@@ -505,9 +505,13 @@ mod tests {
             .start()
             .await
             .expect_err("the subtree belongs to another provider");
+        // The overlap is refused against the declared subtrees, so it is the
+        // provider that starts first - whichever order the set declares - that
+        // is refused, naming its own declared row. The refusal does not depend
+        // on which claim happened first.
         assert_eq!(error.code(), "storage-root-overlap");
-        assert_eq!(error.provider_ref(), "volume-binding");
-        assert_eq!(error.message(), "storage-root-overlap:volume-binding:state/volumes");
+        assert_eq!(error.provider_ref(), "volume-local");
+        assert_eq!(error.message(), "storage-root-overlap:volume-local:state");
     }
 
     /// A provider whose declaration names no identity does not start.
