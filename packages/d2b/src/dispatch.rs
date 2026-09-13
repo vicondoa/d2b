@@ -6,6 +6,7 @@ use std::{
     fmt::Write as _,
     io::{self, Write as _},
     path::{Path, PathBuf},
+    sync::LazyLock,
 };
 
 use crate::context::{
@@ -17,7 +18,7 @@ use crate::{
     CliFailure, activation, complete, debug, endpoint, exec, guest, host, print_json, print_stdout,
     provider, resource, share, shell, zone,
 };
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use d2b_contracts_broker::broker_wire::AuditExportCursor;
 use d2b_contracts_control::{
     cli_output::{AuthDeniedSubcommandV2, AuthRoleV2, AuthSocketStatusV2, AuthStatusOutputV2},
@@ -27,45 +28,40 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-/// The one built-in top-level command registry.
+/// The Provider projection commands the parser carries as static variants.
 ///
-/// Provider projection binding and completion consume this list as well as
-/// clap's parser, so collision handling never depends on a second list.
-pub(crate) const BUILTIN_COMMANDS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "delete",
-    "status",
-    "upgrade",
-    "reconcile",
-    "debug",
-    "host",
-    "guest",
-    "process",
-    "exec",
-    "shell",
-    "volume",
-    "network",
-    "device",
-    "endpoint",
-    "export",
-    "import",
-    "resource",
-    "user",
-    "credential",
-    "provider",
-    "zone",
-    "quota",
-    "emergency-policy",
-    "activation",
-    "audit",
-    "op",
-    "auth",
-    "complete",
-];
+/// A projected command is named by the declaring Provider's own
+/// `cliProjection.topLevel` (`d2b provider inspect`), which no compile-time
+/// table can enumerate, so clap holds one static variant per projection
+/// Provider and the projection binding admits exactly these names in place of
+/// a built-in command. They are parser carriers, not resource knowledge: the
+/// declaration they mirror lives on the Provider, and nothing here needs an
+/// edit when a Provider's projection is renamed - only the variant does.
+const PROJECTION_COMMANDS: &[&str] = &["audio", "clipboard", "display"];
+
+/// The one built-in top-level command registry: the parser's own subcommands,
+/// in declaration order, less the Provider projection carriers.
+///
+/// The parser is the sole authority for a built-in name; projection binding
+/// and completion read this list, so collision handling cannot drift from
+/// what `d2b` actually parses.
+static BUILTIN_COMMANDS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    ModernCli::command()
+        .get_subcommands()
+        .map(|subcommand| subcommand.get_name().to_owned())
+        .filter(|name| !PROJECTION_COMMANDS.contains(&name.as_str()))
+        .collect()
+});
+
+/// The built-in top-level commands, in parser order.
+pub(crate) fn builtin_commands() -> &'static [String] {
+    &BUILTIN_COMMANDS
+}
+
+/// Whether the name is a built-in top-level command.
+pub(crate) fn is_builtin_command(name: &str) -> bool {
+    BUILTIN_COMMANDS.iter().any(|command| command == name)
+}
 
 /// The clean-break CLI parser is the sole runtime entry point.
 #[derive(Debug, Parser)]
@@ -901,7 +897,7 @@ fn provider_projection(
     mode: OutputMode,
     deadline: crate::context::RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    if crate::dispatch::BUILTIN_COMMANDS.contains(&top_level) {
+    if crate::dispatch::is_builtin_command(top_level) {
         return Err(context.failure(
             "resource-schema-invalid",
             "Provider command collides with a built-in command",
@@ -1172,14 +1168,32 @@ mod tests {
     }
 
     #[test]
-    fn built_in_registry_is_unique_and_matches_expected_size() {
-        let mut names = BUILTIN_COMMANDS.to_vec();
+    fn built_in_registry_is_the_parser_less_the_projection_carriers() {
+        let mut names = builtin_commands().to_vec();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), BUILTIN_COMMANDS.len());
-        assert_eq!(BUILTIN_COMMANDS.len(), 33);
-        assert!(BUILTIN_COMMANDS.contains(&"endpoint"));
-        assert!(BUILTIN_COMMANDS.contains(&"import"));
+        assert_eq!(names.len(), builtin_commands().len());
+        assert!(is_builtin_command("endpoint"));
+        assert!(is_builtin_command("import"));
+
+        // The projection carriers are parser subcommands, not built-ins: the
+        // declaring Provider names them through its own `cliProjection`, so
+        // the binding must not refuse them as a built-in collision.
+        for carrier in PROJECTION_COMMANDS {
+            assert!(
+                ModernCli::command()
+                    .get_subcommands()
+                    .any(|subcommand| subcommand.get_name() == *carrier),
+                "{carrier} is not a parser subcommand"
+            );
+            assert!(!is_builtin_command(carrier), "{carrier} is a built-in");
+        }
+
+        // Every typed noun the generated CLI catalog declares is a parser
+        // command, so an entry cannot drift away from what the parser accepts.
+        for (noun, _) in crate::generated::surface_catalog::TYPED_NOUNS {
+            assert!(is_builtin_command(noun), "{noun} is not a built-in");
+        }
     }
 
     #[test]
