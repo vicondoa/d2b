@@ -1051,18 +1051,6 @@ let
     "auditMode": "yes"
   },
   {
-    "operation": "OpenZoneStore",
-    "subject": "resource-store",
-    "scope": "per-Zone",
-    "allowedGroups": [
-      "d2bd"
-    ],
-    "destructive": true,
-    "secretAccess": "metadata-only",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
     "operation": "OpenVhostNet",
     "subject": "device",
     "scope": "per-role",

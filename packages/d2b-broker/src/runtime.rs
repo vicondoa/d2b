@@ -3811,36 +3811,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 },
             )))
         }
-        RealBrokerRequest::OpenZoneStore(req) => {
-            // OpenZoneStore resolves one signed storage-row id and returns
-            // exactly one owned database descriptor. The row and all path
-            // components remain broker-local.
-            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
-            let outcome = crate::live_handlers::live_open_zone_store(resolver, &req.zone_store_id)
-                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "OpenZoneStore",
-                req.zone_store_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                "zone-store",
-                req.zone_store_id.as_str(),
-                None,
-                OperationFields::OpenZoneStore {
-                    zone_store_id: req.zone_store_id.as_str().to_owned(),
-                    store_identity: outcome.response.store_identity.clone(),
-                    disposition: outcome.response.disposition.as_str().to_owned(),
-                    fd_count: 1,
-                },
-            )?;
-            Ok(DispatchResult::with_fd(
-                BrokerResponse::OpenZoneStore(outcome.response),
-                outcome.database_fd,
-            ))
-        }
         RealBrokerRequest::CgroupKill(req) => {
             let resolver = require_resolver(resolver)?;
             crate::ops::cgroup::live_kill_runner_cgroup(resolver, &req)

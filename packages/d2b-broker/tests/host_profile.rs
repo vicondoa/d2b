@@ -6,7 +6,6 @@ fn host_profile_keeps_the_complete_closed_operation_catalog() {
 
     for operation in [
         "ApplyNftables",
-        "OpenZoneStore",
         "SpawnRunner",
         "ApplyHostGenerationHandoff",
         "ExportBrokerAudit",

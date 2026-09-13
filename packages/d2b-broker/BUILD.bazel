@@ -371,23 +371,6 @@ rust_test(
 )
 
 rust_test(
-    name = "zone_store",
-    srcs = ["tests/zone_store.rs"],
-    compile_data = ["Cargo.toml"],
-    data = [":d2b-broker"],
-    env = {"CARGO_BIN_EXE_d2b-broker": "$(rootpath :d2b-broker)"},
-    rustc_env = {"CARGO_BIN_EXE_d2b-broker": "$(rootpath :d2b-broker)"},
-    tags = broker_test_tags(),
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        ":d2b_broker_test_support",
-        "//packages/d2b-contracts:d2b_contracts_test_support",
-        "//packages/d2b-contracts-broker:d2b_contracts_broker",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "d2b_broker_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_broker_test_support",

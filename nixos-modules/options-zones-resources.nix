@@ -505,7 +505,7 @@ let
           && endpointResource.type == "Endpoint"
           && endpointProviderRef == "Provider/credential-entra"
           && (endpointResource.spec.purpose or null)
-            == "credential-entra.d2bus.org/entra-login-token"
+            == "credential-entra-login"
           && (endpointResource.spec.visibility or null) == "provider"
           && sortedSubjects == sortedRequiredSubjects
           && lib.length subjects == lib.length (lib.unique subjects)

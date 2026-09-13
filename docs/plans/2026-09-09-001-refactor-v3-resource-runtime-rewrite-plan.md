@@ -1966,7 +1966,9 @@ rather than served, and a target-local restart rebuilds its rows from the host,
 the only binding domain of record. Each of these is stated in
 `changelog.d/2026-09-12-u14-store-removal.md` so it is reviewed as a choice.
 
-**Open items (not closed by U14).** The host-integration lane is not green:
+**Open items (not closed by U14).** *(Status 2026-09-13: the two actionable
+items below are closed; the lane item was closed by U17. Kept as the dated
+record.)* The host-integration lane is not green:
 `runtime-cloud-hypervisor-guest-preflight` fails at `nested-vmm-api-socket`
 (see the lane note above) on the Guest system Volume's `nix-closure` source,
 which the serving-worker ticket mapping does not cover
@@ -1995,6 +1997,24 @@ Finally, the toolkit's `owner_hints.rs`, `state_migration.rs` and the
 `ControllerDescriptor`/`TriggerSet` surface in `contract.rs` have zero
 production consumers now that the runner is gone - kept because §26 does not
 list them, flagged for the same follow-up.
+
+**Closed (2026-09-13, cleanup wave).** `OpenZoneStore` is retired end to end:
+the request/response variants and their structs left
+`packages/d2b-contracts-broker/src/broker_wire.rs` (with the op-name,
+opaque-target, audit-join and host-catalog entries), the broker lost the
+dispatch arm, `live_open_zone_store`, the audit-field variant and the whole
+`src/ops/zone_store.rs` module (1223 lines) plus the op's integration test and
+its BUILD entry, `packages/d2b-core/src/privileges.rs` lost the authorization
+row, and the generated `docs/reference/schemas/v2/{wire-protocol,privileges}.json`,
+`docs/reference/daemon-api.md` and `nixos-modules/privileges-json.nix` were
+regenerated. The `d2b-contracts-resource` storage types stay: `d2bd-runtime`'s
+zone-authority path reads storage rows. The toolkit's dead surface is deleted
+too - `owner_hints.rs` and `state_migration.rs` entirely, and the
+`ControllerDescriptor`/`TriggerSet` cluster in `contract.rs`; `ResourceKey`,
+`ResourceSnapshot` and `DependencySnapshot` stay (they are what
+`d2b-core-controller` consumes). Gates on the result: `make check` 452/452
+(one target fewer than before: the retired broker test) and the full
+host-integration lane 11/11.
 
 ### U15. Invariant test completion
 
@@ -2037,11 +2057,31 @@ and sub-row 11's reverse direction is asserted for assignment/realization, not
 for the ZoneLink controller's own route state. (3) Row 5 has no
 `ProviderChanged` event and no fixture restarts a provider runtime; the row is
 discharged as provider reconcile re-committing every declared child plus the
-generic actor-restart notification. (4) Row 6's daemon plumbing of a spec's
-`maxConcurrentClaims` into the shared-claim admission is not covered
-end-to-end; the ceiling refusal is proven at the authority layer. (5) The
+generic actor-restart notification. (4) Row 6's ceiling is **not a missing test
+- the refusal is unreachable through the daemon**: the plumbing is real
+(`shared_provider_effects.rs` reads the spec's `maxConcurrentClaims` and feeds
+`GpuAuthorityAdmission` into `AuthorityRequest::gpu_from_core`), but the
+daemon derives exactly one claimant per Device row and keys the authority by
+that row's backing digest, so a second/third claimant on one shared key never
+exists (a repeat reconcile is `DuplicateActiveReservation`, not a ceiling
+refusal) and the authority's capacity arm needs ≥2 distinct owner proofs on
+one key. The per-claimant machinery that could enforce it
+(`GpuArbitrator`, `GpuAuthorityIndex::reserve` in `d2b-provider-device-gpu`)
+has no daemon caller. Whether shared Device rows should arbitrate per shared
+hardware (using that machinery) or stay per-row is a design decision, tracked
+as issue #520; the authority-layer ceiling test stays the proof. (5) The
 re-parent guard deliberately pins an existing child's owner only; binding a
 not-yet-owned row remains the authored `Ensure { owner }` path's decision.
+(6) `tests/runtime_boundary.rs`'s `RUNTIME_FILES` list now covers all 60
+runtime sources (the two omissions are added and the test passes as-is).
+(7) The SecurityKey relay Endpoint's child spec could not decode at all before
+the 2026-09-13 cleanup: its `purpose` was dotted, its
+`allowedProviderComponents` entry was a dotted token, and its
+`attachmentPolicy` was a bare `"component-session"` string where the contract
+requires `{supported, maxAttachments}`. All three are fixed and the driver's
+test now decodes the whole child spec as `EndpointSpec`, which is the
+assertion that would have caught them; the ADR-046 security-key sketch that
+mirrored the wrong spellings carries a note pointing at the closed contract.
 
 ### U16. PR merge and post-merge host-integration
 

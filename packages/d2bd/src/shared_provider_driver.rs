@@ -1558,13 +1558,16 @@ fn security_key_relay_child_ensures(
         "producerRef": relay_process_ref.to_canonical_string(),
         "endpointClass": "device",
         "transport": "vsock",
-        "purpose": "device-security-key.d2bus.org/ctaphid-relay",
+        "purpose": "security-key-ctaphid-relay",
         "serviceFingerprint": "device-security-key.d2bus.org/SecurityKeyCtapRelay.v3",
         "locality": "cross-domain",
         "visibility": "zone",
-        "attachmentPolicy": "component-session",
+        "attachmentPolicy": {
+            "supported": true,
+            "maxAttachments": 1
+        },
         "consumerPolicy": {
-            "allowedProviderComponents": ["device-security-key.d2bus.org/frontend"],
+            "allowedProviderComponents": ["device-security-key"],
             "allowedOperations": ["resolve"]
         },
         "lifecyclePolicy": "recycle-with-producer"
@@ -2415,5 +2418,56 @@ mod tests {
             entries.iter().all(|entry| entry.starts_with("ensure:") || entry.starts_with("effect:") || entry.starts_with("delete:")),
             "{entries:?}"
         );
+    }
+
+    /// The relay Endpoint this driver declares for a SecurityKey Service must
+    /// carry a closed purpose token: `EndpointSpec.purpose` is a
+    /// `BoundedToken`, so the dotted pre-wave spelling is an admission refusal
+    /// (the rule the provider's own Nix projection pins for its endpoints).
+    #[test]
+    fn security_key_relay_endpoint_purpose_is_a_closed_token() {
+        let spec = json!({
+            "spec": {
+                "provider": {
+                    "settings": {
+                        "deviceRef": "Device/key-a",
+                        "relayEndpointRef": "Endpoint/key-a-ctaphid-relay"
+                    }
+                }
+            }
+        });
+        let owner = d2b_contracts_resource::v3::ResourceRef::parse(
+            "security-key.d2bus.org.SecurityKeyService/key-a",
+        )
+        .expect("service ref");
+        let device_uid = super::resource_uid(&[0x42; 16]).expect("device uid");
+        let children = super::security_key_relay_child_ensures(
+            &spec,
+            &owner,
+            &device_uid,
+            d2b_resource_runtime::error::DriverOp::Reconcile,
+        )
+        .expect("relay children");
+        let endpoint = children
+            .iter()
+            .find(|child| child.type_name.as_str() == "Endpoint")
+            .expect("relay Endpoint child");
+        let value: serde_json::Value =
+            serde_json::from_slice(&endpoint.spec).expect("endpoint spec json");
+        let purpose = value
+            .get("purpose")
+            .and_then(serde_json::Value::as_str)
+            .expect("relay endpoint purpose");
+        assert_eq!(purpose, "security-key-ctaphid-relay");
+        assert!(
+            d2b_contracts_resource::v3::BoundedToken::parse(purpose).is_ok(),
+            "relay endpoint purpose must be a closed BoundedToken"
+        );
+        // Decode the whole child spec as the closed contract decodes it: every
+        // token in it must be admissible, not just the purpose (the dotted
+        // `allowedProviderComponents` value this once carried was refused for
+        // the same reason the dotted purpose was).
+        serde_json::from_value::<d2b_contracts_resource::v3::EndpointSpec>(value.clone())
+            .expect("the relay Endpoint child decodes as the closed EndpointSpec");
     }
 }

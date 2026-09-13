@@ -23,7 +23,7 @@
 | Implements | `Credential` ResourceType |
 | Provider schema ID | `credential-entra.d2bus.org/Credential/spec` |
 | Status schema ID | `credential-entra.d2bus.org/Credential/status` |
-| Login Endpoint purpose | `credential-entra.d2bus.org/entra-login-token` |
+| Login Endpoint purpose | `credential-entra-login` |
 | Production token client | Entrablau identity Guest `Endpoint/<name>` implementing `credential-entra.d2bus.org/EntrablauLoginTokenService/v1` |
 | Secret custody | Entrablau-enabled identity `Guest/<name>` only |
 | Controller/agent custody | Secret-free; no token, refresh token, cookie, device-code authority, MSAL cache, browser state, or machine credential |
@@ -144,7 +144,7 @@ Rules:
 
 1. `identityGuestRef` resolves to a `Guest/<name>` in the same Zone.
 2. `loginEndpointRef` resolves to an `Endpoint/<name>` in the same Zone whose
-   `purpose = credential-entra.d2bus.org/entra-login-token`, whose producer runs
+   `purpose = credential-entra-login`, whose producer runs
    inside `identityGuestRef`, and whose `endpointGeneration` is current.
 3. `scope.executionRef` resolves to the same Guest as `identityGuestRef` or to a
    different same-Zone Guest explicitly permitted by `consumerRef`, scope, and
@@ -196,7 +196,7 @@ d2b Provider state Volume and is never mounted into the Host.
 
 | Alias | Resolves to | Required | Notes |
 | --- | --- | --- | --- |
-| `entra-login-token` | `Credential.spec.loginEndpointRef` | Yes | `Endpoint/<name>` with purpose `credential-entra.d2bus.org/entra-login-token`, producer inside `identityGuestRef`, same Zone, ComponentSession attachment. |
+| `entra-login-token` | `Credential.spec.loginEndpointRef` | Yes | `Endpoint/<name>` with purpose `credential-entra-login`, producer inside `identityGuestRef`, same Zone, ComponentSession attachment. |
 
 The alias is resolved by ResourceRef and Endpoint generation, not by a Unix path,
 store path, DBus name, process ID, environment variable, or hostname.
@@ -215,7 +215,7 @@ spec:
   producerRef: Process/work-identity-entrablau-login-token
   endpointClass: service
   transport: unix
-  purpose: credential-entra.d2bus.org/entra-login-token
+  purpose: credential-entra-login
   serviceFingerprint: credential-entra.d2bus.org/EntrablauLoginTokenService/v1
   locality: guest-local
   visibility: provider
@@ -460,7 +460,7 @@ Endpoint exported by that Guest. d2b core does not import the sibling flake.
 
   # Identity Guest NixOS system. The sibling module declares the Entrablau
   # login/token Process and the Endpoint purpose
-  # credential-entra.d2bus.org/entra-login-token.
+  # credential-entra-login.
   d2b.zones.work.resources.work-identity = {
     type = "Guest";
     spec = {
@@ -480,7 +480,7 @@ Endpoint exported by that Guest. d2b core does not import the sibling flake.
       producerRef = "Process/work-identity-entrablau-login-token";
       endpointClass = "service";
       transport = "unix";
-      purpose = "credential-entra.d2bus.org/entra-login-token";
+      purpose = "credential-entra-login";
       serviceFingerprint = "credential-entra.d2bus.org/EntrablauLoginTokenService/v1";
       locality = "guest-local";
       visibility = "provider";
@@ -698,7 +698,7 @@ or any digest derived from Credential identity.
 - `identityGuestRef` and `loginEndpointRef` are required for every
   `Provider/credential-entra` Credential.
 - `loginEndpointRef` must have purpose
-  `credential-entra.d2bus.org/entra-login-token` and producer inside
+  `credential-entra-login` and producer inside
   `identityGuestRef`.
 - `consumerRef` is required and must match the authorized consumer Provider.
 - The login Endpoint uses canonical `visibility = "provider"` and an exact

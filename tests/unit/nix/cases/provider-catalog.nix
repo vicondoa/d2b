@@ -530,7 +530,7 @@ let
           producerRef = "Process/entra-login";
           endpointClass = "service";
           transport = "unix";
-          purpose = "credential-entra.d2bus.org/entra-login-token";
+          purpose = "credential-entra-login";
           serviceFingerprint = "credential-entra.d2bus.org/EntrablauLoginTokenService/v1";
           locality = "guest-local";
           visibility = "provider";
