@@ -14718,6 +14718,201 @@ mod tests {
     }
 
     #[test]
+    fn every_wire_variant_has_a_dispatch_arm_or_a_recorded_deferral() {
+        // The real-wire dispatch match serves one explicit arm per operation it
+        // implements and defers the committed reserved stubs to the fallback
+        // arm. Retiring a family arm is the point of the per-variant shrink, so
+        // an arm that disappears must show up as one of two deliberate states
+        // rather than as a variant that silently falls through to a refusal:
+        // a committed deferral marker, or an entry in the caller-free set below.
+        //
+        // The sets are pinned because the gate has to fail on a *new* state, and
+        // a source-scanning test would fail on a comment. An arm moved out of the
+        // match therefore has to move one of these names with it - which is
+        // exactly the moment the retirement has to be decided.
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        const DISPATCHED: &[&str] = &[
+            "ApplyHostGenerationHandoff",
+            "ApplyNftables",
+            "ApplyNftablesProjection",
+            "ApplyNmUnmanaged",
+            "ApplyRoute",
+            "ApplySysctl",
+            "BindMountFromHardlinkFarm",
+            "CgroupKill",
+            "CheckSystemdUserManager",
+            "ConsumeLifecycleLease",
+            "CreateBridge",
+            "CreatePersistentTap",
+            "CreateTapFd",
+            "DelegateCgroupV2",
+            "DeleteBridge",
+            "DeletePersistentTap",
+            "DeregisterRunnerPidfd",
+            "DiskInit",
+            "ExportBrokerAudit",
+            "Hello",
+            "Invoke",
+            "MigrateLegacySwtpmState",
+            "ModprobeIfAllowed",
+            "ObserveRunner",
+            "ObserveSystemdUnit",
+            "OpenCgroupDir",
+            "OpenDevice",
+            "OpenFuse",
+            "OpenHidrawSecurityKey",
+            "OpenKvm",
+            "OpenPeerPidfdFromAcceptedSocket",
+            "OpenPidfd",
+            "OpenSystemdUnitPidfd",
+            "OpenVhostNet",
+            "PipeWireAudio",
+            "PollChildReaped",
+            "PrepareRuntimeDir",
+            "PrepareStateDir",
+            "PrepareStoreView",
+            "QemuMediaAttach",
+            "QemuMediaBoot",
+            "QemuMediaDetach",
+            "QemuMediaEnroll",
+            "QemuMediaQueryStatus",
+            "QemuMediaQuit",
+            "QemuMediaRefreshRegistry",
+            "QemuMediaSystemPowerdown",
+            "ReconcileStorageScope",
+            "ResourceActivationAudit",
+            "RunActivation",
+            "RunGc",
+            "RunHostInstall",
+            "RunHostKeyTrust",
+            "RunKeysRotate",
+            "RunMigrate",
+            "RunRotateKnownHost",
+            "SeedDnsmasqLease",
+            "SetBridgePortFlags",
+            "SetupMountNamespace",
+            "SignalRunner",
+            "SpawnRunner",
+            "StartSystemdUnit",
+            "StopSystemdUnit",
+            "StoreSync",
+            "StoreVerify",
+            "UpdateHostsFile",
+            "UsbipBind",
+            "UsbipBindFirewallRule",
+            "UsbipExplicitBind",
+            "UsbipExplicitFirewallRule",
+            "UsbipProxyReconcile",
+            "UsbipUnbind",
+            "ValidateLockSpec",
+        ];
+        // The wire variants no dispatch arm and no committed deferral marker
+        // covers. They are caller-free, so retiring them is a deletion of the
+        // variant, its row, and its arm together - the work is recorded for the
+        // unit that owns it, not deferred here. `ValidateBundle` has an arm only
+        // in the bootstrap-feature dispatch, which the real wire does not build.
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        const CALLER_FREE: &[&str] = &["PauseBroker", "ResumeBroker", "ValidateBundle"];
+
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        {
+            let dispatched: BTreeSet<&str> = DISPATCHED.iter().copied().collect();
+            assert_eq!(
+                dispatched.len(),
+                DISPATCHED.len(),
+                "the arm set names one operation once"
+            );
+            let wire: BTreeSet<&str> = crate::catalog::WIRE_VARIANTS.iter().copied().collect();
+            for name in &dispatched {
+                assert!(
+                    wire.contains(name),
+                    "{name}: an arm serves a variant the committed wire enum does not declare"
+                );
+            }
+            let mut undecided: Vec<&str> = Vec::new();
+            for name in crate::catalog::WIRE_VARIANTS {
+                if dispatched.contains(name) {
+                    assert_eq!(
+                        crate::catalog::stub_target(name),
+                        None,
+                        "{name}: an arm serves it, so it is not a reserved stub"
+                    );
+                    continue;
+                }
+                if crate::catalog::stub_target(name).is_some() {
+                    continue;
+                }
+                if CALLER_FREE.contains(name) {
+                    continue;
+                }
+                undecided.push(name);
+            }
+            assert!(
+                undecided.is_empty(),
+                "variants with no dispatch arm, no committed deferral, and no recorded deletion: {undecided:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_served_operation_names_the_audit_shape_its_records_use() {
+        // A variant dispatched by hand carries its own typed audit fields, and
+        // the fallback arm refuses the reserved stubs. A served operation whose
+        // row declares no audit shape therefore has no record shape on either
+        // path - a row that can be dispatched but cannot be audited. The
+        // reserved stubs and the caller-free variants never serve a request, so
+        // no record shape is expected of them.
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        {
+            const NEVER_SERVED: &[&str] = &["PauseBroker", "ResumeBroker", "ValidateBundle"];
+            // Served, but their records carry no typed field shape yet. Pinned
+            // so the gap cannot grow while the audit shapes are brought up to
+            // the served set.
+            const UNAUDITED: &[&str] = &["PollChildReaped", "QemuMediaQueryStatus"];
+            for name in crate::catalog::WIRE_VARIANTS {
+                if crate::catalog::stub_target(name).is_some()
+                    || NEVER_SERVED.contains(name)
+                    || UNAUDITED.contains(name)
+                {
+                    continue;
+                }
+                let row = crate::catalog::BrokerOperationRow::find(name)
+                    .unwrap_or_else(|| panic!("{name}: a wire variant with no committed row"));
+                assert!(
+                    !row.audit_fields.is_empty(),
+                    "{name}: dispatched without an audit shape"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_committed_stub_carries_its_deferral_marker_rather_than_a_dispatch() {
+        // A row the committed catalog still marks as a reserved stub is refused
+        // by name through the fallback arm; the mirror image is a row that is
+        // neither stubbed nor dispatchable, which would be a row the broker
+        // commits and then cannot reach at all.
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        {
+            let mut both_stubbed_and_dispatchable: Vec<&str> = Vec::new();
+            for name in crate::catalog::WIRE_VARIANTS {
+                let Some(_marker) = crate::catalog::stub_target(name) else {
+                    continue;
+                };
+                if crate::catalog::BrokerOperationRow::find(name)
+                    .is_some_and(|row| row.disposition == "promoted-live")
+                {
+                    both_stubbed_and_dispatchable.push(name);
+                }
+            }
+            assert!(
+                both_stubbed_and_dispatchable.is_empty(),
+                "stubbed rows the catalog also promotes: {both_stubbed_and_dispatchable:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_command_rejects_removed_realm_metadata_flags() {
         for flag in ["--realm-controllers-path", "--realm-identity-path"] {
             let error = parse_command([
