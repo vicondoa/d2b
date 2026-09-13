@@ -51,7 +51,6 @@ pub mod typed_error;
 pub mod typed_shell_targets;
 pub mod unix_transport;
 pub mod unsafe_local_helper;
-pub mod unsafe_local_terminal;
 pub mod usbipd_perenv_autostart;
 pub mod vm_start_support;
 pub mod wire;

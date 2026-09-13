@@ -354,7 +354,6 @@ fn scope_unit_name(kind: HelperScopeKind) -> Result<String, ScopeError> {
     let prefix = match kind {
         HelperScopeKind::LauncherApp => "app",
         HelperScopeKind::WaylandProxy => "proxy",
-        HelperScopeKind::PersistentShell => "shell",
     };
     let mut random = [0u8; 16];
     getrandom::getrandom(&mut random).map_err(|_| ScopeError::CreateFailed)?;

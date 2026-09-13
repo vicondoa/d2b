@@ -25,7 +25,6 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use d2b_contracts::workload_identity::WorkloadTarget;
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, VmId},
@@ -8169,10 +8168,11 @@ pub(crate) fn resolve_network_admission(
                 .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?
                 .clone()
                 .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-            let occupancy = observe_host_network()
-                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
             let index = plane.network_admission_index();
             block_on_future(async move {
+                let occupancy = observe_host_network()
+                    .await
+                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
                 index
                     .lock()
                     .await
@@ -8723,62 +8723,33 @@ fn list_all_typed_shell_sessions(
 
 fn typed_shell_resource_error_frame(error: &TypedError) -> Value {
     use d2b_contracts_resource::v3::ResourceErrorKind;
-    use d2bd_runtime::typed_error::{
-        ComponentSessionShellErrorKind as Guest, UnsafeLocalShellErrorKind as UnsafeHost,
-    };
+    use d2bd_runtime::typed_error::ComponentSessionShellErrorKind as Guest;
 
     let kind = match error {
         TypedError::AuthzNotAdmin { .. } => ResourceErrorKind::AuthorizationDenied,
         TypedError::WorkloadTargetNotFound { .. }
         | TypedError::ComponentSessionShellFailed {
             kind: Guest::NotFound | Guest::StaleSession,
-        }
-        | TypedError::UnsafeLocalShellFailed {
-            kind: UnsafeHost::NotFound | UnsafeHost::StaleSession,
         } => ResourceErrorKind::ResourceNotFound,
         TypedError::ComponentSessionShellFailed {
             kind: Guest::Capability,
         }
-        | TypedError::UnsafeLocalShellFailed {
-            kind: UnsafeHost::ShellUnavailable,
-        } => ResourceErrorKind::UnsupportedCapability,
-        TypedError::RuntimeCapabilityUnsupported { .. } => ResourceErrorKind::UnsupportedCapability,
+        | TypedError::RuntimeCapabilityUnsupported { .. } => {
+            ResourceErrorKind::UnsupportedCapability
+        }
         TypedError::ComponentSessionShellFailed {
             kind: Guest::Transport,
-        }
-        | TypedError::UnsafeLocalShellFailed {
-            kind:
-                UnsafeHost::HelperUnavailable
-                | UnsafeHost::HelperStale
-                | UnsafeHost::UserManagerUnavailable
-                | UnsafeHost::EnvironmentInvalid
-                | UnsafeHost::ExecutableUnavailable
-                | UnsafeHost::ScopeCreateFailed
-                | UnsafeHost::ScopeIdentityMismatch
-                | UnsafeHost::GraphicalSessionInactive
-                | UnsafeHost::WaylandUnavailable
-                | UnsafeHost::ProxyUnavailable
-                | UnsafeHost::FirstClientTimeout,
         } => ResourceErrorKind::ResourceProviderUnavailable,
         TypedError::ComponentSessionShellFailed {
             kind: Guest::Timeout,
-        }
-        | TypedError::UnsafeLocalShellFailed {
-            kind: UnsafeHost::Timeout,
         } => ResourceErrorKind::Timeout,
         TypedError::ComponentSessionShellFailed {
             kind: Guest::Capacity,
-        }
-        | TypedError::UnsafeLocalShellFailed {
-            kind: UnsafeHost::QueueFull,
         } => ResourceErrorKind::Backpressure,
         TypedError::ComponentSessionShellFailed {
             kind: Guest::AlreadyAttached,
         }
-        | TypedError::UnsafeLocalShellFailed {
-            kind: UnsafeHost::AlreadyAttached | UnsafeHost::OperationConflict,
-        } => ResourceErrorKind::ResourceConflict,
-        TypedError::WorkloadAliasConflict { .. } => ResourceErrorKind::ResourceConflict,
+        | TypedError::WorkloadAliasConflict { .. } => ResourceErrorKind::ResourceConflict,
         _ => ResourceErrorKind::InternalIntegrityFailure,
     };
     json!({
@@ -8798,51 +8769,23 @@ fn write_named_process_stream_error(
     request_id: u64,
     error: TypedError,
 ) -> Result<(), TypedError> {
-    use d2bd_runtime::typed_error::{
-        ComponentSessionShellErrorKind as Guest, UnsafeLocalShellErrorKind as UnsafeHost,
-    };
+    use d2bd_runtime::typed_error::ComponentSessionShellErrorKind as Guest;
     let kind = match &error {
         TypedError::AuthzNotAdmin { .. } => public_wire::NamedProcessStreamErrorKind::Authorization,
         TypedError::ComponentSessionShellFailed {
             kind: Guest::StaleSession,
-        }
-        | TypedError::UnsafeLocalShellFailed {
-            kind: UnsafeHost::StaleSession,
         } => public_wire::NamedProcessStreamErrorKind::StaleSession,
         TypedError::ComponentSessionShellFailed {
             kind: Guest::NotFound,
-        }
-        | TypedError::UnsafeLocalShellFailed {
-            kind: UnsafeHost::NotFound,
         } => public_wire::NamedProcessStreamErrorKind::NotFound,
         TypedError::ComponentSessionShellFailed {
             kind: Guest::Capacity,
-        }
-        | TypedError::UnsafeLocalShellFailed {
-            kind: UnsafeHost::QueueFull,
         } => public_wire::NamedProcessStreamErrorKind::Backpressure,
         TypedError::ComponentSessionShellFailed {
             kind: Guest::Timeout,
-        }
-        | TypedError::UnsafeLocalShellFailed {
-            kind: UnsafeHost::Timeout,
         } => public_wire::NamedProcessStreamErrorKind::Timeout,
         TypedError::ComponentSessionShellFailed {
             kind: Guest::Transport,
-        }
-        | TypedError::UnsafeLocalShellFailed {
-            kind:
-                UnsafeHost::HelperUnavailable
-                | UnsafeHost::HelperStale
-                | UnsafeHost::UserManagerUnavailable
-                | UnsafeHost::EnvironmentInvalid
-                | UnsafeHost::ExecutableUnavailable
-                | UnsafeHost::ScopeCreateFailed
-                | UnsafeHost::ScopeIdentityMismatch
-                | UnsafeHost::GraphicalSessionInactive
-                | UnsafeHost::WaylandUnavailable
-                | UnsafeHost::ProxyUnavailable
-                | UnsafeHost::FirstClientTimeout,
         } => public_wire::NamedProcessStreamErrorKind::Disconnected,
         _ => public_wire::NamedProcessStreamErrorKind::Protocol,
     };
@@ -12772,20 +12715,6 @@ const SHELL_LIFECYCLE_ERRORS: &[&str] = &[
     "already-attached",
     "not-found",
     "output-gap",
-    "offset-mismatch",
-    "terminal-closed",
-    "invalid-size",
-    "helper-unavailable",
-    "helper-stale",
-    "user-manager",
-    "environment",
-    "executable",
-    "scope-create",
-    "scope-identity",
-    "graphical-session",
-    "wayland",
-    "proxy",
-    "operation-conflict",
     "guest",
     "internal",
 ];
@@ -12807,34 +12736,6 @@ fn shell_error_kind_label(error: &TypedError) -> &'static str {
             K::GuestError => "guest",
             K::Internal => "internal",
         },
-        TypedError::UnsafeLocalShellFailed { kind } => {
-            use d2bd_runtime::typed_error::UnsafeLocalShellErrorKind as UnsafeKind;
-            match kind {
-                UnsafeKind::HelperUnavailable => "helper-unavailable",
-                UnsafeKind::HelperStale => "helper-stale",
-                UnsafeKind::QueueFull => "capacity",
-                UnsafeKind::Timeout | UnsafeKind::FirstClientTimeout => "timeout",
-                UnsafeKind::Protocol => "protocol",
-                UnsafeKind::OperationConflict => "operation-conflict",
-                UnsafeKind::UserManagerUnavailable => "user-manager",
-                UnsafeKind::EnvironmentInvalid => "environment",
-                UnsafeKind::ExecutableUnavailable => "executable",
-                UnsafeKind::ScopeCreateFailed => "scope-create",
-                UnsafeKind::ScopeIdentityMismatch => "scope-identity",
-                UnsafeKind::GraphicalSessionInactive => "graphical-session",
-                UnsafeKind::WaylandUnavailable => "wayland",
-                UnsafeKind::ProxyUnavailable => "proxy",
-                UnsafeKind::ShellUnavailable => "capability",
-                UnsafeKind::NotFound => "not-found",
-                UnsafeKind::AlreadyAttached => "already-attached",
-                UnsafeKind::OutputGap => "output-gap",
-                UnsafeKind::OffsetMismatch => "offset-mismatch",
-                UnsafeKind::TerminalClosed => "terminal-closed",
-                UnsafeKind::InvalidSize => "invalid-size",
-                UnsafeKind::StaleSession => "stale-session",
-                UnsafeKind::Internal => "internal",
-            }
-        }
         _ => "internal",
     }
 }
@@ -12872,7 +12773,7 @@ fn shell_metric(state: &ServerState, outcome: &'static str, error_kind: &'static
 
 fn shell_metric_for_provider(
     state: &ServerState,
-    provider: d2bd_runtime::shell_backend::ShellProvider,
+    provider: d2bd_runtime::daemon_audit::ShellAuditProvider,
     operation: &'static str,
     outcome: &'static str,
     error_kind: &'static str,
@@ -12883,29 +12784,35 @@ fn shell_metric_for_provider(
     state.metrics_registry.counter_inc(
         SHELL_LIFECYCLE_METRIC,
         &[
-            ("provider", provider.label()),
+            ("provider", shell_provider_label(provider)),
             ("component", "shell"),
             ("operation", operation),
             ("outcome", outcome),
             ("error_kind", error_kind),
         ],
     );
-    if provider == d2bd_runtime::shell_backend::ShellProvider::ComponentSession {
+    if provider == d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession {
         shell_metric(state, outcome, error_kind);
     }
 }
 
-fn shell_provider_for_error(error: &TypedError) -> d2bd_runtime::shell_backend::ShellProvider {
+fn shell_provider_label(provider: d2bd_runtime::daemon_audit::ShellAuditProvider) -> &'static str {
+    match provider {
+        d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession => "component-session",
+        d2bd_runtime::daemon_audit::ShellAuditProvider::UnsafeLocal => "unsafe-local",
+    }
+}
+
+/// Only an unavailable unsafe-local runtime reaches this today: its shell route
+/// is deleted, so its refusals are recorded against the unsafe-local provider.
+fn shell_provider_for_error(error: &TypedError) -> d2bd_runtime::daemon_audit::ShellAuditProvider {
     match error {
-        TypedError::UnsafeLocalShellFailed { .. } => {
-            d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal
-        }
         TypedError::RuntimeCapabilityUnsupported { runtime_kind, .. }
             if runtime_kind == "unsafe-local" =>
         {
-            d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal
+            d2bd_runtime::daemon_audit::ShellAuditProvider::UnsafeLocal
         }
-        _ => d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
+        _ => d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
     }
 }
 
@@ -13217,8 +13124,7 @@ fn dispatch_shell_management(
     peer: &PeerIdentity,
     op: ShellManagementOp,
 ) -> Result<Value, TypedError> {
-    use d2b_contracts_control::unsafe_local_wire::{HelperShellRequest, HelperShellResponse};
-    use workload_dispatch::WorkloadRoute;
+    use workload_dispatch::ShellRoute;
 
     if !matches!(peer.role, PeerRole::Admin) {
         return Err(TypedError::AuthzNotAdmin {
@@ -13232,63 +13138,23 @@ fn dispatch_shell_management(
             let resolved = resolve_shell_target(state, &requested_target).inspect_err(|error| {
                 record_unresolved_shell_failure(state, peer.uid, &requested_target, "list", error);
             })?;
-            let (result, provider, target, operation_digest) = match resolved.route.clone() {
-                WorkloadRoute::LocalVm { vm } => {
-                    let result = production_guest_shell_list(state, &vm).inspect_err(|error| {
-                        record_shell_dispatch_failure(
-                            state,
-                            peer.uid,
-                            &vm,
-                            d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
-                            "list",
-                            None,
-                            error,
-                        );
-                    })?;
-                    (
-                        result,
-                        d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
-                        vm,
-                        None,
-                    )
-                }
-                WorkloadRoute::UnsafeLocal => {
-                    let (identity, workload_target, policy) =
-                        unsafe_shell_request_parts(state, &resolved)?;
-                    let operation_id = new_internal_shell_operation_id()?;
-                    let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
-                    let target = workload_target.to_canonical();
-                    let request = HelperShellRequest::List {
-                        request_id: next_internal_shell_request_id(),
-                        operation_id,
-                        workload: identity,
-                        policy,
-                    };
-                    let response = dispatch_unsafe_shell_management(state, peer.uid, request)
+            let (result, target, operation_digest) = match resolved.route.clone() {
+                ShellRoute::LocalVm { vm } => {
+                    let result = production_guest_shell_list(state, &vm)
                         .inspect_err(|error| {
                             record_shell_dispatch_failure(
                                 state,
                                 peer.uid,
-                                &target,
-                                d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
+                                &vm,
+                                d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
                                 "list",
-                                Some(operation_digest.clone()),
+                                None,
                                 error,
                             );
                         })?;
-                    let HelperShellResponse::List(response) = response else {
-                        return Err(d2bd_runtime::shell_backend::unsafe_shell_failed(
-                            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-                        ));
-                    };
-                    (
-                        response.result,
-                        d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
-                        target,
-                        Some(operation_digest),
-                    )
+                    (result, vm, None)
                 }
-                WorkloadRoute::CapabilityUnavailable { provider } => {
+                ShellRoute::CapabilityUnavailable { provider } => {
                     let error = shell_route_capability_error(&requested_target, provider);
                     record_resolved_shell_failure(
                         state,
@@ -13307,7 +13173,7 @@ fn dispatch_shell_management(
                 ProviderShellAudit {
                     target: &target,
                     peer_uid: peer.uid,
-                    provider,
+                    provider: d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
                     action: d2bd_runtime::daemon_audit::ShellAuditAction::List,
                     result: d2bd_runtime::daemon_audit::ShellAuditResult::Listed,
                     force: None,
@@ -13315,7 +13181,13 @@ fn dispatch_shell_management(
                     session_digest: None,
                 },
             );
-            shell_metric_for_provider(state, provider, "list", "management", "none");
+            shell_metric_for_provider(
+                state,
+                d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
+                "list",
+                "management",
+                "none",
+            );
             serde_json::to_value(result).map_err(|_| shell_protocol_failed())?
         }
         ShellManagementOp::Detach {
@@ -13331,66 +13203,23 @@ fn dispatch_shell_management(
                     error,
                 );
             })?;
-            let (result, provider, target, operation_digest) = match resolved.route.clone() {
-                WorkloadRoute::LocalVm { vm } => {
+            let (result, target, operation_digest) = match resolved.route.clone() {
+                ShellRoute::LocalVm { vm } => {
                     let result = production_guest_shell_detach(state, &vm, name.clone())
                         .inspect_err(|error| {
                             record_shell_dispatch_failure(
                                 state,
                                 peer.uid,
                                 &vm,
-                                d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
+                                d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
                                 "detach",
                                 None,
                                 error,
                             );
                         })?;
-                    (
-                        result,
-                        d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
-                        vm,
-                        None,
-                    )
+                    (result, vm, None)
                 }
-                WorkloadRoute::UnsafeLocal => {
-                    let (identity, workload_target, policy) =
-                        unsafe_shell_request_parts(state, &resolved)?;
-                    let name = name.unwrap_or_else(|| policy.default_name.clone());
-                    let operation_id = new_internal_shell_operation_id()?;
-                    let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
-                    let target = workload_target.to_canonical();
-                    let request = HelperShellRequest::Detach {
-                        request_id: next_internal_shell_request_id(),
-                        operation_id,
-                        workload: identity,
-                        policy,
-                        name,
-                    };
-                    let response = dispatch_unsafe_shell_management(state, peer.uid, request)
-                        .inspect_err(|error| {
-                            record_shell_dispatch_failure(
-                                state,
-                                peer.uid,
-                                &target,
-                                d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
-                                "detach",
-                                Some(operation_digest.clone()),
-                                error,
-                            );
-                        })?;
-                    let HelperShellResponse::Detach(response) = response else {
-                        return Err(d2bd_runtime::shell_backend::unsafe_shell_failed(
-                            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-                        ));
-                    };
-                    (
-                        response.result,
-                        d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
-                        target,
-                        Some(operation_digest),
-                    )
-                }
-                WorkloadRoute::CapabilityUnavailable { provider } => {
+                ShellRoute::CapabilityUnavailable { provider } => {
                     let error = shell_route_capability_error(&requested_target, provider);
                     record_resolved_shell_failure(
                         state,
@@ -13410,7 +13239,7 @@ fn dispatch_shell_management(
                 ProviderShellAudit {
                     target: &target,
                     peer_uid: peer.uid,
-                    provider,
+                    provider: d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
                     action: d2bd_runtime::daemon_audit::ShellAuditAction::Detach,
                     result: d2bd_runtime::daemon_audit::ShellAuditResult::Detached,
                     force: None,
@@ -13418,7 +13247,13 @@ fn dispatch_shell_management(
                     session_digest: Some(digest),
                 },
             );
-            shell_metric_for_provider(state, provider, "detach", "management", "none");
+            shell_metric_for_provider(
+                state,
+                d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
+                "detach",
+                "management",
+                "none",
+            );
             serde_json::to_value(result).map_err(|_| shell_protocol_failed())?
         }
         ShellManagementOp::Kill {
@@ -13428,65 +13263,23 @@ fn dispatch_shell_management(
             let resolved = resolve_shell_target(state, &requested_target).inspect_err(|error| {
                 record_unresolved_shell_failure(state, peer.uid, &requested_target, "kill", error);
             })?;
-            let (result, provider, target, operation_digest) = match resolved.route.clone() {
-                WorkloadRoute::LocalVm { vm } => {
+            let (result, target, operation_digest) = match resolved.route.clone() {
+                ShellRoute::LocalVm { vm } => {
                     let result = production_guest_shell_kill(state, &vm, requested_name.clone())
                         .inspect_err(|error| {
                             record_shell_dispatch_failure(
                                 state,
                                 peer.uid,
                                 &vm,
-                                d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
+                                d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
                                 "kill",
                                 None,
                                 error,
                             );
                         })?;
-                    (
-                        result,
-                        d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
-                        vm,
-                        None,
-                    )
+                    (result, vm, None)
                 }
-                WorkloadRoute::UnsafeLocal => {
-                    let (identity, workload_target, policy) =
-                        unsafe_shell_request_parts(state, &resolved)?;
-                    let operation_id = new_internal_shell_operation_id()?;
-                    let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
-                    let target = workload_target.to_canonical();
-                    let request = HelperShellRequest::Kill {
-                        request_id: next_internal_shell_request_id(),
-                        operation_id,
-                        workload: identity,
-                        policy,
-                        name: requested_name.clone(),
-                    };
-                    let response = dispatch_unsafe_shell_management(state, peer.uid, request)
-                        .inspect_err(|error| {
-                            record_shell_dispatch_failure(
-                                state,
-                                peer.uid,
-                                &target,
-                                d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
-                                "kill",
-                                Some(operation_digest.clone()),
-                                error,
-                            );
-                        })?;
-                    let HelperShellResponse::Kill(response) = response else {
-                        return Err(d2bd_runtime::shell_backend::unsafe_shell_failed(
-                            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-                        ));
-                    };
-                    (
-                        response.result,
-                        d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
-                        target,
-                        Some(operation_digest),
-                    )
-                }
-                WorkloadRoute::CapabilityUnavailable { provider } => {
+                ShellRoute::CapabilityUnavailable { provider } => {
                     let error = shell_route_capability_error(&requested_target, provider);
                     record_resolved_shell_failure(
                         state,
@@ -13506,7 +13299,7 @@ fn dispatch_shell_management(
                 ProviderShellAudit {
                     target: &target,
                     peer_uid: peer.uid,
-                    provider,
+                    provider: d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
                     action: d2bd_runtime::daemon_audit::ShellAuditAction::Kill,
                     result: d2bd_runtime::daemon_audit::ShellAuditResult::Killed,
                     force: None,
@@ -13514,60 +13307,17 @@ fn dispatch_shell_management(
                     session_digest: Some(digest),
                 },
             );
-            shell_metric_for_provider(state, provider, "kill", "management", "none");
+            shell_metric_for_provider(
+                state,
+                d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
+                "kill",
+                "management",
+                "none",
+            );
             serde_json::to_value(result).map_err(|_| shell_protocol_failed())?
         }
     };
     Ok(response)
-}
-
-fn unsafe_shell_request_parts(
-    state: &ServerState,
-    resolved: &workload_dispatch::ResolvedShell,
-) -> Result<
-    (
-        ZoneResourceIdentity,
-        WorkloadTarget,
-        d2b_contracts_control::unsafe_local_wire::HelperShellPolicy,
-    ),
-    TypedError,
-> {
-    let identity = resolved.identity.clone().ok_or_else(|| {
-        d2bd_runtime::shell_backend::unsafe_shell_failed(
-            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-        )
-    })?;
-    let workload_target = identity.canonical_target.clone();
-    let resource_identity = authoritative_unsafe_local_resource_identity(state).map_err(|_| {
-        d2bd_runtime::shell_backend::unsafe_shell_failed(
-            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-        )
-    })?;
-    let policy = resolved.policy.clone().ok_or_else(|| {
-        d2bd_runtime::shell_backend::unsafe_shell_failed(
-            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-        )
-    })?;
-    Ok((resource_identity, workload_target, policy))
-}
-
-fn dispatch_unsafe_shell_management(
-    state: &ServerState,
-    peer_uid: u32,
-    request: d2b_contracts_control::unsafe_local_wire::HelperShellRequest,
-) -> Result<d2b_contracts_control::unsafe_local_wire::HelperShellResponse, TypedError> {
-    match state
-        .unsafe_local_helpers
-        .dispatch_shell(peer_uid, request)
-        .map_err(map_shell_helper_registry_error)?
-    {
-        d2bd_runtime::unsafe_local_helper::HelperShellReply::Management(response) => Ok(response),
-        d2bd_runtime::unsafe_local_helper::HelperShellReply::Terminal { .. } => {
-            Err(d2bd_runtime::shell_backend::unsafe_shell_failed(
-                d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-            ))
-        }
-    }
 }
 
 fn shell_route_capability_error(
@@ -13586,7 +13336,7 @@ fn record_shell_dispatch_failure(
     state: &ServerState,
     peer_uid: u32,
     target: &str,
-    provider: d2bd_runtime::shell_backend::ShellProvider,
+    provider: d2bd_runtime::daemon_audit::ShellAuditProvider,
     operation: &'static str,
     operation_digest: Option<String>,
     error: &TypedError,
@@ -13640,26 +13390,17 @@ fn record_resolved_shell_failure(
     operation_digest: Option<String>,
     error: &TypedError,
 ) {
-    use workload_dispatch::WorkloadRoute;
+    use workload_dispatch::ShellRoute;
+
+    use d2bd_runtime::daemon_audit::ShellAuditProvider;
 
     let (provider, target) = match &resolved.route {
-        WorkloadRoute::UnsafeLocal => (
-            d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
-            resolved
-                .identity
-                .as_ref()
-                .map(|identity| identity.canonical_target.to_canonical())
-                .unwrap_or_else(|| unresolved_shell_audit_target().to_owned()),
-        ),
-        WorkloadRoute::LocalVm { vm } => (
-            d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
-            vm.clone(),
-        ),
-        WorkloadRoute::CapabilityUnavailable { provider } => (
+        ShellRoute::LocalVm { vm } => (ShellAuditProvider::ComponentSession, vm.clone()),
+        ShellRoute::CapabilityUnavailable { provider } => (
             if *provider == d2b_contracts::WorkloadProviderKind::UnsafeLocal {
-                d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal
+                ShellAuditProvider::UnsafeLocal
             } else {
-                d2bd_runtime::shell_backend::ShellProvider::ComponentSession
+                ShellAuditProvider::ComponentSession
             },
             resolved
                 .identity
@@ -13679,23 +13420,10 @@ fn record_resolved_shell_failure(
     );
 }
 
-fn shell_audit_provider(
-    provider: d2bd_runtime::shell_backend::ShellProvider,
-) -> d2bd_runtime::daemon_audit::ShellAuditProvider {
-    match provider {
-        d2bd_runtime::shell_backend::ShellProvider::ComponentSession => {
-            d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession
-        }
-        d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal => {
-            d2bd_runtime::daemon_audit::ShellAuditProvider::UnsafeLocal
-        }
-    }
-}
-
 struct ProviderShellAudit<'a> {
     target: &'a str,
     peer_uid: u32,
-    provider: d2bd_runtime::shell_backend::ShellProvider,
+    provider: d2bd_runtime::daemon_audit::ShellAuditProvider,
     action: d2bd_runtime::daemon_audit::ShellAuditAction,
     result: d2bd_runtime::daemon_audit::ShellAuditResult,
     force: Option<bool>,
@@ -13710,7 +13438,7 @@ fn emit_provider_shell_audit(state: &ServerState, event: ProviderShellAudit<'_>)
             .write_event(&d2bd_runtime::daemon_audit::DaemonEvent::ShellLifecycle {
                 target: event.target.to_owned(),
                 peer_uid: event.peer_uid,
-                provider: shell_audit_provider(event.provider),
+                provider: event.provider,
                 action: event.action,
                 result: event.result,
                 force: event.force,
@@ -13731,7 +13459,7 @@ fn emit_shell_attach_audit(
         ProviderShellAudit {
             target: &established.target,
             peer_uid,
-            provider: established.provider,
+            provider: d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
             action: d2bd_runtime::daemon_audit::ShellAuditAction::Attach,
             result: d2bd_runtime::daemon_audit::ShellAuditResult::Attached,
             force: Some(force),
@@ -13753,7 +13481,7 @@ fn emit_shell_close_audit(
         ProviderShellAudit {
             target: &established.target,
             peer_uid,
-            provider: established.provider,
+            provider: d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
             action: d2bd_runtime::daemon_audit::ShellAuditAction::Close,
             result,
             force: None,
@@ -13948,15 +13676,6 @@ fn shell_session_from_resource(
 fn configured_shell_targets(state: &ServerState) -> Result<Vec<String>, TypedError> {
     let resolver = load_bundle_resolver(state)?;
     let mut targets = std::collections::BTreeSet::new();
-    if let Some(private) = resolver.unsafe_local_workloads.as_ref() {
-        targets.extend(
-            private
-                .workloads
-                .iter()
-                .filter(|workload| workload.shell.is_some())
-                .map(|workload| workload.identity.canonical_target.to_canonical()),
-        );
-    }
     targets.extend(
         resolver
             .manifest
@@ -14647,7 +14366,7 @@ fn run_typed_shell_owner(
         resolve_shell_target(&state, &target)
             .map(|resolved| resolved.route)
             .as_ref(),
-        Ok(workload_dispatch::WorkloadRoute::LocalVm { .. })
+        Ok(workload_dispatch::ShellRoute::LocalVm { .. })
     ) {
         let (pool, session) = match guest_shell_session(&state, &target, &name) {
             Ok(value) => value,
@@ -14722,7 +14441,7 @@ fn run_typed_shell_owner(
         );
         shell_metric_for_provider(
             &state,
-            established.provider,
+            d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
             "attach",
             "established",
             "none",
@@ -14745,7 +14464,13 @@ fn run_typed_shell_owner(
             close_result,
             &owner_shell_ref_digest,
         );
-        shell_metric_for_provider(&state, established.provider, "close", "closed", "none");
+        shell_metric_for_provider(
+            &state,
+            d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
+            "close",
+            "closed",
+            "none",
+        );
         let _ = write_json_frame(
             &stream,
             &json!({
@@ -14789,7 +14514,7 @@ fn run_typed_shell_owner(
             &state,
             peer.uid,
             &established.target,
-            established.provider,
+            d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
             "attach",
             established.operation_digest.clone(),
             &error,
@@ -14805,7 +14530,7 @@ fn run_typed_shell_owner(
     );
     shell_metric_for_provider(
         &state,
-        established.provider,
+        d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
         "attach",
         "established",
         "none",
@@ -15009,7 +14734,13 @@ fn run_typed_shell_owner(
         close_result,
         &owner_shell_ref_digest,
     );
-    shell_metric_for_provider(&state, established.provider, "close", "closed", "none");
+    shell_metric_for_provider(
+        &state,
+        d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession,
+        "close",
+        "closed",
+        "none",
+    );
 }
 
 async fn establish_shell_backend(
@@ -15019,12 +14750,12 @@ async fn establish_shell_backend(
     attach: &public_wire::ShellAttachArgs,
     component_session_driver: Option<d2b_session::SessionDriverHandle>,
 ) -> Result<d2bd_runtime::shell_backend::EstablishedShell, TypedError> {
-    use workload_dispatch::WorkloadRoute;
+    use workload_dispatch::ShellRoute;
 
     let resolved = resolve_shell_target(state, &attach.vm)?;
 
     match resolved.route {
-        WorkloadRoute::LocalVm { vm } => {
+        ShellRoute::LocalVm { vm } => {
             let Some(driver) = component_session_driver else {
                 let _ = (state, peer_uid, caller_role, attach);
                 return Err(TypedError::RuntimeCapabilityUnsupported {
@@ -15056,84 +14787,11 @@ async fn establish_shell_backend(
                     force_evicted: false,
                 },
                 target: vm,
-                provider: d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
                 operation_digest: None,
                 initial_control_sequence: 0,
             })
         }
-        WorkloadRoute::UnsafeLocal => {
-            let (identity, workload_target, policy) = unsafe_shell_request_parts(state, &resolved)?;
-            let operation_id = new_internal_shell_operation_id()?;
-            let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
-            let target = workload_target.to_canonical();
-            emit_provider_shell_audit(
-                state,
-                ProviderShellAudit {
-                    target: &target,
-                    peer_uid,
-                    provider: d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
-                    action: d2bd_runtime::daemon_audit::ShellAuditAction::Create,
-                    result: d2bd_runtime::daemon_audit::ShellAuditResult::Requested,
-                    force: None,
-                    operation_digest: Some(operation_digest.clone()),
-                    session_digest: None,
-                },
-            );
-            shell_metric_for_provider(
-                state,
-                d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
-                "create",
-                "requested",
-                "none",
-            );
-            let request_id = next_internal_shell_request_id();
-            let request = d2b_contracts_control::unsafe_local_wire::HelperShellRequest::Attach {
-                request_id,
-                operation_id: operation_id.clone(),
-                workload: identity.clone(),
-                policy,
-                name: attach.name.clone(),
-                force: attach.force,
-                initial_terminal_size: attach.initial_terminal_size,
-            };
-            let reply = state
-                .unsafe_local_helpers
-                .dispatch_shell(peer_uid, request)
-                .map_err(map_shell_helper_registry_error)?;
-            let d2bd_runtime::unsafe_local_helper::HelperShellReply::Terminal { ready, fd } = reply
-            else {
-                return Err(d2bd_runtime::shell_backend::unsafe_shell_failed(
-                    d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-                ));
-            };
-            let public_session = new_public_shell_session_handle()?;
-            let terminal = d2bd_runtime::unsafe_local_terminal::UnsafeLocalTerminalClient::new(fd)
-                .map_err(|_| {
-                    d2bd_runtime::shell_backend::unsafe_shell_failed(
-                        d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-                    )
-                })?;
-            let resolved_name = ready.result.resolved_name;
-            let backend = d2bd_runtime::shell_backend::UnsafeLocalShellBackend::new(
-                public_session.clone(),
-                resolved_name.clone(),
-                terminal,
-            );
-            Ok(d2bd_runtime::shell_backend::EstablishedShell {
-                backend: Arc::new(backend),
-                attach: public_wire::ShellAttachResult {
-                    session: public_session,
-                    resolved_name,
-                    state: ready.result.state,
-                    force_evicted: ready.result.force_evicted,
-                },
-                target,
-                provider: d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
-                operation_digest: Some(operation_digest),
-                initial_control_sequence: 0,
-            })
-        }
-        WorkloadRoute::CapabilityUnavailable { provider } => {
+        ShellRoute::CapabilityUnavailable { provider } => {
             Err(TypedError::RuntimeCapabilityUnsupported {
                 vm: attach.vm.clone(),
                 runtime_kind: workload_provider_label(provider).to_owned(),
@@ -15148,50 +14806,39 @@ fn resolve_shell_target(
     state: &ServerState,
     target: &str,
 ) -> Result<workload_dispatch::ResolvedShell, TypedError> {
-    use workload_dispatch::{CatalogError, ResolvedShell, WorkloadCatalog, WorkloadRoute};
+    use workload_dispatch::{ResolvedShell, ShellRoute, WorkloadCatalog};
 
     let resolver = load_bundle_resolver(state)?;
     match WorkloadCatalog::from_resolver(&resolver) {
         Ok(catalog) => catalog
-            .resolve_shell(resolver.unsafe_local_workloads.as_ref(), target)
-            .map_err(|error| map_shell_catalog_error(error, target)),
-        Err(CatalogError::ArtifactsUnavailable) if !target.ends_with(".d2b") => Ok(ResolvedShell {
-            identity: None,
-            route: WorkloadRoute::LocalVm {
-                vm: target.to_owned(),
-            },
-            policy: None,
+            .resolve_shell(target)
+            .map_err(|error| map_shell_target_error(error, target)),
+        Err(workload_dispatch::CatalogError::ArtifactsUnavailable) if !target.ends_with(".d2b") => {
+            Ok(ResolvedShell {
+                identity: None,
+                route: ShellRoute::LocalVm {
+                    vm: target.to_owned(),
+                },
+            })
+        }
+        // The launcher catalog is the only source of workload targets, so an
+        // unreadable one leaves nothing for a canonical target to resolve to.
+        Err(_) => Err(TypedError::WorkloadTargetNotFound {
+            target: target.to_owned(),
         }),
-        Err(error) => Err(map_shell_catalog_error(error, target)),
     }
 }
 
-fn map_shell_catalog_error(error: workload_dispatch::CatalogError, target: &str) -> TypedError {
-    use workload_dispatch::CatalogError;
+fn map_shell_target_error(error: workload_dispatch::ShellTargetError, target: &str) -> TypedError {
+    use workload_dispatch::ShellTargetError;
     match error {
-        CatalogError::TargetNotFound => TypedError::WorkloadTargetNotFound {
+        ShellTargetError::TargetNotFound => TypedError::WorkloadTargetNotFound {
             target: target.to_owned(),
         },
-        CatalogError::AliasConflict => TypedError::WorkloadAliasConflict {
+        ShellTargetError::AliasConflict => TypedError::WorkloadAliasConflict {
             workload_id: target.to_owned(),
             detail: "multiple configured workloads share this short id".to_owned(),
         },
-        CatalogError::ShellCapabilityUnavailable => {
-            d2bd_runtime::shell_backend::unsafe_shell_failed(
-                d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::ShellUnavailable,
-            )
-        }
-        CatalogError::ArtifactsUnavailable
-        | CatalogError::ConfiguredItemMissing
-        | CatalogError::ConfiguredItemMismatch => d2bd_runtime::shell_backend::unsafe_shell_failed(
-            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-        ),
-        CatalogError::LauncherDisabled
-        | CatalogError::ItemNotFound
-        | CatalogError::OperationConflict
-        | CatalogError::OperationInProgress => d2bd_runtime::shell_backend::unsafe_shell_failed(
-            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Internal,
-        ),
     }
 }
 
@@ -15205,68 +14852,11 @@ fn next_internal_helper_request_id() -> u64 {
     }
 }
 
-fn next_internal_shell_request_id() -> u64 {
-    next_internal_helper_request_id()
-}
-
-fn new_internal_shell_operation_id() -> Result<d2b_contracts::OperationId, TypedError> {
-    let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).map_err(|_| {
-        d2bd_runtime::shell_backend::unsafe_shell_failed(
-            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Internal,
-        )
-    })?;
-    d2b_contracts::OperationId::parse(format!("shell-{}", hex_bytes(&bytes))).map_err(|_| {
-        d2bd_runtime::shell_backend::unsafe_shell_failed(
-            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Internal,
-        )
-    })
-}
-
 fn new_public_shell_session_handle() -> Result<String, TypedError> {
     let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).map_err(|_| {
-        d2bd_runtime::shell_backend::unsafe_shell_failed(
-            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Internal,
-        )
-    })?;
+    getrandom::getrandom(&mut bytes)
+        .map_err(|_| shell_failed(d2bd_runtime::typed_error::ComponentSessionShellErrorKind::Internal))?;
     Ok(format!("shell-{}", hex_bytes(&bytes)))
-}
-
-fn map_shell_helper_registry_error(
-    error: d2bd_runtime::unsafe_local_helper::HelperRegistryError,
-) -> TypedError {
-    use d2bd_runtime::typed_error::UnsafeLocalShellErrorKind as UnsafeKind;
-    use d2bd_runtime::unsafe_local_helper::HelperRegistryError as H;
-    match error {
-        H::HelperUnavailable | H::Io => {
-            d2bd_runtime::shell_backend::unsafe_shell_failed(UnsafeKind::HelperUnavailable)
-        }
-        H::HelperStale | H::GenerationSuperseded => {
-            d2bd_runtime::shell_backend::unsafe_shell_failed(UnsafeKind::HelperStale)
-        }
-        H::QueueFull | H::OperationInProgress => {
-            d2bd_runtime::shell_backend::unsafe_shell_failed(UnsafeKind::QueueFull)
-        }
-        H::Timeout => d2bd_runtime::shell_backend::unsafe_shell_failed(UnsafeKind::Timeout),
-        H::OperationIdConflict => {
-            d2bd_runtime::shell_backend::unsafe_shell_failed(UnsafeKind::OperationConflict)
-        }
-        H::OperationRejected(code) => d2bd_runtime::shell_backend::map_helper_failure(code),
-        H::InvalidFrame
-        | H::InvalidRequest
-        | H::FrameTooLarge
-        | H::ProtocolMismatch
-        | H::RequestCorrelationMismatch
-        | H::InvalidTerminalFd
-        | H::SocketBufferTooSmall
-        | H::SnapshotTooLarge => {
-            d2bd_runtime::shell_backend::unsafe_shell_failed(UnsafeKind::Protocol)
-        }
-        H::UnauthorizedPeer | H::InvalidPeer => {
-            d2bd_runtime::shell_backend::unsafe_shell_failed(UnsafeKind::Internal)
-        }
-    }
 }
 
 fn emit_detached_create_audit(state: &ServerState, peer_uid: u32, vm: &str, exec_id: &str) {
@@ -30683,9 +30273,9 @@ mod broker_dispatch_tests {
     #[test]
     fn shell_verb_is_admin_only() {
         use super::verb_requires_admin;
-        // Shell operations can attach/detach/kill a guest or unsafe-local
-        // workload-user terminal, so configured-launch authority never extends
-        // to shell and the daemon denies launchers before backend side effects.
+        // Shell operations can attach/detach/kill a guest workload-user
+        // terminal, so configured-launch authority never extends to shell and
+        // the daemon denies launchers before backend side effects.
         assert!(verb_requires_admin("shell"));
     }
 
@@ -31060,12 +30650,12 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn helper_request_ids_share_one_nonzero_correlation_namespace() {
-        let launch = super::next_internal_helper_request_id();
-        let shell = super::next_internal_shell_request_id();
-        assert_ne!(launch, 0);
-        assert_ne!(shell, 0);
-        assert_ne!(launch, shell);
+    fn helper_request_ids_are_nonzero_and_distinct() {
+        let first = super::next_internal_helper_request_id();
+        let second = super::next_internal_helper_request_id();
+        assert_ne!(first, 0);
+        assert_ne!(second, 0);
+        assert_ne!(first, second);
     }
 
     #[test]
