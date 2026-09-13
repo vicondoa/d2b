@@ -6,11 +6,6 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-exports_files(
-    ["src/conformance.rs"],
-    visibility = ["//visibility:public"],
-)
-
 d2b_provider_toolkit_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 rust_library(
@@ -24,6 +19,7 @@ rust_library(
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-provider:d2b_provider",
+        "//packages/d2b-resource-types:d2b_resource_types",
         "//packages/d2b-session:d2b_session",
         "//packages/d2b-session-unix:d2b_session_unix",
         "@crates//:serde",
@@ -43,6 +39,7 @@ rust_library(
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-provider:d2b_provider_test_support",
+        "//packages/d2b-resource-types:d2b_resource_types",
         "//packages/d2b-session:d2b_session_test_support",
         "//packages/d2b-session-unix:d2b_session_unix_test_support",
         "@crates//:serde",
@@ -76,6 +73,7 @@ rust_test(
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_toolkit",
+        "//packages/d2b-resource-types:d2b_resource_types",
         "//packages/d2b-provider:d2b_provider",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -93,6 +91,7 @@ rust_test(
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_toolkit",
+        "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -109,6 +108,7 @@ rust_test(
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_toolkit",
+        "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -141,8 +141,21 @@ rust_test(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_toolkit_test_support",
+        "//packages/d2b-resource-types:d2b_resource_types",
         "//packages/d2b-session:d2b_session_test_support",
         "//packages/d2b-session-unix:d2b_session_unix_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "harness",
+    srcs = ["tests/harness.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-resource-types:d2b_resource_types",
+        ":d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

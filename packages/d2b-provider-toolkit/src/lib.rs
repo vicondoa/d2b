@@ -1,13 +1,30 @@
-//! The Provider authoring toolkit.
+//! The Provider authoring framework.
 //!
 //! Every Provider in the frozen catalog is an independently buildable crate
 //! that binds one or more ResourceTypes, runs as one or more Processes, and
 //! reaches host state only through an injected effect port. This crate owns
-//! the provider-neutral half of that: the Zone-allocator bootstrap check a
-//! Provider agent process performs before it serves anything, the bounded
-//! audit ring and bounded in-flight dispatch accounting every agent needs,
-//! the Provider resource conformance kit, and the redaction and test-driver
-//! helpers each Provider crate would otherwise re-derive.
+//! the provider-neutral half of that, as a framework rather than a menu: a
+//! provider implements [`ProviderBase`], states its entrypoint facts, and
+//! calls [`run`]. The bootstrap, readiness, admission, plane attach,
+//! startup order, service loop, operation envelope, audit ring, drain
+//! ordering, and the test harness are toolkit-owned, so two providers cannot
+//! diverge on any of them.
+//!
+//! The layout is the framework:
+//!
+//! - [`declaration`] - the declaration vocabulary every provider publishes,
+//!   plus the canonical manifest and root-schema emitters.
+//! - [`base`] - [`ProviderBase`], [`run`]/[`run_guest`], and the lifecycle
+//!   driver behind them.
+//! - [`server`] - the authenticated service loop: frame codec, bounded
+//!   dispatch adapter, readiness handshake, drain.
+//! - [`operations`] - the envelope-side types and the envelope that runs a
+//!   declared handler.
+//! - [`plane`] - the zone-plane handle, the child-creation fence, the drain
+//!   deadline, and the cause-carrying reconcile seam.
+//! - [`audit`] - the bounded audit ring and the redaction wrapper.
+//! - [`testing`] - the harness, fakes, faults, deterministic clock, and the
+//!   conformance kit.
 //!
 //! What this crate deliberately does not do, because
 //! `ADR-046-provider-model-and-packaging` forbids it for a Provider and for
@@ -29,8 +46,8 @@
 //!   Zone RBAC binding.
 //! - It imports no daemon, broker, Zone-store, Nix-emitter, or Provider
 //!   implementation internals. It depends on the shared v3 contract catalog,
-//!   the neutral Provider registry SDK, and the transport-agnostic
-//!   ComponentSession driver.
+//!   the neutral Provider registry SDK, the declaration vocabulary, and the
+//!   transport-agnostic ComponentSession driver.
 //!
 //! No file descriptor, numeric UID or GID, device node, store path, socket
 //! path, or host path appears in any type here. A bootstrap binding names a
@@ -39,91 +56,75 @@
 
 #![deny(missing_docs)]
 
-// The adapter module retains its transport-loop helper for compatibility;
-// the lifecycle-owning generated server lives in `server`.
-#[allow(dead_code)]
-mod agent;
-mod audit;
-mod bootstrap;
-mod credential;
-mod dispatch;
-mod error;
-#[cfg(feature = "unix-transport")]
-mod fd10;
-mod fixture;
-mod redaction;
-mod registration;
-mod runtime;
-mod server;
-mod session_runtime;
-mod typed_boundary;
-mod values;
-
-pub mod conformance;
-pub mod fakes;
-pub mod manifest;
-pub mod schema;
+pub mod audit;
+pub mod base;
+pub mod declaration;
+pub mod operations;
+pub mod plane;
+pub mod server;
 pub mod testing;
 
-pub use agent::{
-    ProviderAgentAdapter, ProviderAgentProcess, ProviderFrameCodec, ProviderRequest,
-    ProviderService, validate_attachment_indexes,
-};
 pub use audit::{
     DEFAULT_AUDIT_CAPACITY, ProviderAgentAuditEvent, ProviderAgentAuditLog,
-    ProviderAgentAuditOutcome,
+    ProviderAgentAuditOutcome, Redacted,
 };
-pub use bootstrap::{
-    AllocatorSessionBinding, PROVIDER_RESOURCE_TYPE, ProviderAgentBootstrap, ProviderAgentIdentity,
+#[cfg(feature = "unix-transport")]
+pub use base::fd10::{
+    CredentialDeliveryKeyHandoff, CredentialDeliveryKeyMaterial, CredentialSensitiveBytes,
+    GUEST_CREDENTIAL_BACKEND_FD, GUEST_CREDENTIAL_BACKEND_PROTOCOL,
+    GUEST_CREDENTIAL_BACKEND_SERVICE, GuestCredentialBackend, GuestCredentialBackendError,
+    GuestCredentialBackendHandler, GuestCredentialBackendHandlerError,
+    GuestCredentialBackendHandlerFuture, GuestCredentialBackendReply,
+    GuestCredentialBackendResponderLease, GuestCredentialBackendResponse,
+    PROVIDER_BOOTSTRAP_STREAM_CREDIT, PROVIDER_BOOTSTRAP_STREAM_ID,
+    PROVIDER_DELIVERY_KEY_STREAM_CREDIT, PROVIDER_DELIVERY_KEY_STREAM_ID, ProviderFd10Spec,
+    ProviderSessionMetadata, SupervisedRoute, establish_supervised_route, run_from_fd10,
+    spawn_guest_credential_backend_responder, zeroizing_bytes,
 };
-pub use credential::{
-    CredentialAuthorizationSource, CredentialRequestMetadata, RouteCredentialAuthorization,
-    credential_service, run_authenticated_credential_provider,
+pub use base::{
+    AllocatorSessionBinding, AttachError, AuthenticatedRoute, DEFAULT_DRAIN_BUDGET_MS, DrainError,
+    EnrolledRoute, EnrollmentRequest, GuestAgent, GuestEnrollment, GuestError, Lifecycle,
+    PROVIDER_RESOURCE_TYPE, ProviderAdmission, ProviderAgentBootstrap, ProviderAgentIdentity,
+    ProviderBase, ProviderEntrypoint, ProviderLifecycle, ProviderRunError, ProviderRuntimeError,
+    ProviderSessionAdmission, ProviderToolkitError, ServiceMethods, ServiceSurface, StartupError,
+    StartupPlan, StartupPlanRefusal, StartupStepError, StartupStepExecutor, SupervisedProvider,
+    UnsupportedGuestEnrollment, run, run_guest, run_guest_with, run_with_startup,
 };
 pub use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, Cancellation,
     ComponentSessionDriver, StreamEvent, StreamId,
 };
-pub use dispatch::{DispatchLimiter, DispatchPermit, MAX_DISPATCH_IN_FLIGHT};
-#[cfg(feature = "unix-transport")]
-pub use fd10::{
-    CredentialDeliveryKeyHandoff, CredentialDeliveryKeyMaterial, GUEST_CREDENTIAL_BACKEND_FD,
-    GUEST_CREDENTIAL_BACKEND_PROTOCOL, GUEST_CREDENTIAL_BACKEND_SERVICE,
-    CredentialSensitiveBytes,
-    GuestCredentialBackend, GuestCredentialBackendError, GuestCredentialBackendHandler,
-    GuestCredentialBackendHandlerError, GuestCredentialBackendHandlerFuture,
-    GuestCredentialBackendReply, GuestCredentialBackendResponderLease,
-    GuestCredentialBackendResponse, PROVIDER_BOOTSTRAP_STREAM_CREDIT,
-    PROVIDER_BOOTSTRAP_STREAM_ID, PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
-    PROVIDER_DELIVERY_KEY_STREAM_ID, PROVIDER_READY_MARKER, PROVIDER_READY_STREAM_CREDIT,
-    PROVIDER_READY_STREAM_ID, ProviderFd10Spec, ProviderSessionMetadata, run_from_fd10,
-    zeroizing_bytes,
-    spawn_guest_credential_backend_responder,
+pub use declaration::{
+    AllowedSources, Cardinality, ChildCreation, ChildCustody, DriverDescriptor, IsolationPosture,
+    OperationDef, OperationHandler, PlaneAdapter, PrincipalName, ProviderDeclaration, SelfBinding,
+    ServiceDecl, StartupStep, StorageRoot, WellKnownType,
 };
-pub use error::ProviderToolkitError;
-pub use fixture::{
-    DeterministicClock, FakeProvider, Fixture, SampleLeaseRequest, sample_lease_request,
+pub use operations::{
+    OperationCtx, OperationEnvelope, OperationFailure, OperationResult, ValidatedPayload,
 };
-pub use redaction::Redacted;
-pub use registration::{
-    ExactRegistration, ToolkitError, register_exact_instances, validate_manifest_registration,
-};
-pub use runtime::{
-    AuthenticatedRoute, ProviderAdmission, ProviderEntrypoint, ProviderLifecycle,
-    ProviderRuntimeError, ProviderSessionAdmission,
+pub use plane::{
+    ChildCreationFailure, ChildCreationFence, CreateChild, CreationRefusal, CreationTable,
+    DrainDeadline, MAX_DRAIN_BUDGET_MS, MAX_REQUEUE_AFTER_MS, PlaneError, ReconcileCause,
+    ReconcileCtx, ReconcileOutcome, ReconcileRefusal, ReconcileTarget, SystemClock,
+    UnavailablePlanePort, ZonePlaneHandle, ZonePlanePort,
 };
 pub use server::{
-    GeneratedProviderServiceServer, GeneratedServiceDescriptor, MAX_SERVER_IN_FLIGHT, ServerError,
-    ServerRequestPermit,
+    AuthenticatedProviderFrameCodec, AuthenticatedProviderRequest, CredentialAuthorizationSource,
+    CredentialRequestMetadata, DispatchLimiter, DispatchPermit, GeneratedProviderServiceServer,
+    GeneratedServiceDescriptor, MAX_DISPATCH_IN_FLIGHT, MAX_SERVER_IN_FLIGHT,
+    PROVIDER_READY_MARKER, PROVIDER_READY_STREAM_CREDIT, PROVIDER_READY_STREAM_ID,
+    ProviderAgentAdapter, ProviderFrameCodec, ProviderRequest, ProviderService,
+    RouteCredentialAuthorization, ServerError, ServerRequestPermit, credential_service,
+    run_authenticated_credential_provider, run_authenticated_provider,
+    serve_authenticated_component_session, serve_authenticated_route, validate_attachment_indexes,
+    validate_provider_route,
 };
-pub use session_runtime::{
-    AuthenticatedProviderFrameCodec, AuthenticatedProviderRequest, run_authenticated_provider,
-    serve_authenticated_component_session, validate_provider_route,
-};
-pub use typed_boundary::{ComponentSessionService, TransportProvider};
-pub use values::{
-    ProviderHealth, ProviderHealthState, ProviderInspection, ProviderObservability, ProviderValues,
-    ValuesError,
+pub use testing::{
+    AdmissionRefusal, AdmittedRow, DeterministicClock, FIXTURE_NOW_UNIX_MS, FakeBus,
+    FakeCoreClient, FakeEffectPort, FakePortError, FakeProvider, FakeResourceStore, FakeSupervisor,
+    FaultInjector, FaultPlan, Fixture, HarnessDeclarations, MAX_RECORDED_CALLS, PlaneCall,
+    RecordingPlanePort, RowPhase, RowStatus, SampleLeaseRequest, TestHarness, block_on,
+    sample_lease_request,
 };
 
 /// Audited Unix attachment types used by Provider-specific transport adapters.

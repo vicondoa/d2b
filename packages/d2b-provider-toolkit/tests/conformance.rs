@@ -27,10 +27,8 @@ use d2b_provider::{
     AdmissionOptions, CancellationToken, ProviderClass, ProviderMethodName,
     ProviderRegistryBuilder, ProviderRuntimeError,
 };
-use d2b_provider_toolkit::{
-    FakeProvider, Fixture, GeneratedProviderServiceServer, ProviderValues, ServerError,
-    manifest::{self, VerificationError},
-};
+use d2b_provider_toolkit::declaration::manifest::{self, VerificationError};
+use d2b_provider_toolkit::{FakeProvider, Fixture, GeneratedProviderServiceServer, ServerError};
 use sha2::{Digest, Sha256};
 
 const MANIFEST_DIGEST_VECTOR: &str =
@@ -92,14 +90,20 @@ async fn fake_provider_round_trip_uses_the_exact_placement_binding() {
 #[test]
 fn fake_provider_conformance_keeps_health_inspection_and_observability_closed() {
     let fixture = Fixture::new(ProviderClass::Observability, 0).expect("fixture");
-    let values = ProviderValues::new(&fixture.descriptor, fixture.now_unix_ms).expect("values");
+    let provider = FakeProvider::new(fixture);
+    provider.conformance_sequence().expect("closed sequence");
+    let observability = provider
+        .call(ProviderMethodName::parse("observability").expect("closed method"))
+        .expect("the observability method answers");
+    let sequence = observability
+        .get("sequence")
+        .expect("the observability payload carries its sequence")
+        .to_canonical_bytes();
     assert_eq!(
-        values.observability().sequence(),
-        &["health", "inspect", "observability"]
+        sequence,
+        br#"["health","inspect","observability"]"#.to_vec(),
+        "the closed sequence is the one the fake publishes"
     );
-    FakeProvider::new(fixture)
-        .conformance_sequence()
-        .expect("closed sequence");
 }
 
 #[tokio::test]

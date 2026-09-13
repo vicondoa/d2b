@@ -23,7 +23,8 @@ use d2b_contracts_zone_session::v3::{component_session::RequestId, zone_routing:
 use d2b_session::{AuthenticatedSessionRouteBinding, Cancellation, ComponentSessionDriver};
 use tokio::sync::Notify;
 
-use crate::{ProviderAgentAdapter, ProviderFrameCodec, ProviderService, ProviderToolkitError};
+use crate::base::error::ProviderToolkitError;
+use crate::server::{ProviderAgentAdapter, ProviderFrameCodec, ProviderService};
 use tracing::warn;
 
 /// Maximum calls a generated service server may drain at once.

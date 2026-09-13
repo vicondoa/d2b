@@ -94,7 +94,7 @@ impl std::error::Error for ProviderToolkitError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conformance::check_closed_code_set;
+    use crate::testing::conformance::check_closed_code_set;
 
     #[test]
     fn every_code_is_unique_and_matches_the_frozen_grammar() {

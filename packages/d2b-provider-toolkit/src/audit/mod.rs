@@ -11,6 +11,10 @@
 //! `Provider/<name>` reference), the method token, and the closed outcome
 //! class. It carries no argument, payload, digest, path, credential, or
 //! caller-supplied text.
+//!
+//! The ring holds the events the base records for admitted methods and for
+//! every refused operation invocation, so a test or a doctor pass reads the
+//! same record the agent produced.
 
 use std::collections::VecDeque;
 
@@ -18,7 +22,11 @@ use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 
-use crate::error::ProviderToolkitError;
+use crate::base::error::ProviderToolkitError;
+
+pub mod redaction;
+
+pub use redaction::Redacted;
 
 /// The frozen audit ring capacity, and its only permitted value.
 ///

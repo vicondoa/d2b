@@ -18,14 +18,14 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_contracts_zone_session::v3::{
     component_session::{
-        EndpointPolicy, EndpointRole as ComponentEndpointRole,
-        Locality as ComponentLocality, PurposeClass, TransportClass,
+        EndpointPolicy, EndpointRole as ComponentEndpointRole, Locality as ComponentLocality,
+        PurposeClass, TransportClass,
     },
     zone_routing::{ZoneLabelId, ZonePath},
 };
 use d2b_session::{
-    AuthenticatedSessionRouteBinding, ComponentSessionDriver, HandshakeCredentials,
-    Secret32, SessionDriverHandle, SessionEngine, SessionTtrpcClient, StreamEvent, StreamId,
+    AuthenticatedSessionRouteBinding, ComponentSessionDriver, HandshakeCredentials, Secret32,
+    SessionDriverHandle, SessionEngine, SessionTtrpcClient, StreamEvent, StreamId,
     x25519_public_key,
 };
 use d2b_session_unix::{
@@ -37,22 +37,16 @@ use d2b_session_unix::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
+use crate::base::{
     AllocatorSessionBinding, ProviderAgentBootstrap, ProviderEntrypoint, ProviderRuntimeError,
-    ProviderSessionAdmission, credential_service,
 };
+use crate::server::{credential_service, serve_authenticated_route};
 
 const PROVIDER_BOOTSTRAP_FD: i32 = 10;
 /// Named stream carrying the authenticated Provider route bootstrap.
 pub const PROVIDER_BOOTSTRAP_STREAM_ID: u16 = 0x0102;
 /// Initial bounded credit for the Provider route bootstrap stream.
 pub const PROVIDER_BOOTSTRAP_STREAM_CREDIT: u32 = 64 * 1024;
-/// Named stream carrying the post-admission Provider readiness receipt.
-pub const PROVIDER_READY_STREAM_ID: u16 = 0x0103;
-/// Initial bounded credit for the Provider readiness stream.
-pub const PROVIDER_READY_STREAM_CREDIT: u32 = 256;
-/// Protected readiness receipt sent only after the typed service is live.
-pub const PROVIDER_READY_MARKER: &[u8] = b"d2b-provider-ready-v1";
 /// Named stream carrying one allocator-issued Credential delivery key handoff.
 pub const PROVIDER_DELIVERY_KEY_STREAM_ID: u16 = 0x0104;
 /// Initial bounded credit for the Credential delivery key handoff stream.
@@ -1176,14 +1170,9 @@ async fn ensure_backend_connection(
         .ok_or(GuestCredentialBackendError::Unavailable)?
         .into_handshake()
         .map_err(|_| GuestCredentialBackendError::Unavailable)?;
-    let engine = SessionEngine::establish_initiator(
-        transport,
-        policy,
-        credentials,
-        Instant::now(),
-    )
-    .await
-    .map_err(|_| GuestCredentialBackendError::Unavailable)?;
+    let engine = SessionEngine::establish_initiator(transport, policy, credentials, Instant::now())
+        .await
+        .map_err(|_| GuestCredentialBackendError::Unavailable)?;
     let driver: Arc<dyn ComponentSessionDriver> = Arc::new(engine.into_driver());
     let client = Arc::new(SessionTtrpcClient::new(Arc::clone(&driver)));
     state.connection = Some(GuestCredentialBackendConnection {
@@ -1339,8 +1328,7 @@ async fn run_guest_credential_backend_responder(
                 route: route.route,
                 user_ref: route.user_ref,
                 handler,
-            })
-            as Box<dyn ttrpc::r#async::MethodHandler + Send + Sync>,
+            }) as Box<dyn ttrpc::r#async::MethodHandler + Send + Sync>,
         )]),
         streams: HashMap::new(),
     };
@@ -1404,8 +1392,7 @@ impl GuestCredentialBackendMethod {
         }
         let claimed_user = metadata_value(&request, "d2b.credential.user-ref")
             .map(|value| {
-                ResourceRef::parse(value)
-                    .map_err(|_| GuestCredentialBackendHandlerError::Denied)
+                ResourceRef::parse(value).map_err(|_| GuestCredentialBackendHandlerError::Denied)
             })
             .transpose()?;
         if claimed_user
@@ -1539,21 +1526,31 @@ where
     }
 }
 
-async fn run_from_fd10_async<P, A, F>(
+/// The route one supervised Provider established from its inherited fd10
+/// bootstrap.
+pub struct SupervisedRoute {
+    /// The session driver the established route is served over.
+    pub driver: SessionDriverHandle,
+    /// The authenticated route binding.
+    pub route: AuthenticatedSessionRouteBinding,
+    /// The non-secret route metadata the controller sent.
+    pub metadata: ProviderSessionMetadata,
+}
+
+/// Establish the supervised Provider route from the inherited fd 10 handoff.
+///
+/// The steps are the same for every provider binary: adopt the inherited
+/// bootstrap descriptor, hand the controller its prearmed endpoint, establish
+/// the initiator session under `policy`, register the bootstrap stream and
+/// every extra named stream, decode and validate the route metadata against
+/// the compiled-in spec, and admit the allocator-issued binding. What differs
+/// per family is `policy` and `extra_streams`; what stays family-specific
+/// outside is whatever the family sends on those extra streams.
+pub async fn establish_supervised_route(
     spec: ProviderFd10Spec,
-    factory: F,
-) -> Result<(), ProviderRuntimeError>
-where
-    P: CredentialProvider + 'static,
-    A: crate::CredentialAuthorizationSource,
-    F: FnOnce(
-            &AuthenticatedSessionRouteBinding,
-            &ProviderSessionMetadata,
-            Arc<GuestCredentialBackend>,
-        ) -> Result<(Arc<P>, Arc<A>), ProviderRuntimeError>
-        + Send
-        + 'static,
-{
+    policy: EndpointPolicy,
+    extra_streams: &[(u16, u32)],
+) -> Result<SupervisedRoute, ProviderRuntimeError> {
     let bootstrap = SeqpacketSocket::from_inherited_fd(PROVIDER_BOOTSTRAP_FD)
         .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
     let expected_peer = bootstrap
@@ -1564,7 +1561,6 @@ where
     let controller_socket = SeqpacketSocket::from_parent_prearmed(controller_endpoint)
         .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
     send_controller_bootstrap(&bootstrap, daemon_endpoint).await?;
-    let policy = credential_provider_endpoint_policy();
     let transport = provider_transport(controller_socket, &policy, expected_peer)?;
     let mut engine = SessionEngine::establish_initiator(
         transport,
@@ -1574,14 +1570,13 @@ where
     )
     .await
     .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
-    // Named-stream registration is local to this endpoint, so the controller can
-    // send on a stream before this side has registered it. Register both
-    // streams on the engine before the session driver exists: once the driver
-    // task is spawned it may route an inbound fragment first, and a fragment for
-    // an unregistered stream fails the whole session as an invalid channel.
+    // Named-stream registration is local to this endpoint, so the controller
+    // can send on a stream before this side has registered it. Register every
+    // stream on the engine before the session driver exists: once the driver
+    // task is spawned it may route an inbound fragment first, and a fragment
+    // for an unregistered stream fails the whole session as an invalid
+    // channel.
     let bootstrap_stream = StreamId::new(PROVIDER_BOOTSTRAP_STREAM_ID)
-        .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
-    let delivery_key_stream = StreamId::new(PROVIDER_DELIVERY_KEY_STREAM_ID)
         .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
     engine
         .open_named_stream(
@@ -1590,13 +1585,13 @@ where
             PROVIDER_BOOTSTRAP_STREAM_CREDIT,
         )
         .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
-    engine
-        .open_named_stream(
-            delivery_key_stream,
-            PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
-            PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
-        )
-        .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+    for (stream_id, credit) in extra_streams {
+        let stream =
+            StreamId::new(*stream_id).map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+        engine
+            .open_named_stream(stream, *credit, *credit)
+            .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+    }
     let driver = engine.into_driver();
     let metadata = ProviderSessionMetadata::decode(&receive_route_metadata(&driver).await?)?;
     if metadata.provider_ref != spec.provider_ref
@@ -1607,16 +1602,6 @@ where
         return Err(ProviderRuntimeError::SessionUnauthenticated);
     }
     let route = metadata.route()?;
-    let delivery_keys = receive_delivery_key_handoff(&driver, &route).await?;
-    let backend = GuestCredentialBackend::from_inherited_fd(
-        GUEST_CREDENTIAL_BACKEND_FD,
-        &route,
-        delivery_keys,
-    )?;
-    backend
-        .preconnect()
-        .await
-        .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
     let bootstrap_identity = ProviderAgentBootstrap::new(
         spec.provider_ref.clone(),
         ZonePath::new(vec![
@@ -1629,9 +1614,54 @@ where
     bootstrap_identity
         .admit(metadata.allocator_binding()?)
         .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+    Ok(SupervisedRoute {
+        driver,
+        route,
+        metadata,
+    })
+}
 
-    let mut entrypoint =
-        ProviderEntrypoint::with_provider(spec.name, spec.provider_ref, spec.service)?;
+async fn run_from_fd10_async<P, A, F>(
+    spec: ProviderFd10Spec,
+    factory: F,
+) -> Result<(), ProviderRuntimeError>
+where
+    P: CredentialProvider + 'static,
+    A: crate::server::CredentialAuthorizationSource,
+    F: FnOnce(
+            &AuthenticatedSessionRouteBinding,
+            &ProviderSessionMetadata,
+            Arc<GuestCredentialBackend>,
+        ) -> Result<(Arc<P>, Arc<A>), ProviderRuntimeError>
+        + Send
+        + 'static,
+{
+    let name = spec.name;
+    let provider_ref = spec.provider_ref.clone();
+    let service = spec.service;
+    let supervised = establish_supervised_route(
+        spec,
+        credential_provider_endpoint_policy(),
+        &[(
+            PROVIDER_DELIVERY_KEY_STREAM_ID,
+            PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
+        )],
+    )
+    .await?;
+    let route = supervised.route.clone();
+    let driver = supervised.driver;
+    let delivery_keys = receive_delivery_key_handoff(&driver, &route).await?;
+    let backend = GuestCredentialBackend::from_inherited_fd(
+        GUEST_CREDENTIAL_BACKEND_FD,
+        &route,
+        delivery_keys,
+    )?;
+    backend
+        .preconnect()
+        .await
+        .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+
+    let mut entrypoint = ProviderEntrypoint::with_provider(name, provider_ref, service)?;
     if let Some(execution_ref) = route.context().execution_ref().cloned() {
         entrypoint = entrypoint.with_execution_target(execution_ref)?;
     }
@@ -1645,15 +1675,15 @@ where
     }
     let registration = entrypoint.admit()?;
     let session_admission = entrypoint.admit_authenticated(&route)?;
-    let (provider, authorizer) = factory(&route, &metadata, backend)?;
-    serve_provider_route(
+    let (provider, authorizer) = factory(&route, &supervised.metadata, backend)?;
+    let services = credential_service(provider, authorizer, route.clone());
+    serve_authenticated_route(
         entrypoint,
         registration,
         session_admission,
         Arc::new(driver),
         route,
-        provider,
-        authorizer,
+        services,
     )
     .await
 }
@@ -1747,80 +1777,6 @@ async fn receive_route_metadata(
             _ => return Err(ProviderRuntimeError::SessionUnauthenticated),
         }
     }
-}
-
-async fn serve_provider_route<P, A>(
-    entrypoint: ProviderEntrypoint,
-    registration: crate::ProviderAdmission,
-    session_admission: ProviderSessionAdmission,
-    driver: Arc<dyn ComponentSessionDriver>,
-    route: AuthenticatedSessionRouteBinding,
-    provider: Arc<P>,
-    authorizer: Arc<A>,
-) -> Result<(), ProviderRuntimeError>
-where
-    P: CredentialProvider + 'static,
-    A: crate::CredentialAuthorizationSource,
-{
-    let services = credential_service(provider, authorizer, route.clone());
-    let serving = tokio::spawn(d2b_session::serve_ttrpc_services(
-        Arc::clone(&driver),
-        services,
-    ));
-    tokio::task::yield_now().await;
-    if serving.is_finished() {
-        let _ = serving.await;
-        return Err(ProviderRuntimeError::SessionLoopFailed);
-    }
-    if entrypoint
-        .publish_authenticated_ready(&registration, session_admission, &route)
-        .is_err()
-    {
-        serving.abort();
-        let _ = serving.await;
-        return Err(ProviderRuntimeError::SessionLoopFailed);
-    }
-    let ready_result = async {
-        let stream = StreamId::new(PROVIDER_READY_STREAM_ID)
-            .map_err(|_| ProviderRuntimeError::SessionLoopFailed)?;
-        driver
-            .open_named_stream(
-                stream,
-                PROVIDER_READY_STREAM_CREDIT,
-                PROVIDER_READY_STREAM_CREDIT,
-            )
-            .await
-            .map_err(|_| ProviderRuntimeError::SessionLoopFailed)?;
-        driver
-            .send_named_stream(stream, PROVIDER_READY_MARKER.to_vec())
-            .await
-            .map_err(|_| ProviderRuntimeError::SessionLoopFailed)?;
-        driver
-            .close_named_stream(stream)
-            .await
-            .map_err(|_| ProviderRuntimeError::SessionLoopFailed)
-    }
-    .await;
-    if let Err(error) = ready_result {
-        serving.abort();
-        let _ = serving.await;
-        return Err(error);
-    }
-    let result = serving
-        .await
-        .map_err(|_| ProviderRuntimeError::SessionLoopFailed)?
-        .map_err(|_| ProviderRuntimeError::SessionLoopFailed);
-    let _ = driver
-        .close(
-            d2b_contracts_zone_session::v3::component_session::CloseReason::Normal,
-            d2b_contracts_zone_session::v3::component_session::Remediation::None,
-        )
-        .await;
-    drop(registration);
-    if !entrypoint.drain(Duration::from_secs(5)) {
-        return Err(ProviderRuntimeError::SessionLoopFailed);
-    }
-    result
 }
 
 async fn receive_delivery_key_handoff(

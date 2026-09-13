@@ -83,7 +83,6 @@ rust_test(
 rust_test(
     name = "conformance",
     srcs = [
-        "//packages/d2b-provider-toolkit:src/conformance.rs",  # keep
         "tests/common/mod.rs",
         "tests/conformance.rs",
     ],

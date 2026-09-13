@@ -32,7 +32,7 @@ use d2b_contracts_provider::v3::{DependencyAlias, ProviderManifest};
 use d2b_contracts_resource::v3::ArtifactId;
 use d2b_contracts_resource::v3::{ResourceRef, execution_policy::BoundedToken};
 
-use crate::error::ProviderToolkitError;
+use crate::base::error::ProviderToolkitError;
 
 /// The maximum number of calls one fake records before it stops growing.
 ///
@@ -134,7 +134,7 @@ impl FaultPlan {
     }
 
     /// Take the next scheduled outcome.
-    fn take(&mut self) -> Result<(), FakePortError> {
+    pub(crate) fn take_next(&mut self) -> Result<(), FakePortError> {
         let inject = self.schedule.get(self.consumed).copied().unwrap_or(false);
         self.consumed = self.consumed.saturating_add(1);
         if inject {
@@ -271,7 +271,7 @@ impl FakeCoreClient {
         &mut self,
         artifact_id: &ArtifactId,
     ) -> Result<&ProviderManifest, FakePortError> {
-        self.faults.take()?;
+        self.faults.take_next()?;
         let _ = self
             .recorder
             .record("resolve-artifact", BoundedToken::parse("catalog").unwrap());
@@ -285,7 +285,7 @@ impl FakeCoreClient {
         &mut self,
         provider_ref: &ResourceRef,
     ) -> Result<(), FakePortError> {
-        self.faults.take()?;
+        self.faults.take_next()?;
         let _ = self
             .recorder
             .record("resolve-provider-ref", BoundedToken::parse("row").unwrap());
@@ -333,7 +333,7 @@ impl FakeResourceStore {
 
     /// Write status for one resource, refusing an unowned ResourceType.
     pub fn write_status(&mut self, resource_ref: &ResourceRef) -> Result<(), FakePortError> {
-        self.faults.take()?;
+        self.faults.take_next()?;
         let _ = self
             .recorder
             .record("write-status", BoundedToken::parse("status").unwrap());
@@ -387,7 +387,7 @@ impl FakeBus {
 
     /// Resolve one declared alias.
     pub fn resolve_alias(&mut self, alias: DependencyAlias) -> Result<ResourceRef, FakePortError> {
-        self.faults.take()?;
+        self.faults.take_next()?;
         let _ = self.recorder.record(
             "resolve-alias",
             BoundedToken::parse(alias.as_str()).expect("an alias token is a compiled constant"),
@@ -426,7 +426,7 @@ impl FakeSupervisor {
 
     /// Record one launch intent for the named component.
     pub fn launch(&mut self, component_id: &BoundedToken) -> Result<(), FakePortError> {
-        self.faults.take()?;
+        self.faults.take_next()?;
         let _ = self.recorder.record("launch", component_id.clone());
         Ok(())
     }
@@ -460,7 +460,7 @@ impl FakeEffectPort {
 
     /// Record one effect intent.
     pub fn apply(&mut self, effect: &BoundedToken) -> Result<(), FakePortError> {
-        self.faults.take()?;
+        self.faults.take_next()?;
         let _ = self.recorder.record("apply-effect", effect.clone());
         Ok(())
     }
@@ -474,7 +474,7 @@ impl FakeEffectPort {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conformance::check_closed_code_set;
+    use crate::testing::conformance::check_closed_code_set;
 
     #[test]
     fn every_refusal_code_is_unique_and_matches_the_frozen_grammar() {
@@ -488,15 +488,15 @@ mod tests {
     #[test]
     fn a_fault_plan_is_consumed_call_by_call() {
         let mut plan = FaultPlan::scheduled([true, false, true]);
-        assert_eq!(plan.take(), Err(FakePortError::InjectedFault));
-        assert_eq!(plan.take(), Ok(()));
-        assert_eq!(plan.take(), Err(FakePortError::InjectedFault));
+        assert_eq!(plan.take_next(), Err(FakePortError::InjectedFault));
+        assert_eq!(plan.take_next(), Ok(()));
+        assert_eq!(plan.take_next(), Err(FakePortError::InjectedFault));
         // An exhausted plan stops injecting rather than repeating forever.
-        assert_eq!(plan.take(), Ok(()));
+        assert_eq!(plan.take_next(), Ok(()));
         assert_eq!(plan.consumed(), 4);
         assert_eq!(FaultPlan::healthy().consumed(), 0);
         assert_eq!(
-            FaultPlan::failing_first(1).take(),
+            FaultPlan::failing_first(1).take_next(),
             Err(FakePortError::InjectedFault)
         );
     }

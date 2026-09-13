@@ -29,14 +29,15 @@ use d2b_provider::{
     ProviderMethodName, ProviderRuntimeError, SessionIdentity,
 };
 
-use crate::{
-    ProviderService,
-    error::ProviderToolkitError,
-    values::{ProviderValues, ValuesError},
-};
+use crate::base::error::ProviderToolkitError;
+use crate::server::ProviderService;
 
 /// The fixed timestamp used by a fresh fixture.
 pub const FIXTURE_NOW_UNIX_MS: u64 = 1_700_000_000_000;
+
+/// The deterministic health, inspection, and observability payloads the fake
+/// Provider answers with.
+const OBSERVABILITY_PAYLOAD: &[u8] = br#"{"sequence":["health","inspect","observability"]}"#;
 
 const FIXTURE_ZONE_NAME: &str = "dev";
 const FIXTURE_DIGEST: &str =
@@ -347,20 +348,18 @@ impl FakeProvider {
             return Err(ProviderToolkitError::WireInvalid);
         }
         if let Ok(mut calls) = self.calls.lock() {
-            if calls.len() >= crate::fakes::MAX_RECORDED_CALLS {
+            if calls.len() >= crate::testing::fakes::MAX_RECORDED_CALLS {
                 return Err(ProviderToolkitError::CapacityOutOfRange);
             }
             calls.push(method.clone());
         }
-        let values = ProviderValues::new(self.descriptor(), self.fixture.now_unix_ms)
-            .map_err(|_: ValuesError| ProviderToolkitError::WireInvalid)?;
-        match method.as_str() {
-            "health" => values.health_payload(),
-            "inspect" => values.inspection_payload(),
-            "observability" => values.observability_payload(),
-            _ => CanonicalJsonObject::parse(br#"{"accepted":true}"#)
-                .map_err(|_| ProviderToolkitError::WireInvalid),
-        }
+        let payload = match method.as_str() {
+            "health" => br#"{"state":"healthy"}"#.as_slice(),
+            "inspect" => br#"{"phase":"ready"}"#.as_slice(),
+            "observability" => OBSERVABILITY_PAYLOAD,
+            _ => br#"{"accepted":true}"#.as_slice(),
+        };
+        CanonicalJsonObject::parse(payload).map_err(|_| ProviderToolkitError::WireInvalid)
     }
 }
 

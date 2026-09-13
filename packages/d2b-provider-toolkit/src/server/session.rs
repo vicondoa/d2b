@@ -19,10 +19,9 @@ use d2b_session::{
 };
 use tracing::warn;
 
-use crate::{
-    ProviderAgentAdapter, ProviderService, ProviderToolkitError,
-    runtime::{ProviderEntrypoint, ProviderRuntimeError, ProviderSessionAdmission},
-};
+use crate::base::error::ProviderToolkitError;
+use crate::base::{ProviderEntrypoint, ProviderRuntimeError, ProviderSessionAdmission};
+use crate::server::{ProviderAgentAdapter, ProviderService};
 
 /// A decoded Provider request whose authorization request is still owned by
 /// the authenticated session.

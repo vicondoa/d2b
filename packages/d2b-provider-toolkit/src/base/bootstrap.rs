@@ -22,10 +22,10 @@
 //! serve a Zone it was not placed in. To keep bootstrap evidence
 //! non-replayable the binding is consumed by value and is not `Clone`.
 
+use crate::base::error::ProviderToolkitError;
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::identity::{Locality, SessionPurpose, TransportBinding};
 use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
-use crate::error::ProviderToolkitError;
 use tracing::warn;
 
 /// The `ResourceType` a Provider agent's own resource reference must name.

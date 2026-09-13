@@ -32,7 +32,7 @@ use d2b_contracts_resource::v3::{
     volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchemaId},
 };
 use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
-use d2b_provider_toolkit::fakes::{
+use d2b_provider_toolkit::testing::fakes::{
     FakeBus, FakeCoreClient, FakeEffectPort, FakePortError, FakeResourceStore, FakeSupervisor,
     FaultPlan,
 };

@@ -1,11 +1,12 @@
-//! Bounded Provider-agent dispatch and service-server adapters.
+//! Bounded Provider-agent dispatch: the adapter, the generated frame codec
+//! it decodes through, and the frozen in-flight accounting behind it.
 //!
-//! The adapter is intentionally transport-agnostic.  A ComponentSession
+//! The adapter is intentionally transport-agnostic. A ComponentSession
 //! receive loop supplies a canonical request, while this module owns the
-//! fixed 64-call admission ceiling, the 1024-entry diagnostic audit ring,
-//! and the bounded shutdown state.
+//! fixed 64-call admission ceiling and the 1024-entry diagnostic audit ring.
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceRef, execution_policy::BoundedToken,
@@ -16,11 +17,9 @@ use d2b_contracts_zone_session::v3::{
 };
 use d2b_session::{AuthenticatedSessionRouteBinding, Cancellation, ComponentSessionDriver};
 
-use crate::runtime::same_controller_identity;
-use crate::{
-    DispatchLimiter, ProviderAgentAuditEvent, ProviderAgentAuditLog, ProviderAgentAuditOutcome,
-    ProviderToolkitError,
-};
+use crate::audit::{ProviderAgentAuditEvent, ProviderAgentAuditLog, ProviderAgentAuditOutcome};
+use crate::base::error::ProviderToolkitError;
+use crate::base::runtime::same_controller_identity;
 use tracing::warn;
 
 /// Validate the strict attachment-index sequence carried by a Provider
@@ -385,220 +384,129 @@ where
     }
 }
 
-/// Generated-service registration facade over a Provider agent adapter.
-pub struct GeneratedProviderServiceServer<S> {
-    adapter: ProviderAgentAdapter<S>,
+/// The frozen maximum number of concurrent in-flight dispatches.
+pub const MAX_DISPATCH_IN_FLIGHT: usize = 64;
+
+/// Bounded in-flight accounting for one Provider agent.
+///
+/// The ceiling is frozen rather than configured, so a caller cannot make one
+/// agent hold unbounded work, and saturation is a typed refusal rather than
+/// an unbounded queue.
+#[derive(Debug, Clone)]
+pub struct DispatchLimiter {
+    in_flight: Arc<AtomicUsize>,
+    limit: usize,
 }
 
-impl<S> GeneratedProviderServiceServer<S> {
-    /// Construct the generated service facade.
-    pub fn new(service: S) -> Self {
-        Self {
-            adapter: ProviderAgentAdapter::new(service),
-        }
+impl DispatchLimiter {
+    /// Build a limiter at the frozen ceiling.
+    pub fn new() -> Self {
+        Self::with_limit(MAX_DISPATCH_IN_FLIGHT).expect("the frozen ceiling is in range")
     }
 
-    /// Borrow the bounded adapter.
-    pub const fn adapter(&self) -> &ProviderAgentAdapter<S> {
-        &self.adapter
-    }
-
-    /// Bind the generated server to one authenticated controller route.
-    pub fn bind_authenticated_route(
-        &self,
-        route: AuthenticatedSessionRouteBinding,
-    ) -> Result<(), ProviderToolkitError> {
-        self.adapter.bind_authenticated_route(route)
-    }
-}
-
-impl<S> GeneratedProviderServiceServer<S>
-where
-    S: ProviderService,
-{
-    /// Serve the generated service over an authenticated ComponentSession.
-    pub async fn serve_component_session<D, C>(
-        &self,
-        driver: &D,
-        codec: &C,
-        cancellation: Cancellation,
-    ) -> Result<(), ProviderToolkitError>
-    where
-        D: ComponentSessionDriver,
-        C: ProviderFrameCodec,
-    {
-        self.adapter
-            .serve_component_session(driver, codec, cancellation)
-            .await
-    }
-}
-
-/// Fixed Provider-agent shutdown state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProviderAgentProcess {
-    shutdown_deadline_ms: u32,
-    stopping: bool,
-}
-
-impl ProviderAgentProcess {
-    /// Maximum shutdown deadline accepted by the toolkit.
-    pub const MAX_SHUTDOWN_DEADLINE_MS: u32 = 5_000;
-
-    /// Construct a running process state.
-    pub fn new(shutdown_deadline_ms: u32) -> Result<Self, ProviderToolkitError> {
-        if shutdown_deadline_ms == 0 || shutdown_deadline_ms > Self::MAX_SHUTDOWN_DEADLINE_MS {
+    /// Build a limiter at an explicit limit.
+    ///
+    /// The limit is closed: zero and anything above
+    /// [`MAX_DISPATCH_IN_FLIGHT`] are rejected, so no caller can widen the
+    /// ceiling or disable admission.
+    pub fn with_limit(limit: usize) -> Result<Self, ProviderToolkitError> {
+        if limit == 0 || limit > MAX_DISPATCH_IN_FLIGHT {
             return Err(ProviderToolkitError::CapacityOutOfRange);
         }
         Ok(Self {
-            shutdown_deadline_ms,
-            stopping: false,
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            limit,
         })
     }
 
-    /// Request bounded shutdown.
-    pub fn stop(&mut self) {
-        self.stopping = true;
+    /// Reserve one dispatch slot, or refuse.
+    pub fn acquire(&self) -> Result<DispatchPermit, ProviderToolkitError> {
+        let mut current = self.in_flight.load(Ordering::Acquire);
+        loop {
+            if current >= self.limit {
+                return Err(ProviderToolkitError::DispatchSaturated);
+            }
+            match self.in_flight.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Ok(DispatchPermit {
+                        in_flight: Arc::clone(&self.in_flight),
+                    });
+                }
+                Err(observed) => current = observed,
+            }
+        }
     }
 
-    /// Complete the bounded shutdown transition.
-    ///
-    /// The transport owner performs the actual session close; this state
-    /// transition is deliberately synchronous and cannot outlive the fixed
-    /// deadline advertised by the process.
-    pub async fn shutdown(&mut self) -> Result<(), ProviderToolkitError> {
-        self.stop();
-        Ok(())
+    /// Return the frozen limit.
+    pub const fn limit(&self) -> usize {
+        self.limit
     }
 
-    /// Whether shutdown has been requested.
-    pub const fn stopping(&self) -> bool {
-        self.stopping
+    /// Return the number of currently reserved slots.
+    pub fn in_flight(&self) -> usize {
+        self.in_flight.load(Ordering::Acquire)
     }
+}
 
-    /// Return the configured shutdown deadline.
-    pub const fn shutdown_deadline_ms(&self) -> u32 {
-        self.shutdown_deadline_ms
+impl Default for DispatchLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One reserved dispatch slot, released when dropped.
+///
+/// The permit is not `Clone`: cloning it would release one slot twice and
+/// let the agent exceed its frozen ceiling.
+#[derive(Debug)]
+pub struct DispatchPermit {
+    in_flight: Arc<AtomicUsize>,
+}
+
+impl Drop for DispatchPermit {
+    fn drop(&mut self) {
+        self.in_flight.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_resource::v3::{ResourceName, ResourceTypeName};
-    use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
-    struct Echo;
 
-    impl ProviderService for Echo {
-        fn dispatch(
-            &self,
-            _method: &BoundedToken,
-            payload: &CanonicalJsonObject,
-        ) -> Result<CanonicalJsonObject, ProviderToolkitError> {
-            Ok(payload.clone())
-        }
-    }
-
-    fn zone() -> ZonePath {
-        ZonePath::new(vec![ZoneLabelId::parse("dev").unwrap()]).unwrap()
-    }
-
-    fn provider() -> ResourceRef {
-        ResourceRef::new(
-            ResourceTypeName::parse("Provider").unwrap(),
-            ResourceName::parse("system-core").unwrap(),
-        )
+    #[test]
+    fn the_limit_is_closed_and_bounded() {
+        assert_eq!(
+            DispatchLimiter::with_limit(0).unwrap_err(),
+            ProviderToolkitError::CapacityOutOfRange
+        );
+        assert_eq!(
+            DispatchLimiter::with_limit(MAX_DISPATCH_IN_FLIGHT + 1).unwrap_err(),
+            ProviderToolkitError::CapacityOutOfRange
+        );
+        assert_eq!(DispatchLimiter::new().limit(), MAX_DISPATCH_IN_FLIGHT);
     }
 
     #[test]
-    fn adapter_dispatches_and_records_only_bounded_metadata() {
-        let adapter = ProviderAgentAdapter::new(Echo);
-        let result = adapter
-            .dispatch(
-                zone(),
-                provider(),
-                BoundedToken::parse("inspect").unwrap(),
-                CanonicalJsonObject::parse(br#"{"ok":true}"#).unwrap(),
-            )
-            .unwrap();
+    fn saturation_refuses_and_a_released_permit_restores_the_slot() {
+        let limiter = DispatchLimiter::with_limit(2).expect("valid limit");
+        let first = limiter.acquire().expect("first slot");
+        let second = limiter.acquire().expect("second slot");
+        assert_eq!(limiter.in_flight(), 2);
         assert_eq!(
-            result,
-            CanonicalJsonObject::parse(br#"{"ok":true}"#).unwrap()
+            limiter.acquire().unwrap_err(),
+            ProviderToolkitError::DispatchSaturated
         );
-        assert_eq!(adapter.audit_len(), 1);
-    }
-
-    #[test]
-    fn shutdown_deadline_is_bounded() {
-        assert!(ProviderAgentProcess::new(5_001).is_err());
-        let mut process = ProviderAgentProcess::new(5_000).unwrap();
-        process.stop();
-        assert!(process.stopping());
-    }
-
-    #[test]
-    fn attachment_indexes_are_strictly_monotone() {
-        assert!(validate_attachment_indexes(&[0, 1, 2]).is_ok());
-        assert_eq!(
-            validate_attachment_indexes(&[0, 2]),
-            Err(ProviderToolkitError::NonMonotoneAttachmentIndexes)
-        );
-        assert_eq!(
-            validate_attachment_indexes(&[1, 0]),
-            Err(ProviderToolkitError::NonMonotoneAttachmentIndexes)
-        );
-    }
-
-    #[test]
-    fn component_session_serving_requires_controller_route_admission() {
-        use crate::Fixture;
-        use d2b_provider::ProviderClass;
-        use d2b_session::AuthenticatedSessionRouteBinding;
-
-        let fixture = Fixture::new(ProviderClass::Runtime, 0).expect("fixture");
-        let adapter = ProviderAgentAdapter::new(Echo);
-        let missing_generation = AuthenticatedSessionRouteBinding::for_test(
-            Some(fixture.descriptor.provider_ref().clone()),
-            "d2b.provider.v3",
-            1,
-            Some(1),
-            None,
-        );
-        assert_eq!(
-            adapter.bind_authenticated_route(missing_generation),
-            Err(ProviderToolkitError::SessionUnauthenticated)
-        );
-        assert!(!adapter.has_authenticated_route());
-
-        let route = AuthenticatedSessionRouteBinding::for_test(
-            Some(fixture.descriptor.provider_ref().clone()),
-            "d2b.provider.v3",
-            1,
-            Some(1),
-            Some(1),
-        );
-        assert!(adapter.bind_authenticated_route(route.clone()).is_ok());
-        assert!(adapter.has_authenticated_route());
-        assert!(adapter.bind_authenticated_route(route).is_ok());
-        let reconnect = AuthenticatedSessionRouteBinding::for_test(
-            Some(fixture.descriptor.provider_ref().clone()),
-            "d2b.provider.v3",
-            2,
-            Some(1),
-            Some(1),
-        );
-        assert!(adapter.bind_authenticated_route(reconnect).is_ok());
-        assert_eq!(
-            adapter.dispatch(
-                d2b_contracts_zone_session::v3::zone_routing::ZonePath::new(vec![
-                    d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId::parse("dev")
-                        .unwrap(),
-                ])
-                .unwrap(),
-                d2b_contracts_resource::v3::ResourceRef::parse("Provider/other").unwrap(),
-                BoundedToken::parse("inspect").unwrap(),
-                CanonicalJsonObject::empty(),
-            ),
-            Err(ProviderToolkitError::SessionUnauthenticated)
-        );
+        drop(second);
+        assert_eq!(limiter.in_flight(), 1);
+        let third = limiter.acquire().expect("reclaimed slot");
+        assert_eq!(limiter.in_flight(), 2);
+        drop(first);
+        drop(third);
+        assert_eq!(limiter.in_flight(), 0);
     }
 }

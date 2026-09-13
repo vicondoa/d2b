@@ -9,7 +9,7 @@ use d2b_contracts_provider::v3::credential::{
     AudienceToken, CredentialAuthorization, CredentialMethod, CredentialProvider,
     CredentialRequest, CredentialResponse, CredentialServiceError, CredentialServiceErrorCode,
     CredentialSessionBinding, DeliveryResponse, DeliveryRouteDigest, DeliverySessionParams,
-    MetadataResponse, MAX_DELIVERY_RECORD_BYTES, decode_outer, dispatch_authorized_provider_async,
+    MAX_DELIVERY_RECORD_BYTES, MetadataResponse, decode_outer, dispatch_authorized_provider_async,
     encode_outer,
 };
 use d2b_contracts_resource::v3::{
@@ -19,7 +19,9 @@ use d2b_session::{AuthenticatedComponentSession, AuthenticatedSessionRouteBindin
 use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{ProviderAdmission, ProviderEntrypoint, ProviderRuntimeError, ProviderSessionAdmission};
+use crate::base::{
+    ProviderAdmission, ProviderEntrypoint, ProviderRuntimeError, ProviderSessionAdmission,
+};
 
 const CREDENTIAL_SERVICE: &str = "d2b.credential.v3.CredentialService";
 
@@ -129,7 +131,9 @@ pub struct CredentialRequestMetadata {
 static NEXT_DELIVERY_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 fn next_delivery_sequence() -> u64 {
-    NEXT_DELIVERY_SEQUENCE.fetch_add(1, Ordering::Relaxed).max(1)
+    NEXT_DELIVERY_SEQUENCE
+        .fetch_add(1, Ordering::Relaxed)
+        .max(1)
 }
 
 fn delivery_route_digest(
@@ -196,8 +200,7 @@ where
             .map(d2b_contracts_resource::v3::ResourceRef::to_canonical_string);
         let metadata = request_metadata(&request)?;
         if metadata_value(&request, "d2b.credential.zone") != Some(self.route.zone().as_str())
-            || metadata_value(&request, "d2b.credential.provider")
-                != expected_provider.as_deref()
+            || metadata_value(&request, "d2b.credential.provider") != expected_provider.as_deref()
             || metadata_value(&request, "d2b.credential.session-generation")
                 .and_then(|value| value.parse::<u64>().ok())
                 != Some(self.route.reconnect_generation().get())
@@ -247,9 +250,7 @@ fn metadata_value<'a>(request: &'a ttrpc::Request, key: &str) -> Option<&'a str>
         .map(|value| value.value.as_str())
 }
 
-fn request_metadata(
-    request: &ttrpc::Request,
-) -> Result<CredentialRequestMetadata, ttrpc::Error> {
+fn request_metadata(request: &ttrpc::Request) -> Result<CredentialRequestMetadata, ttrpc::Error> {
     let parse = |key: &str| {
         metadata_value(request, key).ok_or_else(|| {
             rpc_error(CredentialServiceError::new(
@@ -564,12 +565,7 @@ mod tests {
             controller_generation: ControllerGeneration::new(1).unwrap(),
         };
         let authorization = RouteCredentialAuthorization
-            .authorize_with_metadata(
-                CredentialMethod::AcquireToken,
-                &request,
-                &route,
-                &metadata,
-            )
+            .authorize_with_metadata(CredentialMethod::AcquireToken, &request, &route, &metadata)
             .unwrap();
         let delivery = authorization.delivery_session_params().unwrap();
         assert_eq!(delivery.credential_uid(), &metadata.credential_uid);
