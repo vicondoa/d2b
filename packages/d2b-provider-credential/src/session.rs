@@ -1,10 +1,10 @@
 //! The Credential family's session and revocation vocabulary.
 //!
 //! The v3 `ResourceDriver` conversion of the daemon-owned Credential
-//! controller path (U12) deleted the old reconciler and kept the Provider
+//! controller path deleted the old reconciler and kept the Provider
 //! revocation surface. What remains is family vocabulary: the exact
 //! non-secret `RevokeToken` request whose delete path binds one session
-//! generation (R28), the confirmed-revocation evidence the driver projects,
+//! generation, the confirmed-revocation evidence the driver projects,
 //! and the typed session port the daemon's ProviderSupervisor handoff
 //! satisfies.
 //!
@@ -128,7 +128,7 @@ impl CredentialRevocationRequest {
     /// Validate and bind one revocation identity. The request is only
     /// constructible for a credential Provider with a live (non-zero)
     /// session generation; everything else fails closed as
-    /// [`CredentialResourceRuntimeError::InvalidResource`] (R28).
+    /// [`CredentialResourceRuntimeError::InvalidResource`].
     pub fn new(inputs: CredentialRevocationInputs) -> Result<Self, CredentialResourceRuntimeError> {
         if inputs.session_generation.get() == 0
             || inputs.rotation_generation == 0
@@ -475,7 +475,7 @@ mod tests {
     #[tokio::test]
     async fn uncertain_revocation_never_unblocks_cleanup() {
         // A live session that cannot confirm revocation must keep the
-        // credential row alive (R28).
+        // credential row alive.
         let session = UncertainCredentialSession;
         assert_eq!(
             session

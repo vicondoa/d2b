@@ -89,10 +89,11 @@ fn gate_declared_phase(phase: Option<&'static str>) -> Result<(), TpmResourceEff
 /// publishes the runtime's ready classification whatever the one-shot
 /// outcome was, so the outcome - and only the outcome - rides the row's
 /// status projection (`{"ephemeral": {"state": ..., "code": ...}}`,
-/// `process_driver.rs::publish_ephemeral_outcome`). A row that has not
-/// published one yet is retryable (the flush is still in flight); a failed
-/// outcome is the flush's own failure and fails the device path closed; an
-/// unreadable projection is refused rather than read as success.
+/// `ProcessDriver::publish_ephemeral_outcome` in `d2b-provider-process`). A
+/// row that has not published one yet is retryable (the flush is still in
+/// flight); a failed outcome is the flush's own failure and fails the device
+/// path closed; an unreadable projection is refused rather than read as
+/// success.
 fn gate_flush_outcome(view: &ResourceView) -> Result<(), TpmResourceEffectError> {
     let Some(projection) = view.observed_status_projection() else {
         return Err(TpmResourceEffectError::Transient);

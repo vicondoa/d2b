@@ -13,7 +13,7 @@
 # start DAG's store preflight; the plane cannot realize it yet, because the
 # same Guest-owned guard refuses it, so reconcile classifies the refusal
 # terminally and a one-shot delete converges without provider effects (see
-# `packages/d2bd/src/process_driver.rs`, the `guest-process-not-vmm`
+# `packages/d2b-provider-process/src/driver.rs`, the `guest-process-not-vmm`
 # classification). Retiring the declaration would empty this projection
 # entirely (its `enabled` gate and its only process row), which is a larger
 # decision than the cleanup item that raised it: the two follow-ons are to

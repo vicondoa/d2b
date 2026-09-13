@@ -1463,7 +1463,7 @@ enum BrokerOperation<'a> {
 /// [`read_proc_start_time`] yields `None` for both: there is no observed
 /// identity to compare, and nothing to adopt. Reporting that as an identity
 /// ambiguity would quarantine a launch that never produced a running process
-/// (`d2bd::process_driver` classifies every `identity` / `ambiguous` provider
+/// (`d2b-provider-process` classifies every `identity` / `ambiguous` provider
 /// code as terminal), so the definite outcome is reported instead: the child
 /// vanished, which the conformance port projects as the `pidfd-unavailable`
 /// conformance code and the daemon reads as a retryable launch effect.
@@ -1742,7 +1742,7 @@ mod tests {
     /// and stays refused (`adoption-ambiguous`), while a child that is already
     /// gone (exited before adoption: absent or zombie, `None`) is the definite
     /// launch failure - it must never be reported as an ambiguous identity,
-    /// which `d2bd::process_driver` would classify as terminal and quarantine.
+    /// which `d2b-provider-process` would classify as terminal and quarantine.
     #[test]
     fn launch_fence_separates_start_time_drift_from_a_gone_process() {
         assert_eq!(launch_adoption_error(1234, Some(77), 77), None);

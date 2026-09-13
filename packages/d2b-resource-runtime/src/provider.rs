@@ -38,8 +38,8 @@ pub trait DriverRegistration: Send + Sync {
     /// The committed operation references this driver serves, in canonical
     /// `Type/name` form.
     ///
-    /// The registry is the handler table (KTD8), so one reference has exactly
-    /// one owner: a second registration naming the same reference is refused.
+    /// The registry is the handler table, so one reference has exactly one
+    /// owner: a second registration naming the same reference is refused.
     fn operation_refs(&self) -> Vec<String>;
 
     /// The resource verbs this type supports, in the declaration's spelling.
@@ -100,9 +100,9 @@ pub enum ProviderDirectoryError {
 /// decoder (the manager's per-type decode hook) and indexes the operation
 /// references it serves.
 ///
-/// The registry also carries the plane-open gate (R4): drivers declared with
-/// an allowed-source mask that lacks RUNTIME must be registered before the
-/// plane opens, and [`ProviderDirectory::mark_plane_open`] closes that window.
+/// The registry also carries the plane-open gate: drivers declared with an
+/// allowed-source mask that lacks RUNTIME must be registered before the plane
+/// opens, and [`ProviderDirectory::mark_plane_open`] closes that window.
 /// What the registered set must *cover* at open is the generated
 /// converted-type catalog's business: the plane compares
 /// [`ProviderDirectory::registered_types`] against it.
@@ -195,7 +195,7 @@ impl ProviderDirectory {
 
     /// Every registered resource type, sorted. The plane's startup
     /// cross-check compares this set against the generated converted-type
-    /// catalog (R4).
+    /// catalog.
     pub fn registered_types(&self) -> Vec<ResourceTypeName> {
         let mut types = self.factories.keys().cloned().collect::<Vec<_>>();
         types.sort();

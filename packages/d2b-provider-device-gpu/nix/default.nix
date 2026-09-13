@@ -73,8 +73,8 @@ let
   # `reconcile/launch`) instead of an endless requeue. It is a
   # per-daemon-lifetime ceiling, not a window: the driver's `RestartBudget`
   # counts up and nothing consumes `resetAfter`
-  # (`packages/d2bd/src/process_driver.rs`), so two restarts - however far
-  # apart - exhaust it. The numeric defaults mirror
+  # (`packages/d2b-provider-process/src/driver.rs`), so two restarts - however
+  # far apart - exhaust it. The numeric defaults mirror
   # `nixos-modules/resources-zones-processes.nix` processDefaults; only
   # `maxRestarts` differs (canonical default: null, unbounded).
   workerRestartPolicy = {
