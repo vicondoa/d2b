@@ -1152,13 +1152,15 @@ mod tests {
         }
 
         fn decoder(&self) -> std::sync::Arc<dyn d2b_resource_runtime::context::SpecDecoder> {
-            d2b_provider_command::command_spec_decoder()
+            d2b_resource_runtime::metadata::metadata_spec_decoder()
         }
 
         fn factory(
             &self,
         ) -> std::sync::Arc<dyn d2b_resource_runtime::driver::ResourceDriverFactory> {
-            std::sync::Arc::new(d2b_provider_command::CommandDriverFactory::new())
+            std::sync::Arc::new(d2b_resource_runtime::metadata::MetadataDriverFactory::new(
+                ResourceTypeName::new("Command"),
+            ))
         }
     }
 
