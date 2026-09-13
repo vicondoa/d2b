@@ -1532,6 +1532,7 @@ mod tests {
         .unwrap();
         let status = ResourceStatus::new(
             ObservedGeneration::new(1),
+            Some(ObservedGeneration::new(1)),
             ResourcePhase::Ready,
             Vec::new(),
             None,

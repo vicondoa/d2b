@@ -24,6 +24,7 @@ const V3_TOP_LEVEL_COMMANDS: &[&str] = &[
     "status",
     "upgrade",
     "reconcile",
+    "debug",
     "host",
     "guest",
     "process",

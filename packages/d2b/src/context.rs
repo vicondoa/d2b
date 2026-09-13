@@ -26,7 +26,9 @@ use d2b_contracts_control::public_wire::{
     NamedProcessStreamRequest, NamedProcessStreamRequestFrame, NamedProcessStreamResponse,
     NamedProcessStreamResponseFrame,
 };
-use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
+use d2b_contracts_resource::v3::identity::{
+    STANDARD_RESOURCE_TYPES, V3_CONVERTED_RESOURCE_TYPES,
+};
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceErrorKind, ResourceRef, ResourceTypeName, RetryClass, ZoneId,
 };
@@ -2476,6 +2478,13 @@ pub(crate) fn standard_resource_types() -> &'static [&'static str; 23] {
     &STANDARD_RESOURCE_TYPES
 }
 
+/// The resource types the managed plane serves: what a zone-wide read must
+/// cover, since a type this catalog names but the caller cannot read is a
+/// degraded read rather than an absent one.
+pub(crate) fn converted_resource_types() -> &'static [&'static str; 36] {
+    &V3_CONVERTED_RESOURCE_TYPES
+}
+
 pub(crate) fn read_spec(spec_file: Option<&Path>, spec_stdin: bool) -> Result<Value, CliFailure> {
     if spec_file.is_some() == spec_stdin {
         return Err(CliFailure::new(
@@ -2638,6 +2647,8 @@ fn stable_error_class(class: &str) -> &str {
         | "bundle-integrity-failure"
         | "bundle-generation-replay"
         | "bundle-schema-mismatch"
+        | "debug-read-refused"
+        | "debug-read-exhausted"
         | "resource-pending-cleanup" => class,
         _ => "internal-error",
     }

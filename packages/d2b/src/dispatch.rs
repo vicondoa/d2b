@@ -14,7 +14,7 @@ use crate::context::{
     output_mode, parse_hello_reply,
 };
 use crate::{
-    CliFailure, activation, complete, endpoint, exec, guest, host, print_json, print_stdout,
+    CliFailure, activation, complete, debug, endpoint, exec, guest, host, print_json, print_stdout,
     provider, resource, share, shell, zone,
 };
 use clap::{Args, Parser, Subcommand};
@@ -41,6 +41,7 @@ pub(crate) const BUILTIN_COMMANDS: &[&str] = &[
     "status",
     "upgrade",
     "reconcile",
+    "debug",
     "host",
     "guest",
     "process",
@@ -108,6 +109,7 @@ pub(crate) enum ModernCommand {
     Status(GenericStatusArgs),
     Upgrade(GenericUpgradeArgs),
     Reconcile(GenericReconcileArgs),
+    Debug(debug::DebugArgs),
     Host(host::HostArgs),
     Guest(guest::GuestArgs),
     Process(guest::ProcessArgs),
@@ -782,6 +784,7 @@ pub(crate) fn runtime_dispatch(cli: &ModernCli, context: &ZoneContext) -> Result
         ModernCommand::Status(args) => resource::status(context, args, mode, deadline),
         ModernCommand::Upgrade(args) => resource::upgrade(context, args, mode, deadline),
         ModernCommand::Reconcile(args) => resource::reconcile(context, args, mode, deadline),
+        ModernCommand::Debug(args) => debug::run(context, args, mode, deadline),
         ModernCommand::Host(args) => host::run(context, args, mode, deadline),
         ModernCommand::Guest(args) => guest::run_guest(context, args, mode, deadline),
         ModernCommand::Process(args) => guest::run_process(context, args, mode, deadline),
@@ -924,6 +927,27 @@ fn provider_projection(
     Ok(0)
 }
 
+/// The zone this invocation routes to.
+///
+/// `d2b debug` names its zone twice over: the global `--zone`/`D2B_ZONE`
+/// route, and the positional argument that says which zone to explain. The
+/// positional argument is the route's authority when it is given, so
+/// `d2b debug prod` connects to `prod`; `run` refuses an explicit global zone
+/// that disagrees with it.
+fn routed_zone<'a>(cli: &'a ModernCli) -> Option<&'a str> {
+    match &cli.command {
+        ModernCommand::Debug(args) => Some(args.zone_ref.as_str()),
+        _ => cli.zone.as_deref(),
+    }
+}
+
+/// The zone named by an explicit `--zone` or `D2B_ZONE`, if either was given.
+fn explicit_zone_argument(cli_zone: Option<&str>) -> Option<String> {
+    cli_zone
+        .map(str::to_owned)
+        .or_else(|| std::env::var("D2B_ZONE").ok().filter(|zone| !zone.is_empty()))
+}
+
 pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
     let cli = match ModernCli::try_parse_from(raw_args.clone()) {
         Ok(cli) => cli,
@@ -961,12 +985,30 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
                 | host::HostCommand::Doctor(_)
         })
     ) || matches!(&cli.command, ModernCommand::Auth(_));
+    // `d2b debug` names its zone twice over, and an explicitly selected zone
+    // that disagrees with the positional one is a usage error refused before
+    // any connection.
+    if let ModernCommand::Debug(args) = &cli.command
+        && let Some(explicit) = explicit_zone_argument(cli.zone.as_deref())
+        && explicit != args.zone_ref
+    {
+        let mode = output_mode(cli.json, cli.human).unwrap_or(OutputMode::Json);
+        return report_dispatch_failure(
+            None,
+            &cli,
+            mode,
+            CliFailure::new(
+                2,
+                "ref-invalid: debug zone disagrees with the selected Zone",
+            ),
+        );
+    }
     let context = if local_host_command {
         ZoneContext::local_only_with_explicit_zone(
             cli.zone.is_some() || std::env::var_os("D2B_ZONE").is_some(),
         )
     } else {
-        match ZoneContext::discover(cli.zone.as_deref()) {
+        match ZoneContext::discover(routed_zone(&cli)) {
             Ok(context) => context,
             Err(error) => {
                 let mode = output_mode(cli.json, cli.human).unwrap_or(OutputMode::Json);
@@ -1072,6 +1114,24 @@ mod tests {
     }
 
     #[test]
+    fn modern_debug_routes_by_its_positional_zone() {
+        let cli = ModernCli::try_parse_from(["d2b", "debug", "prod"])
+            .expect("debug command parses without a global zone");
+        assert_eq!(routed_zone(&cli), Some("prod"));
+
+        // The positional zone is the route's authority, so an ambient zone
+        // cannot silently redirect the explanation to another zone.
+        let cli = ModernCli::try_parse_from(["d2b", "--zone", "dev", "debug", "prod"])
+            .expect("debug command parses with both zones");
+        assert_eq!(routed_zone(&cli), Some("prod"));
+
+        // Every other command keeps the global flag.
+        let cli = ModernCli::try_parse_from(["d2b", "--zone", "dev", "list", "Host"])
+            .expect("list command parses");
+        assert_eq!(routed_zone(&cli), Some("dev"));
+    }
+
+    #[test]
     fn modern_list_requires_a_resource_type() {
         let cli = ModernCli::try_parse_from(["d2b", "list", "Zone", "--json"])
             .expect("typed resource list parses");
@@ -1117,7 +1177,7 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), BUILTIN_COMMANDS.len());
-        assert_eq!(BUILTIN_COMMANDS.len(), 32);
+        assert_eq!(BUILTIN_COMMANDS.len(), 33);
         assert!(BUILTIN_COMMANDS.contains(&"endpoint"));
         assert!(BUILTIN_COMMANDS.contains(&"import"));
     }

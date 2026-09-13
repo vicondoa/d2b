@@ -251,6 +251,68 @@ pkgs.testers.runNixOSTest {
     controller_pid_before = machine.succeed(
         "ps -eo pid=,args= | awk '$NF ~ /acceptance-controller$/ {print $1; exit}'"
     ).strip()
+
+    # The debug surface, on a zone this fixture has just settled. alice can
+    # read Process, Host and User but not Zone, so the report is expected to
+    # name exactly those types it could not read rather than present them as
+    # empty, and to still explain the rows it did read.
+    diag_step(
+        "debug-surface-zone-report",
+        lambda: machine.succeed(
+            "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+            "d2b --zone work --json debug work >/run/d2b-debug-zone.json && "
+            "jq -e '.zoneRef == \"Zone/work\" "
+            "and (.degradedReads | map(.resourceType) | index(\"Zone\")) != null "
+            "and (.degradedReads | map(.resourceType) | index(\"Process\")) == null "
+            "and (.degradedReads | map(.resourceType) | index(\"Host\")) == null' "
+            "/run/d2b-debug-zone.json >/dev/null && "
+            "jq -e '[.roots[].ref] | index(\"Host/host-system\") != null "
+            "and index(\"User/alice\") != null' "
+            "/run/d2b-debug-zone.json >/dev/null"
+        ),
+        rows=[live_rows("Process rows", "Process")],
+        explain=[("d2bd.service", "acceptance-controller")],
+    )
+    diag_step(
+        "debug-surface-named-row",
+        lambda: machine.succeed(
+            "name=$(runuser -u alice -- env "
+            "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+            "d2b --zone work --json list Process | "
+            "jq -r '.resources[] | select(.metadata.name | startswith("
+            "\"controller-\")) | .metadata.name') && "
+            "test -n \"$name\" && "
+            "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+            "d2b --zone work --json debug work \"Process/$name\" "
+            ">/run/d2b-debug-row.json && "
+            "jq -e '.roots | length == 1' /run/d2b-debug-row.json >/dev/null && "
+            "jq -e --arg name \"Process/$name\" "
+            "'.roots[0].ref == $name and .roots[0].phase == \"Ready\" "
+            "and (.roots[0].children | length == 0)' "
+            "/run/d2b-debug-row.json >/dev/null"
+        ),
+        rows=[live_rows("Process rows", "Process")],
+        explain=[("d2bd.service", "acceptance-controller")],
+    )
+    diag_step(
+        "debug-surface-human-report",
+        lambda: machine.succeed(
+            # No TTY in the lane, so the human tree needs the explicit flag;
+            # this is the one place the tree renderer is exercised live.
+            "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+            "d2b --zone work --human debug work >/run/d2b-debug-human.txt && "
+            "grep -F 'zone work rows=' /run/d2b-debug-human.txt >/dev/null && "
+            "grep -F 'Host/host-system' /run/d2b-debug-human.txt >/dev/null && "
+            "grep -F 'type Zone not read' /run/d2b-debug-human.txt >/dev/null"
+        ),
+        rows=[live_rows("Process rows", "Process")],
+        explain=[("d2bd.service", "acceptance-controller")],
+    )
+    machine.fail(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work debug work Process/absent-row >/dev/null 2>&1"
+    )
+
     machine.fail(
         "runuser -u bob -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Process "

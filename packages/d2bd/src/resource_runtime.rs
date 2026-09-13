@@ -13337,6 +13337,7 @@ mod tests {
             ResourceSpec::empty(),
             ResourceStatus::new(
                 ObservedGeneration::new(0),
+                None,
                 phase,
                 Vec::new(),
                 None,

@@ -233,6 +233,12 @@ impl ResourceView {
     /// else the closed failure classification, else the empty layer. The
     /// manager runs no update assessment, so `update` reports the empty
     /// currency (`Unknown`, no owned/dependency sets).
+    ///
+    /// `statusGeneration` reports the row generation the status was published
+    /// for, or null when nothing was published. It is what makes a skew
+    /// visible: a status older than the row renders the honest `Pending`
+    /// phase, and the reader learns from this field that the row has moved on
+    /// rather than that it never reported anything.
     pub fn wire_status(&self) -> serde_json::Value {
         let generation = self.generation.max(1);
         let status = self.observed_status();
@@ -248,6 +254,7 @@ impl ResourceView {
             "conditions": [],
             "lastReconciledAt": serde_json::Value::Null,
             "observedGeneration": generation,
+            "statusGeneration": self.status_generation,
             "outcome": serde_json::Value::Null,
             "phase": status
                 .as_ref()
@@ -2406,6 +2413,11 @@ mod tests {
         let unpublished = view(None, None, None).wire_status();
         assert_eq!(unpublished["phase"], serde_json::json!("Pending"));
         assert_eq!(unpublished["observedGeneration"], serde_json::json!(2));
+        assert_eq!(
+            unpublished["statusGeneration"],
+            serde_json::Value::Null,
+            "a row that published nothing reports no status generation"
+        );
         assert_eq!(unpublished["resource"], serde_json::json!({}));
         let keys: std::collections::BTreeSet<&str> = unpublished
             .as_object()
@@ -2424,6 +2436,7 @@ mod tests {
                 "phase",
                 "resource",
                 "startedAt",
+                "statusGeneration",
                 "update",
             ]),
             "the universal status object carries exactly the contract's keys"
@@ -2439,6 +2452,11 @@ mod tests {
         .wire_status();
         assert_eq!(stale["phase"], serde_json::json!("Pending"));
         assert_eq!(stale["resource"], serde_json::json!({}));
+        assert_eq!(
+            stale["statusGeneration"],
+            serde_json::json!(1),
+            "the status generation exposes the skew the phase alone hides"
+        );
 
         // Current Ready with a driver projection: the projection is the
         // layer, and the phase comes from the classification.
@@ -2451,6 +2469,11 @@ mod tests {
         .wire_status();
         assert_eq!(ready["phase"], serde_json::json!("Ready"));
         assert_eq!(ready["resource"], projection);
+        assert_eq!(
+            ready["statusGeneration"],
+            ready["observedGeneration"],
+            "a current status reports the row's own generation"
+        );
 
         // A failed row without a projection carries the structured failure
         // in the free-form layer, never a top-level field. The layer is the
