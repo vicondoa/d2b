@@ -2,8 +2,8 @@
   "authority": "cargo-locked-metadata",
   "defaultFeatures": true,
   "features": [],
-  "lockSha256": "11c556b4ebb3c67ecd7636a2b971c0c92b65e5be32badd1bdadb69409c2d6b16",
-  "policyPackageCount": 353,
+  "lockSha256": "f3be3c44d78c3af6e0879974334046ee2169875901cf08f883770254dd6a022a",
+  "policyPackageCount": 354,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
     "aead@0.5.2#registry+https://github.com/rust-lang/crates.io-index",
@@ -116,6 +116,7 @@
     "d2b-resource-client@0.0.0-bootstrap#path",
     "d2b-resource-compiler@0.0.0-bootstrap#path",
     "d2b-resource-runtime@0.0.0-bootstrap#path",
+    "d2b-resource-types@0.0.0-bootstrap#path",
     "d2b-session-unix@0.0.0-bootstrap#path",
     "d2b-session@0.0.0-bootstrap#path",
     "d2b-sk-frontend@0.0.0-bootstrap#path",
@@ -359,8 +360,8 @@
     "zvariant_derive@5.15.0#registry+https://github.com/rust-lang/crates.io-index",
     "zvariant_utils@4.2.0#registry+https://github.com/rust-lang/crates.io-index"
   ],
-  "productionPackageCount": 353,
-  "resolveNodeCount": 393,
+  "productionPackageCount": 354,
+  "resolveNodeCount": 394,
   "roots": [
     "d2b",
     "d2b-audit",
@@ -414,6 +415,7 @@
     "d2b-resource-client",
     "d2b-resource-compiler",
     "d2b-resource-runtime",
+    "d2b-resource-types",
     "d2b-session",
     "d2b-session-unix",
     "d2b-sk-frontend",

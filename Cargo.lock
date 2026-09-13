@@ -1705,6 +1705,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-resource-types"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "bitflags 2.13.1",
+ "d2b-contracts-resource",
+ "d2b-resource-runtime",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-session"
 version = "0.0.0-bootstrap"
 dependencies = [

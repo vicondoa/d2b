@@ -59,6 +59,7 @@ test_suite(
         "//packages/d2b-resource-client:all-tests",
         "//packages/d2b-resource-compiler:all-tests",
         "//packages/d2b-resource-runtime:all-tests",
+        "//packages/d2b-resource-types:all-tests",
         "//packages/d2b-session:all-tests",
         "//packages/d2b-session-unix:all-tests",
         "//packages/d2b-sk-frontend:all-tests",

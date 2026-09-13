@@ -57,6 +57,7 @@
     "d2b-resource-client",
     "d2b-resource-compiler",
     "d2b-resource-runtime",
+    "d2b-resource-types",
     "d2b-session",
     "d2b-session-unix",
     "d2b-sk-frontend",
@@ -67,7 +68,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "11c556b4ebb3c67ecd7636a2b971c0c92b65e5be32badd1bdadb69409c2d6b16",
+  "lock_sha256": "f3be3c44d78c3af6e0879974334046ee2169875901cf08f883770254dd6a022a",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -952,6 +953,14 @@
     {
       "id": "d2b-resource-runtime@0.0.0-bootstrap#path",
       "name": "d2b-resource-runtime",
+      "version": "0.0.0-bootstrap",
+      "source": null,
+      "checksum": null,
+      "target": "aarch64-unknown-linux-gnu"
+    },
+    {
+      "id": "d2b-resource-types@0.0.0-bootstrap#path",
+      "name": "d2b-resource-types",
       "version": "0.0.0-bootstrap",
       "source": null,
       "checksum": null,
@@ -6354,6 +6363,36 @@
     {
       "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
       "to": "tracing@0.1.44#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-types@0.0.0-bootstrap#path",
+      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "proc-macro",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-types@0.0.0-bootstrap#path",
+      "to": "bitflags@2.13.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-types@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-types@0.0.0-bootstrap#path",
+      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-types@0.0.0-bootstrap#path",
+      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
