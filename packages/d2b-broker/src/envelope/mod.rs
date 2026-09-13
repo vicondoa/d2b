@@ -237,12 +237,22 @@ pub struct DirectInvocation<'a> {
 /// declaring crate's process. An implementation either serves the operation
 /// locally or forwards it, and refuses an operation it was not given a
 /// handler for - never serving a row it does not implement.
+/// The future one dispatch completes on.
+///
+/// The envelope holds its dispatcher as a trait object, so the future is
+/// boxed rather than an associated type: a handler that answers locally can
+/// hand back a ready future, and a forwarder hands back the peer leg's.
+pub type DispatchFuture<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchFailure>> + Send + 'a>,
+>;
+
 pub trait OperationDispatcher: Send + Sync {
     /// Run one validated, authorized invocation.
-    fn dispatch(
-        &self,
-        invocation: DirectInvocation<'_>,
-    ) -> Result<DispatchOutcome, DispatchFailure>;
+    ///
+    /// The dispatch is async because one of its two legs is: a family row's
+    /// handler runs in the declaring process, and the call crosses to it over
+    /// an async dial bounded by the forwarder's own round-trip budget.
+    fn dispatch<'a>(&'a self, invocation: DirectInvocation<'a>) -> DispatchFuture<'a>;
 }
 
 /// The broker-side operation envelope.
@@ -294,8 +304,10 @@ impl BrokerEnvelope {
     ///
     /// The invocation is named before it is authorized, so a refusal carries
     /// the same identifier a success would have carried: an operator can
-    /// follow a denied invocation in the audit log.
-    pub fn call(
+    /// follow a denied invocation in the audit log. The call is async
+    /// because the dispatch step is: a forwarded row's handler runs in the
+    /// declaring process and is reached over an async dial.
+    pub async fn call(
         &self,
         caller: CallerAuthority,
         operation: &str,
@@ -347,6 +359,7 @@ impl BrokerEnvelope {
                 ctx,
                 payload: &payload,
             })
+            .await
             .map_err(|failure| {
                 // The envelope's refusals are a closed set of broker-side
                 // codes; a failure a forwarder raised carries the peer's own
@@ -546,21 +559,22 @@ impl HandlerTable {
 }
 
 impl OperationDispatcher for HandlerTable {
-    fn dispatch(
-        &self,
-        invocation: DirectInvocation<'_>,
-    ) -> Result<DispatchOutcome, DispatchFailure> {
+    fn dispatch<'a>(&'a self, invocation: DirectInvocation<'a>) -> DispatchFuture<'a> {
         let Some((_, handler)) = self
             .handlers
             .iter()
             .find(|(operation, _)| *operation == invocation.ctx.operation)
         else {
-            return Err(DispatchFailure::unregistered_handler(format!(
-                "no local handler for {}",
-                invocation.ctx.operation
-            )));
+            let operation = invocation.ctx.operation;
+            return Box::pin(async move {
+                Err(DispatchFailure::unregistered_handler(format!(
+                    "no local handler for {operation}"
+                )))
+            });
         };
-        handler(&invocation)
+        // A local handler is already the whole answer: its future is ready
+        // the moment it is asked, and the envelope's await costs nothing.
+        Box::pin(async move { handler(&invocation) })
     }
 }
 
@@ -614,16 +628,14 @@ impl Default for ForwardingDispatcher {
 }
 
 impl OperationDispatcher for ForwardingDispatcher {
-    fn dispatch(
-        &self,
-        invocation: DirectInvocation<'_>,
-    ) -> Result<DispatchOutcome, DispatchFailure> {
-        self.forwarder.forward(crate::forwarding::ForwardedOperation {
-            operation: invocation.ctx.operation,
-            zone: invocation.ctx.zone,
-            invocation_id: invocation.ctx.invocation_id,
-            payload: invocation.payload,
-        })
+    fn dispatch<'a>(&'a self, invocation: DirectInvocation<'a>) -> DispatchFuture<'a> {
+        self.forwarder
+            .forward(crate::forwarding::ForwardedOperation {
+                operation: invocation.ctx.operation,
+                zone: invocation.ctx.zone,
+                invocation_id: invocation.ctx.invocation_id,
+                payload: invocation.payload,
+            })
     }
 }
 
@@ -637,6 +649,20 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// One multi-thread runtime for these tests: the envelope's call is async
+    /// because the peer leg is, so a test drives it the way the broker does.
+    fn runtime() -> &'static tokio::runtime::Runtime {
+        static RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
+            std::sync::LazyLock::new(|| {
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_all()
+                    .build()
+                    .expect("envelope test runtime")
+            });
+        &RUNTIME
+    }
 
     /// The declaring process a test broker forwards to.
     ///
@@ -706,14 +732,14 @@ mod tests {
         };
         let payload: CanonicalJsonObject =
             serde_json::from_value(payload).expect("canonical payload");
-        let outcome = match dispatcher.dispatch(DirectInvocation {
+        let outcome = match runtime().block_on(dispatcher.dispatch(DirectInvocation {
             ctx: InvocationCtx {
                 operation,
                 zone,
                 invocation_id,
             },
             payload: &payload,
-        }) {
+        })) {
             Ok(DispatchOutcome { result }) => ForwardOperationOutcome::Result {
                 result: serde_json::to_value(&result).expect("render result"),
             },
@@ -796,13 +822,13 @@ mod tests {
     #[test]
     fn an_unknown_operation_is_refused() {
         let envelope = probe_envelope();
-        let refusal = envelope
+        let refusal = runtime().block_on(envelope
             .call(
                 CallerAuthority::Daemon,
                 "NoSuchOperation",
                 "zone-a",
                 &serde_json::json!({}),
-            )
+            ))
             .expect_err("an unknown operation is refused");
         assert_eq!(refusal.code, UNKNOWN_OPERATION);
         assert_eq!(refusal.operation, "NoSuchOperation");
@@ -813,13 +839,13 @@ mod tests {
         let envelope = probe_envelope();
         // The committed catalog declares the operation; this broker does not
         // serve it, and deny-by-default refuses it rather than guessing.
-        let refusal = envelope
+        let refusal = runtime().block_on(envelope
             .call(
                 CallerAuthority::Daemon,
                 "ApplySysctl",
                 "zone-a",
                 &serde_json::json!({}),
-            )
+            ))
             .expect_err("an uncommitted row is refused");
         assert_eq!(refusal.code, UNCOMMITTED_OPERATION);
         assert_eq!(refusal.operation, "ApplySysctl");
@@ -828,13 +854,13 @@ mod tests {
     #[test]
     fn an_ungranted_caller_is_refused() {
         let envelope = probe_envelope();
-        let refusal = envelope
+        let refusal = runtime().block_on(envelope
             .call(
                 CallerAuthority::Unauthorized,
                 "ProbeOperation",
                 "zone-a",
                 &serde_json::json!({ "label": "x" }),
-            )
+            ))
             .expect_err("an ungranted caller is refused");
         assert_eq!(refusal.code, UNGRANTED_CALLER);
         assert_eq!(refusal.operation, "ProbeOperation");
@@ -845,13 +871,13 @@ mod tests {
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(echo_table()))
             .commit_all()
             .build();
-        let refusal = envelope
+        let refusal = runtime().block_on(envelope
             .call(
                 CallerAuthority::Daemon,
                 "ApplySysctl",
                 "zone-a",
                 &serde_json::json!({}),
-            )
+            ))
             .expect_err("a wire-inherited operation is not carried generically");
         assert_eq!(refusal.code, WIRE_INHERITED_OPERATION);
     }
@@ -859,22 +885,22 @@ mod tests {
     #[test]
     fn a_payload_outside_the_row_schema_is_refused() {
         let envelope = probe_envelope();
-        let undeclared = envelope
+        let undeclared = runtime().block_on(envelope
             .call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
                 &serde_json::json!({ "label": "x", "extra": 1 }),
-            )
+            ))
             .expect_err("an undeclared field is refused");
         assert_eq!(undeclared.code, INVALID_PAYLOAD);
-        let missing = envelope
+        let missing = runtime().block_on(envelope
             .call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
                 &serde_json::json!({}),
-            )
+            ))
             .expect_err("a missing required field is refused");
         assert_eq!(missing.code, INVALID_PAYLOAD);
     }
@@ -889,13 +915,13 @@ mod tests {
                 &["d2bd"],
             ))
             .build();
-        let refusal = envelope
+        let refusal = runtime().block_on(envelope
             .call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
                 &serde_json::json!({ "label": "x" }),
-            )
+            ))
             .expect_err("a row with no handler is refused");
         assert_eq!(refusal.code, UNREGISTERED_HANDLER);
     }
@@ -903,13 +929,13 @@ mod tests {
     #[test]
     fn a_declared_operation_dispatches_with_an_invocation_id() {
         let envelope = probe_envelope();
-        let invocation = envelope
+        let invocation = runtime().block_on(envelope
             .call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
                 &serde_json::json!({ "label": "x" }),
-            )
+            ))
             .expect("a declared, granted operation dispatches");
         let invocation_id = invocation.invocation_id;
         assert!(invocation_id.starts_with("invocation-"));
@@ -923,13 +949,13 @@ mod tests {
     #[test]
     fn a_refusal_carries_the_invocation_identifier_it_denied() {
         let envelope = probe_envelope();
-        let refusal = envelope
+        let refusal = runtime().block_on(envelope
             .call(
                 CallerAuthority::Unauthorized,
                 "ProbeOperation",
                 "zone-a",
                 &serde_json::json!({ "label": "x" }),
-            )
+            ))
             .expect_err("an ungranted caller is refused");
         assert!(refusal.invocation_id.starts_with("invocation-"));
         let fields = refusal.audit_fields();
@@ -937,13 +963,13 @@ mod tests {
         assert_eq!(fields["operation"], "ProbeOperation");
         assert_eq!(fields["reason"], UNGRANTED_CALLER);
         // Two refusals are two named invocations, not one anonymous denial.
-        let other = envelope
+        let other = runtime().block_on(envelope
             .call(
                 CallerAuthority::Unauthorized,
                 "ProbeOperation",
                 "zone-a",
                 &serde_json::json!({ "label": "x" }),
-            )
+            ))
             .expect_err("an ungranted caller is refused");
         assert_ne!(refusal.invocation_id, other.invocation_id);
     }
@@ -956,13 +982,13 @@ mod tests {
             .declare(row)
             .build();
         let joined = |kind: &str| {
-            envelope
+            runtime().block_on(envelope
                 .call(
                     CallerAuthority::Daemon,
                     "ProbeOperation",
                     "zone-a",
                     &serde_json::json!({ "label": "x", "kind": kind }),
-                )
+                ))
                 .expect("a declared, granted operation dispatches")
                 .audit_join_identity
                 .expect("a row that declares a join carries one")
@@ -975,13 +1001,13 @@ mod tests {
         assert!(!first.contains("alpha"));
         // A row that declares no join carries none.
         let envelope = probe_envelope();
-        let plain = envelope
+        let plain = runtime().block_on(envelope
             .call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
                 &serde_json::json!({ "label": "x" }),
-            )
+            ))
             .expect("a declared, granted operation dispatches");
         assert_eq!(plain.audit_join_identity, None);
     }
@@ -1032,13 +1058,13 @@ mod tests {
             &["d2bd"],
         ))
         .build();
-        let invocation = envelope
+        let invocation = runtime().block_on(envelope
             .call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
                 &serde_json::json!({ "label": "x" }),
-            )
+            ))
             .expect("the peer served the forwarded invocation");
         assert_eq!(peer.calls(), 1, "the call must have crossed the socket");
         let rendered = String::from_utf8(invocation.outcome.result.to_canonical_bytes())
@@ -1065,13 +1091,13 @@ mod tests {
             &["d2bd"],
         ))
         .build();
-        let refusal = envelope
+        let refusal = runtime().block_on(envelope
             .call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
                 &serde_json::json!({ "label": "x" }),
-            )
+            ))
             .expect_err("a row no peer serves is refused");
         assert_eq!(refusal.code, UNREGISTERED_HANDLER);
         assert_eq!(peer.calls(), 1, "the call must have crossed the socket");
@@ -1092,13 +1118,13 @@ mod tests {
             &["d2bd"],
         ))
         .build();
-        let refusal = envelope
+        let refusal = runtime().block_on(envelope
             .call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
                 &serde_json::json!({ "label": "x" }),
-            )
+            ))
             .expect_err("no forwarding peer is wired");
         assert_eq!(refusal.code, UNREGISTERED_HANDLER);
     }

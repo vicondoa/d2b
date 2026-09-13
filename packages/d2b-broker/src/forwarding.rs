@@ -18,10 +18,11 @@
 //! [`ForwardOperationRequest`] frame, one [`ForwardOperationResponse`]
 //! frame. The peer that answers owns the socket path; the broker refuses
 //! every forwarded operation while it has none, so a broker started without
-//! a forwarding peer stays fail-closed.
+//! a forwarding peer stays fail-closed. The dial and the exchange wait in
+//! async time under one round-trip deadline, so a peer that accepts and then
+//! stalls costs the caller a waiting task instead of a blocked thread.
 
 use std::io;
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -63,6 +64,28 @@ pub struct ForwardedOperation<'a> {
     pub payload: &'a CanonicalJsonObject,
 }
 
+/// The round-trip budget the environment names, when it names one.
+///
+/// A zero or unparsable budget is not a budget: the default stands rather
+/// than a peer reading an unbounded or instantaneous deadline.
+pub fn default_forward_timeout() -> Duration {
+    std::env::var(FORWARD_TIMEOUT_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|millis| *millis > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_FORWARD_TIMEOUT)
+}
+
+/// The future one forwarded call completes on.
+///
+/// The dispatcher holds its forwarder as a trait object, so the future is
+/// boxed rather than an associated type: `dyn OperationForwarder` is the
+/// seam, and a boxed future is the price of keeping it.
+pub type ForwardFuture<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchFailure>> + Send + 'a>,
+>;
+
 /// The peer-mediated half of one dispatch: the process that declares an
 /// operation's handler.
 pub trait OperationForwarder: Send + Sync + 'static {
@@ -73,7 +96,12 @@ pub trait OperationForwarder: Send + Sync + 'static {
     /// cannot reach - is [`DispatchFailure::unregistered_handler`] rather
     /// than a success or a synthesized result, because a dispatch that did
     /// not reach a handler did not happen.
-    fn forward(&self, invocation: ForwardedOperation<'_>) -> Result<DispatchOutcome, DispatchFailure>;
+    ///
+    /// The call is async because the peer leg is: the dial, the request
+    /// frame, and the reply frame all wait in async time under one deadline,
+    /// so a peer that accepts and then stalls costs a waiting task rather
+    /// than a broker thread.
+    fn forward<'a>(&'a self, invocation: ForwardedOperation<'a>) -> ForwardFuture<'a>;
 }
 
 /// A forwarder that answers for no operation.
@@ -85,14 +113,13 @@ pub trait OperationForwarder: Send + Sync + 'static {
 pub struct UnroutedForwarder;
 
 impl OperationForwarder for UnroutedForwarder {
-    fn forward(
-        &self,
-        invocation: ForwardedOperation<'_>,
-    ) -> Result<DispatchOutcome, DispatchFailure> {
-        Err(DispatchFailure::unregistered_handler(format!(
-            "no forwarding peer serves {}",
-            invocation.operation
-        )))
+    fn forward<'a>(&'a self, invocation: ForwardedOperation<'a>) -> ForwardFuture<'a> {
+        Box::pin(async move {
+            Err(DispatchFailure::unregistered_handler(format!(
+                "no forwarding peer serves {}",
+                invocation.operation
+            )))
+        })
     }
 }
 
@@ -137,7 +164,14 @@ impl SocketForwarder {
 }
 
 impl OperationForwarder for SocketForwarder {
-    fn forward(
+    fn forward<'a>(&'a self, invocation: ForwardedOperation<'a>) -> ForwardFuture<'a> {
+        Box::pin(self.forward_to_peer(invocation))
+    }
+}
+
+impl SocketForwarder {
+    /// Forward one invocation and decode the peer's answer.
+    async fn forward_to_peer(
         &self,
         invocation: ForwardedOperation<'_>,
     ) -> Result<DispatchOutcome, DispatchFailure> {
@@ -150,7 +184,9 @@ impl OperationForwarder for SocketForwarder {
             invocation_id: invocation.invocation_id.to_owned(),
             payload,
         };
-        let response = dial_and_exchange(&self.socket_path, &request, self.timeout)
+        let response = self
+            .exchange(&request)
+            .await
             .map_err(|error| DispatchFailure::unregistered_handler(error.to_string()))?;
         match response.outcome {
             ForwardOperationOutcome::Result { result } => {
@@ -166,67 +202,51 @@ impl OperationForwarder for SocketForwarder {
             ForwardOperationOutcome::Refused { code } => Err(DispatchFailure::new(code)),
         }
     }
-}
 
-/// The round-trip budget the environment names, when it names one.
-///
-/// A zero or unparsable budget is not a budget: the default stands rather
-/// than a peer reading an unbounded or instantaneous deadline.
-pub fn default_forward_timeout() -> Duration {
-    std::env::var(FORWARD_TIMEOUT_ENV)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|millis| *millis > 0)
-        .map(Duration::from_millis)
-        .unwrap_or(DEFAULT_FORWARD_TIMEOUT)
-}
-
-/// One frame exchange with the forwarding peer.
-///
-/// The request is bounded by the same ceiling every broker frame is, so a
-/// payload the broker admitted cannot be refused for size on the way out.
-fn dial_and_exchange(
-    socket_path: &Path,
-    request: &ForwardOperationRequest,
-    timeout: Duration,
-) -> io::Result<ForwardOperationResponse> {
-    let payload = canonical_json_bytes(request)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "encode forward request"))?;
-    if payload.len() > crate::protocol::MAX_FRAME_SIZE {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "forward request exceeds the frame ceiling",
-        ));
+    /// One frame exchange with the forwarding peer.
+    ///
+    /// The request is bounded by the same ceiling every broker frame is, so a
+    /// payload the broker admitted cannot be refused for size on the way out.
+    /// The whole round trip - dial, request frame, reply frame - sits under
+    /// one async deadline: the connection is nonblocking, so a peer that
+    /// accepts and then stalls is waited out by this deadline rather than by
+    /// the kernel, and no socket timeout has to be armed for it.
+    async fn exchange(
+        &self,
+        request: &ForwardOperationRequest,
+    ) -> io::Result<ForwardOperationResponse> {
+        let payload = canonical_json_bytes(request)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "encode forward request"))?;
+        if payload.len() > crate::protocol::MAX_FRAME_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "forward request exceeds the frame ceiling",
+            ));
+        }
+        let path = self.socket_path.as_path();
+        let timeout = self.timeout;
+        tokio::time::timeout(timeout, async move {
+            let connection = crate::protocol::connect_seqpacket_bounded(path, timeout).await?;
+            connection.send_json_frame(request).await?;
+            let response = connection
+                .recv_json_frame::<ForwardOperationResponse>()
+                .await?;
+            response.ok_or_else(|| {
+                io::Error::new(io::ErrorKind::UnexpectedEof, "peer closed without a reply")
+            })
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "forwarded call to {} exceeded its {} ms round-trip budget",
+                    path.display(),
+                    timeout.as_millis()
+                ),
+            ))
+        })
     }
-    let fd = crate::protocol::connect_seqpacket(socket_path)?;
-    apply_round_trip_timeout(&fd, timeout)?;
-    crate::protocol::send_json_frame(fd.as_raw_fd(), request)?;
-    let response = crate::protocol::recv_json_frame::<ForwardOperationResponse>(fd.as_raw_fd())?;
-    response.ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "peer closed without a reply"))
-}
-
-/// Bound the whole dial-to-reply round trip with one absolute deadline.
-///
-/// A peer that accepts a forwarded call and then stalls must not hold a
-/// broker worker past the budget it was given, so the read deadline is the
-/// bound that survives a peer this process does not control. A sub-tick
-/// budget floors to one microsecond rather than zero, because a zero
-/// `SO_RCVTIMEO` means "wait forever" to the kernel.
-fn apply_round_trip_timeout(fd: impl std::os::fd::AsFd, timeout: Duration) -> io::Result<()> {
-    let seconds = i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX);
-    let mut micros = i64::try_from(timeout.subsec_micros()).unwrap_or(0);
-    if seconds == 0 && micros == 0 {
-        micros = 1;
-    }
-    let deadline = nix::sys::time::TimeVal::new(seconds, micros);
-    nix::sys::socket::setsockopt(&fd, nix::sys::socket::sockopt::ReceiveTimeout, &deadline)
-        .map_err(io_error_from_errno)?;
-    nix::sys::socket::setsockopt(&fd, nix::sys::socket::sockopt::SendTimeout, &deadline)
-        .map_err(io_error_from_errno)
-}
-
-fn io_error_from_errno(errno: nix::errno::Errno) -> io::Error {
-    io::Error::from_raw_os_error(errno as i32)
 }
 
 #[cfg(test)]
@@ -251,7 +271,9 @@ mod tests {
     }
 
     impl Peer {
-        fn spawn(answer: impl Fn(ForwardOperationRequest) -> ForwardOperationResponse + Send + 'static) -> Self {
+        fn spawn(
+            answer: impl Fn(ForwardOperationRequest) -> ForwardOperationResponse + Send + 'static,
+        ) -> Self {
             let dir = tempfile::tempdir().expect("peer socket dir");
             let path = dir.path().join("forward.sock");
             let listener = bind_seqpacket(&path).expect("bind peer socket");
@@ -289,7 +311,28 @@ mod tests {
         use nix::sys::socket::{SockFlag, accept4};
         accept4(listener.as_raw_fd(), SockFlag::empty())
             .map(crate::sys::owned_fd_from_raw)
-            .map_err(io_error_from_errno)
+            .map_err(|err| io::Error::from_raw_os_error(err as i32))
+    }
+
+    /// One runtime for these tests: the forwarder is async because the peer
+    /// leg is, so a test drives it exactly the way the broker does.
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Runtime::new().expect("forwarding test runtime")
+    }
+
+    /// One forwarded call through a fresh runtime, as the broker makes it.
+    fn forward(
+        forwarder: &SocketForwarder,
+        operation: &str,
+        invocation_id: &str,
+        payload: &CanonicalJsonObject,
+    ) -> Result<DispatchOutcome, DispatchFailure> {
+        runtime().block_on(forwarder.forward(ForwardedOperation {
+            operation,
+            zone: "work",
+            invocation_id,
+            payload,
+        }))
     }
 
     fn echo_digest(request: ForwardOperationRequest) -> ForwardOperationResponse {
@@ -319,20 +362,19 @@ mod tests {
     fn a_forwarded_call_reaches_the_peer_and_returns_its_result() {
         let peer = Peer::spawn(echo_digest);
         let payload = payload();
-        let outcome = peer
-            .forwarder()
-            .forward(ForwardedOperation {
-                operation: "UsbipBind",
-                zone: "work",
-                invocation_id: "invocation-7",
-                payload: &payload,
-            })
+        let outcome = forward(&peer.forwarder(), "UsbipBind", "invocation-7", &payload)
             .expect("the peer answered");
         assert_eq!(peer.calls(), 1);
         let rendered = outcome.result.to_canonical_bytes();
         let rendered = String::from_utf8(rendered).expect("canonical json is utf-8");
-        assert!(rendered.contains("\"operation\":\"UsbipBind\""), "{rendered}");
-        assert!(rendered.contains("\"invocation\":\"invocation-7\""), "{rendered}");
+        assert!(
+            rendered.contains("\"operation\":\"UsbipBind\""),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("\"invocation\":\"invocation-7\""),
+            "{rendered}"
+        );
         assert!(rendered.contains("\"fields\":2"), "{rendered}");
         assert!(
             rendered.contains(
@@ -349,14 +391,7 @@ mod tests {
     fn a_payload_the_peer_never_saw_cannot_produce_the_result() {
         let peer = Peer::spawn(echo_digest);
         let other = CanonicalJsonObject::parse(br#"{"busId":"9-9"}"#).expect("canonical payload");
-        let outcome = peer
-            .forwarder()
-            .forward(ForwardedOperation {
-                operation: "UsbipBind",
-                zone: "work",
-                invocation_id: "invocation-8",
-                payload: &other,
-            })
+        let outcome = forward(&peer.forwarder(), "UsbipBind", "invocation-8", &other)
             .expect("the peer answered");
         let rendered = String::from_utf8(outcome.result.to_canonical_bytes()).expect("utf-8");
         assert!(
@@ -377,14 +412,7 @@ mod tests {
                 code: "usbip-device-absent".to_owned(),
             },
         });
-        let failure = peer
-            .forwarder()
-            .forward(ForwardedOperation {
-                operation: "UsbipBind",
-                zone: "work",
-                invocation_id: "invocation-9",
-                payload: &payload(),
-            })
+        let failure = forward(&peer.forwarder(), "UsbipBind", "invocation-9", &payload())
             .expect_err("the peer refused the call");
         assert_eq!(failure.code, "usbip-device-absent");
         assert_eq!(peer.calls(), 1);
@@ -392,13 +420,13 @@ mod tests {
 
     #[test]
     fn an_unrouted_forwarder_refuses_every_operation() {
-        let failure = UnroutedForwarder
-            .forward(ForwardedOperation {
+        let failure = runtime()
+            .block_on(UnroutedForwarder.forward(ForwardedOperation {
                 operation: "UsbipBind",
                 zone: "work",
                 invocation_id: "invocation-10",
                 payload: &payload(),
-            })
+            }))
             .expect_err("no peer is configured");
         assert_eq!(failure.code, crate::envelope::UNREGISTERED_HANDLER);
     }
@@ -407,14 +435,36 @@ mod tests {
     fn a_peer_that_is_not_there_refuses_rather_than_succeeding() {
         let dir = tempfile::tempdir().expect("dir");
         let forwarder = SocketForwarder::new(dir.path().join("absent.sock"));
-        let failure = forwarder
-            .forward(ForwardedOperation {
-                operation: "UsbipBind",
-                zone: "work",
-                invocation_id: "invocation-11",
-                payload: &payload(),
-            })
+        let failure = forward(&forwarder, "UsbipBind", "invocation-11", &payload())
             .expect_err("an absent peer serves nothing");
         assert_eq!(failure.code, crate::envelope::UNREGISTERED_HANDLER);
+    }
+
+    #[test]
+    fn a_peer_that_accepts_and_never_answers_is_bounded_by_the_round_trip_budget() {
+        // The peer accepts the dial and then says nothing. A blocking
+        // exchange with no deadline would hold the caller forever; the
+        // round trip is bounded in async time instead, so the call returns
+        // inside its budget with the fail-closed refusal.
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("silent.sock");
+        let listener = bind_seqpacket(&path).expect("bind silent peer socket");
+        let held = std::thread::spawn(move || {
+            let accepted = accept(&listener).expect("accept the dial");
+            // Hold the connection open past the caller's budget.
+            std::thread::sleep(Duration::from_millis(750));
+            drop(accepted);
+        });
+        let forwarder = SocketForwarder::with_timeout(path, Duration::from_millis(150));
+        let started = std::time::Instant::now();
+        let failure = forward(&forwarder, "UsbipBind", "invocation-12", &payload())
+            .expect_err("a peer that never answers serves nothing");
+        let elapsed = started.elapsed();
+        assert_eq!(failure.code, crate::envelope::UNREGISTERED_HANDLER);
+        assert!(
+            elapsed < Duration::from_millis(700),
+            "the round trip must end on its own budget, not on the peer: {elapsed:?}"
+        );
+        held.join().expect("silent peer thread");
     }
 }

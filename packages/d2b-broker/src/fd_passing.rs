@@ -3,6 +3,7 @@ use std::io;
 use std::os::fd::RawFd;
 
 use nix::cmsg_space;
+use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::sys::socket::{ControlMessage, ControlMessageOwned, MsgFlags, recvmsg, sendmsg};
 use nix::sys::stat::fstat;
@@ -18,6 +19,10 @@ pub enum FdPassingError {
     MessageTruncated,
     ControlTruncated,
     IOError,
+    /// Nothing is ready on the socket. A nonblocking receive reports an
+    /// empty descriptor here rather than a failed one, so the caller can
+    /// wait for readability and retry instead of treating it as malformed.
+    WouldBlock,
 }
 
 #[derive(Debug, Default)]
@@ -129,7 +134,10 @@ fn recv_fds_with_capacity_inner(
         // setting FD_CLOEXEC with F_SETFD after recvmsg races a concurrent
         // fork+exec in the receiving process.
         let message = recvmsg::<()>(sock, &mut iov, Some(&mut cmsg), MsgFlags::MSG_CMSG_CLOEXEC)
-            .map_err(|_| FdPassingError::IOError)?;
+            .map_err(|err| match err {
+                Errno::EAGAIN => FdPassingError::WouldBlock,
+                _ => FdPassingError::IOError,
+            })?;
         if message
             .flags
             .intersects(MsgFlags::MSG_TRUNC | MsgFlags::MSG_CTRUNC)

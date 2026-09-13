@@ -522,3 +522,34 @@
   interaction accept loops park in the kernel on their listener instead of
   sleeping per iteration, and the synchronous seat that drives async work
   reuses one process-wide runtime instead of building one per call.
+
+- The broker serves requests concurrently. Its accept loop is an async loop on
+  the tokio reactor that hands each accepted connection to its own task behind
+  an in-flight gate, and the frames cross a nonblocking `SOCK_SEQPACKET`
+  descriptor through `tokio::io::unix::AsyncFd` - the pattern the session crate
+  already uses - instead of a blocking read and write inline on the accept
+  thread. A caller that connects and then sends nothing no longer holds the
+  next caller's request behind it.
+- The broker's request body runs on a bounded dispatch pool rather than on the
+  accept thread or a reactor worker. The steps with no async form - the
+  per-request bundle reload, the handlers' subprocess and filesystem work, the
+  audit append - run on a fixed worker set with one bounded queue each, and the
+  connection task awaits its own job, so a queued request waits in async time
+  instead of in a thread and the pool's size is a bound rather than a per-call
+  resource.
+- The broker's forwarding dial is async and deadline-bounded. The seqpacket
+  connection is nonblocking, the whole round trip - dial, request frame, reply
+  frame - sits under one async budget, and the kernel-level receive and send
+  timeouts are gone. A peer that accepts and then never answers returns inside
+  its budget instead of holding a broker thread, and a dial the kernel cannot
+  complete waits out its own deadline rather than blocking unbounded.
+- The broker's operation envelope and its forwarder seam are async:
+  `OperationDispatcher::dispatch` and `OperationForwarder::forward` return
+  boxed futures so `dyn` dispatch survives, `BrokerEnvelope::call` is async,
+  and a local handler still answers from a ready future.
+- The obs-vsock socket ACL refresh is an async retry with a deadline instead of
+  a thread per call: one pending refresh per socket, each attempt on the
+  dispatch pool, and no thread is spawned for a socket that has not appeared
+  yet.
+- The broker's SIGCHLD reap loop shares the reactor the accept loop runs on
+  instead of owning a second runtime.

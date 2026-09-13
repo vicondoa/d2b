@@ -761,17 +761,31 @@ mod tests {
     }
 
     #[test]
-    fn every_ownership_class_owns_rows() {
-        for owner in [
+    fn every_ownership_class_a_row_carries_is_declared() {
+        // Retiring the callerless transport concerns emptied the
+        // transport-excluded class, so owning rows is no longer what every
+        // class does. What must hold is that no row carries a class outside
+        // the declared vocabulary, and that a class still in use owns rows -
+        // an owner a generator invents, or an in-use class that silently
+        // empties, both fail here.
+        let declared = [
             OperationOwner::Family,
             OperationOwner::BrokerGeneric,
             OperationOwner::TransportExcluded,
-        ] {
+        ];
+        for row in BROKER_OPERATION_CATALOG {
+            assert!(
+                declared.contains(&row.owner),
+                "{} is not a declared ownership class",
+                row.owner.as_str()
+            );
+        }
+        for owner in [OperationOwner::Family, OperationOwner::BrokerGeneric] {
             assert!(
                 BROKER_OPERATION_CATALOG
                     .iter()
                     .any(|row| row.owner == owner),
-                "{} owns no committed row",
+                "{} is in use but owns no committed row",
                 owner.as_str()
             );
         }

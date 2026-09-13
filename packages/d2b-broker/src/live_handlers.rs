@@ -20,12 +20,15 @@
 //! exercised by the broker integration tests (broker-pidfd-adopt-roundtrip.sh
 //! and broker-spawn-runner-smoke.sh).
 
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 
 use crate::ops::exec_reconcile::{
     GeneratedSshKey, IpRouteVerb, ReconcileExecError, ReconcileExecutor,
@@ -2537,26 +2540,101 @@ fn grant_obs_vsock_acl_once(uid: u32, socket: &Path) -> Result<bool, String> {
     Ok(socket.exists())
 }
 
+/// How long one obs-vsock ACL refresh keeps retrying before it gives up.
+const OBS_VSOCK_ACL_RETRY_WINDOW: Duration = Duration::from_secs(30);
+/// How long one obs-vsock ACL refresh waits between attempts.
+const OBS_VSOCK_ACL_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+
+/// The sockets whose ACL refresh is still pending.
+///
+/// One entry per socket rather than per spawn: every runner sharing an obs
+/// VM's socket shares its pending refresh, so what is in flight is the number
+/// of distinct sockets, not the number of calls that asked.
+static PENDING_OBS_VSOCK_ACL_RETRIES: LazyLock<Mutex<HashSet<(u32, PathBuf)>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// The pending-set guard: the socket stays claimed until its refresh ends.
+struct PendingObsVsockAclRetry {
+    uid: u32,
+    socket: PathBuf,
+}
+
+impl Drop for PendingObsVsockAclRetry {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = PENDING_OBS_VSOCK_ACL_RETRIES.lock() {
+            pending.remove(&(self.uid, self.socket.clone()));
+        }
+    }
+}
+
+/// Claim one socket's pending refresh; `false` means one is already waiting.
+fn claim_obs_vsock_acl_retry(uid: u32, socket: &Path) -> bool {
+    match PENDING_OBS_VSOCK_ACL_RETRIES.lock() {
+        Ok(mut pending) => pending.insert((uid, socket.to_path_buf())),
+        // A poisoned set must not stop the ACL from being refreshed.
+        Err(_) => true,
+    }
+}
+
+/// Wait for a socket the runner will create, then grant it the runner's ACL.
+///
+/// The wait is an async deadline on the broker's reactor, not a thread: the
+/// socket appears when the obs VM's relay binds it, which is sooner or later
+/// than any sleep, so the retry sleeps in timer time and gives up on its own
+/// budget. Each attempt is a `setfacl` shellout and a filesystem walk, which
+/// have no async form; they run on the broker's bounded dispatch pool like
+/// every other kernel-path step, so a socket that never appears holds no
+/// worker and no thread.
 fn spawn_obs_vsock_acl_retry(uid: u32, socket: PathBuf) {
-    std::thread::spawn(move || {
-        for _ in 0..120 {
-            match grant_obs_vsock_acl_once(uid, &socket) {
-                Ok(true) => return,
-                Ok(false) => {}
-                Err(err) => {
+    let Some(background) = crate::runtime::broker_background() else {
+        // Only a serving broker has a reactor to wait on; a handler driven
+        // outside one has nothing to retry against either.
+        tracing::warn!(
+            path = %socket.display(),
+            "obs-vsock socket ACL refresh dropped: no broker reactor is running",
+        );
+        return;
+    };
+    if !claim_obs_vsock_acl_retry(uid, &socket) {
+        return;
+    }
+    let pending = PendingObsVsockAclRetry {
+        uid,
+        socket: socket.clone(),
+    };
+    background.runtime.spawn(async move {
+        let _pending = pending;
+        let deadline = tokio::time::Instant::now() + OBS_VSOCK_ACL_RETRY_WINDOW;
+        loop {
+            let attempt = {
+                let socket = socket.clone();
+                background
+                    .dispatches
+                    .run(move || grant_obs_vsock_acl_once(uid, &socket))
+                    .await
+            };
+            match attempt {
+                Ok(Ok(true)) => return,
+                Ok(Ok(false)) => {}
+                Ok(Err(err)) => {
                     tracing::debug!(
                         path = %socket.display(),
                         error = %err,
                         "obs-vsock socket ACL refresh not ready yet",
                     );
                 }
+                // The pool is gone, so the broker is shutting down.
+                Err(_) => return,
             }
-            std::thread::sleep(std::time::Duration::from_millis(250));
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    path = %socket.display(),
+                    "obs-vsock socket ACL refresh timed out",
+                );
+                return;
+            }
+            tokio::time::sleep(OBS_VSOCK_ACL_RETRY_INTERVAL).await;
         }
-        tracing::warn!(
-            path = %socket.display(),
-            "obs-vsock socket ACL refresh timed out",
-        );
     });
 }
 
