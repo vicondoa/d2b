@@ -590,6 +590,11 @@ impl<'de> Deserialize<'de> for ProviderStatusExtension {
 #[serde(rename_all = "camelCase")]
 pub struct ResourceStatus {
     observed_generation: ObservedGeneration,
+    /// The row generation this status was published for, when one was
+    /// published at all. It equals `observed_generation` for a status that
+    /// describes the current spec, and is older when the row has advanced
+    /// past it, which is what makes that skew visible to a reader.
+    status_generation: Option<ObservedGeneration>,
     phase: ResourcePhase,
     conditions: Vec<ResourceCondition>,
     last_reconciled_at: Option<Timestamp>,
@@ -607,6 +612,7 @@ impl ResourceStatus {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         observed_generation: ObservedGeneration,
+        status_generation: Option<ObservedGeneration>,
         phase: ResourcePhase,
         mut conditions: Vec<ResourceCondition>,
         last_reconciled_at: Option<Timestamp>,
@@ -630,6 +636,7 @@ impl ResourceStatus {
         ensure_layer_size(&resource)?;
         let value = Self {
             observed_generation,
+            status_generation,
             phase,
             conditions,
             last_reconciled_at,
@@ -653,6 +660,12 @@ impl ResourceStatus {
     /// Return the latest accounted-for spec generation.
     pub const fn observed_generation(&self) -> ObservedGeneration {
         self.observed_generation
+    }
+
+    /// Return the row generation this status was published for, when one was
+    /// published at all. `None` means the row carries no status.
+    pub const fn status_generation(&self) -> Option<ObservedGeneration> {
+        self.status_generation
     }
 
     /// Return the universal phase.
@@ -698,6 +711,7 @@ impl<'de> Deserialize<'de> for ResourceStatus {
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Wire {
             observed_generation: ObservedGeneration,
+            status_generation: RequiredNullable<ObservedGeneration>,
             phase: ResourcePhase,
             conditions: Vec<ResourceCondition>,
             last_reconciled_at: RequiredNullable<Timestamp>,
@@ -711,6 +725,7 @@ impl<'de> Deserialize<'de> for ResourceStatus {
         let wire = Wire::deserialize(deserializer)?;
         Self::new(
             wire.observed_generation,
+            wire.status_generation.0,
             wire.phase,
             wire.conditions,
             wire.last_reconciled_at.0,
@@ -881,6 +896,7 @@ mod tests {
         .unwrap();
         let status = ResourceStatus::new(
             ObservedGeneration::new(1),
+            Some(ObservedGeneration::new(1)),
             ResourcePhase::Ready,
             Vec::new(),
             Some(timestamp()),
@@ -926,6 +942,7 @@ mod tests {
         assert!(!format!("{secret_marker:?}").contains("operator-only"));
         let status = ResourceStatus::new(
             ObservedGeneration::new(0),
+            None,
             ResourcePhase::Pending,
             Vec::new(),
             None,
@@ -1061,6 +1078,7 @@ mod tests {
         .unwrap();
         let status = ResourceStatus::new(
             ObservedGeneration::new(1),
+            Some(ObservedGeneration::new(1)),
             ResourcePhase::Ready,
             vec![condition.clone()],
             Some(timestamp()),

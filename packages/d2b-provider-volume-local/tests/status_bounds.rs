@@ -62,6 +62,7 @@ fn status_with_layers(
 ) -> Result<ResourceStatus, ResourceStatusError> {
     ResourceStatus::new(
         ObservedGeneration::new(1),
+        Some(ObservedGeneration::new(1)),
         ResourcePhase::Degraded,
         Vec::new(),
         None,
@@ -151,6 +152,7 @@ fn condition_list_and_map_cardinality_caps_are_typed_rejections() {
         typed_oversize(
             ResourceStatus::new(
                 ObservedGeneration::new(1),
+                Some(ObservedGeneration::new(1)),
                 ResourcePhase::Ready,
                 conditions,
                 None,
