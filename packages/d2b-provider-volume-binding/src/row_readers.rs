@@ -1,16 +1,18 @@
-//! Read-side helpers for Core-owned Binding children.
+//! Read-side helpers over a stored `VolumeBinding` row.
 //!
-//! The Guest family's child reconciliation lives in the per-type drivers
-//! (`guest_driver` / `guest_effects`), which read the manager view directly;
-//! this module keeps only the two pure readers over a stored VolumeBinding
-//! row: the fenced readiness projection and the typed spec parse.
+//! Every consumer of a binding row - the Guest driver deciding whether a
+//! binding gates a start, the plane's admission check reading what a binding
+//! declares, and the family's own driver tests - reads it through the two
+//! pure readers here: the fenced readiness projection the binding actor
+//! publishes, and the typed spec parse. Neither touches a store, and both
+//! fail closed on a row they cannot read.
 
 use d2b_contracts_resource::v3::volume_binding::{VolumeBindingSpec, VolumeBindingStatusResource};
 use d2b_contracts_resource::v3::StoredResource;
 
 /// Whether one stored VolumeBinding carries a current fenced readiness
 /// projection.  Unparseable or unfenced projections fail closed.
-pub(crate) fn binding_readiness_current(child: &StoredResource) -> bool {
+pub fn binding_readiness_current(child: &StoredResource) -> bool {
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&child.canonical_json) else {
         return false;
     };
@@ -30,7 +32,7 @@ pub(crate) fn binding_readiness_current(child: &StoredResource) -> bool {
 /// Parse a stored binding envelope to its typed spec, stripping the
 /// reserved envelope fields the minter stores alongside the five typed
 /// ones.  Returns None for genuinely broken resources.
-pub(crate) fn parsed_binding_spec(binding: &StoredResource) -> Option<VolumeBindingSpec> {
+pub fn parsed_binding_spec(binding: &StoredResource) -> Option<VolumeBindingSpec> {
     let mut spec = serde_json::from_slice::<serde_json::Value>(&binding.canonical_json)
         .ok()?
         .get("spec")?

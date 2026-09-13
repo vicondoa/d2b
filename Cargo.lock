@@ -1629,6 +1629,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-volume"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-volume-local",
+ "d2b-provider-volume-virtiofs",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-volume-binding"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-process-minijail",
+ "d2b-provider-volume-virtiofs",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "d2b-provider-volume-local"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1878,6 +1909,8 @@ dependencies = [
  "d2b-provider-system-core",
  "d2b-provider-toolkit",
  "d2b-provider-transport-azure-relay",
+ "d2b-provider-volume",
+ "d2b-provider-volume-binding",
  "d2b-provider-volume-local",
  "d2b-provider-volume-virtiofs",
  "d2b-resource-api",

@@ -53,6 +53,12 @@ use d2b_provider_process::{
     GuestOwnerIdentitySource, ProcessDriverArgs, ProcessDriverEffects, decode_metadata_owner_ref,
     process_family_descriptors,
 };
+use d2b_provider_volume::{
+    VolumeDriverArgs, VolumeDriverEffects, volume_descriptor,
+};
+use d2b_provider_volume_binding::{
+    BindingDriverArgs, BindingDriverEffects, binding_descriptor,
+};
 use d2b_provider_volume_local::{VolumeLocalController, VolumeLocalProfile};
 use d2b_provider_volume_virtiofs::{MAX_SOCKET_PATH_BYTES, SocketIdentity, StoredBinding};
 use d2b_resource_api::manager_backend::nix_bundle_subject;
@@ -78,10 +84,7 @@ use crate::activation_driver::{
     ActivationDriverArgs, ActivationDriverEffects, ActivationDriverFactory,
     ProductionActivationDriverEffects, activation_spec_decoder,
 };
-use crate::binding_driver::{
-    BindingDriverArgs, BindingDriverEffects, BindingDriverFactory, ProductionBindingDriverEffects,
-    binding_spec_decoder,
-};
+use crate::binding_effects::ProductionBindingDriverEffects;
 use crate::credential_driver::{
     CredentialDriverArgs, CredentialDriverEffects, CredentialDriverFactory, credential_spec_decoder,
 };
@@ -94,9 +97,7 @@ use crate::semantic_binding_resource_runtime::{
     TELEMETRY_BINDING_TYPE, TELEMETRY_SERVICE_TYPE, TelemetryDriverFactory,
     telemetry_spec_decoder,
 };
-use crate::volume_driver::{
-    ProductionVolumeDriverEffects, VolumeDriverArgs, VolumeDriverEffects, volume_spec_decoder,
-};
+use crate::volume_effects::ProductionVolumeDriverEffects;
 use crate::shared_provider_driver::{
     SharedProviderDriverArgs, SharedProviderDriverEffects, SharedProviderDriverFactory,
     shared_provider_spec_decoder,
@@ -1755,17 +1756,20 @@ impl ResourcePlaneV3 {
         }) {
             providers.register_driver(&descriptor)?;
         }
-        providers.register(Arc::new(crate::volume_driver::VolumeDriverFactory::new(
-            VolumeDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                effects: Arc::clone(&inputs.volume_effects),
-            },
-        )))?;
-        providers.register(Arc::new(BindingDriverFactory::new(BindingDriverArgs {
+        // The Volume and VolumeBinding types register through their driver
+        // declarations: the registry serves each type's decoder and factory
+        // from its declaration, and the declaration carries the family's
+        // verbs, execution domains, exportability, reads, and the children it
+        // may create.
+        providers.register_driver(&volume_descriptor(VolumeDriverArgs {
+            zone: inputs.zone.as_str().to_owned(),
+            effects: Arc::clone(&inputs.volume_effects),
+        }))?;
+        providers.register_driver(&binding_descriptor(BindingDriverArgs {
             zone: inputs.zone.as_str().to_owned(),
             effects: Arc::clone(&inputs.binding_effects),
             vcpu_count: inputs.authority.vcpu_count,
-        })))?;
+        }))?;
         // The Endpoint type registers through its driver declaration: the
         // registry serves the type's decoder and factory from it, and the
         // declaration carries the family's verbs, execution domains,
@@ -1814,8 +1818,6 @@ impl ResourcePlaneV3 {
     /// families whose builders this plane still wires directly.
     fn decoders(providers: &ProviderDirectory) -> HashMap<ResourceTypeName, Arc<dyn SpecDecoder>> {
         let mut decoders = providers.decoders();
-        decoders.insert(ResourceTypeName::new("Volume"), volume_spec_decoder());
-        decoders.insert(ResourceTypeName::new("VolumeBinding"), binding_spec_decoder());
         decoders.insert(
             ResourceTypeName::new(crate::activation_driver::ACTIVATION_TYPE_NAME),
             activation_spec_decoder(),

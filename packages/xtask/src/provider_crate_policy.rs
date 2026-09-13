@@ -597,11 +597,6 @@ const SHARED_DRIVER_EXEMPTIONS: &[SharedDriverExemption] = &[
         retires_with: "the family moves into its own provider crate",
     },
     SharedDriverExemption {
-        module: "packages/d2bd/src/binding_driver.rs",
-        family: "volume-binding",
-        retires_with: "the family moves into its own provider crate",
-    },
-    SharedDriverExemption {
         module: "packages/d2bd/src/core_driver.rs",
         family: "core",
         retires_with: "the family moves into its own provider crate",
@@ -634,11 +629,6 @@ const SHARED_DRIVER_EXEMPTIONS: &[SharedDriverExemption] = &[
     SharedDriverExemption {
         module: "packages/d2bd/src/system_core_driver.rs",
         family: "host/user",
-        retires_with: "the family moves into its own provider crate",
-    },
-    SharedDriverExemption {
-        module: "packages/d2bd/src/volume_driver.rs",
-        family: "volume",
         retires_with: "the family moves into its own provider crate",
     },
 ];
@@ -1721,8 +1711,8 @@ mod tests {
         let d2bd = fixture.root.join("packages/d2bd/src");
         fs::create_dir_all(&d2bd).unwrap();
         fs::write(
-            d2bd.join("volume_driver.rs"),
-            "impl ResourceDriver for VolumeDriver {}\n",
+            d2bd.join("credential_driver.rs"),
+            "impl ResourceDriver for CredentialDriver {}\n",
         )
         .unwrap();
         let error = check_shared_driver_placements(&fixture.root)
@@ -1732,7 +1722,7 @@ mod tests {
             error.contains("packages/d2bd/src/activation_driver.rs"),
             "{error}"
         );
-        if error.contains("packages/d2bd/src/volume_driver.rs") {
+        if error.contains("packages/d2bd/src/credential_driver.rs") {
             panic!("the module that still declares a driver must not be stale: {error}");
         }
     }
