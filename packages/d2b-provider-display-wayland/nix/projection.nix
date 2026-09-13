@@ -115,7 +115,7 @@ let
       providerRef = providerRef;
       endpointClass = "transport";
       transport = "opaque-carriage";
-      purpose = "display-wayland.d2bus.org/cross-domain";
+      purpose = "display-wayland-cross-domain";
       serviceFingerprint = null;
       locality = "cross-domain";
       visibility = "owner";

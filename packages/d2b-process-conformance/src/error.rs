@@ -23,6 +23,9 @@ pub enum ProcessConformanceError {
     IdentityUnverified,
     /// The effect adapter returned no verified pidfd evidence.
     PidfdUnavailable,
+    /// Trusted launch configuration could not be resolved for the ticket;
+    /// nothing was launched and no process identity is in question.
+    ResolutionFailed,
     /// The effect adapter could not launch the process.
     LaunchFailed,
     /// Observed identity is ambiguous; the process is quarantined.
@@ -58,6 +61,7 @@ impl ProcessConformanceError {
             Self::ProviderMismatch => "provider-mismatch",
             Self::IdentityUnverified => "identity-unverified",
             Self::PidfdUnavailable => "pidfd-unavailable",
+            Self::ResolutionFailed => "resolution-failed",
             Self::LaunchFailed => "launch-failed",
             Self::AdoptionAmbiguous => "adoption-ambiguous",
             Self::WaitOwnerMismatch => "wait-owner-mismatch",
@@ -73,13 +77,14 @@ impl ProcessConformanceError {
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::InvalidTicket,
         Self::DomainNotSupported,
         Self::UserRefRequired,
         Self::ProviderMismatch,
         Self::IdentityUnverified,
         Self::PidfdUnavailable,
+        Self::ResolutionFailed,
         Self::LaunchFailed,
         Self::AdoptionAmbiguous,
         Self::WaitOwnerMismatch,

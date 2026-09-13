@@ -41,6 +41,44 @@ let
 
   processProviderRef = "Provider/system-minijail";
 
+  # Declared worker sandbox posture. The private template binding pins the
+  # executable and the seccomp profile; this block is the public half the
+  # broker fences the launch plan against before it clones the worker, and
+  # the resource compiler refuses a row whose sandbox disagrees with the
+  # template's closed posture.
+  #
+  # umask 0007: swtpm binds the TPM/control sockets as a shared Unix socket
+  # its peer connects to as a different uid, so the requested 0660 mode must
+  # survive the create (see RoleProfile::umask).
+  swtpmSandbox = {
+    namespaceClasses = [ "mount" "pid" "user" ];
+    capabilityClasses = [ ];
+    seccompClass = "strict";
+    noNewPrivileges = true;
+    startRoot = false;
+    readOnlyRoot = true;
+    environmentClass = "minimal";
+    umask = "0007";
+    oomScoreAdj = 0;
+    userNamespace = { mappingClass = "process-principal-root"; };
+  };
+
+  # The mandatory pre-start flush is a one-shot `swtpm-ioctl -i`: it runs as
+  # its system principal directly, with no user namespace (ADR 0021 applies
+  # the process-principal-root mapping to long-lived workers only).
+  flushSandbox = {
+    namespaceClasses = [ "mount" "pid" ];
+    capabilityClasses = [ ];
+    seccompClass = "strict";
+    noNewPrivileges = true;
+    startRoot = false;
+    readOnlyRoot = true;
+    environmentClass = "minimal";
+    umask = "0007";
+    oomScoreAdj = 0;
+    userNamespace = null;
+  };
+
   deviceRows = zoneName:
     let executionRef = providerExecutionRef zoneName;
     in if executionRef == null
@@ -71,6 +109,7 @@ let
         domain = "system";
         processClass = "worker";
         template = "swtpm-socket";
+        sandbox = swtpmSandbox;
         desiredLifecycle = "running";
         deviceUsage = [ ];
         networkUsage = null;
@@ -92,6 +131,7 @@ let
         domain = "system";
         processClass = "worker";
         template = "swtpm-init-flush";
+        sandbox = flushSandbox;
         deviceUsage = [ ];
         networkUsage = null;
       };
@@ -127,7 +167,7 @@ let
             providerRef = providerRef;
             endpointClass = "device";
             transport = "opaque-carriage";
-            purpose = "device-tpm.d2bus.org/tpm";
+            purpose = "swtpm-tpm-socket";
             serviceFingerprint = null;
             locality = "host-local";
             visibility = "owner";
@@ -155,7 +195,7 @@ let
             providerRef = providerRef;
             endpointClass = "control";
             transport = "opaque-carriage";
-            purpose = "device-tpm.d2bus.org/control";
+            purpose = "swtpm-control-socket";
             serviceFingerprint = null;
             locality = "host-local";
             visibility = "owner";

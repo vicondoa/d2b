@@ -1,0 +1,32 @@
+[package]
+name = "d2b-resource-runtime"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ractor.workspace = true
+rusqlite.workspace = true
+rusqlite_migration.workspace = true
+thiserror = "2"
+# v3 resource-runtime rewrite (U3): deterministic resource uids (R8) hash
+# the stable `(zone, type, name)` identity so owned-child graphs and
+# adoption identities reconstruct identically after restart.
+# First consumed by packages/d2b-resource-runtime (this commit).
+sha2.workspace = true
+async-trait = "0.1"
+serde_json.workspace = true
+# Issue #508: the resource actor prints the one canonical structured failure
+# line (`DriverFailure::log_line`) so the operator log and the wire status are
+# projections of the same detail. First consumed by this crate.
+tracing = "0.1"
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }

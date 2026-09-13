@@ -95,7 +95,7 @@ struct GuestArgs {
     guest_uid: String,
     #[arg(long)]
     zone: String,
-    #[arg(long, default_value = "zone-link")]
+    #[arg(long, default_value = "component-session")]
     purpose: String,
     #[arg(long)]
     schema_fingerprint: String,

@@ -14,7 +14,7 @@ mod identity;
 pub mod metrics;
 pub mod quota_gate;
 pub mod service;
-pub mod registered;
+pub mod manager_backend;
 mod store;
 pub mod watch;
 pub mod zone_service;
@@ -28,11 +28,12 @@ pub use admission::{AdmissionError, AdmittedMutation};
 pub use protobuf;
 pub use authz::{AuthorizationLease, StoreSealHandoffError};
 pub use client::ResourceApiClient;
-pub use registered::RedbRegisteredControllerApi;
-pub use d2b_resource_store::PreparedStoreMutation;
+pub use d2b_contracts_resource::v3::PreparedStoreMutation;
 pub use identity::AuthenticatedSubjectContext;
+pub use store::{ResourceStoreBackend, StoreBindingError};
 pub use service::{GuestLifecycleAdmission, ResourceService};
-pub use store::{RedbBackend, ResourceStoreBackend, StoreBindingError};
+pub use watch::{WatchFrame, WatchSink, WatchSinkError};
+
 pub use zone_service::{
     StrictWireMessage, ZoneCallContext, ZoneMethod, ZoneService, ZoneServiceError,
     ZoneServiceHandler,

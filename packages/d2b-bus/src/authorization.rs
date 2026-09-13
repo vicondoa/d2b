@@ -564,7 +564,7 @@ mod tests {
         ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
         PolicyRule, RelayGrantAuthority, ResourceVerb,
     };
-    use d2b_resource_store::PolicySnapshot;
+    use d2b_contracts_resource::v3::PolicySnapshot;
 
     use super::*;
     use crate::{

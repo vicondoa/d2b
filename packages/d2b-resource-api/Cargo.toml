@@ -15,8 +15,7 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
-d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
-d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
+d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
 d2b-telemetry = { path = "../d2b-telemetry", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"
 serde_json.workspace = true
@@ -25,5 +24,6 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 ttrpc = { workspace = true, features = ["async"] }
 
 [dev-dependencies]
+ractor.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }

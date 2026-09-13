@@ -390,9 +390,16 @@ impl RouteAdmissionSessionBinding {
         policy: &base::EndpointPolicy,
         session: &d2b_session::AuthenticatedSessionRouteBinding,
     ) -> Result<Self, ZonePolicyError> {
-        policy
-            .validate_zone_link()
-            .map_err(|_| ZonePolicyError::ZoneLinkNotAdmissible)?;
+        // ZoneLink route admission binds the session it actually
+        // authenticated. Two enrolled profiles may carry a ZoneLink: a remote
+        // Provider stream between Zone controllers, and the Guest-local
+        // target-control ComponentSession the gateway Guest terminates (R20:
+        // that session is a ComponentSession, not a ZoneLink).
+        if policy.validate_zone_link().is_err()
+            && policy.validate_enrolled_guest_session().is_err()
+        {
+            return Err(ZonePolicyError::ZoneLinkNotAdmissible);
+        }
         let context = session.context();
         let expected_locality = match policy.transport_binding.locality {
             base::Locality::GuestLocal => IdentityLocality::Local,

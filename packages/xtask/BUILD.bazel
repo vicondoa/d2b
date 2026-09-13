@@ -243,8 +243,6 @@ rust_test(
         "//packages/d2b-resource-api:BUILD.bazel",
         "//packages/d2b-resource-client:BUILD.bazel",
         "//packages/d2b-resource-compiler:BUILD.bazel",
-        "//packages/d2b-resource-store:BUILD.bazel",
-        "//packages/d2b-resource-store-redb:BUILD.bazel",
         "//packages/d2b-session:BUILD.bazel",
         "//packages/d2b-session-unix:BUILD.bazel",
         "//packages/d2b-sk-frontend:BUILD.bazel",

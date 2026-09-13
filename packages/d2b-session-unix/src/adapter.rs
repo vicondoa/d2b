@@ -454,12 +454,22 @@ impl UnixSeqpacketTransport {
         let mut active_limits = self.limits;
         active_limits.protected_ciphertext_bytes =
             u32::try_from(protected_limit).map_err(|_| UnixSessionError::PayloadLimit)?;
-        let burst = self
-            .socket
-            .recv_burst(active_limits, self.capacity, &self.credits, 64)
-            .await?;
-        self.received.extend(burst.packets);
-        self.received.pop_front().ok_or(UnixSessionError::Closed)
+        loop {
+            let burst = self
+                .socket
+                .recv_burst(active_limits, self.capacity, &self.credits, 64)
+                .await?;
+            self.received.extend(burst.packets);
+            if let Some(packet) = self.received.pop_front() {
+                return Ok(packet);
+            }
+            // A burst comes back empty only when the readiness notification was
+            // already consumed (`drained_to_would_block`); the peer is still
+            // connected. That stale notification has now been cleared, so the
+            // next `recv_burst` parks on the reactor until the socket becomes
+            // readable again. A peer close never reaches this point: it arrives
+            // as `UnixSessionError::Closed` from `recv_burst` above.
+        }
     }
 
     fn received_transport_packet(

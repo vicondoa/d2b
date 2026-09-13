@@ -27,8 +27,6 @@ d2bd_runtime_deps = [
     "//packages/d2b-core-controller:d2b_core_controller",
     "//packages/d2b-host:d2b_host",
     "//packages/d2b-resource-api:d2b_resource_api",
-    "//packages/d2b-resource-store:d2b_resource_store",
-    "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
     "//packages/d2b-session:d2b_session",
     "//packages/d2b-session-unix:d2b_session_unix",
 ]
@@ -45,8 +43,6 @@ d2bd_runtime_test_deps = [
     "//packages/d2b-core-controller:d2b_core_controller_test_support",
     "//packages/d2b-host:d2b_host_test_support",
     "//packages/d2b-resource-api:d2b_resource_api_test_support",
-    "//packages/d2b-resource-store:d2b_resource_store_test_support",
-    "//packages/d2b-resource-store-redb:d2b_resource_store_redb_test_support",
     "//packages/d2b-session:d2b_session_test_support",
     "//packages/d2b-session-unix:d2b_session_unix_test_support",
 ]

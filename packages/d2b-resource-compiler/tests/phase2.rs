@@ -1054,3 +1054,420 @@ fn d2b_core_layout_error_mapping_is_closed() {
     let error = compile(&entry, &tree, &keys).unwrap_err();
     assert_eq!(error.kind().exit_code(), 95);
 }
+
+/// One verified Provider artifact whose executable set enumerates exactly
+/// `executables` - the shape a Device Provider packages: its controller
+/// binary plus the worker binaries the declared Device rows launch.
+fn device_worker_fixture(
+    artifact_id: &str,
+    executables: &[&str],
+) -> (
+    ArtifactCatalogEntry,
+    MemoryDir,
+    StaticPublisherKeys,
+    VerifiedProviderArtifact,
+) {
+    assert!(!executables.is_empty());
+    let execution = ComponentExecution::Launchable {
+        binary_ref: BinaryRef::parse(executables[0]).unwrap(),
+    };
+    let mut executable_digests = BTreeMap::new();
+    let mut tree = MemoryDir::default();
+    for (index, name) in executables.iter().enumerate() {
+        let mut binary = elf();
+        binary.push(u8::try_from(index).unwrap());
+        executable_digests.insert((*name).to_owned(), sha256_digest(&binary));
+        tree = tree.file(&format!("bin/{name}"), binary, 0o755);
+    }
+    tree = tree.node("bin", Node::Directory);
+    let controller_digest = executable_digests[executables[0]].clone();
+    let executable_set = executable_set_digest(&executable_digests).unwrap();
+    let schema = schema();
+    let schema_digest = sha256_digest(&schema);
+    let package_digest = sha256_digest(b"selected-output-nar");
+    let provider_manifest = manifest(
+        artifact_id,
+        controller_digest,
+        executable_set.clone(),
+        schema_digest.clone(),
+        execution,
+    );
+    let manifest_bytes = canonical_json_bytes(&provider_manifest).unwrap();
+    let manifest_digest = sha256_digest(&manifest_bytes);
+    let keypair = Ed25519KeyPair::from_seed_unchecked(&[7_u8; 32]).unwrap();
+    let signature = keypair.sign(&manifest_bytes).as_ref().to_vec();
+    let mut keys = StaticPublisherKeys::default();
+    keys.insert_key(PUBLISHER, SIGNATURE_ID, pem(keypair.public_key().as_ref()));
+    let tree = tree
+        .file(MANIFEST_PATH, manifest_bytes, 0o644)
+        .file(SIGNATURE_PATH, signature, 0o644)
+        .file(SCHEMA_PATH, schema, 0o644)
+        .node("share/d2b/provider", Node::Directory);
+    let entry = ArtifactCatalogEntry::new(
+        ArtifactId::parse(artifact_id).unwrap(),
+        "/nix/store/test-provider",
+        PUBLISHER,
+        SIGNATURE_ID,
+        CatalogDigests::new(
+            package_digest,
+            executable_set,
+            manifest_digest,
+            schema_digest,
+        ),
+    );
+    let compiled = compile(&entry, &tree, &keys).expect("verified provider artifact");
+    let artifact = VerifiedProviderArtifact::new(
+        entry.artifact_id().clone(),
+        entry.store_path().to_path_buf(),
+        compiled,
+    );
+    (entry, tree, keys, artifact)
+}
+
+fn device_row(
+    row_type: &str,
+    name: &str,
+    device: &str,
+    template: &str,
+    sandbox: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": row_type,
+        "metadata": {"name": name, "zone": "dev", "ownerRef": format!("Device/{device}")},
+        "spec": {
+            "providerRef": "Provider/system-minijail",
+            "executionRef": "Host/host-system",
+            "domain": "system",
+            "processClass": "worker",
+            "template": template,
+            "sandbox": sandbox,
+        }
+    })
+}
+
+fn device_worker_sandbox(namespaces: &[&str], user_namespace: bool) -> serde_json::Value {
+    serde_json::json!({
+        "namespaceClasses": namespaces,
+        "capabilityClasses": [],
+        "seccompClass": "strict",
+        "noNewPrivileges": true,
+        "startRoot": false,
+        "readOnlyRoot": true,
+        "environmentClass": "minimal",
+        "umask": "0007",
+        "oomScoreAdj": 0,
+        "userNamespace": if user_namespace {
+            serde_json::json!({"mappingClass": "process-principal-root"})
+        } else {
+            serde_json::Value::Null
+        },
+    })
+}
+
+fn device_worker_zone(
+    provider_name: &str,
+    devices: &[&str],
+    rows: Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    let mut resources = vec![
+        serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Host",
+            "metadata": {"name": "host-system", "zone": "dev"},
+            "spec": {}
+        }),
+        serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Provider",
+            "metadata": {"name": provider_name, "zone": "dev"},
+            "spec": {
+                "artifactId": provider_name,
+                "config": {"controllerExecutionRef": "Host/host-system"}
+            }
+        }),
+    ];
+    for device in devices {
+        resources.push(serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Device",
+            "metadata": {"name": device, "zone": "dev", "ownerRef": "Guest/dev"},
+            "spec": {"providerRef": format!("Provider/{provider_name}")}
+        }));
+    }
+    resources.extend(rows);
+    resources
+}
+
+/// The bindings the Device-worker arms emitted, excluding the Provider's own
+/// controller template (projected by the static controller arm).
+fn worker_bindings(
+    projection: &d2b_resource_compiler::StaticControllerProjection,
+) -> Vec<&d2b_contracts_zone_session::v3::resource_bundle::ProcessTemplateBinding> {
+    projection
+        .templates
+        .iter()
+        .filter(|binding| !binding.template().as_str().starts_with("controller-"))
+        .collect()
+}
+
+fn bundle_from_projection(
+    resources: &[serde_json::Value],
+    projection: &d2b_resource_compiler::StaticControllerProjection,
+) -> ResourceBundle {
+    let bundle_resources = resources
+        .iter()
+        .chain(projection.resources.iter())
+        .cloned()
+        .map(|resource| {
+            serde_json::from_value::<BundleResource>(resource).expect("bundle resource")
+        })
+        .collect::<Vec<_>>();
+    ResourceBundle::new(
+        d2b_contracts_resource::v3::ZoneId::parse("dev").unwrap(),
+        bundle_resources,
+        "sha256:0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        d2b_contracts_resource::v3::Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
+    )
+    .expect("resource bundle")
+    .with_process_templates(projection.templates.clone())
+    .expect("template bindings")
+}
+
+#[test]
+fn device_tpm_worker_rows_bind_their_declared_template_and_executable() {
+    let (_, _, _, artifact) = device_worker_fixture("device-tpm", &["swtpm", "swtpm-ioctl"]);
+    let resources = device_worker_zone(
+        "device-tpm",
+        &["tpm"],
+        vec![
+            device_row(
+                "Process",
+                "swtpm-tpm",
+                "tpm",
+                "swtpm-socket",
+                device_worker_sandbox(&["mount", "pid", "user"], true),
+            ),
+            device_row(
+                "EphemeralProcess",
+                "swtpm-flush-tpm",
+                "tpm",
+                "swtpm-init-flush",
+                device_worker_sandbox(&["mount", "pid"], false),
+            ),
+        ],
+    );
+    let projection = project_static_controller_processes("dev", &resources, &[artifact])
+        .expect("device-tpm worker projection");
+    assert!(projection.resources.iter().all(|resource| {
+        resource["spec"]["processClass"] == "controller"
+    }));
+    let bindings = worker_bindings(&projection)
+        .iter()
+        .map(|binding| {
+            (
+                binding.process_ref().to_canonical_string(),
+                binding.template().as_str().to_owned(),
+                binding.binary_ref().as_str().to_owned(),
+                binding.owner_ref().to_canonical_string(),
+                binding.execution_ref().to_canonical_string(),
+                binding.is_dynamic(),
+                binding.admits_launch_args(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        bindings,
+        vec![
+            (
+                "EphemeralProcess/swtpm-flush-tpm".to_owned(),
+                "swtpm-init-flush".to_owned(),
+                "swtpm-ioctl".to_owned(),
+                "Provider/device-tpm".to_owned(),
+                "Host/host-system".to_owned(),
+                false,
+                true,
+            ),
+            (
+                "Process/swtpm-tpm".to_owned(),
+                "swtpm-socket".to_owned(),
+                "swtpm".to_owned(),
+                "Provider/device-tpm".to_owned(),
+                "Host/host-system".to_owned(),
+                false,
+                true,
+            ),
+        ]
+    );
+    // The declared-row arm accepts the Device-owned rows: the binding names a
+    // row this bundle declares, owned by a Device whose Provider is the
+    // binding's owner.
+    let bundle = bundle_from_projection(&resources, &projection);
+    assert_eq!(bundle.process_templates.len(), 3);
+}
+
+#[test]
+fn device_gpu_worker_rows_bind_the_declared_templates() {
+    let (_, _, _, artifact) = device_worker_fixture("device-gpu", &["crosvm"]);
+    let resources = device_worker_zone(
+        "device-gpu",
+        &["gpu"],
+        vec![
+            device_row(
+                "Process",
+                "gpu-gpu",
+                "gpu",
+                "gpu-worker",
+                device_worker_sandbox(&["mount", "pid", "ipc", "uts", "user"], true),
+            ),
+            device_row(
+                "Process",
+                "video-gpu",
+                "gpu",
+                "video-worker",
+                device_worker_sandbox(&["mount", "pid", "ipc", "uts"], false),
+            ),
+        ],
+    );
+    let projection = project_static_controller_processes("dev", &resources, &[artifact])
+        .expect("device-gpu worker projection");
+    let workers = worker_bindings(&projection);
+    assert_eq!(workers.len(), 2);
+    assert!(workers.iter().all(|binding| {
+        !binding.is_dynamic()
+            && binding.owner_ref().to_canonical_string() == "Provider/device-gpu"
+            && binding.binary_ref().as_str() == "crosvm"
+            && binding.admits_launch_args()
+    }));
+    let templates = workers
+        .iter()
+        .map(|binding| binding.template().as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        templates,
+        BTreeSet::from(["gpu-worker".to_owned(), "video-worker".to_owned()])
+    );
+    let bundle = bundle_from_projection(&resources, &projection);
+    assert_eq!(bundle.process_templates.len(), 3);
+}
+
+#[test]
+fn device_worker_rows_of_two_devices_bind_their_own_rows() {
+    let (_, _, _, artifact) = device_worker_fixture("device-tpm", &["swtpm", "swtpm-ioctl"]);
+    let resources = device_worker_zone(
+        "device-tpm",
+        &["tpm", "tpm2"],
+        vec![
+            device_row(
+                "Process",
+                "swtpm-tpm",
+                "tpm",
+                "swtpm-socket",
+                device_worker_sandbox(&["mount", "pid", "user"], true),
+            ),
+            device_row(
+                "Process",
+                "swtpm-tpm2",
+                "tpm2",
+                "swtpm-socket",
+                device_worker_sandbox(&["mount", "pid", "user"], true),
+            ),
+        ],
+    );
+    let projection = project_static_controller_processes("dev", &resources, &[artifact])
+        .expect("two-device projection");
+    let process_refs = worker_bindings(&projection)
+        .iter()
+        .map(|binding| binding.process_ref().to_canonical_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        process_refs,
+        vec![
+            "Process/swtpm-tpm".to_owned(),
+            "Process/swtpm-tpm2".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn device_worker_row_sandbox_must_match_the_declared_template() {
+    let (_, _, _, artifact) = device_worker_fixture("device-tpm", &["swtpm", "swtpm-ioctl"]);
+    let resources = device_worker_zone(
+        "device-tpm",
+        &["tpm"],
+        vec![device_row(
+            "Process",
+            "swtpm-tpm",
+            "tpm",
+            "swtpm-socket",
+            // The long-lived swtpm worker requires the user namespace; a row
+            // that leaves it out is refused at compile time, not at spawn.
+            device_worker_sandbox(&["mount", "pid"], false),
+        )],
+    );
+    let diagnostic = project_static_controller_processes("dev", &resources, &[artifact])
+        .expect_err("posture mismatch");
+    assert_eq!(diagnostic.code(), "provider-device-worker-posture-mismatch");
+}
+
+#[test]
+fn device_worker_rows_without_a_packaged_executable_are_not_bound() {
+    let (_, _, _, artifact) = device_worker_fixture("device-gpu", &["test-controller"]);
+    let resources = device_worker_zone(
+        "device-gpu",
+        &["gpu"],
+        vec![device_row(
+            "Process",
+            "gpu-gpu",
+            "gpu",
+            "gpu-worker",
+            device_worker_sandbox(&["mount", "pid", "ipc", "uts", "user"], true),
+        )],
+    );
+    let projection = project_static_controller_processes("dev", &resources, &[artifact])
+        .expect("projection without the worker binary");
+    assert!(
+        worker_bindings(&projection).is_empty(),
+        "a worker template the artifact does not package must not be bound"
+    );
+}
+
+#[test]
+fn device_worker_rows_only_bind_rows_their_own_device_provider_declares() {
+    let (_, _, _, artifact) = device_worker_fixture("device-tpm", &["swtpm", "swtpm-ioctl"]);
+    let mut resources = device_worker_zone(
+        "device-tpm",
+        &["tpm"],
+        vec![device_row(
+            "Process",
+            "swtpm-tpm",
+            "tpm",
+            "swtpm-socket",
+            device_worker_sandbox(&["mount", "pid", "user"], true),
+        )],
+    );
+    // A row whose Device is served by the GPU Provider is never bound by the
+    // TPM Provider's arm, even though the provider resource exists here.
+    resources.push(serde_json::json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "Device",
+        "metadata": {"name": "gpu", "zone": "dev", "ownerRef": "Guest/dev"},
+        "spec": {"providerRef": "Provider/device-gpu"}
+    }));
+    resources.push(device_row(
+        "Process",
+        "swtpm-gpu",
+        "gpu",
+        "swtpm-socket",
+        device_worker_sandbox(&["mount", "pid", "user"], true),
+    ));
+    let projection = project_static_controller_processes("dev", &resources, &[artifact])
+        .expect("projection");
+    let process_refs = worker_bindings(&projection)
+        .iter()
+        .map(|binding| binding.process_ref().to_canonical_string())
+        .collect::<Vec<_>>();
+    assert_eq!(process_refs, vec!["Process/swtpm-tpm".to_owned()]);
+}

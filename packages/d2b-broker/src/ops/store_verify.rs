@@ -157,7 +157,17 @@ pub fn run_store_verify_read_only(
         }
     };
     let response = verify_locked(intent, repair);
-    if let Err(err) = posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm) {
+    // Diagnostic pass: a farm that was never provisioned (or whose drift is
+    // exactly what this run is classifying) reports its own verdict below
+    // instead of failing on a declared level that is not there yet - the
+    // strict enforcement of `required` belongs to the StoreSync pass that runs
+    // after the build that creates the levels.
+    if let Err(err) =
+        crate::ops::store_view_posture::posture_store_view_matrix_paths_before_build(
+            &intent.hardlink_farm_path,
+            &intent.vm,
+        )
+    {
         return failed(&intent.vm, format!("posture store-view metadata: {err}"));
     }
     drop(lock);
@@ -696,6 +706,10 @@ fn acquire_verify_lock(farm_root: &Path) -> Result<File, String> {
         .map_err(|err| format!("open {}: {err}", path.display()))?;
     flock(file.as_raw_fd(), FlockArg::LockExclusive)
         .map_err(|err| format!("lock {}: {err}", path.display()))?;
+    // Same `file-record` owner evidence StoreSync writes: a lock without a
+    // verifiable live owner stays quarantined for the daemon.
+    hardlink_farm::SyncLockOwnerRecord::record_current_process(&file)
+        .map_err(|err| format!("record {} owner: {err}", path.display()))?;
     Ok(file)
 }
 

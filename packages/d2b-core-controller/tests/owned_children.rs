@@ -1,19 +1,17 @@
-use std::collections::BTreeSet;
-
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_core_controller::{
-    CoreTriggerReason, DependencyEvent, DependencyIndex, DesiredChild, HintTarget, ObservedChild,
-    OwnedChildKind, OwnerBatchResult, OwnerChildIdentity, OwnerIndex, OwnerLimits, OwnerMutation,
+    DesiredChild, ObservedChild, OwnedChildKind, OwnerBatchResult, OwnerChildIdentity, OwnerIndex,
+    OwnerLimits, OwnerMutation, ResourceKey,
 };
 
 fn uid(suffix: u8) -> ResourceUid {
     ResourceUid::parse(format!("123e4567-e89b-42d3-a456-4266141741{suffix:02}")).unwrap()
 }
 
-fn owner() -> HintTarget {
-    HintTarget::new(
+fn owner() -> ResourceKey {
+    ResourceKey::new(
         ZoneId::parse("work").unwrap(),
         ResourceRef::parse("Guest/app").unwrap(),
         uid(0),
@@ -51,7 +49,7 @@ fn child(
 }
 
 fn observed(
-    target: HintTarget,
+    target: ResourceKey,
     revision: u64,
     owner_generation: u64,
     dependencies: impl IntoIterator<Item = ResourceRef>,
@@ -69,8 +67,8 @@ fn observed(
     .unwrap()
 }
 
-fn target(resource_type: &str, name: &str, suffix: u8) -> HintTarget {
-    HintTarget::new(
+fn target(resource_type: &str, name: &str, suffix: u8) -> ResourceKey {
+    ResourceKey::new(
         ZoneId::parse("work").unwrap(),
         ResourceRef::parse(&format!("{resource_type}/{name}")).unwrap(),
         uid(suffix),
@@ -213,7 +211,7 @@ fn rejects_partial_batch_and_fences_missing_extra_foreign_cross_zone_and_stale_c
         .is_err()
     );
 
-    let foreign_owner = HintTarget::new(
+    let foreign_owner = ResourceKey::new(
         ZoneId::parse("work").unwrap(),
         ResourceRef::parse("Guest/other").unwrap(),
         uid(8),
@@ -238,7 +236,7 @@ fn rejects_partial_batch_and_fences_missing_extra_foreign_cross_zone_and_stale_c
     );
 
     let cross_zone = ObservedChild::new(
-        HintTarget::new(
+        ResourceKey::new(
             ZoneId::parse("other").unwrap(),
             ResourceRef::parse("Process/foreign").unwrap(),
             uid(9),
@@ -365,40 +363,4 @@ fn teardown_is_deterministic_and_leaves_are_deleted_before_standard_children() {
     ));
 }
 
-#[test]
-fn dependency_reasons_union_without_losing_ready_or_changed_trigger() {
-    let network = target("Network", "lan", 1);
-    let volume = target("Volume", "system", 2);
-    let guest = target("Guest", "app", 3);
-    let controller = d2b_core_controller::ControllerLeaseKey::new(
-        ZoneId::parse("work").unwrap(),
-        ResourceRef::parse("Process/guest-controller").unwrap(),
-    )
-    .unwrap();
-    let mut index = DependencyIndex::default();
-    index
-        .register(
-            controller,
-            guest.clone(),
-            BTreeSet::from([network.clone(), volume.clone()]),
-        )
-        .unwrap();
 
-    let merged = index
-        .triggers_for([
-            DependencyEvent::new(network, ZoneRevision::new(8), false).unwrap(),
-            DependencyEvent::new(volume, ZoneRevision::new(9), true).unwrap(),
-        ])
-        .unwrap();
-
-    assert_eq!(merged.len(), 1);
-    assert_eq!(merged[0].target(), &guest);
-    assert_eq!(merged[0].revision(), ZoneRevision::new(9));
-    assert_eq!(
-        merged[0].reasons(),
-        &BTreeSet::from([
-            CoreTriggerReason::DependencyChanged,
-            CoreTriggerReason::DependencyReady
-        ])
-    );
-}

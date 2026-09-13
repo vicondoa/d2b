@@ -1566,7 +1566,7 @@ where
     send_controller_bootstrap(&bootstrap, daemon_endpoint).await?;
     let policy = credential_provider_endpoint_policy();
     let transport = provider_transport(controller_socket, &policy, expected_peer)?;
-    let engine = SessionEngine::establish_initiator(
+    let mut engine = SessionEngine::establish_initiator(
         transport,
         policy,
         HandshakeCredentials::Nn,
@@ -1574,27 +1574,30 @@ where
     )
     .await
     .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
-    let driver = engine.into_driver();
+    // Named-stream registration is local to this endpoint, so the controller can
+    // send on a stream before this side has registered it. Register both
+    // streams on the engine before the session driver exists: once the driver
+    // task is spawned it may route an inbound fragment first, and a fragment for
+    // an unregistered stream fails the whole session as an invalid channel.
     let bootstrap_stream = StreamId::new(PROVIDER_BOOTSTRAP_STREAM_ID)
         .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
-    driver
+    let delivery_key_stream = StreamId::new(PROVIDER_DELIVERY_KEY_STREAM_ID)
+        .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+    engine
         .open_named_stream(
             bootstrap_stream,
             PROVIDER_BOOTSTRAP_STREAM_CREDIT,
             PROVIDER_BOOTSTRAP_STREAM_CREDIT,
         )
-        .await
         .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
-    let delivery_key_stream = StreamId::new(PROVIDER_DELIVERY_KEY_STREAM_ID)
-        .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
-    driver
+    engine
         .open_named_stream(
             delivery_key_stream,
             PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
             PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
         )
-        .await
         .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+    let driver = engine.into_driver();
     let metadata = ProviderSessionMetadata::decode(&receive_route_metadata(&driver).await?)?;
     if metadata.provider_ref != spec.provider_ref
         || metadata.service.as_str() != spec.service

@@ -140,7 +140,9 @@ impl SwtpmArgv {
             "--pid",
             "<state-dir>/swtpm.pid",
         ]);
-        args.push("--daemon=false");
+        // No `--daemon` argument: swtpm's `socket` mode is foreground by
+        // default and `--daemon` both means daemonize and takes no
+        // argument (see `swtpm_argv`).
         Ok(Self { args })
     }
 

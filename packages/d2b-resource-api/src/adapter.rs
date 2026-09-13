@@ -11,7 +11,7 @@ use d2b_contracts_resource::v3::{ResourceName, ResourceTypeName};
 use d2b_core_controller::controller_assignment::{
     AssignmentTransportError, ScopedCommitTransport, ScopedResourceMutation,
 };
-use d2b_resource_store::StoreFilter;
+use d2b_contracts_resource::v3::StoreFilter;
 use protobuf::Message;
 use ttrpc::proto::{
     MESSAGE_HEADER_LENGTH, MESSAGE_TYPE_REQUEST, MessageHeader, Request as TtrpcRequest,
@@ -471,8 +471,8 @@ mod tests {
         canonical_digest,
     };
     use d2b_core_controller::controller_assignment::{ScopedCommitTransport, ScopedResourceScope};
-    use d2b_resource_store::mutation_seal::MutationSealAcceptor;
-    use d2b_resource_store::{
+    use d2b_contracts_resource::v3::operations::seal::MutationSealAcceptor;
+    use d2b_contracts_resource::v3::{
         AdmittedVerb, PolicySnapshot, ResourceMutationKind, StoreCommitResult, StoreError,
         StoreGetRequest, StoreInspectSchemaRequest, StoreListRequest, StoreListResult,
         StoreResolveRequest, StoreResolvedIdentity, StoreSealIdentity, StoreSlot,
@@ -537,7 +537,7 @@ mod tests {
 
         async fn commit_verified(
             &self,
-            _: d2b_resource_store::SealedMutation,
+            _: d2b_contracts_resource::v3::SealedMutation,
         ) -> Result<StoreCommitResult, StoreError> {
             unreachable!("authorization must run before the store")
         }
@@ -850,7 +850,7 @@ mod tests {
 
         async fn commit_verified(
             &self,
-            mutation: d2b_resource_store::SealedMutation,
+            mutation: d2b_contracts_resource::v3::SealedMutation,
         ) -> Result<StoreCommitResult, StoreError> {
             let opened = self.acceptor.open(mutation).unwrap();
             let body = opened.into_body();

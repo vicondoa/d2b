@@ -37,8 +37,7 @@ fn argv_shape_is_path_free_and_byte_stable() {
             "--log",
             "file=<state-dir>/swtpm.log,level=<log-level>",
             "--pid",
-            "<state-dir>/swtpm.pid",
-            "--daemon=false"
+            "<state-dir>/swtpm.pid"
         ]
     );
     assert_eq!(

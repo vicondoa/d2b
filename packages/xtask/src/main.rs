@@ -26,8 +26,8 @@ use d2b_contracts_resource::v3::storage::ZoneStoreStorageRow;
 use d2b_core::{
     allocator_config::AllocatorJson, bundle::Bundle, closures::ClosureMetadata, error::Error,
     host::HostJson, manifest_v04::ManifestV04, minijail_profile::MinijailProfile,
-    privileges::PrivilegesJson, processes::ProcessesJson, storage::StorageJson,
-    storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
+    privileges::PrivilegesJson, processes::ProcessesJson, site::SiteJson,
+    storage::StorageJson, storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
     unsafe_local_workloads::UnsafeLocalWorkloadsJson,
 };
 mod diagnostic_redaction;
@@ -521,6 +521,7 @@ fn schema_documents() -> Vec<(&'static str, RootSchema)> {
         ),
         ("host.json", schemars::schema_for!(HostJson)),
         ("processes.json", schemars::schema_for!(ProcessesJson)),
+        ("site.json", schemars::schema_for!(SiteJson)),
         ("storage.json", schemars::schema_for!(StorageJson)),
         ("sync.json", schemars::schema_for!(SyncJson)),
         (

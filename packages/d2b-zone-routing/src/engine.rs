@@ -524,21 +524,24 @@ fn validate_session_binding(
     // A ZoneLink may terminate either at an adjacent Zone controller over a
     // Provider stream or at the selected Gateway Guest over its authenticated
     // Guest-local vsock session. Both profiles are fixed by the v3 policy;
-    // no caller-selected transport profile is accepted here.
-    let remote_provider_stream = binding.responder_role() == EndpointRole::ZoneController
+    // no caller-selected transport profile is accepted here. The Gateway
+    // Guest carriage is the generic enrolled target-control ComponentSession
+    // (R20): a ZoneLink consumes that session, so it is named for what it is.
+    let remote_provider_stream = binding.purpose() == EndpointPurpose::ZoneLink
+        && binding.responder_role() == EndpointRole::ZoneController
         && binding.endpoint_locality()
             == d2b_contracts_zone_session::v3::component_session::Locality::Remote
         && binding.transport_class() == TransportClass::ProviderStream
         && binding.transport_binding().locality()
             == d2b_contracts_resource::v3::identity::Locality::AdjacentZone;
-    let gateway_guest_session = binding.responder_role() == EndpointRole::GuestAgent
+    let gateway_guest_session = binding.purpose() == EndpointPurpose::ComponentSession
+        && binding.responder_role() == EndpointRole::GuestAgent
         && binding.endpoint_locality()
             == d2b_contracts_zone_session::v3::component_session::Locality::GuestLocal
         && binding.transport_class() == TransportClass::NativeVsock
         && binding.transport_binding().locality()
             == d2b_contracts_resource::v3::identity::Locality::Local;
-    if binding.purpose() != EndpointPurpose::ZoneLink
-        || binding.purpose_class() != PurposeClass::Enrolled
+    if binding.purpose_class() != PurposeClass::Enrolled
         || binding.initiator_role() != EndpointRole::ZoneController
         || binding.service() != ServicePackage::ResourceV3
         || (!remote_provider_stream && !gateway_guest_session)

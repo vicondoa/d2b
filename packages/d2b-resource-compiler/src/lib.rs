@@ -451,6 +451,11 @@ pub enum StaticControllerProjectionError {
     ComponentTargetUnsupported,
     /// The signed binary was absent from the verified package.
     TemplateArtifactMissing,
+    /// A declared Device-owned worker row carried a malformed shape.
+    DeviceWorkerRowInvalid,
+    /// A declared Device-owned worker row's sandbox disagreed with the
+    /// closed posture its template declares.
+    DeviceWorkerPostureMismatch,
     /// The signed target artifact differed from the verified package binary.
     ArtifactDigestMismatch,
     /// A generated Process identity collided with another resource.
@@ -476,6 +481,8 @@ impl StaticControllerProjectionError {
             Self::ControllerTargetMissing => "provider-controller-target-missing",
             Self::ComponentTargetUnsupported => "provider-controller-target-unsupported",
             Self::TemplateArtifactMissing => "provider-controller-template-artifact-missing",
+            Self::DeviceWorkerRowInvalid => "provider-device-worker-row-invalid",
+            Self::DeviceWorkerPostureMismatch => "provider-device-worker-posture-mismatch",
             Self::ArtifactDigestMismatch => "provider-controller-artifact-digest-mismatch",
             Self::DuplicateProcessName => "provider-controller-process-name-duplicate",
             Self::InvalidTemplate => "provider-controller-template-invalid",
@@ -690,6 +697,22 @@ where
         &mut templates,
     )?;
 
+    append_device_tpm_worker_templates(
+        &zone_id,
+        resources,
+        &artifacts,
+        &mut generated_identities,
+        &mut templates,
+    )?;
+
+    append_device_gpu_worker_templates(
+        &zone_id,
+        resources,
+        &artifacts,
+        &mut generated_identities,
+        &mut templates,
+    )?;
+
     projected_resources
         .sort_by(|left, right| resource_sort_key(left).cmp(&resource_sort_key(right)));
     templates.sort_by(|left, right| {
@@ -894,7 +917,10 @@ fn append_virtiofsd_worker_templates<'a>(
         .join(EXECUTABLE_DIR)
         .join(binary_ref.as_str());
     templates.push(
-        ProcessTemplateBinding::new_dynamic(
+        // The virtiofsd worker is the one template whose controller-derived
+        // arguments (socket path, served view root, thread pool, flags) carry
+        // per-binding launch data. The executable stays pinned here.
+        ProcessTemplateBinding::new_dynamic_with_launch_args(
             process_ref,
             provider_ref,
             execution_ref,
@@ -907,6 +933,273 @@ fn append_virtiofsd_worker_templates<'a>(
         .map_err(|_| StaticControllerProjectionError::TemplateBindingInvalid)?,
     );
     Ok(())
+}
+
+/// Emit the signed Device-owned worker templates one Device Provider
+/// projects into this Zone.
+///
+/// The provider's Nix projection declares the worker rows - `Process/swtpm-<device>`
+/// and `EphemeralProcess/swtpm-flush-<device>` for `device-tpm`,
+/// `Process/gpu-<device>` and `Process/video-<device>` for `device-gpu` -
+/// owned by the Device that claims them. This arm binds each declared row to
+/// the provider artifact's digest-pinned worker executable and to the closed
+/// sandbox posture the broker enforces for that template
+/// ([`d2b_core::bundle_resolver::device_worker_posture`]), so a declared row
+/// whose sandbox disagrees with its template is refused here, at compile
+/// time, instead of failing at spawn.
+///
+/// The binding stays non-dynamic: the declared row, not a synthetic template
+/// ref, is the launch identity (`Process/swtpm-<device>` names exactly one
+/// Device's worker). Launch arguments are admitted because the arguments -
+/// socket paths, log level, device node path, backend - are composed by the
+/// owning Process controller at launch time from the Device settings; the
+/// executable itself stays pinned here.
+///
+/// A template whose executable the artifact does not enumerate (the
+/// deployment's artifact ships only the controller binary) yields no binding
+/// - the same fail-closed rule as the virtiofsd serving worker.
+fn append_device_worker_templates<'a>(
+    zone: &ZoneId,
+    resources: &[serde_json::Value],
+    artifacts: &BTreeMap<String, &'a VerifiedProviderArtifact>,
+    generated_identities: &mut BTreeSet<(String, String)>,
+    templates: &mut Vec<ProcessTemplateBinding>,
+    provider_name: &str,
+) -> Result<(), StaticControllerProjectionError> {
+    let provider_ref = ResourceRef::parse(&format!("Provider/{provider_name}"))
+        .map_err(|_| StaticControllerProjectionError::InvalidProviderResource)?;
+    let Some(provider) = resources.iter().find(|resource| {
+        resource.get("type").and_then(Value::as_str) == Some("Provider")
+            && resource
+                .get("metadata")
+                .and_then(|metadata| metadata.get("zone"))
+                .and_then(Value::as_str)
+                == Some(zone.as_str())
+            && resource
+                .get("metadata")
+                .and_then(|metadata| metadata.get("name"))
+                .and_then(Value::as_str)
+                == Some(provider_name)
+    }) else {
+        return Ok(());
+    };
+    let artifact_id = provider
+        .get("spec")
+        .and_then(|spec| spec.get("artifactId"))
+        .and_then(Value::as_str)
+        .ok_or(StaticControllerProjectionError::InvalidProviderResource)?;
+    let Some(artifact) = artifacts.get(artifact_id) else {
+        return Ok(());
+    };
+    for row in resources {
+        let Some(resource_type) = row.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        if !matches!(resource_type, "Process" | "EphemeralProcess") {
+            continue;
+        }
+        let Some(name) = row
+            .get("metadata")
+            .and_then(|metadata| metadata.get("name"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        if row
+            .get("metadata")
+            .and_then(|metadata| metadata.get("zone"))
+            .and_then(Value::as_str)
+            != Some(zone.as_str())
+        {
+            continue;
+        }
+        // Only rows whose owning Device is served by this Provider are ours;
+        // every other declared Process row belongs to another provider's
+        // projection (or to a plain declared row) and is not ours to bind.
+        let Some(owner_ref) = row
+            .get("metadata")
+            .and_then(|metadata| metadata.get("ownerRef"))
+            .and_then(Value::as_str)
+            .and_then(|reference| ResourceRef::parse(reference).ok())
+            .filter(|owner| owner.resource_type().as_str() == "Device")
+        else {
+            continue;
+        };
+        if !resources.iter().any(|candidate| {
+            candidate.get("type").and_then(Value::as_str) == Some("Device")
+                && candidate
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("name"))
+                    .and_then(Value::as_str)
+                    == Some(owner_ref.name().as_str())
+                && candidate
+                    .get("spec")
+                    .and_then(|spec| spec.get("providerRef"))
+                    .and_then(Value::as_str)
+                    == Some(provider_ref.to_canonical_string().as_str())
+        }) {
+            continue;
+        }
+        let spec = row.get("spec").ok_or(StaticControllerProjectionError::DeviceWorkerRowInvalid)?;
+        let Some(template) = spec.get("template").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(posture) = d2b_core::bundle_resolver::device_worker_posture(
+            &provider_ref.to_canonical_string(),
+            template,
+        ) else {
+            continue;
+        };
+        if !declared_device_worker_posture_matches(&posture, spec) {
+            return Err(StaticControllerProjectionError::DeviceWorkerPostureMismatch);
+        }
+        if spec.get("providerRef").and_then(Value::as_str) != Some("Provider/system-minijail")
+            || spec.get("processClass").and_then(Value::as_str) != Some("worker")
+        {
+            return Err(StaticControllerProjectionError::DeviceWorkerRowInvalid);
+        }
+        let binary_ref = BinaryRef::parse(posture.binary_ref())
+            .map_err(|_| StaticControllerProjectionError::TemplateArtifactMissing)?;
+        let Some(artifact_digest) = artifact.compiled().executable_digests().get(binary_ref.as_str())
+        else {
+            continue;
+        };
+        let template = BoundedToken::parse(template)
+            .map_err(|_| StaticControllerProjectionError::InvalidTemplate)?;
+        let process_ref = ResourceRef::new(
+            ResourceTypeName::parse(resource_type)
+                .map_err(|_| StaticControllerProjectionError::DeviceWorkerRowInvalid)?,
+            ResourceName::parse(name)
+                .map_err(|_| StaticControllerProjectionError::DeviceWorkerRowInvalid)?,
+        );
+        let identity = ("Process".to_owned(), process_ref.name().as_str().to_owned());
+        // The declared row is the binding's identity: two bindings may never
+        // name the same row.
+        if !generated_identities.insert(identity) {
+            return Err(StaticControllerProjectionError::DuplicateProcessName);
+        }
+        let execution_ref = spec
+            .get("executionRef")
+            .and_then(Value::as_str)
+            .and_then(|reference| ResourceRef::parse(reference).ok())
+            .ok_or(StaticControllerProjectionError::DeviceWorkerRowInvalid)?;
+        let binary_path = artifact
+            .store_path()
+            .join(EXECUTABLE_DIR)
+            .join(binary_ref.as_str());
+        templates.push(
+            ProcessTemplateBinding::new_with_launch_args(
+                process_ref,
+                provider_ref.clone(),
+                execution_ref,
+                template,
+                artifact.artifact_id().clone(),
+                binary_ref,
+                artifact_digest.clone(),
+                binary_path.to_string_lossy().into_owned(),
+            )
+            .map_err(|_| StaticControllerProjectionError::TemplateBindingInvalid)?,
+        );
+    }
+    Ok(())
+}
+
+/// Emit the `device-tpm` worker templates declared in this Zone.
+fn append_device_tpm_worker_templates<'a>(
+    zone: &ZoneId,
+    resources: &[serde_json::Value],
+    artifacts: &BTreeMap<String, &'a VerifiedProviderArtifact>,
+    generated_identities: &mut BTreeSet<(String, String)>,
+    templates: &mut Vec<ProcessTemplateBinding>,
+) -> Result<(), StaticControllerProjectionError> {
+    append_device_worker_templates(
+        zone,
+        resources,
+        artifacts,
+        generated_identities,
+        templates,
+        "device-tpm",
+    )
+}
+
+/// Emit the `device-gpu` worker templates declared in this Zone.
+fn append_device_gpu_worker_templates<'a>(
+    zone: &ZoneId,
+    resources: &[serde_json::Value],
+    artifacts: &BTreeMap<String, &'a VerifiedProviderArtifact>,
+    generated_identities: &mut BTreeSet<(String, String)>,
+    templates: &mut Vec<ProcessTemplateBinding>,
+) -> Result<(), StaticControllerProjectionError> {
+    append_device_worker_templates(
+        zone,
+        resources,
+        artifacts,
+        generated_identities,
+        templates,
+        "device-gpu",
+    )
+}
+
+/// Whether one declared worker row carries exactly the posture its template
+/// declares.
+///
+/// Every field is compared against the canonical Process sandbox defaults
+/// (`nixos-modules/resources-zones-processes.nix`) when the row leaves it
+/// out, so a row that declares nothing matches no worker template: the
+/// broker fences the launch against the same posture
+/// (`d2b-broker::runtime::validate_sandbox_launch_plan`), and a mismatch
+/// would only surface as a refused spawn.
+fn declared_device_worker_posture_matches(
+    posture: &d2b_core::bundle_resolver::DeviceWorkerPosture,
+    spec: &Value,
+) -> bool {
+    let sandbox = spec.get("sandbox");
+    let field = |name: &str| {
+        sandbox
+            .and_then(|sandbox| sandbox.get(name))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    let namespaces = posture.namespaces();
+    let expected_namespaces = [
+        ("mount", namespaces.mount),
+        ("pid", namespaces.pid),
+        ("ipc", namespaces.ipc),
+        ("uts", namespaces.uts),
+        ("user", namespaces.user),
+    ]
+    .into_iter()
+    .filter_map(|(name, enabled)| enabled.then(|| name.to_owned()))
+    .collect::<BTreeSet<_>>();
+    let declared_namespaces = field("namespaceClasses")
+        .as_array()
+        .map(|classes| {
+            classes
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let expected_user_namespace = if posture.user_namespace() {
+        serde_json::json!({ "mappingClass": "process-principal-root" })
+    } else {
+        Value::Null
+    };
+    declared_namespaces == expected_namespaces
+        && field("capabilityClasses")
+            .as_array()
+            .is_none_or(Vec::is_empty)
+        && field("seccompClass").as_str().is_none_or(|class| class == "strict")
+        && field("noNewPrivileges").as_bool().is_none_or(|value| value)
+        && field("startRoot").as_bool().is_none_or(|value| !value)
+        && field("readOnlyRoot").as_bool().is_none_or(|value| value)
+        && field("environmentClass")
+            .as_str()
+            .is_none_or(|class| class == "minimal")
+        && field("oomScoreAdj").as_i64().is_none_or(|value| value == 0)
+        && field("umask").as_str() == Some(&format!("{:04o}", posture.umask()))
+        && field("userNamespace") == expected_user_namespace
 }
 
 /// Return the deterministic resource ordering key.

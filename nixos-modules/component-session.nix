@@ -103,8 +103,8 @@ in
     };
 
     purpose = lib.mkOption {
-      type = lib.types.enum [ "zone-link" ];
-      default = "zone-link";
+      type = lib.types.enum [ "component-session" ];
+      default = "component-session";
       internal = true;
     };
 

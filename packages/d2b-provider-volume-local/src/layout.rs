@@ -15,6 +15,7 @@ use d2b_contracts_resource::v3::volume::{
     ForeignChildPolicy, Invariant, LayoutEntry, LeaseClass, RepairPolicy,
 };
 
+use crate::acl::AclBinding;
 use crate::error::VolumeLocalError;
 use crate::identity::{EntryDigest, MarkerState, OwnerProof};
 use crate::port::{DriftClass, ObservedEntry};
@@ -47,7 +48,9 @@ impl EntryRequest {
     /// The lifecycle policy fields are read back from the entry's own
     /// canonical JSON because the contract type exposes no accessor for
     /// them; the canonical rendering is the frozen contract, so this is a
-    /// read of the same authority rather than a second vocabulary.
+    /// read of the same authority rather than a second vocabulary. The ACL
+    /// projection decodes from the same rendering, so a declaration whose
+    /// grants exceed the mode's group class fails resolution here.
     pub fn resolve(
         volume_uid: &ResourceUid,
         declared: &LayoutEntry,
@@ -84,13 +87,11 @@ impl EntryRequest {
         let recursive = decode("recursive")?
             .as_bool()
             .ok_or(VolumeLocalError::InvalidSpec)?;
-        let acl_len = |name: &str| -> Result<usize, VolumeLocalError> {
-            Ok(decode(name)?
-                .as_array()
-                .ok_or(VolumeLocalError::InvalidSpec)?
-                .len())
-        };
-        let has_acl = acl_len("accessAcl")? > 0 || acl_len("defaultAcl")? > 0;
+        // Decode the ACL projection with the same canonical rendering, so a
+        // declaration whose grants exceed the mode's group class fails
+        // resolution instead of reaching an effect that would widen the mode.
+        let acl = AclBinding::from_rendered(&rendered)?;
+        let has_acl = acl.has_access() || acl.has_default();
 
         Ok(Self {
             digest: EntryDigest::derive(volume_uid, declared.path()),
@@ -352,12 +353,24 @@ pub fn plan_entry(
             BTreeSet::new()
         }
         RepairPolicy::ExactMode => [DriftClass::Mode].into_iter().collect(),
-        RepairPolicy::ExactOwnerAndAcl => [DriftClass::Owner, DriftClass::Mode, DriftClass::Acl]
-            .into_iter()
-            .collect(),
+        // The ACL half of this policy is delivered by the separate `apply_acl`
+        // pass, which runs for every entry that declares grants; the layout
+        // effect's repair pass cannot recover ACLs.
+        RepairPolicy::ExactOwnerAndAcl => {
+            [DriftClass::Owner, DriftClass::Mode].into_iter().collect()
+        }
     };
     let repair: BTreeSet<DriftClass> = repair.intersection(&observed.drift).copied().collect();
-    let unrepaired: BTreeSet<DriftClass> = observed.drift.difference(&repair).copied().collect();
+    // ACL drift is never *unrepaired* drift: the `apply_acl` pass re-applies
+    // the declared grants on every plan, so counting the class here would
+    // report `EntryDrift` on every cycle of a healthy ACL-declaring entry.
+    let acl_covered = entry.has_acl();
+    let unrepaired: BTreeSet<DriftClass> = observed
+        .drift
+        .difference(&repair)
+        .copied()
+        .filter(|class| !(acl_covered && *class == DriftClass::Acl))
+        .collect();
 
     let plan = EntryPlan {
         repair,
@@ -388,5 +401,36 @@ pub fn plan_cleanup(entry: &EntryRequest, observed: &ObservedEntry) -> bool {
         CleanupPolicy::ProcessExitWithProof | CleanupPolicy::ProcessExit => {
             observed.present && observed.owner_proof == OwnerProof::Dead
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn volume_uid() -> ResourceUid {
+        ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("volume UID")
+    }
+
+    /// Regression (security review): the daemon's entry decode refuses a
+    /// declaration whose grants exceed the declared mode's group class, so no
+    /// effect is ever planned for a declaration that would widen the mode.
+    #[test]
+    fn resolve_refuses_grants_wider_than_the_group_class() {
+        let widened: LayoutEntry = serde_json::from_value(serde_json::json!({
+            "path": "",
+            "type": "directory",
+            "ownerRef": "User/d2bd",
+            "groupRef": "User/d2bd",
+            "mode": "0700",
+            "accessAcl": [{ "principal": { "ref": "User/alice" }, "permissions": "rwx" }],
+            "defaultAcl": [],
+            "foreignChildPolicy": "preserve"
+        }))
+        .expect("valid entry");
+        assert_eq!(
+            EntryRequest::resolve(&volume_uid(), &widened),
+            Err(VolumeLocalError::InvalidSpec)
+        );
     }
 }

@@ -73,7 +73,7 @@ let
             providerRef = providerRef;
             endpointClass = "transport";
             transport = "opaque-carriage";
-            purpose = "usb.d2bus.org/guest-proxy";
+            purpose = "usb-guest-proxy";
             serviceFingerprint = null;
             locality = "guest-local";
             visibility = "owner";

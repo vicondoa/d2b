@@ -42,16 +42,18 @@ in
 {
   cases = {
     "provider-volume-virtiofs/guest-process" = {
+      # No Guest-owned Process row is projected: the Process driver refuses a
+      # Guest-owned row that is not `<guest>-vmm`, so only the store preflight
+      # intent remains (the binding driver mints the live virtiofsd worker).
       expr = {
-        process = evaluated.config.d2b._resourceCompiler
-          .providerProjectionVolumeVirtiofs.processesByZone.dev
-          ."virtiofsd-guest".spec.template;
+        rows = builtins.attrNames evaluated.config.d2b._resourceCompiler
+          .providerProjectionVolumeVirtiofs.processesByZone.dev;
         preflight = evaluated.config.d2b._resourceCompiler
           .providerProjectionVolumeVirtiofs.processesByZone.dev
           ."store-preflight-guest".spec.template;
       };
       expected = {
-        process = "virtiofsd";
+        rows = [ "store-preflight-guest" ];
         preflight = "store-virtiofs-preflight";
       };
     };

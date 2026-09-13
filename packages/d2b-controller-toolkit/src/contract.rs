@@ -6,8 +6,6 @@ use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
 };
 
-use crate::ContextError;
-
 /// Closed reason set used for queue coalescing and dispatch selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TriggerReason {
@@ -200,7 +198,7 @@ impl ControllerIdentity {
         process_ref: ResourceRef,
         host_ref: ResourceRef,
         guest_ref: Option<ResourceRef>,
-    ) -> Result<Self, ContextError> {
+    ) -> Result<Self, DescriptorError> {
         if controller_ref.resource_type().as_str() != "Process"
             || provider_ref.resource_type().as_str() != "Provider"
             || process_ref.resource_type().as_str() != "Process"
@@ -209,7 +207,7 @@ impl ControllerIdentity {
                 .as_ref()
                 .is_some_and(|guest| guest.resource_type().as_str() != "Guest")
         {
-            return Err(ContextError::InvalidControllerIdentity);
+            return Err(DescriptorError::InvalidIdentity);
         }
         Ok(Self {
             zone,
@@ -757,6 +755,8 @@ pub enum DescriptorError {
     InvalidResource,
     InvalidExecution,
     InvalidRegistration,
+    /// The fixed identity names a ResourceType outside its exact class.
+    InvalidIdentity,
 }
 
 impl core::fmt::Display for DescriptorError {
@@ -766,6 +766,7 @@ impl core::fmt::Display for DescriptorError {
             Self::InvalidResource => "controller ResourceType policy is invalid",
             Self::InvalidExecution => "controller execution policy is invalid",
             Self::InvalidRegistration => "controller registration is empty, duplicated, or broad",
+            Self::InvalidIdentity => "controller identity names the wrong ResourceType",
         })
     }
 }

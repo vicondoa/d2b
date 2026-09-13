@@ -1,5 +1,7 @@
 //! Production Volume controller and anchored effect-adapter composition.
 
+use std::os::unix::fs::PermissionsExt;
+
 use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourceRef, ResourceUid,
     volume::SourceKind,
@@ -425,6 +427,116 @@ fn production_nix_closure_store_view_materializes_without_a_source_policy() {
     assert!(base.join(".d2b-volume-marker").is_file());
     assert!(base.join("live").is_dir());
     assert!(base.join("meta/current").is_symlink());
+    let _ = std::fs::remove_dir_all(base);
+}
+
+/// The store-view `sync.lock` is a `file-record` lease: it is adopted only
+/// with a verifiable live owner record, exactly as the broker writes it
+/// under the exclusive flock while it materializes the farm. With the
+/// broker's lock present the layout converges to `Ready`; without adopting
+/// it the Volume would stay Degraded and its attachment Pending.
+#[test]
+fn broker_owned_sync_lock_record_converges_the_store_view_layout() {
+    let (base, adapter) = adapter_root_with_options("broker-sync-lock", true);
+    let record = d2b_host::hardlink_farm::SyncLockOwnerRecord::for_current_process()
+        .expect("broker owner record");
+    let lock = base.join("sync.lock");
+    std::fs::write(&lock, record.to_bytes()).expect("broker sync.lock record");
+    std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o640)).expect("lock mode");
+
+    let controller = VolumeLocalController::new(VolumeLocalProfile::shipped(), &adapter, &adapter);
+    let uid = volume_uid();
+    let spec = d2b_provider_volume_local::testing::fixtures::store_view_volume();
+    let report = d2b_provider_volume_local::testing::block_on(
+        controller.reconcile(&uid, &spec, None, None),
+    )
+    .expect("store-view Volume reconcile");
+
+    assert_eq!(
+        report.layout_phase,
+        d2b_provider_volume_local::LayoutPhase::Ready
+    );
+    assert!(
+        report.layout_conditions.is_empty(),
+        "no entry may stay quarantined: {:?}",
+        report.layout_conditions
+    );
+    // The broker's record is neither removed nor rewritten by adoption.
+    assert_eq!(std::fs::read(&lock).expect("lock readback"), record.to_bytes());
+    let _ = std::fs::remove_dir_all(base);
+}
+
+/// A `file-record` lock whose owner cannot be proven stays quarantined: an
+/// unknown payload, and a record naming a process that is gone, are both
+/// ambiguity and neither is adopted, repaired, or removed.
+#[test]
+fn unprovable_sync_lock_owner_still_quarantines_the_store_view_layout() {
+    let (base, adapter) = adapter_root_with_options("foreign-sync-lock", true);
+    let mut stale = d2b_host::hardlink_farm::SyncLockOwnerRecord::for_current_process()
+        .expect("owner record");
+    // No such process: the record's owner is not live.
+    stale.pid = i32::MAX;
+    let lock = base.join("sync.lock");
+    std::fs::write(&lock, stale.to_bytes()).expect("stale sync.lock record");
+
+    let controller = VolumeLocalController::new(VolumeLocalProfile::shipped(), &adapter, &adapter);
+    let uid = volume_uid();
+    let spec = d2b_provider_volume_local::testing::fixtures::store_view_volume();
+    let report = d2b_provider_volume_local::testing::block_on(
+        controller.reconcile(&uid, &spec, None, None),
+    )
+    .expect("store-view Volume reconcile");
+
+    assert_eq!(
+        report.layout_phase,
+        d2b_provider_volume_local::LayoutPhase::Degraded
+    );
+    assert_eq!(report.layout_conditions.len(), 1, "{:?}", report.layout_conditions);
+    let condition = &report.layout_conditions[0];
+    assert_eq!(
+        condition.entry,
+        d2b_provider_volume_local::EntryDigest::derive(&uid, "sync.lock")
+    );
+    assert_eq!(condition.reason, VolumeLocalError::EntryQuarantined);
+    assert_eq!(
+        condition.severity,
+        d2b_provider_volume_local::ConditionSeverity::Degraded
+    );
+    // Quarantine mutates nothing.
+    assert_eq!(std::fs::read(&lock).expect("lock readback"), stale.to_bytes());
+    let _ = std::fs::remove_dir_all(base);
+}
+
+/// The same quarantine holds for a lock that carries no record at all: the
+/// daemon-created file is adopted only because its creator recorded itself.
+#[test]
+fn unrecorded_sync_lock_owner_still_quarantines_the_store_view_layout() {
+    let (base, adapter) = adapter_root_with_options("unrecorded-sync-lock", true);
+    let lock = base.join("sync.lock");
+    std::fs::write(&lock, b"foreign-bytes").expect("foreign sync.lock");
+
+    let controller = VolumeLocalController::new(VolumeLocalProfile::shipped(), &adapter, &adapter);
+    let uid = volume_uid();
+    let spec = d2b_provider_volume_local::testing::fixtures::store_view_volume();
+    let report = d2b_provider_volume_local::testing::block_on(
+        controller.reconcile(&uid, &spec, None, None),
+    )
+    .expect("store-view Volume reconcile");
+
+    assert_eq!(
+        report.layout_phase,
+        d2b_provider_volume_local::LayoutPhase::Degraded
+    );
+    assert_eq!(report.layout_conditions.len(), 1, "{:?}", report.layout_conditions);
+    assert_eq!(
+        report.layout_conditions[0].reason,
+        VolumeLocalError::EntryQuarantined
+    );
+    assert_eq!(
+        std::fs::read(&lock).expect("lock readback"),
+        b"foreign-bytes",
+        "an unprovable foreign lock is never rewritten"
+    );
     let _ = std::fs::remove_dir_all(base);
 }
 

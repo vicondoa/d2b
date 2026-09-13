@@ -1,11 +1,18 @@
 //! Checked resource-store backend boundary.
+//!
+//! The Resource API talks to exactly one storage authority per Zone: the
+//! manager-backed backend ([`crate::manager_backend::ManagerBackend`]). The
+//! pre-v3 durable store and its per-type plane fence are deleted (spec §26,
+//! R29): the fence existed only to stop that backend from serving a converted
+//! type, and with one execution model there is no second plane to fence.
 
-use std::{future::Future, sync::Arc};
+use std::future::Future;
+use std::sync::Arc;
 
-use d2b_resource_store::{
+use d2b_contracts_resource::v3::{
     SealedMutation, StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest,
-    StoreListRequest, StoreListResult, StoreResolveRequest, StoreResolvedIdentity,
-    StoreWatchReceipt, StoreWatchRequest, StoredResource, StoredSchema,
+    StoreListRequest, StoreListResult, StoreResolveRequest, StoreResolvedIdentity, StoreWatchReceipt,
+    StoreWatchRequest, StoredResource, StoredSchema,
 };
 
 use crate::admission::{AdmittedMutation, StoreAdmissionBinding};
@@ -61,82 +68,6 @@ pub trait ResourceStoreBackend: Send + Sync {
     ) -> impl Future<Output = Result<StoreCommitResult, StoreError>> + Send;
 }
 
-/// API bridge that owns the concrete mutation-seal store binding.
-///
-/// A caller can construct a locally paired seal, but foreign locally-paired
-/// seals are inert: a correctly wired production store accepts only evidence
-/// from the issuer paired with its own acceptor.
-///
-/// ```compile_fail
-/// use d2b_resource_api::RedbBackend;
-/// use d2b_resource_store::SealedMutation;
-///
-/// fn forge() -> SealedMutation {
-///     SealedMutation {}
-/// }
-/// ```
-pub struct RedbBackend {
-    store: Arc<d2b_resource_store_redb::RedbResourceStore>,
-}
-
-impl core::fmt::Debug for RedbBackend {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("RedbBackend(<redacted>)")
-    }
-}
-
-impl RedbBackend {
-    pub fn new(store: d2b_resource_store_redb::RedbResourceStore) -> Self {
-        Self {
-            store: Arc::new(store),
-        }
-    }
-
-    /// Bind the API to a store whose lifetime is owned by a Zone runtime.
-    pub const fn from_arc(store: Arc<d2b_resource_store_redb::RedbResourceStore>) -> Self {
-        Self { store }
-    }
-
-    pub(crate) fn store_arc(&self) -> Arc<d2b_resource_store_redb::RedbResourceStore> {
-        Arc::clone(&self.store)
-    }
-}
-
-impl ResourceStoreBackend for RedbBackend {
-    async fn get(&self, request: StoreGetRequest) -> Result<StoredResource, StoreError> {
-        self.store.get(request).await
-    }
-
-    async fn list(&self, request: StoreListRequest) -> Result<StoreListResult, StoreError> {
-        self.store.list(request).await
-    }
-
-    async fn watch(&self, request: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
-        self.store.watch(request).await
-    }
-
-    async fn resolve_ref(
-        &self,
-        request: StoreResolveRequest,
-    ) -> Result<StoreResolvedIdentity, StoreError> {
-        self.store.resolve_ref(request).await
-    }
-
-    async fn inspect_schema(
-        &self,
-        request: StoreInspectSchemaRequest,
-    ) -> Result<StoredSchema, StoreError> {
-        self.store.inspect_schema(request).await
-    }
-
-    async fn commit_verified(
-        &self,
-        mutation: SealedMutation,
-    ) -> Result<StoreCommitResult, StoreError> {
-        self.store.commit_verified(mutation).await
-    }
-}
-
 /// A native authorizer has already been bound to a store backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StoreBindingError;
@@ -166,10 +97,6 @@ impl<S> Clone for CheckedResourceStore<S> {
 impl<S> CheckedResourceStore<S> {
     pub(super) const fn new(backend: Arc<S>, admission: StoreAdmissionBinding) -> Self {
         Self { backend, admission }
-    }
-
-    pub(crate) fn backend(&self) -> Arc<S> {
-        Arc::clone(&self.backend)
     }
 }
 

@@ -188,12 +188,29 @@ pub fn live_prepare_runtime_dir(
     Ok(())
 }
 
+/// The state directory one successful `PrepareStateDir` resolved, and the
+/// posture recorded for it.
+///
+/// A legacy VM's directory is created/verified by this op, so the posture is
+/// the manifest intent's. A v3 zone-native Guest's directory is owned by the
+/// controller-created state Volume, which the trusted
+/// `path:swtpm-state:<guest>` storage row roots, so this op resolves that row
+/// and records the posture it declares - it creates nothing. Both postures
+/// come from a verified bundle artifact, never from the request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedStateDir {
+    pub base_dir: PathBuf,
+    pub owner_uid: u32,
+    pub owner_gid: u32,
+    pub mode: u32,
+}
+
 pub fn live_prepare_state_dir(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
     req: &d2b_contracts_broker::broker_wire::PrepareDirRequest,
     _audit_log: &crate::audit::AuditLog,
-) -> Result<(), PrepareStateDirError> {
+) -> Result<PreparedStateDir, PrepareStateDirError> {
     if req.path_class != PathClass::Vm {
         return Err(super::OpError::InvalidInput {
             detail: format!(
@@ -203,12 +220,51 @@ pub fn live_prepare_state_dir(
         }
         .into());
     }
-    let intent = resolver
-        .resolve_prepare_dir_intent(req.vm_id.as_str(), false)
-        .ok_or_else(|| super::OpError::UnknownSubject {
-            operation: "PrepareStateDir",
-            subject: req.vm_id.as_str().to_owned(),
-        })?;
+    let Some(intent) = resolver.resolve_prepare_dir_intent(req.vm_id.as_str(), false) else {
+        // v3: a zone-native Guest carries no legacy state-directory intent.
+        // Its TPM state directory is the controller-created state Volume the
+        // trusted `path:swtpm-state:<guest>` storage row roots
+        // (`createPolicy: create-if-never-provisioned`,
+        // `repairPolicy: fail-closed`,
+        // `packages/d2b-provider-device-tpm/src/resources.rs`), so there is no
+        // legacy directory for this op to prepare. Accept exactly the subject
+        // such a trusted row names - the same row the daemon's worker
+        // derivation, the spawn-time swtpm-dir fence and the volume-local
+        // controller's root all agree on - and keep every other unknown
+        // subject failing closed.
+        let (spec, state_root) =
+            crate::ops::swtpm_dir::zone_native_swtpm_state_row(resolver, req.vm_id.as_str())
+                .ok_or_else(|| super::OpError::UnknownSubject {
+                    operation: "PrepareStateDir",
+                    subject: req.vm_id.as_str().to_owned(),
+                })?;
+        let (owner_uid, owner_gid, mode) = crate::ops::storage_contract::row_posture(spec)
+            .ok_or_else(|| super::OpError::Refused {
+                operation: "PrepareStateDir",
+                reason: "trusted-state-row-posture-unresolvable".to_owned(),
+            })?;
+        // The directory the worker actually opens: the state Volume of the
+        // Guest's own TPM Device, which the TPM Provider names from that
+        // Device's durable uid (`<root>/device-<32hex>-tpm-state`) - the same
+        // name `d2bd`'s `device_state_dir` composes and the volume-local
+        // controller provisions. The op is per-Guest, so it can name that
+        // directory only when the verified bundles name exactly one TPM Device
+        // for the Guest; a Device committed through the Resource API lives in
+        // no bundle, and a Guest declaring several TPM Devices owns several
+        // state Volumes, in which case the shared policy root the trusted row
+        // itself names is recorded - never an invented one of them.
+        let base_dir = crate::ops::device_worker::unique_tpm_state_dir(
+            &crate::ops::device_worker::tpm_devices_of_guest(resolver, req.vm_id.as_str()),
+            &state_root,
+        )
+        .unwrap_or(state_root);
+        return Ok(PreparedStateDir {
+            base_dir,
+            owner_uid,
+            owner_gid,
+            mode,
+        });
+    };
     ensure_dir_preserve_existing(
         &intent.base_dir,
         intent.mode,
@@ -274,7 +330,170 @@ pub fn live_prepare_state_dir(
             .map_err(PrepareStateDirError::SwtpmDirHardening)?;
     }
 
-    Ok(())
+    Ok(PreparedStateDir {
+        base_dir: intent.base_dir,
+        owner_uid: intent.owner_uid,
+        owner_gid: intent.owner_gid,
+        mode: intent.mode,
+    })
+}
+
+/// The trusted `path:swtpm-state:<guest>` storage row a zone-native Guest's
+/// TPM state root comes from, as one resolver - the same artifact the
+/// spawn-time swtpm-dir fence resolves (`swtpm_dir::resource_backed_identity`
+/// reads `path:swtpm-state:<guest>` and `path:tpm-state` through the same
+/// `find_storage_path_spec`).
+///
+/// The row declares `0:0 0700` numerically: a named principal would only
+/// resolve on a host that has that account, and these tests assert the
+/// posture the row itself declares.
+#[cfg(test)]
+/// The canonical content hash of one fixture resource array, computed the way
+/// `ResourceBundle` computes it, so the fixture bundle verifies.
+fn fixture_content_hash(resources: &[serde_json::Value]) -> String {
+    use d2b_contracts_resource::v3::resource_schema::{
+        CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest,
+    };
+    let array = serde_json::Value::Array(resources.to_vec());
+    let canonical =
+        CanonicalJsonValue::parse(&serde_json::to_vec(&array).expect("fixture resources serialize"))
+            .expect("fixture resources are canonical JSON");
+    framed_canonical_digest(
+        "d2b:v3:resource-bundle",
+        &canonical_json_bytes(&canonical).expect("fixture resources encode"),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn resolver_with_swtpm_state_row(guest: &str) -> BundleResolver {
+    use d2b_core::bundle::{Bundle, BundleGeneration};
+    use d2b_core::contract_id::{ContractId, PathTemplate};
+    use d2b_core::host::HostJson;
+    use d2b_core::manifest_v04::ManifestV04;
+    use d2b_core::processes::ProcessesJson;
+    use d2b_core::storage::{
+        ActorKind, ActorRef, CleanupPolicy, LeaseClass, PrincipalKind, PrincipalRef,
+        RepairPolicy, SensitivityClass, StorageAdoptionPolicy, StorageInvariant, StorageJson,
+        StorageLifecycle, StoragePathKind, StoragePathSpec, StoragePersistence,
+        StorageRestartPolicy,
+    };
+
+    let principal = |kind, value: &str| PrincipalRef {
+        kind,
+        value: ContractId::parse(value).unwrap(),
+    };
+    let actor = |kind, value: &str| ActorRef {
+        kind,
+        value: ContractId::parse(value).unwrap(),
+    };
+    let storage = StorageJson {
+        schema_version: "v2".to_owned(),
+        roots: Vec::new(),
+        paths: vec![StoragePathSpec {
+            id: ContractId::parse(&format!("path:swtpm-state:{guest}")).unwrap(),
+            scope: ContractId::parse(&format!("vm:{guest}")).unwrap(),
+            path_template: PathTemplate::parse("/var/lib/d2b/tpm-state").unwrap(),
+            kind: StoragePathKind::Directory,
+            lifecycle: StorageLifecycle::Persistent,
+            persistence: StoragePersistence::Persistent,
+            owner: principal(PrincipalKind::Uid, "0"),
+            group: principal(PrincipalKind::Gid, "0"),
+            mode: "0700".to_owned(),
+            access_acl: Vec::new(),
+            default_acl: Vec::new(),
+            creator: actor(ActorKind::NixModule, "tmpfiles"),
+            writers: vec![actor(ActorKind::Daemon, "d2bd")],
+            readers: vec![actor(ActorKind::Daemon, "d2bd")],
+            cleanup_policy: CleanupPolicy::Never,
+            repair_policy: RepairPolicy::BrokerFailClosed,
+            restart_policy: StorageRestartPolicy::PreserveAcrossDaemonRestart,
+            adoption_policy: StorageAdoptionPolicy::QuarantineOnAmbiguity,
+            lease_class: LeaseClass::None,
+            sensitivity: SensitivityClass::SecretAdjacent,
+            no_follow: true,
+            recursive: false,
+            invariants: vec![StorageInvariant::NoSymlink],
+        }],
+        restart_policies: Vec::new(),
+        degraded_states: Vec::new(),
+        remediations: Vec::new(),
+    };
+    let bundle = Bundle {
+        bundle_version: 11,
+        schema_version: "v2".to_owned(),
+        public_manifest_path: "vms.json".to_owned(),
+        host_path: "host.json".to_owned(),
+        processes_path: "processes.json".to_owned(),
+        privileges_path: "privileges.json".to_owned(),
+        storage_path: Some("storage.json".to_owned()),
+        sync_path: None,
+        allocator_path: None,
+        realm_controllers_path: None,
+        realm_identity_path: None,
+        realm_workloads_launcher_v2_path: None,
+        unsafe_local_workloads_path: None,
+        closures: Vec::new(),
+        minijail_profiles: Vec::new(),
+        managed_keys: Default::default(),
+        generation: BundleGeneration {
+            generator: "test".to_owned(),
+            source_revision: None,
+            generated_at: None,
+        },
+        bundle_hash: None,
+        artifact_hashes: None,
+    };
+    let host: HostJson = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/deny-unknown/host-valid.json"
+    ))
+    .expect("host fixture parses");
+    let manifest = ManifestV04::from_slice(
+        include_str!("../../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+    )
+    .expect("manifest fixture parses");
+    // The Zone resource bundle names the Device that owns the Guest's TPM
+    // function, which is what the `PrepareStateDir` record resolves the
+    // worker's state Volume directory from.
+    let resources = vec![serde_json::json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "Device",
+        "metadata": {
+            "name": "tpm0",
+            "zone": "work",
+            "ownerRef": format!("Guest/{guest}"),
+        },
+        "spec": {"providerRef": "Provider/device-tpm"},
+    })];
+    let zone_bundle = serde_json::json!({
+        "schemaVersion": 3,
+        "bundleVersion": 1,
+        "zone": "work",
+        "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
+        "contentHash": fixture_content_hash(&resources),
+        "artifactCatalogDigest": format!("sha256:{}", "c".repeat(64)),
+        "schemaFingerprints": {},
+        "providerSchemaDigests": {},
+        "resources": resources,
+        "generatedAt": "1970-01-01T00:00:00.000Z",
+    });
+    let mut resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
+        bundle,
+        host,
+        ProcessesJson {
+            schema_version: "v2".to_owned(),
+            vms: Vec::new(),
+        },
+        manifest,
+        std::collections::BTreeMap::from([(
+            "work".to_owned(),
+            serde_json::to_vec(&zone_bundle).expect("zone bundle bytes"),
+        )]),
+    );
+    // Storage travels on the same resolver: the production loader carries both
+    // artifacts, and this fixture needs the trusted row and the Device scope
+    // to resolve together.
+    resolver.storage = Some(storage);
+    resolver
 }
 
 #[cfg(test)]
@@ -443,5 +662,90 @@ mod tests {
         let err = prepare_dir(&req).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         fs::remove_dir_all(dir).ok();
+    }
+
+    fn prepare_request(vm: &str) -> d2b_contracts_broker::broker_wire::PrepareDirRequest {
+        use d2b_contracts::types::VmId;
+        d2b_contracts_broker::broker_wire::PrepareDirRequest {
+            vm_id: VmId::new(vm),
+            path_class: PathClass::Vm,
+            tracing_span_id: None,
+        }
+    }
+
+    #[test]
+    fn prepare_state_dir_accepts_a_zone_native_guest_with_the_trusted_state_row() {
+        // The v3 TPM state directory belongs to the controller-created state
+        // Volume, so the legacy prepare is a no-op for a zone-native Guest -
+        // and only for one a trusted `path:swtpm-state:<guest>` row names.
+        // The record names the directory the worker actually opens: the state
+        // Volume of the Guest's own Device under the trusted root.
+        let resolver = resolver_with_swtpm_state_row("acceptance-guest");
+        let (exec, audit_log) = live_fixture();
+        let prepared = live_prepare_state_dir(
+            &exec,
+            &resolver,
+            &prepare_request("acceptance-guest"),
+            &audit_log,
+        )
+        .expect("the zone-native TPM subject prepares as a no-op");
+        let device_uid = crate::ops::device_worker::deterministic_resource_uid(
+            "work",
+            "Device",
+            "tpm0",
+        );
+        assert_eq!(
+            prepared.base_dir,
+            PathBuf::from("/var/lib/d2b/tpm-state").join(crate::ops::swtpm_dir::state_volume_name(
+                &device_uid
+            ))
+        );
+        assert_ne!(
+            prepared.base_dir,
+            PathBuf::from("/var/lib/d2b/tpm-state"),
+            "the record must name the worker's own state Volume directory, not the shared root"
+        );
+        assert_eq!(prepared.owner_uid, 0);
+        assert_eq!(prepared.owner_gid, 0);
+        assert_eq!(prepared.mode, 0o700);
+    }
+
+    #[test]
+    fn prepare_state_dir_still_refuses_an_unknown_subject() {
+        let resolver = resolver_with_swtpm_state_row("other-guest");
+        let (exec, audit_log) = live_fixture();
+        let error = live_prepare_state_dir(
+            &exec,
+            &resolver,
+            &prepare_request("acceptance-guest"),
+            &audit_log,
+        )
+        .expect_err("a subject no trusted row names still fails closed");
+        assert!(matches!(
+            error,
+            PrepareStateDirError::Operation(super::super::OpError::UnknownSubject { .. })
+        ));
+    }
+
+    fn live_fixture() -> (SystemLiveExec, crate::audit::AuditLog) {
+        let exec = SystemLiveExec::new(
+            nix::unistd::geteuid().as_raw(),
+            nix::unistd::getegid().as_raw(),
+        );
+        let audit_log = crate::audit::AuditLog::open(
+            &crate::test_scratch_root().join(format!(
+                "w3-state-dir-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )),
+            0,
+            true,
+            1,
+        )
+        .expect("test audit log opens");
+        (exec, audit_log)
     }
 }

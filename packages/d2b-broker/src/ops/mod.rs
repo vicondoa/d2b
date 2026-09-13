@@ -43,6 +43,9 @@ pub mod usbip_host;
 
 // Kernel-module + device-fd handoff ops.
 pub mod device;
+// Trusted scope of one Device-owned worker launch (row -> Device -> Guest
+// pin, per-Guest socket directory, Device row uid derivation).
+pub mod device_worker;
 // GPU-specific role, allowlist, and restart identity preflight.
 pub mod gpu;
 pub mod modprobe;

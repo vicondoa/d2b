@@ -7,6 +7,11 @@
 { pkgs, self }:
 
 let
+  # Shared fixture diagnostics (issue #513): row dumps and per-stage markers.
+  d2bLib = import ./lib.nix {
+    inherit self;
+    inherit (pkgs) lib;
+  };
   proxyPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.d2b-wayland-proxy;
 in
 pkgs.testers.runNixOSTest {
@@ -27,9 +32,13 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    ${d2bLib.fixtureDiagnostics}
+
     start_all()
+    stage("boot")
     machine.wait_for_unit("multi-user.target", timeout=180)
 
+    stage("fake-upstream")
     machine.succeed("install -d -m 0700 -o alice -g users /run/d2b-wayland-proxy-test")
     machine.succeed(
         "cat > /run/d2b-wayland-proxy-test/fake-upstream.py <<'PY'\n"
@@ -77,8 +86,25 @@ pkgs.testers.runNixOSTest {
         ">/run/d2b-wayland-proxy-test/upstream.log 2>&1 & "
         "echo $! > /run/d2b-wayland-proxy-test/upstream.pid"
     )
-    machine.wait_for_file("/run/d2b-wayland-proxy-test/upstream.ready", timeout=30)
+    diag_step(
+        "upstream-ready",
+        lambda: machine.wait_for_file(
+            "/run/d2b-wayland-proxy-test/upstream.ready", timeout=30
+        ),
+        rows=[
+            (
+                "upstream log",
+                "cat /run/d2b-wayland-proxy-test/upstream.log "
+                "2>/dev/null || true",
+            ),
+            (
+                "test dir",
+                "ls -la /run/d2b-wayland-proxy-test 2>&1 || true",
+            ),
+        ],
+    )
 
+    stage("proxy-start")
     machine.succeed(
         "runuser -u alice -- env XDG_RUNTIME_DIR=/run/d2b-wayland-proxy-test "
         "d2b-wayland-proxy "
@@ -93,9 +119,11 @@ pkgs.testers.runNixOSTest {
         "for attempt in $(seq 1 300); do "
         "test -S /run/d2b-wayland-proxy-test/proxy.sock && exit 0; "
         "kill -0 $(cat /run/d2b-wayland-proxy-test/proxy.pid) 2>/dev/null || "
-        "{ cat /run/d2b-wayland-proxy-test/proxy.log >&2; exit 1; }; "
+        "{ echo 'd2b-wayland-proxy exited before binding its socket:'; "
+        "cat /run/d2b-wayland-proxy-test/proxy.log; exit 1; }; "
         "sleep 0.1; done; "
-        "cat /run/d2b-wayland-proxy-test/proxy.log >&2; exit 1"
+        "echo 'd2b-wayland-proxy did not bind its socket within 30s:'; "
+        "cat /run/d2b-wayland-proxy-test/proxy.log; exit 1"
     )
     machine.succeed("test -S /run/d2b-wayland-proxy-test/proxy.sock")
     machine.succeed("test \"$(stat -c %a /run/d2b-wayland-proxy-test)\" = 700")
@@ -104,6 +132,7 @@ pkgs.testers.runNixOSTest {
     # compositor must observe the same 12-byte Wayland request on its upstream
     # socket, proving the live proxy accepted a client and relayed protocol
     # traffic rather than only binding a socket.
+    stage("relay-proof")
     machine.succeed(
         "python3 - <<'PY'\n"
         "import socket, struct\n"
@@ -115,7 +144,24 @@ pkgs.testers.runNixOSTest {
         "sock.close()\n"
         "PY"
     )
-    machine.wait_for_file("/run/d2b-wayland-proxy-test/upstream.seen", timeout=30)
+    diag_step(
+        "relay-observed",
+        lambda: machine.wait_for_file(
+            "/run/d2b-wayland-proxy-test/upstream.seen", timeout=30
+        ),
+        rows=[
+            (
+                "upstream log",
+                "cat /run/d2b-wayland-proxy-test/upstream.log "
+                "2>/dev/null || true",
+            ),
+            (
+                "proxy log",
+                "cat /run/d2b-wayland-proxy-test/proxy.log "
+                "2>/dev/null || true",
+            ),
+        ],
+    )
     machine.succeed(
         "python3 - <<'PY'\n"
         "import pathlib, struct\n"
@@ -124,6 +170,7 @@ pkgs.testers.runNixOSTest {
         "PY"
     )
 
+    stage("teardown")
     machine.succeed("kill $(cat /run/d2b-wayland-proxy-test/proxy.pid) || true")
     machine.succeed("kill $(cat /run/d2b-wayland-proxy-test/upstream.pid) || true")
   '';

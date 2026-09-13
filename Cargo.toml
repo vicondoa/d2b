@@ -57,8 +57,7 @@ members = [
     "packages/d2b-core-controller",
     "packages/d2b-provider-test-controller",
     "packages/d2b-resource-api",
-    "packages/d2b-resource-store",
-    "packages/d2b-resource-store-redb",
+    "packages/d2b-resource-runtime",
     "packages/d2b",
     "packages/d2bd-runtime",
     "packages/d2bd",
@@ -147,3 +146,20 @@ sha2 = "0.10"
 unicode-normalization = "0.1"
 tokio = { version = "1", default-features = false }
 ttrpc = { version = "0.9.0", default-features = false }
+# v3 resource-runtime rewrite (U1): ractor is the actor runtime for the new
+# resource plane (one authoritative actor per desired resource, supervised
+# respawns, requeue timers). Default features only - the cluster feature is
+# deliberately excluded (Ractor remoting is out of scope per plan R22).
+# First consumed by packages/d2b-resource-runtime (scaffold commit).
+ractor = "0.16"
+# v3 resource-runtime rewrite (U1): rusqlite backs the minimal durable
+# desired-spec store (WAL, single-writer connection owned by the spec store
+# task; all calls via spawn_blocking per KTD12). `bundled` compiles the pinned
+# SQLite C sources so no system libsqlite3 is required.
+# First consumed by packages/d2b-resource-runtime (scaffold commit).
+rusqlite = { version = "0.40", features = ["bundled"] }
+# v3 resource-runtime rewrite (U2): embedded schema migrations for the SQLite
+# spec store (persist-then-reopen must apply migrations idempotently without a
+# runtime-side migration runner). Small, auditable migration list only.
+# First consumed by packages/d2b-resource-runtime (this commit).
+rusqlite_migration = "2.6"

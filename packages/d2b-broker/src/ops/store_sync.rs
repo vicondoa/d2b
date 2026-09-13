@@ -46,6 +46,7 @@ use crate::ops::store_sync_audit::{
 };
 use crate::ops::store_view_posture::{
     PostureError, plant_live_marker_with_matrix_posture, posture_store_view_matrix_paths,
+    posture_store_view_matrix_paths_before_build,
 };
 
 /// Typed errors for the `StoreSync` handler. Each value classifies the
@@ -298,7 +299,11 @@ fn run_store_sync_inner(
     let lock_hold_started = Instant::now();
 
     let probe_started = Instant::now();
-    posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm)
+    // Bring-up pass: this runs BEFORE the build below creates the farm's
+    // matrix levels, so a level the declaration marks `required` may be absent
+    // here on a farm's first sync. The strict pass after a successful build
+    // (and every other caller) refuses a missing required level as drift.
+    posture_store_view_matrix_paths_before_build(&intent.hardlink_farm_path, &intent.vm)
         .map_err(|err| posture_error(ErrorStage::Lock, err))?;
 
     // Reconcile possible stale `state/current.tmp` / `meta/current.tmp`
@@ -662,6 +667,19 @@ fn acquire_sync_lock(farm_root: &Path) -> Result<File, StoreSyncError> {
             HardlinkFarmError::Io {
                 path: path.display().to_string(),
                 detail: format!("lock sync.lock: {err}"),
+            },
+        )
+    })?;
+    // Record the live owner while the exclusive lock is held. This is the
+    // `file-record` lease evidence the daemon verifies (kernel start-time +
+    // boot id + comm) before adopting the broker-owned lock; without it the
+    // daemon keeps the entry quarantined.
+    hardlink_farm::SyncLockOwnerRecord::record_current_process(&file).map_err(|error| {
+        StoreSyncError::at(
+            ErrorStage::Lock,
+            HardlinkFarmError::Io {
+                path: path.display().to_string(),
+                detail: format!("record sync.lock owner: {error}"),
             },
         )
     })?;

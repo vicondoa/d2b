@@ -11,9 +11,17 @@ fn controller_uses_opaque_resource_effects_and_preserves_volume_on_finalize() {
     let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
     let device_ref = ResourceRef::parse("Device/work-tpm").unwrap();
     let execution = ResourceRef::parse("Host/host-system").unwrap();
-    let spec = build_tpm_state_volume_spec(&device, &execution).unwrap();
+    let spec = build_tpm_state_volume_spec(&device_ref, "dev", &execution).unwrap();
     assert_eq!(spec["source"]["settings"]["kind"], "local-path");
     assert!(spec.get("hostPath").is_none());
+    assert_eq!(spec["layout"][0]["ownerRef"], "User/d2bd");
+    assert_eq!(
+        spec["layout"][0]["accessAcl"][0],
+        serde_json::json!({
+            "principal": { "ref": "User/d2b-dev-work-tpm-swtpm" },
+            "permissions": "rwx"
+        })
+    );
 
     fn assert_port<P: TpmResourceEffectPort>() {}
     assert_port::<NoopEffects>();

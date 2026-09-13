@@ -180,8 +180,8 @@ let
         endpointClass = "service";
         transport = "opaque-carriage";
         purpose = if host
-          then "audio.d2bus.org/host-worker"
-          else "audio.d2bus.org/guest-agent";
+          then "audio-pipewire-host-worker"
+          else "audio-pipewire-guest-agent";
         serviceFingerprint = null;
         locality = if host then "host-local" else "guest-local";
         visibility = "owner";

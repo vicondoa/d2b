@@ -166,6 +166,13 @@ in
           .providerProjectionDeviceTpm.processesByZone.dev);
         endpoints = lib.attrNames (projected.config.d2b._resourceCompiler
           .providerProjectionDeviceTpm.resourcesByZone.dev);
+        # `EndpointSpec.purpose` is a `BoundedToken` (`^[a-z][a-z0-9-]*$`), so a
+        # dotted service-style spelling is a decode refusal at the daemon, not
+        # a naming choice. Pin the ADR-046 names here.
+        endpointPurposes = lib.mapAttrs
+          (_: resource: resource.spec.purpose)
+          (projected.config.d2b._resourceCompiler
+            .providerProjectionDeviceTpm.resourcesByZone.dev);
         processRefs = projected.config.d2b._resourceCompiler
           .providerProjectionDeviceTpm.privateArtifact.processRefs;
       };
@@ -173,10 +180,68 @@ in
         enabled = true;
         processes = [ "swtpm-flush-tpm" "swtpm-tpm" ];
         endpoints = [ "tpm-ctrl-tpm" "tpm-tpm" ];
+        endpointPurposes = {
+          "tpm-ctrl-tpm" = "swtpm-control-socket";
+          "tpm-tpm" = "swtpm-tpm-socket";
+        };
         processRefs = [
           "Process/swtpm-tpm"
           "EphemeralProcess/swtpm-flush-tpm"
         ];
+      };
+    };
+
+    "provider-device-tpm/swtpm-child-posture" = {
+      expr = let
+        processes = projected.config.d2b._resourceCompiler
+          .providerProjectionDeviceTpm.processesByZone.dev;
+        swtpm = processes.swtpm-tpm;
+        flush = processes.swtpm-flush-tpm;
+      in {
+        swtpmOwner = swtpm.metadata.ownerRef;
+        swtpmExecution = swtpm.spec.executionRef;
+        swtpmClass = swtpm.spec.processClass;
+        swtpmTemplate = swtpm.spec.template;
+        swtpmSandbox = swtpm.spec.sandbox;
+        flushOwner = flush.metadata.ownerRef;
+        flushTemplate = flush.spec.template;
+        flushSandbox = flush.spec.sandbox;
+      };
+      expected = {
+        # The declared row name is the authority: the Process controller
+        # returns exactly this ref, never a UID-hex derivation.
+        swtpmOwner = "Device/tpm";
+        swtpmExecution = "Host/host-system";
+        swtpmClass = "worker";
+        swtpmTemplate = "swtpm-socket";
+        swtpmSandbox = {
+          namespaceClasses = [ "mount" "pid" "user" ];
+          capabilityClasses = [ ];
+          seccompClass = "strict";
+          noNewPrivileges = true;
+          startRoot = false;
+          readOnlyRoot = true;
+          environmentClass = "minimal";
+          umask = "0007";
+          oomScoreAdj = 0;
+          userNamespace = { mappingClass = "process-principal-root"; };
+        };
+        flushOwner = "Device/tpm";
+        flushTemplate = "swtpm-init-flush";
+        # The one-shot flush carries no user namespace: ADR 0021 maps
+        # process-principal-root for long-lived workers only.
+        flushSandbox = {
+          namespaceClasses = [ "mount" "pid" ];
+          capabilityClasses = [ ];
+          seccompClass = "strict";
+          noNewPrivileges = true;
+          startRoot = false;
+          readOnlyRoot = true;
+          environmentClass = "minimal";
+          umask = "0007";
+          oomScoreAdj = 0;
+          userNamespace = null;
+        };
       };
     };
 

@@ -329,6 +329,10 @@ pub mod fixtures {
         current["repairPolicy"] = json!("none");
         let mut lock = owned("sync.lock", "file", "0640");
         lock["cleanupPolicy"] = json!("never");
+        // The store-sync lock is a `file-record` lease: it is adopted only
+        // with a verifiable live owner record (the broker's, or the
+        // creator's for a lock no broker materialized).
+        lock["leaseClass"] = json!("file-record");
         parse(json!({
             "source": {
                 "executionRef": "Host/host-system",

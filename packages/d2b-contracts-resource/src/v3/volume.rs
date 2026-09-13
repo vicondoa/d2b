@@ -929,6 +929,28 @@ impl AttachmentSettings {
     pub const fn inode_file_handles(&self) -> InodeFileHandles {
         self.inode_file_handles
     }
+
+    /// Whether POSIX ACLs are served for this attachment.
+    pub const fn posix_acl(&self) -> bool {
+        self.posix_acl
+    }
+
+    /// Whether extended attributes are served for this attachment.
+    pub const fn xattr(&self) -> bool {
+        self.xattr
+    }
+
+    /// Return the declared worker thread-pool size, when the attachment
+    /// overrides the target Guest's vCPU count.
+    pub const fn thread_pool_size(&self) -> Option<u32> {
+        self.thread_pool_size
+    }
+
+    /// Return the declared socket group name, when the attachment overrides
+    /// the broker default.
+    pub fn socket_group(&self) -> Option<&BoundedToken> {
+        self.socket_group.as_ref()
+    }
 }
 
 impl Default for AttachmentSettings {

@@ -172,6 +172,11 @@ in
         endpoint = builtins.hasAttr "security-key-binding"
           projected.config.d2b._resourceCompiler
           .providerProjectionDeviceSecurityKey.resourcesByZone.dev;
+        # `EndpointSpec.purpose` is a `BoundedToken`; a dotted spelling is a
+        # decode refusal at the daemon.
+        purpose = (projected.config.d2b._resourceCompiler
+          .providerProjectionDeviceSecurityKey.resourcesByZone.dev)
+          ."security-key-binding".spec.purpose;
         processRefs = projected.config.d2b._resourceCompiler
           .providerProjectionDeviceSecurityKey.privateArtifact.processRefs;
       };
@@ -179,6 +184,7 @@ in
         enabled = true;
         process = "security-key-frontend";
         endpoint = true;
+        purpose = "security-key-ctaphid";
         processRefs = [ "Process/security-key-binding" ];
       };
     };

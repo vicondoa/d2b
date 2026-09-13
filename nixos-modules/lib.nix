@@ -494,6 +494,83 @@ rec {
     if principal == "root" then 0
     else 50000 + lib.fromHexString (builtins.substring 0 6 (builtins.hashString "sha256" principal));
 
+  # The principal uid one Device-owned worker row runs as, mirroring
+  # `d2b-core`'s `mint_template_intent` (`bundle_resolver.rs`): the first
+  # four bytes of the SHA-256 over
+  # `<bindingOwner>:<processRef>:<executionRef>`, masked to 24 bits, offset by
+  # 50000. The Device TPM Provider's state Volume and its worker must agree on
+  # it, so both sides derive it from the same triple.
+  deviceWorkerPrincipalId = bindingOwner: processRef: executionRef:
+    50000 + (builtins.bitAnd
+      (lib.fromHexString (builtins.substring 2 6
+        (builtins.hashString "sha256" "${bindingOwner}:${processRef}:${executionRef}")))
+      16777215);
+
+  # The host principals one zone-native Device with a TPM needs, derived from
+  # the same artifacts the runtime derives them from:
+  #
+  # - the two worker principals the TPM Provider's state Volume grants ACL
+  #   access to (`User/d2b-<zone>-<device>-swtpm` and its `-flush` sibling,
+  #   `packages/d2b-provider-device-tpm/src/resources.rs`), which the
+  #   state-layout effect resolves through NSS - the Volume's layout owner
+  #   itself is the daemon (`User/d2bd`), and
+  # - the worker-row principal uids the daemon's Device-worker tickets name
+  #   (`deviceWorkerPrincipalId` over the binding's
+  #   `<owner>:<rowRef>:<executionRef>` triple).
+  #
+  # Both worker rows of one Device share one state directory, so both
+  # principals are provisioned: the long-lived swtpm worker is granted rwx on
+  # it and the one-shot flush the traverse and socket writes it needs.
+  deviceTpmPrincipals = cfg:
+    let
+      providerRef = "Provider/device-tpm";
+      devices = lib.concatMap
+        (zoneName:
+          let
+            resources = cfg.zones.${zoneName}.resources or { };
+            provider = resources.device-tpm or null;
+            providerConfig =
+              if provider == null then { } else (provider.spec.config or { });
+            executionRef = providerConfig.controllerExecutionRef or null;
+            parts =
+              if builtins.isString executionRef then lib.splitString "/" executionRef else [ ];
+            resolvable = lib.length parts == 2
+              && builtins.elemAt parts 0 == "Host"
+              && builtins.hasAttr (builtins.elemAt parts 1) resources
+              && (resources.${builtins.elemAt parts 1}).type or null == "Host";
+            tpmDevices = lib.filter
+              (name:
+                (resources.${name}.type or null) == "Device"
+                && (resources.${name}.spec.providerRef or null) == providerRef
+                && lib.hasPrefix "Guest/" ((resources.${name}.metadata or { }).ownerRef or ""))
+              (lib.attrNames resources);
+          in
+          lib.optional (resolvable && tpmDevices != [ ]) {
+            inherit zoneName executionRef tpmDevices;
+          })
+        (lib.sort lib.lessThan (lib.attrNames (cfg.zones or { })));
+    in
+    lib.concatMap
+      (zone:
+        map
+          (device:
+            let
+              account = "d2b-${zone.zoneName}-${device}-swtpm";
+              flushAccount = "d2b-${zone.zoneName}-${device}-swtpm-flush";
+              ownerRef = "Provider/device-tpm";
+            in
+            {
+              inherit (zone) zoneName;
+              inherit device;
+              inherit account flushAccount;
+              ownerUid = deviceWorkerPrincipalId ownerRef
+                "Process/swtpm-${device}" zone.executionRef;
+              flushUid = deviceWorkerPrincipalId ownerRef
+                "EphemeralProcess/swtpm-flush-${device}" zone.executionRef;
+            })
+          zone.tpmDevices)
+      devices;
+
   # Stable virtio-blk serial for a microvm.volumes entry. Cloud Hypervisor
   # emits this into the block device, while vm-guest-base.nix mounts by the
   # corresponding /dev/disk/by-id/virtio-<serial> path.

@@ -26,8 +26,6 @@ d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
 d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
 d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
-d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
-d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
 d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap", features = ["host-socket", "native-vsock"] }
 libc = "0.2"
@@ -51,3 +49,7 @@ d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["tes
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 regex = "1"
 tempfile = "3"
+# Test-only tokio feature: `start_paused`/`advance` give the startup store
+# retry tests a virtual clock instead of a wall-clock race with the retry
+# backoff timers. Feature unification scopes it to test builds.
+tokio = { version = "1", features = ["test-util"] }

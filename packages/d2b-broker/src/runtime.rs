@@ -73,6 +73,12 @@ use d2b_core::bundle_resolver::BundleResolver;
 /// `D2B_BROKER_SOCKET_PATH`) to override the path used in non-activated
 /// (test / legacy) mode.
 const DEFAULT_SOCKET_PATH: &str = "/run/d2b/priv.sock";
+/// The directory the broker's own socket lives in. The daemon derives a
+/// runner's private socket paths from the configured broker socket's parent
+/// (`socket_runtime_dir`), so this is the fallback fence for
+/// [`crate::live_handlers::grant_serving_worker_launch_acls`] when the
+/// configured path has no parent.
+const DEFAULT_BROKER_RUNTIME_DIR: &str = "/run/d2b";
 const DEFAULT_GUEST_SOCKET_PATH: &str = "/run/d2b/guest-broker.sock";
 /// Audit records land under
 /// `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (no more legacy
@@ -2301,33 +2307,242 @@ fn request_accepts_fd(request: &BrokerRequest) -> bool {
     )
 }
 
+/// Whether the trusted intent is the signed binding-owned serving-worker
+/// template.
+///
+/// This is the ONE site in the broker that spells the raw condition
+/// (`virtiofsd-worker` under `Provider/volume-virtiofs`).
+/// [`LaunchPosture::resolve`] turns it into the carried posture for the
+/// launch path; the adoption path (`OpenPidfd`, whose wire request carries no
+/// runner role) reads this same evaluation directly, so a posture-dependent
+/// decision cannot be omitted at one site while the others agree.
+///
+/// The resolver mints the same template from its own spelling of the
+/// predicate (`is_serving_worker_template` in `d2b_core::bundle_resolver`,
+/// where the shape also selects the ADR-0021 user namespace), and the daemon
+/// classifies a binding-owned worker from that same declared template under
+/// its `VolumeBinding` owner (`resolve_launch_identity` in
+/// `d2bd::process_resource_runtime`, keyed on
+/// `d2b_provider_volume_virtiofs::WORKER_TEMPLATE`): those are separate,
+/// cross-crate decisions the broker only *reads*, and the broker must never
+/// re-derive them from request fields.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn validate_spawn_runner_request_fds(
-    role: RunnerRole,
-    inherited_fd_count: u16,
-    attached_fd_count: usize,
-) -> Result<(), BrokerError> {
-    const MAX_REQUEST_INHERITED_FDS: u16 = 256;
-    if inherited_fd_count > MAX_REQUEST_INHERITED_FDS {
-        return Err(BrokerError::Protocol(
-            "SpawnRunner inherited fd count exceeds the bounded maximum".to_owned(),
-        ));
-    }
-    match role {
-        RunnerRole::ProviderController
-            if (1..=2).contains(&inherited_fd_count)
-                && attached_fd_count == usize::from(inherited_fd_count) + 1 =>
-        {
-            Ok(())
+fn intent_is_serving_worker_template(
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> bool {
+    intent.role == d2b_core::processes::ProcessRole::ProviderController
+        && intent.profile_id == "virtiofsd-worker"
+        && intent.owner_ref.as_deref() == Some("Provider/volume-virtiofs")
+}
+
+/// The launch posture of one runner request, resolved exactly once from the
+/// trusted intent.
+///
+/// SINGLE EVALUATION POINT for the serving-worker / controller posture: every
+/// posture-dependent decision in the launch path reads this value - the
+/// inherited-descriptor contract ([`Self::validate_request_fds`]), the
+/// controller-bootstrap escrow custody
+/// ([`Self::carries_controller_escrow`]) and the advertised response fd
+/// indices ([`Self::bootstrap_response_index`] /
+/// [`Self::console_response_index`]) - instead of re-deriving it from
+/// `(req.role, intent)`.
+///
+/// The posture deliberately decides NO identity: a launch's executor uid/gid
+/// and in-namespace root mapping are always the trusted intent's principal
+/// ([`prepare_runner_launch_identity`]). The broker's only authentication factor is
+/// peer identity - `peer_matches_instance` admits exactly the daemon's
+/// uid/gid on the privileged socket - so a posture that handed any runner the
+/// daemon identity would hand it the whole daemon API (the pre-PR security
+/// review's finding against the binding-owned serving worker).
+///
+/// The serving-worker axis is a property of the RESOLVED trusted intent (the
+/// signed `virtiofsd-worker` profile under `Provider/volume-virtiofs`), never
+/// of caller-supplied request fields: `SpawnRunnerRequest::owner_ref` is only
+/// a fence value checked against the intent. The request only selects the
+/// controller-role contract, which the role fence checks against the trusted
+/// intent.
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaunchPosture {
+    /// Ordinary runner launch: no controller escrow descriptor.
+    Standard,
+    /// Non-serving `ProviderController` launch: must carry the controller
+    /// bootstrap escrow descriptor (1-2 inherited fds, one extra attached)
+    /// and advertises its broker duplicate at response index 1; the broker
+    /// retains the original as custody.
+    ControllerEscrow,
+    /// Binding-owned serving worker: carries no broker escrow descriptor
+    /// (zero-fd exemption) and advertises no bootstrap index. It runs as the
+    /// trusted intent's principal like every other posture; the two path
+    /// trees its launch ticket names are opened to that principal with
+    /// per-runner ACLs
+    /// ([`crate::live_handlers::grant_serving_worker_launch_acls`]).
+    ServingWorker,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+impl LaunchPosture {
+    /// Resolve the posture ONCE, from the trusted intent, at the point the
+    /// dispatch arm resolves that intent.
+    fn resolve(
+        role: RunnerRole,
+        intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+    ) -> Self {
+        match (role, intent_is_serving_worker_template(intent)) {
+            (RunnerRole::ProviderController, true) => Self::ServingWorker,
+            (RunnerRole::ProviderController, false) => Self::ControllerEscrow,
+            _ => Self::Standard,
         }
-        RunnerRole::ProviderController => Err(BrokerError::Protocol(
-            "ProviderController requires one or two inherited fds".to_owned(),
-        )),
-        _ if inherited_fd_count == 0 && attached_fd_count == 0 => Ok(()),
-        _ => Err(BrokerError::Protocol(
-            "runner inherited fd count/attachment mismatch".to_owned(),
-        )),
     }
+
+    fn is_provider_controller(self) -> bool {
+        !matches!(self, Self::Standard)
+    }
+
+    fn is_serving_worker(self) -> bool {
+        matches!(self, Self::ServingWorker)
+    }
+
+    /// Whether this launch owns the controller bootstrap escrow descriptor:
+    /// the backend duplicates it onto the response and retains the original
+    /// in the `controller_bootstrap_registry` custody.
+    fn carries_controller_escrow(self) -> bool {
+        matches!(self, Self::ControllerEscrow)
+    }
+
+    /// The inherited-descriptor contract this posture admits.
+    ///
+    /// Only [`Self::ControllerEscrow`] admits the controller-escrow fd shape
+    /// (1-2 inherited descriptors, one extra attached for the bootstrap
+    /// duplicate). The binding-owned serving worker carries no inherited
+    /// descriptor at all - the supervisor refuses one for its ticket
+    /// (`binding_worker_launch`) - and because
+    /// [`Self::carries_controller_escrow`] is false for it, an admitted
+    /// escrow-shaped fd would be neither retained as custody nor returned as
+    /// a duplicate: the backend pushes every supplied descriptor onto
+    /// `pre_opened_device_fds`, so a caller-chosen descriptor would land on
+    /// the well-known Provider bootstrap fd slot (10) inside the worker with
+    /// no custody and no copy. The ServingWorker arm therefore admits only
+    /// `(0, 0)`, enforcing the contract the enum documents.
+    fn validate_request_fds(
+        self,
+        inherited_fd_count: u16,
+        attached_fd_count: usize,
+    ) -> Result<(), BrokerError> {
+        const MAX_REQUEST_INHERITED_FDS: u16 = 256;
+        if inherited_fd_count > MAX_REQUEST_INHERITED_FDS {
+            return Err(BrokerError::Protocol(
+                "SpawnRunner inherited fd count exceeds the bounded maximum".to_owned(),
+            ));
+        }
+        match self {
+            // A binding-owned serving worker is a controller-role launch with
+            // a VolumeBinding semantic owner; it carries no broker escrow
+            // descriptors. The full intent fences still apply.
+            Self::ServingWorker if inherited_fd_count == 0 && attached_fd_count == 0 => Ok(()),
+            Self::ServingWorker => Err(BrokerError::Protocol(
+                "binding-owned serving worker must carry no inherited fds".to_owned(),
+            )),
+            Self::ControllerEscrow
+                if (1..=2).contains(&inherited_fd_count)
+                    && attached_fd_count == usize::from(inherited_fd_count) + 1 =>
+            {
+                Ok(())
+            }
+            Self::ControllerEscrow => Err(BrokerError::Protocol(
+                "ProviderController requires one or two inherited fds".to_owned(),
+            )),
+            Self::Standard if inherited_fd_count == 0 && attached_fd_count == 0 => Ok(()),
+            Self::Standard => Err(BrokerError::Protocol(
+                "runner inherited fd count/attachment mismatch".to_owned(),
+            )),
+        }
+    }
+
+    /// Index of the controller-bootstrap escrow fd on a `SpawnRunner`
+    /// response.
+    ///
+    /// Only a non-serving `ProviderController` launch carries the escrow
+    /// descriptor: the binding-owned serving worker deliberately attaches
+    /// none (`Self::validate_request_fds`), so its response fd vector holds
+    /// the pidfd alone. Advertising index 1 for that launch made the
+    /// supervisor's strict decode reject a spawn that had already succeeded
+    /// (`ProcessEffectError::PidfdUnavailable`), orphaning the worker.
+    fn bootstrap_response_index(self) -> Option<u32> {
+        self.carries_controller_escrow().then_some(1)
+    }
+
+    /// Index of the console-socket descriptor on a `SpawnRunner` response.
+    /// Controller launches carry no console descriptor.
+    fn console_response_index(self, extra_response_fds: usize) -> Option<u32> {
+        if extra_response_fds == 0 || self.is_provider_controller() {
+            None
+        } else {
+            Some(1)
+        }
+    }
+}
+
+/// The executor identity one runner launch runs with: uid, gid, and the
+/// user-namespace mapping the spawn plan installs (ADR 0021), plus the
+/// per-runner path access the launch posture requires.
+///
+/// The identity is ALWAYS the trusted intent's principal, for every posture.
+/// This is the single evaluation point for runner identity, and it
+/// deliberately takes no identity from the posture: the broker's only
+/// authentication factor is peer identity - `peer_matches_instance` admits
+/// exactly `config.d2bd_uid` / `config.d2bd_gid` on the privileged socket,
+/// whose mode is `0660 d2bd:d2bd` - so a runner launched with the daemon's
+/// uid/gid could connect that socket, pass the pre-decode peer check, and use
+/// the whole daemon API (the pre-PR security review's finding: the
+/// binding-owned serving worker was launched with the daemon identity and its
+/// in-namespace root mapped to it).
+///
+/// The posture decides only *access*, never identity: a binding-owned serving
+/// worker runs on daemon-provisioned paths, so its two ticket-named trees are
+/// opened to its own principal with per-runner ACLs
+/// ([`crate::live_handlers::grant_serving_worker_launch_acls`]) instead of
+/// borrowing the daemon's credentials.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn prepare_runner_launch_identity(
+    posture: LaunchPosture,
+    config: &ServerConfig,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+    argv: &[String],
+) -> Result<
+    (
+        u32,
+        u32,
+        Option<crate::ops::spawn_runner::UserNamespaceSpec>,
+    ),
+    BrokerError,
+> {
+    let (uid, gid, user_namespace) = (
+        intent.uid,
+        intent.gid,
+        intent
+            .user_namespace
+            .map(|spec| crate::ops::spawn_runner::UserNamespaceSpec {
+                host_uid_for_zero: spec.host_uid_for_zero,
+                host_gid_for_zero: spec.host_gid_for_zero,
+            }),
+    );
+    let runtime_root = config
+        .socket_path
+        .parent()
+        .unwrap_or_else(|| Path::new(DEFAULT_BROKER_RUNTIME_DIR));
+    if posture.is_serving_worker() {
+        crate::live_handlers::grant_serving_worker_launch_acls(argv, uid, runtime_root)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+    }
+    // Device-owned worker launches (the declared swtpm/GPU rows) also bind
+    // their per-VM socket inside the broker runtime root, which the daemon
+    // owns and which carries no grant for the launched principal. That grant
+    // is NOT applied here: it is derived from the pinned owning Device (never
+    // from the launch arguments) and applied inside `live_spawn_runner` after
+    // the launch's typed fences pass, so a refused launch never leaves an ACL
+    // behind (`live_handlers::DeviceWorkerSocketGrant`).
+    Ok((uid, gid, user_namespace))
 }
 
 /// Real-wire dispatch. Matches the opaque-ID
@@ -2381,6 +2596,13 @@ fn dispatch_request_with_request_fds(
         daemon_uid: config.d2bd_uid,
         daemon_gid: config.d2bd_gid,
         state_dir: config.state_dir.clone(),
+        // The tree the broker's own private socket lives in: the bound every
+        // Device-owned worker's per-Guest socket directory is derived under.
+        runtime_root: config
+            .socket_path
+            .parent()
+            .unwrap_or_else(|| Path::new(DEFAULT_BROKER_RUNTIME_DIR))
+            .to_path_buf(),
     };
     dispatch_request_with_backend_and_request_fds(
         request,
@@ -2988,7 +3210,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     "runner adoption intent mismatch".to_owned(),
                 ));
             }
-            let typed = typed_process_identity(
+    let typed = typed_process_identity(
                 req.resource_ref.as_ref(),
                 req.resource_uid.as_ref(),
                 req.zone_uid.as_ref(),
@@ -3004,7 +3226,14 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.provider_identity,
                 req.template_identity,
                 req.guest_execution.as_ref(),
+                // OpenPidfd's wire request carries no runner role, so only the
+                // trusted-intent axis is resolvable here; it reads the same
+                // single evaluation the launch posture resolves from.
+                intent_is_serving_worker_template(intent),
                 intent,
+                // Adoption observes an already-launched runner: this request
+                // carries no owner uid to pin and derives no Device path.
+                None,
             )
             .inspect_err(|error| {
                 tracing::warn!(
@@ -3175,11 +3404,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             if req.vm_id.as_str() != intent.vm_name
                 || req.role != expected_role
                 || req.bundle_runner_intent_ref.as_str() != intent.intent_id
-                || req.role_id.as_str()
-                    != match intent.role {
-                        d2b_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
-                        _ => intent.role_id.as_str(),
-                    }
+                || req.role_id.as_str() != wire_role_id_for_intent(intent)
             {
                 tracing::warn!("ObserveRunner basic intent identity validation failed");
                 return Err(BrokerError::LiveHandler(
@@ -3198,6 +3423,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             .inspect_err(|error| {
                 tracing::warn!(error = ?error, "ObserveRunner typed identity decoding failed");
             })?;
+            let posture = LaunchPosture::resolve(req.role, intent);
             validate_typed_process_metadata(
                 typed,
                 req.owner_ref.as_ref(),
@@ -3205,7 +3431,11 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.provider_identity,
                 req.template_identity,
                 req.guest_execution.as_ref(),
+                posture.is_serving_worker(),
                 intent,
+                // Observation derives no Device path and the request carries
+                // no owner uid to pin against the Device row.
+                None,
             )?;
             let response = observe_registered_runner(&req, intent).inspect_err(|error| {
                 tracing::warn!(error = ?error, "ObserveRunner registry observation failed");
@@ -3833,7 +4063,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             ))
         }
         RealBrokerRequest::SpawnRunner(req) => {
-            validate_spawn_runner_request_fds(req.role, req.inherited_fd_count, request_fds.len())?;
             let resolver = require_resolver(resolver)?;
             let intent = resolver
                 .find_runner_intent(req.bundle_runner_intent_ref.as_str())
@@ -3841,6 +4070,19 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     kind: "runner",
                     intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
                 })?;
+            // The launch posture (controller escrow contract, serving-worker
+            // escrow exemption, daemon uid/gid + in-namespace root mapping)
+            // is resolved from the trusted intent exactly once, before any
+            // request-shaped decision is made; every decision below reads it.
+            let posture = LaunchPosture::resolve(req.role, intent);
+            posture.validate_request_fds(req.inherited_fd_count, request_fds.len())?;
+            // Device-owned worker launches derive every runtime path - the
+            // swtpm state identity, the per-Guest socket directory the broker
+            // opens to the worker - from the Device that owns the launched
+            // row. That Device is resolved and pinned here, from the verified
+            // bundle, before any Device-derived identity is trusted below; a
+            // launch claiming another Device is refused by name.
+            let device_worker = resolve_device_worker_launch(resolver, &req, intent)?;
             if req.resource_ref.is_some() {
                 let Some(bundle_content_identity) = req.bundle_content_identity.as_deref() else {
                     return Err(BrokerError::SpawnRunnerIntentMismatch {
@@ -3965,7 +4207,12 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     reason: err.to_string(),
                 });
             }
-            validate_spawn_runner_request_matches_intent(&req, intent)?;
+            validate_spawn_runner_request_matches_intent(
+                &req,
+                intent,
+                posture,
+                device_worker.scope.as_ref(),
+            )?;
             let typed_process = req.resource_ref.is_some();
             let cgroup_placement = private_cgroup_placement(
                 &intent.cgroup_placement,
@@ -4045,16 +4292,35 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 &req.role,
                 &mut env,
             )?;
-            cleanup_cloud_hypervisor_stale_sockets(&req.role, &intent.argv)?;
-            cleanup_video_stale_socket(&req.role, &intent.argv)?;
-            cleanup_otel_host_bridge_stale_socket(&req.role, &intent.argv)?;
+            // The executable is always the trusted intent's pinned binary; a
+            // launch may only append controller-supplied arguments, and only
+            // when the resolved template declares that it admits them.
+            let launch_argv = match req.launch_args.as_ref() {
+                Some(launch_args) => {
+                    let mut argv = Vec::with_capacity(launch_args.as_slice().len() + 1);
+                    argv.push(intent.binary_path.to_string_lossy().into_owned());
+                    argv.extend(launch_args.as_slice().iter().cloned());
+                    argv
+                }
+                None => intent.argv.clone(),
+            };
+            cleanup_cloud_hypervisor_stale_sockets(&req.role, &launch_argv)?;
+            cleanup_video_stale_socket(&req.role, &launch_argv)?;
+            cleanup_otel_host_bridge_stale_socket(&req.role, &launch_argv)?;
             let argv =
-                bind_cloud_hypervisor_guest_uid(req.role, req.owner_uid.as_ref(), &intent.argv)?;
+                bind_cloud_hypervisor_guest_uid(req.role, req.owner_uid.as_ref(), &launch_argv)?;
+            // The launch identity is the trusted intent's principal, for every
+            // posture; the serving posture only adds the per-runner ACLs that
+            // open its two ticket-named trees to that principal
+            // (`prepare_runner_launch_identity`) - before the spawn and before
+            // any descriptor is passed to the child.
+            let (runner_uid, runner_gid, runner_user_namespace) =
+                prepare_runner_launch_identity(posture, config, intent, &argv)?;
             let plan_input = crate::ops::spawn_runner::SpawnRunnerPlanInput {
                 binary_path: intent.binary_path.clone(),
                 argv,
-                uid: intent.uid,
-                gid: intent.gid,
+                uid: runner_uid,
+                gid: runner_gid,
                 supplementary_groups: intent.supplementary_groups.clone(),
                 env,
                 capabilities: intent.capabilities.clone(),
@@ -4064,14 +4330,10 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 cgroup_placement,
                 root_carve_out: intent.root_carve_out,
                 skip_binary_exists_check: false,
-                // Thread through the user-namespace spec from the
-                // resolved intent (ADR 0021).
-                user_namespace: intent.user_namespace.map(|spec| {
-                    crate::ops::spawn_runner::UserNamespaceSpec {
-                        host_uid_for_zero: spec.host_uid_for_zero,
-                        host_gid_for_zero: spec.host_gid_for_zero,
-                    }
-                }),
+                // Thread through the user-namespace spec from the resolved
+                // intent (ADR 0021); in-namespace root maps to the intent's
+                // principal for every posture.
+                user_namespace: runner_user_namespace,
                 umask: intent.umask,
             };
             let runner_id = runner_registry_key(
@@ -4087,6 +4349,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 &plan_input,
                 resolver,
                 &req,
+                posture,
+                &device_worker,
                 std::mem::take(&mut request_fds),
                 audit_log,
             ) {
@@ -4170,15 +4434,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 cleanup_spawned_runner_after_failure(runner_id.as_str(), outcome.pidfd.as_fd());
                 return Err(error);
             }
-            let controller_bootstrap_fd_index =
-                (req.role == RunnerRole::ProviderController).then_some(1);
-            let console_fd_index = if outcome.extra_response_fds.is_empty()
-                || req.role == RunnerRole::ProviderController
-            {
-                None
-            } else {
-                Some(1)
-            };
+            let controller_bootstrap_fd_index = posture.bootstrap_response_index();
+            let console_fd_index = posture.console_response_index(outcome.extra_response_fds.len());
             let response = BrokerResponse::SpawnRunner(
                 d2b_contracts_broker::broker_wire::SpawnRunnerResponse {
                     vm_id: req.vm_id.clone(),
@@ -5050,40 +5307,42 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         }
         RealBrokerRequest::PrepareStateDir(req) => {
             let resolver = require_resolver(resolver)?;
-            let intent = resolver
-                .resolve_prepare_dir_intent(req.vm_id.as_str(), false)
-                .ok_or_else(|| {
-                    BrokerError::LiveHandler(format!(
-                        "PrepareStateDir: unknown subject {:?}",
-                        req.vm_id.as_str()
-                    ))
-                })?;
             let exec = live_exec(config);
-            match crate::ops::state_dir::live_prepare_state_dir(&exec, resolver, &req, audit_log) {
-                Ok(()) => {}
-                Err(crate::ops::state_dir::PrepareStateDirError::SwtpmDirHardening(error)) => {
-                    write_decision_op_record!(
-                        audit_log,
-                        bundle_metadata,
-                        "PrepareSwtpmDir",
-                        req.vm_id.as_str(),
-                        caller_uid,
-                        caller_gid,
-                        &caller_role,
-                        req.vm_id.as_str(),
-                        req.vm_id.as_str(),
-                        tracing_span_id_str(req.tracing_span_id.as_ref()),
-                        "denied-refused",
-                        Some(error.reason),
-                        OperationFields::PrepareSwtpmDir(error.audit.clone()),
-                    )?;
-                    return Err(BrokerError::SwtpmDirHardening {
-                        audit: error.audit,
-                        reason: error.reason,
-                    });
-                }
-                Err(error) => return Err(BrokerError::LiveHandler(error.to_string())),
-            }
+            // The executor resolves the subject's trusted state directory - a
+            // legacy manifest VM's state dir, or, for a v3 zone-native Guest,
+            // the trusted `path:swtpm-state:<guest>` storage root the
+            // controller-created state Volume owns - and returns the posture
+            // this record carries. Resolving it here as well would gate the op
+            // on the legacy manifest and refuse a zone-native subject the
+            // verified storage contract does name (the same row the
+            // spawn-time swtpm-dir fence and the volume-local controller use).
+            let prepared =
+                match crate::ops::state_dir::live_prepare_state_dir(&exec, resolver, &req, audit_log)
+                {
+                    Ok(prepared) => prepared,
+                    Err(crate::ops::state_dir::PrepareStateDirError::SwtpmDirHardening(error)) => {
+                        write_decision_op_record!(
+                            audit_log,
+                            bundle_metadata,
+                            "PrepareSwtpmDir",
+                            req.vm_id.as_str(),
+                            caller_uid,
+                            caller_gid,
+                            &caller_role,
+                            req.vm_id.as_str(),
+                            req.vm_id.as_str(),
+                            tracing_span_id_str(req.tracing_span_id.as_ref()),
+                            "denied-refused",
+                            Some(error.reason),
+                            OperationFields::PrepareSwtpmDir(error.audit.clone()),
+                        )?;
+                        return Err(BrokerError::SwtpmDirHardening {
+                            audit: error.audit,
+                            reason: error.reason,
+                        });
+                    }
+                    Err(error) => return Err(BrokerError::LiveHandler(error.to_string())),
+                };
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -5097,10 +5356,10 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 tracing_span_id_str(req.tracing_span_id.as_ref()),
                 OperationFields::PrepareStateDir {
                     vm_id: req.vm_id.as_str().to_owned(),
-                    base_dir: intent.base_dir.display().to_string(),
-                    owner_uid: intent.owner_uid,
-                    owner_gid: intent.owner_gid,
-                    mode: intent.mode,
+                    base_dir: prepared.base_dir.display().to_string(),
+                    owner_uid: prepared.owner_uid,
+                    owner_gid: prepared.owner_gid,
+                    mode: prepared.mode,
                 },
             )?;
             Ok(DispatchResult::no_fds(ack_response("PrepareStateDir")))
@@ -7934,6 +8193,12 @@ trait DispatchBackend {
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
         resolver: &BundleResolver,
         req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+        // Launch posture resolved from the trusted intent by the dispatch
+        // arm; the backend must not re-derive it from the request.
+        posture: LaunchPosture,
+        // Device-owned worker scope resolved (and pinned) by the dispatch arm
+        // from the verified bundle; `default()` for every other launch.
+        device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
         request_fds: Vec<OwnedFd>,
         audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError>;
@@ -8027,6 +8292,10 @@ struct LiveDispatchBackend {
     daemon_uid: u32,
     daemon_gid: u32,
     state_dir: PathBuf,
+    /// Broker runtime root (the private socket's directory): the tree a
+    /// Device-owned worker's per-Guest socket directory must strictly live
+    /// under before the broker opens it to the worker's principal.
+    runtime_root: PathBuf,
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -8427,6 +8696,8 @@ impl DispatchBackend for LiveDispatchBackend {
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
         resolver: &BundleResolver,
         req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+        posture: LaunchPosture,
+        device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
         mut request_fds: Vec<OwnedFd>,
         audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
@@ -8444,7 +8715,7 @@ impl DispatchBackend for LiveDispatchBackend {
             self.daemon_gid,
         )?;
         let (controller_bootstrap_response, retained_controller_bootstrap) =
-            if req.role == d2b_contracts_broker::broker_wire::RunnerRole::ProviderController {
+            if posture.carries_controller_escrow() {
                 let retained = request_fds.pop().ok_or_else(|| {
                     BrokerError::Protocol(
                         "ProviderController bootstrap escrow fd is missing".to_owned(),
@@ -8464,12 +8735,16 @@ impl DispatchBackend for LiveDispatchBackend {
                 "request inherited fds cannot combine with broker-preopened fds".to_owned(),
             ));
         }
+        let swtpm_identity = resource_backed_swtpm_identity(resolver, req, device_worker);
         let mut outcome = crate::live_handlers::live_spawn_runner(
             plan_input,
             preopened.child_fds,
             request_fds,
             req.activation_input.as_ref(),
             &self.state_dir,
+            swtpm_identity.as_ref(),
+            device_worker,
+            &self.runtime_root,
         )
         .map_err(|err| {
             // Log the actual LiveHandlerError detail before wrapping it
@@ -10335,6 +10610,22 @@ fn runner_role_for_process_role(
     }
 }
 
+/// The wire `role_id` one trusted runner intent fences against. The
+/// cloud-hypervisor runner keeps its daemon-side `ch-runner` alias; every
+/// other intent uses its own `role_id`.
+///
+/// SINGLE EVALUATION POINT for the alias: spawn validation and observation
+/// both read it instead of re-listing the match.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn wire_role_id_for_intent(
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> &str {
+    match intent.role {
+        d2b_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
+        _ => intent.role_id.as_str(),
+    }
+}
+
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_guest_process_binding(
     request: &d2b_contracts_broker::broker_wire::BrokerRequest,
@@ -10779,7 +11070,16 @@ fn validate_typed_process_metadata(
     provider_identity: Option<[u8; 32]>,
     template_identity: Option<[u8; 32]>,
     guest_execution: Option<&d2b_contracts_broker::broker_wire::GuestExecutionBinding>,
+    // Serving-worker posture already resolved from the trusted intent (see
+    // `LaunchPosture`); this fence never re-derives it.
+    serving_worker: bool,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+    // Owning-Device scope already pinned from the verified bundle (the
+    // launched row's `metadata.ownerRef`, `device_worker::resolve_launch_scope`).
+    // `Some` on the launch path, where that Device anchors every runtime path
+    // the launch derives; `None` for the observe/adopt requests, which carry
+    // no owner uid to pin and derive no Device paths.
+    device_worker_scope: Option<&crate::ops::device_worker::DeviceWorkerScope>,
 ) -> Result<(), BrokerError> {
     if !typed {
         return Ok(());
@@ -10838,7 +11138,12 @@ fn validate_typed_process_metadata(
             resolved: "signed-process-provider".to_owned(),
         });
     }
-    let expected_template = if intent.role == d2b_core::processes::ProcessRole::ProviderController {
+    let expected_template = if intent.role == d2b_core::processes::ProcessRole::ProviderController
+        || d2b_core::bundle_resolver::is_device_worker_role(&intent.role)
+    {
+        // A Provider controller's template is the signed profile id;
+        // a Device worker's is its declared template. Both are named by the
+        // template the launch resolved through, never by the per-row role id.
         intent.profile_id.as_str()
     } else {
         intent.role_id.as_str()
@@ -10854,35 +11159,86 @@ fn validate_typed_process_metadata(
             resolved: "bundle-process-template".to_owned(),
         });
     }
-    if owner_ref.is_some_and(|owner| {
-        !matches!(
-            owner.resource_type().as_str(),
-            "Guest" | "Host" | "Provider"
-        )
-    }) {
+    if let Some(owner) = owner_ref {
+        // The owning Device of a Device worker row is pinned from the verified
+        // bundle by the launch arm: a request that names another Device is
+        // refused BY NAME here, before any Device-derived identity is trusted.
+        if let Some(scope) = device_worker_scope
+            && owner != &scope.device_ref
+        {
+            return Err(BrokerError::SpawnRunnerIntentMismatch {
+                field: "owner_ref",
+                requested: owner.to_canonical_string(),
+                resolved: scope.device_ref.to_canonical_string(),
+            });
+        }
+        let owner_type = owner.resource_type().as_str();
+        let admitted = if d2b_core::bundle_resolver::is_device_worker_role(&intent.role) {
+            // A Device worker row is declared and owned by the Device it
+            // serves; its provider is the Provider that signed the template
+            // the intent was resolved through. WHICH Device owns the launched
+            // row is pinned from the verified bundle by the launch arm
+            // (`device_worker::resolve_launch_scope`: the row's
+            // `metadata.ownerRef`, plus the Device row's durable uid), and the
+            // request must name exactly that Device - a launch aimed at
+            // another Device would derive another Guest's runtime socket
+            // directory and state Volume. The scope is `None` for the
+            // observe/adopt requests, which carry no owner uid to pin and
+            // derive no Device paths.
+            owner_type == "Device"
+                && device_worker_scope.is_none_or(|scope| owner == &scope.device_ref)
+        } else {
+            matches!(owner_type, "Guest" | "Host" | "Provider" | "VolumeBinding")
+        };
+        if !admitted {
+            return Err(BrokerError::SpawnRunnerIntentMismatch {
+                field: "owner_ref",
+                requested: "invalid".to_owned(),
+                resolved: "Guest-or-Host-or-Provider-or-VolumeBinding-or-Device-worker".to_owned(),
+            });
+        }
+    } else if d2b_core::bundle_resolver::is_device_worker_role(&intent.role) {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
             field: "owner_ref",
-            requested: "invalid".to_owned(),
-            resolved: "Guest-or-Host-or-Provider".to_owned(),
+            requested: "missing".to_owned(),
+            resolved: "Device".to_owned(),
         });
     }
     if intent.role == d2b_core::processes::ProcessRole::ProviderController {
-        let expected_owner = intent
-            .owner_ref
-            .as_deref()
-            .map(d2b_contracts_resource::v3::ResourceRef::parse)
-            .transpose()
-            .map_err(|_| BrokerError::SpawnRunnerIntentMismatch {
-                field: "owner_ref",
-                requested: "invalid".to_owned(),
-                resolved: "bundle-owner".to_owned(),
-            })?;
-        if owner_ref != expected_owner.as_ref() {
-            return Err(BrokerError::SpawnRunnerIntentMismatch {
-                field: "owner_ref",
-                requested: "mismatch".to_owned(),
-                resolved: "bundle-owner".to_owned(),
-            });
+        if serving_worker {
+            // A binding-owned serving worker's semantic owner is the
+            // runtime-minted VolumeBinding, not the Provider that signed the
+            // serving template. The bundle cannot pin the binding identity
+            // (it is derived from the attachment tuple at reconcile time),
+            // so the fence pins the owner type; the template, execution
+            // target, and runtime-scope fences pin the rest.
+            if !owner_ref.is_some_and(|owner| {
+                owner.resource_type().as_str() == "VolumeBinding"
+            }) {
+                return Err(BrokerError::SpawnRunnerIntentMismatch {
+                    field: "owner_ref",
+                    requested: "invalid".to_owned(),
+                    resolved: "VolumeBinding".to_owned(),
+                });
+            }
+        } else {
+            let expected_owner = intent
+                .owner_ref
+                .as_deref()
+                .map(d2b_contracts_resource::v3::ResourceRef::parse)
+                .transpose()
+                .map_err(|_| BrokerError::SpawnRunnerIntentMismatch {
+                    field: "owner_ref",
+                    requested: "invalid".to_owned(),
+                    resolved: "bundle-owner".to_owned(),
+                })?;
+            if owner_ref != expected_owner.as_ref() {
+                return Err(BrokerError::SpawnRunnerIntentMismatch {
+                    field: "owner_ref",
+                    requested: "mismatch".to_owned(),
+                    resolved: "bundle-owner".to_owned(),
+                });
+            }
         }
     }
     Ok(())
@@ -10971,10 +11327,97 @@ fn private_cgroup_placement(
     Ok(private)
 }
 
+/// The trusted identity of one resource-backed `w1-swtpm` launch.
+///
+/// A resource-backed (typed) Process launch is placed under a private cgroup
+/// scope (`private_cgroup_placement`) that deliberately carries no VM name,
+/// and the Device-worker template intent ships no writable paths, so the
+/// spawn-time swtpm-dir fence cannot read the VM identity from the plan.
+/// Resolve it from the owning Device the launch arm already pinned against the
+/// verified bundle ([`crate::ops::device_worker::DeviceWorkerScope`]): the
+/// Device's declared Guest owner names the VM, and the trusted
+/// `path:swtpm-state:<guest>` storage row names the state root (which must
+/// equal the Provider's `path:tpm-state` policy root). The Device ref and uid
+/// read here are the pinned ones, never the request's claim. `None` leaves the
+/// launch to the hardening's fail-closed refusal.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn resource_backed_swtpm_identity(
+    resolver: &BundleResolver,
+    req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+    device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
+) -> Option<crate::ops::swtpm_dir::ResourceBackedSwtpm> {
+    if !matches!(req.role, RunnerRole::Swtpm | RunnerRole::SwtpmFlush) {
+        return None;
+    }
+    let scope = device_worker.scope.as_ref()?;
+    crate::ops::swtpm_dir::resource_backed_identity(
+        resolver,
+        &scope.zone_uid,
+        &scope.device_ref,
+        Some(&scope.device_uid),
+    )
+}
+
+/// What one launch arm resolved for a Device-owned worker row.
+///
+/// A launch whose intent is not a Device-owned worker role resolves
+/// [`DeviceWorkerLaunch::default`]: it has no Device-derived runtime path and
+/// no per-Guest socket directory to open.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn resolve_device_worker_launch(
+    resolver: &BundleResolver,
+    req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> Result<crate::ops::device_worker::DeviceWorkerLaunch, BrokerError> {
+    use crate::ops::device_worker::{
+        DeviceWorkerLaunch, binds_runtime_socket, resolve_launch_scope,
+    };
+    if !d2b_core::bundle_resolver::is_device_worker_role(&intent.role) {
+        return Ok(DeviceWorkerLaunch::default());
+    }
+    let binds_runtime_socket = binds_runtime_socket(&intent.role);
+    // A legacy VM-scoped Device worker (the `swtpm` role of a manifest VM)
+    // launches without a typed Process identity: it carries no resource row,
+    // so there is no owning Device to pin. Its runtime socket directory is
+    // derived from the launch's own trusted placement instead (the `w1-swtpm`
+    // fence's `derive_paths`, which cross-checks the placement's VM against
+    // the plan's writable paths) - never from a launch argument.
+    let (Some(resource_ref), Some(zone_uid)) = (req.resource_ref.as_ref(), req.zone_uid.as_ref())
+    else {
+        return Ok(DeviceWorkerLaunch {
+            scope: None,
+            binds_runtime_socket,
+        });
+    };
+    let scope = resolve_launch_scope(
+        resolver,
+        resource_ref,
+        zone_uid,
+        req.owner_ref.as_ref(),
+        req.owner_uid.as_ref(),
+    )
+    .map_err(|error| BrokerError::SpawnRunnerIntentMismatch {
+        field: error.field(),
+        requested: error.requested(),
+        resolved: error.resolved(),
+    })?;
+    Ok(DeviceWorkerLaunch {
+        scope: Some(scope),
+        binds_runtime_socket,
+    })
+}
+
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_spawn_runner_request_matches_intent(
     req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+    // Posture already resolved from the trusted intent (see `LaunchPosture`);
+    // this fence never re-derives it.
+    posture: LaunchPosture,
+    // Owning-Device scope already pinned from the verified bundle by
+    // `resolve_device_worker_launch` (see `DeviceWorkerScope`); `None` for
+    // every launch that is not a typed Device-owned worker.
+    device_worker_scope: Option<&crate::ops::device_worker::DeviceWorkerScope>,
 ) -> Result<(), BrokerError> {
     if req.vm_id.as_str() != intent.vm_name {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
@@ -11034,10 +11477,7 @@ fn validate_spawn_runner_request_matches_intent(
         });
     }
 
-    let expected_role_id = match intent.role {
-        d2b_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
-        _ => intent.role_id.as_str(),
-    };
+    let expected_role_id = wire_role_id_for_intent(intent);
     if req.role_id.as_str() != expected_role_id {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
             field: "role_id",
@@ -11059,6 +11499,17 @@ fn validate_spawn_runner_request_matches_intent(
             resolved: expected_role.as_str().to_owned(),
         });
     }
+    // Controller-supplied arguments are admitted only by the resolved
+    // template's own declaration: the executable and the sandbox posture
+    // stay broker-resolved, so a launch may only append arguments after
+    // the pinned binary, never replace it.
+    if req.launch_args.is_some() && !intent.accepts_launch_args {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "launch_args",
+            requested: "present".to_owned(),
+            resolved: "template-does-not-admit-controller-arguments".to_owned(),
+        });
+    }
     let typed = typed_process_identity(
         req.resource_ref.as_ref(),
         req.resource_uid.as_ref(),
@@ -11068,6 +11519,18 @@ fn validate_spawn_runner_request_matches_intent(
         &intent.role_id,
         req.guest_execution.as_ref(),
     )?;
+    if !typed && posture.is_provider_controller() {
+        // Every ProviderController launch runs with the runner sandbox the
+        // typed Process identity selects (uid/gid, runtime scope, cgroup
+        // leaf, escrow). An untyped request could reference a ProviderController
+        // intent while skipping the typed metadata fences, including the
+        // intent-derived serving-worker posture - refuse it outright.
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "process_identity",
+            requested: "untyped".to_owned(),
+            resolved: "typed-provider-controller-required".to_owned(),
+        });
+    }
     validate_typed_process_metadata(
         typed,
         req.owner_ref.as_ref(),
@@ -11075,7 +11538,9 @@ fn validate_spawn_runner_request_matches_intent(
         req.provider_identity,
         req.template_identity,
         req.guest_execution.as_ref(),
+        posture.is_serving_worker(),
         intent,
+        device_worker_scope,
     )?;
     if typed {
         if !req.runtime_allocations.is_empty()
@@ -14868,7 +15333,9 @@ mod tests {
                 Some(provider_identity),
                 Some(template_identity),
                 None,
+                false,
                 &intent,
+                None,
             )
             .is_ok()
         );
@@ -14880,7 +15347,9 @@ mod tests {
                 Some([9; 32]),
                 Some(template_identity),
                 None,
+                false,
                 &intent,
+                None,
             )
             .is_err()
         );
@@ -14892,7 +15361,9 @@ mod tests {
                 Some(provider_identity),
                 Some([9; 32]),
                 None,
+                false,
                 &intent,
+                None,
             )
             .is_err()
         );
@@ -14962,6 +15433,7 @@ mod tests {
             generation: Some(1),
             runtime_scope: Some(runtime_scope),
             activation_input: None,
+            launch_args: None,
             sandbox_plan: None,
             role: RunnerRole::CloudHypervisor,
             bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
@@ -14977,7 +15449,11 @@ mod tests {
         };
 
         let valid = request();
-        assert!(validate_spawn_runner_request_matches_intent(&valid, &intent).is_ok());
+        let posture = LaunchPosture::resolve(valid.role, &intent);
+        assert_eq!(posture, LaunchPosture::Standard);
+        assert!(
+            validate_spawn_runner_request_matches_intent(&valid, &intent, posture, None).is_ok()
+        );
 
         let mut mutations = Vec::new();
         let mut provider = valid.clone();
@@ -15001,10 +15477,627 @@ mod tests {
 
         for mutation in mutations {
             assert!(
-                validate_spawn_runner_request_matches_intent(&mutation, &intent).is_err(),
+                validate_spawn_runner_request_matches_intent(&mutation, &intent, posture, None).is_err(),
                 "mutated SpawnRunner request must fail before clone"
             );
         }
+    }
+
+    /// The launch-admission decision the `SpawnRunner` dispatch arm runs, in
+    /// the arm's own order: posture resolution from the trusted intent ->
+    /// inherited-descriptor contract -> trusted-intent fences (which refuse
+    /// an untyped ProviderController). The returned posture is the carried
+    /// value the rest of the arm reads (uid/gid, response indices, backend
+    /// escrow custody).
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn admission_posture(
+        req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+        intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+        attached_fd_count: usize,
+    ) -> Result<LaunchPosture, BrokerError> {
+        let posture = LaunchPosture::resolve(req.role, intent);
+        posture.validate_request_fds(req.inherited_fd_count, attached_fd_count)?;
+        validate_spawn_runner_request_matches_intent(req, intent, posture, None)?;
+        Ok(posture)
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn provider_controller_template_identity(profile_id: &str) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(b"d2b-process-template-v1");
+        digest.update(profile_id.as_bytes());
+        digest.finalize().into()
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn provider_identity_digest(provider_name: &str) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(b"d2b-process-provider-v1");
+        digest.update(provider_name.as_bytes());
+        digest.finalize().into()
+    }
+
+    /// The signed binding-owned serving-worker intent: `virtiofsd-worker`
+    /// under `Provider/volume-virtiofs`, with the per-binding principal and
+    /// ADR-0021 user namespace the resolver mints for that template
+    /// (`uid = gid = principal >= 50_000`, in-NS root mapped to it). The
+    /// single raw condition lives in `intent_is_serving_worker_template`;
+    /// every fixture below reaches it through the production code paths.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn serving_worker_runner_intent() -> d2b_core::bundle_resolver::ResolvedRunnerIntent {
+        let mut intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
+            .with_intent_id("runner:vm:host-system:role:volume-worker")
+            .with_vm_name("host-system")
+            .with_role(d2b_core::processes::ProcessRole::ProviderController)
+            .with_role_id("volume-worker")
+            .with_profile_id("virtiofsd-worker")
+            .with_execution_ref("Host/host-system")
+            .with_uid(4242)
+            .with_gid(4242)
+            .with_user_namespace(Some(d2b_core::bundle_resolver::UserNamespaceSpec {
+                host_uid_for_zero: 4242,
+                host_gid_for_zero: 4242,
+            }))
+            .build();
+        intent.owner_ref = Some("Provider/volume-virtiofs".to_owned());
+        intent
+    }
+
+    /// A fully typed Process launch request for `intent`, in the shape the
+    /// dispatch arm sees after daemon-side classification.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn typed_runner_request(
+        intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+        role: RunnerRole,
+        resource_name: &str,
+        owner_ref: Option<&str>,
+        inherited_fd_count: u16,
+    ) -> d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
+        use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+        use d2b_contracts_broker::broker_wire::SpawnRunnerRequest;
+        use d2b_contracts_resource::v3::{
+            ResourceRef, ResourceUid, execution_policy::ExecutionDomain,
+        };
+        use d2b_core::processes::ProcessRole;
+
+        let resource_ref =
+            ResourceRef::parse(&format!("Process/{resource_name}")).expect("resource ref");
+        let resource_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("resource uid");
+        let zone_uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
+        let runtime_scope = private_runtime_scope(
+            &zone_uid,
+            None,
+            &resource_ref,
+            &resource_uid,
+            &intent.role_id,
+            1,
+        );
+        let template_identity = if intent.role == ProcessRole::ProviderController
+            || d2b_core::bundle_resolver::is_device_worker_role(&intent.role)
+        {
+            provider_controller_template_identity(&intent.profile_id)
+        } else {
+            provider_controller_template_identity(&intent.role_id)
+        };
+        let execution_domain = match intent.execution_domain {
+            d2b_core::processes::ProcessExecutionDomain::System => ExecutionDomain::System,
+            d2b_core::processes::ProcessExecutionDomain::User => ExecutionDomain::User,
+        };
+        let wire_role_id = wire_role_id_for_intent(intent).to_owned();
+        SpawnRunnerRequest {
+            vm_id: VmId::new(intent.vm_name.clone()),
+            role_id: RoleId::new(wire_role_id),
+            resource_ref: Some(resource_ref),
+            resource_uid: Some(resource_uid),
+            zone_uid: Some(zone_uid),
+            owner_ref: owner_ref.map(|owner| ResourceRef::parse(owner).expect("owner ref")),
+            owner_uid: None,
+            provider_ref: Some(
+                ResourceRef::parse("Provider/system-minijail").expect("provider ref"),
+            ),
+            bundle_content_identity: Some("sha256:bundle".to_owned()),
+            provider_identity: Some(provider_identity_digest("system-minijail")),
+            template_identity: Some(template_identity),
+            generation: Some(1),
+            runtime_scope: Some(runtime_scope),
+            activation_input: None,
+            launch_args: None,
+            sandbox_plan: None,
+            role,
+            bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
+            execution_ref: Some(
+                d2b_contracts_resource::v3::ResourceRef::parse(&intent.execution_ref)
+                    .expect("execution ref"),
+            ),
+            execution_domain: Some(execution_domain),
+            user_ref: None,
+            guest_execution: None,
+            runtime_allocations: Vec::new(),
+            tracing_span_id: None,
+            workload_identity: None,
+            inherited_fd_count,
+            network_tap_context: None,
+        }
+    }
+
+    /// The posture's descriptor-contract decision set, evaluated through the
+    /// same production methods the dispatch arm and backend read. One test
+    /// per posture pins this whole set, so dropping or diverging any single
+    /// decision site (escrow contract, escrow custody, response indices, fd
+    /// shape) fails that posture's test.
+    ///
+    /// Executor identity is deliberately NOT part of it: no posture decides
+    /// it (`prepare_runner_launch_identity` takes it from the trusted intent,
+    /// and `serving_worker_launch_runs_as_the_intent_principal` pins that).
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[derive(Debug, PartialEq, Eq)]
+    struct PostureDecisions {
+        bootstrap_response_index: Option<u32>,
+        console_response_index_with_extras: Option<u32>,
+        carries_controller_escrow: bool,
+        accepts_zero_fds: bool,
+        accepts_escrow_fd_shape: bool,
+        accepts_two_escrow_fds: bool,
+        rejects_unattached_inherited_fd: bool,
+        rejects_over_max_fds: bool,
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn posture_decisions(posture: LaunchPosture) -> PostureDecisions {
+        PostureDecisions {
+            bootstrap_response_index: posture.bootstrap_response_index(),
+            console_response_index_with_extras: posture.console_response_index(1),
+            carries_controller_escrow: posture.carries_controller_escrow(),
+            accepts_zero_fds: posture.validate_request_fds(0, 0).is_ok(),
+            accepts_escrow_fd_shape: posture.validate_request_fds(1, 2).is_ok(),
+            accepts_two_escrow_fds: posture.validate_request_fds(2, 3).is_ok(),
+            rejects_unattached_inherited_fd: posture.validate_request_fds(1, 1).is_err(),
+            rejects_over_max_fds: posture.validate_request_fds(257, 0).is_err(),
+        }
+    }
+
+    /// R35 blocker: the serving-worker posture is a property of the resolved
+    /// trusted intent. An untyped ProviderController request that carries a
+    /// `VolumeBinding` owner ref (the exploit the review found) is refused by
+    /// the trusted-intent fence, and the posture predicate itself ignores
+    /// every request field, so no request can select the daemon uid/gid,
+    /// the in-namespace root mapping, or the zero-fd escrow exemption.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn untyped_provider_controller_cannot_claim_serving_worker_posture() {
+        use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+        use d2b_contracts_broker::broker_wire::SpawnRunnerRequest;
+        use d2b_contracts_resource::v3::{ResourceRef, execution_policy::ExecutionDomain};
+
+        let intent = serving_worker_runner_intent();
+        // The reference intent is the legitimate serving template, so even
+        // referencing a real serving intent must not hand an untyped
+        // request the posture.
+        assert_eq!(
+            LaunchPosture::resolve(RunnerRole::ProviderController, &intent),
+            LaunchPosture::ServingWorker
+        );
+
+        let attack = SpawnRunnerRequest {
+            vm_id: VmId::new("host-system"),
+            role_id: RoleId::new("volume-worker"),
+            resource_ref: None,
+            resource_uid: None,
+            zone_uid: None,
+            owner_ref: Some(ResourceRef::parse("VolumeBinding/forged").expect("owner ref")),
+            owner_uid: None,
+            provider_ref: None,
+            bundle_content_identity: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            runtime_scope: None,
+            activation_input: None,
+            launch_args: None,
+            sandbox_plan: None,
+            role: RunnerRole::ProviderController,
+            bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
+            execution_ref: Some(ResourceRef::parse("Host/host-system").expect("execution ref")),
+            execution_domain: Some(ExecutionDomain::System),
+            user_ref: None,
+            guest_execution: None,
+            runtime_allocations: Vec::new(),
+            tracing_span_id: None,
+            workload_identity: None,
+            inherited_fd_count: 0,
+            network_tap_context: None,
+        };
+
+        let error = validate_spawn_runner_request_matches_intent(
+            &attack,
+            &intent,
+            LaunchPosture::resolve(attack.role, &intent),
+            None,
+        )
+        .expect_err("untyped ProviderController launch must be refused");
+        match error {
+            BrokerError::SpawnRunnerIntentMismatch { field, requested, .. } => {
+                assert_eq!(field, "process_identity");
+                assert_eq!(requested, "untyped");
+            }
+            other => panic!("expected SpawnRunnerIntentMismatch, got {other:?}"),
+        }
+        assert!(
+            admission_posture(&attack, &intent, 0).is_err(),
+            "the attack request must never reach the serving-worker posture"
+        );
+
+        // The posture resolves from the trusted intent alone: a different
+        // semantic owner or a different profile keeps the ordinary
+        // ProviderController posture regardless of any request claim, and a
+        // non-controller role never reaches the serving-worker posture.
+        let mut foreign_owner = intent.clone();
+        foreign_owner.owner_ref = Some("Provider/volume-other".to_owned());
+        assert_eq!(
+            LaunchPosture::resolve(RunnerRole::ProviderController, &foreign_owner),
+            LaunchPosture::ControllerEscrow
+        );
+        let mut other_profile = intent.clone();
+        other_profile.profile_id = "controller-worker".to_owned();
+        assert_eq!(
+            LaunchPosture::resolve(RunnerRole::ProviderController, &other_profile),
+            LaunchPosture::ControllerEscrow
+        );
+        assert_eq!(
+            LaunchPosture::resolve(RunnerRole::CloudHypervisor, &intent),
+            LaunchPosture::Standard,
+            "only a controller-role request can carry the serving-worker posture"
+        );
+    }
+
+    /// Serving-worker posture: the descriptor decision set at once. It stays
+    /// admitted only as a typed launch whose owner is the runtime-minted
+    /// VolumeBinding, keeps the zero-fd escrow exemption (enforced: an
+    /// escrow-shaped descriptor set is refused), runs as the trusted intent's
+    /// principal, and advertises no bootstrap index.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn serving_worker_posture_decides_the_whole_launch() {
+        use d2b_contracts_resource::v3::ResourceRef;
+
+        let intent = serving_worker_runner_intent();
+        let posture = LaunchPosture::resolve(RunnerRole::ProviderController, &intent);
+        assert_eq!(posture, LaunchPosture::ServingWorker);
+
+        assert_eq!(
+            posture_decisions(posture),
+            PostureDecisions {
+                bootstrap_response_index: None,
+                console_response_index_with_extras: None,
+                carries_controller_escrow: false,
+                accepts_zero_fds: true,
+                // The zero-fd contract the enum documents is enforced here:
+                // an escrow-shaped descriptor set is NOT admitted, because no
+                // custody is retained for it and it would be installed at the
+                // Provider bootstrap fd slot.
+                accepts_escrow_fd_shape: false,
+                accepts_two_escrow_fds: false,
+                rejects_unattached_inherited_fd: true,
+                rejects_over_max_fds: true,
+            }
+        );
+
+        let request = typed_runner_request(
+            &intent,
+            RunnerRole::ProviderController,
+            "vol-worker",
+            Some("VolumeBinding/vol-binding"),
+            0,
+        );
+        let admitted = admission_posture(&request, &intent, 0).expect("typed serving worker");
+        assert_eq!(admitted, LaunchPosture::ServingWorker);
+        // Pre-PR security-review regression (low): a serving worker that
+        // presents the controller-escrow descriptor shape is refused at the
+        // single evaluation point. It is not custodied
+        // (`carries_controller_escrow` is false) and no duplicate is returned,
+        // so admitting it would install a caller-chosen descriptor at the
+        // well-known Provider bootstrap fd slot (10) inside the worker.
+        let mut with_escrow_shape = request.clone();
+        with_escrow_shape.inherited_fd_count = 1;
+        let error = admission_posture(&with_escrow_shape, &intent, 2)
+            .expect_err("serving worker must carry no inherited fds");
+        assert!(
+            matches!(
+                error,
+                BrokerError::Protocol(ref message)
+                    if message == "binding-owned serving worker must carry no inherited fds"
+            ),
+            "unexpected refusal: {error:?}"
+        );
+        // The owner fence demands the runtime-minted VolumeBinding; the
+        // Provider that signed the serving template is refused.
+        let mut provider_owner = request.clone();
+        provider_owner.owner_ref =
+            Some(ResourceRef::parse("Provider/volume-virtiofs").expect("owner ref"));
+        assert!(
+            validate_spawn_runner_request_matches_intent(&provider_owner, &intent, posture, None)
+                .is_err()
+        );
+        // The serving template does not admit controller-supplied arguments,
+        // so the launch argv stays the trusted intent's.
+        let mut with_launch_args = request;
+        with_launch_args.launch_args = Some(
+            d2b_contracts_broker::broker_wire::RunnerLaunchArgs::new(vec!["--forge".to_owned()])
+                .expect("launch args"),
+        );
+        assert!(
+            validate_spawn_runner_request_matches_intent(&with_launch_args, &intent, posture, None)
+                .is_err()
+        );
+    }
+
+    /// Pre-PR security-review regression: the binding-owned serving worker was
+    /// launched with the DAEMON's uid/gid and its in-namespace root mapped to
+    /// the daemon identity. The broker's only authentication factor is peer
+    /// identity - `peer_matches_instance` admits exactly the daemon uid/gid on
+    /// the privileged socket - so a guest -> worker compromise yielded a
+    /// process that could connect the broker socket, pass the pre-decode peer
+    /// check, and use the whole daemon API (admin-class gates, bundle
+    /// activation, SpawnRunner for any role/VM, read/write on every
+    /// daemon-owned path).
+    ///
+    /// The launch identity is the trusted intent's principal for every
+    /// posture, and the serving worker's two ticket-named trees are opened to
+    /// that principal with per-runner ACLs instead: this drives the same
+    /// entry point the dispatch arm calls, with the daemon's own ticket argv.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn serving_worker_launch_runs_as_the_intent_principal() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = test_audit_dir("serving-worker-principal");
+        let config = test_server_config(&root, &root.join("broker.sock"));
+        let intent = serving_worker_runner_intent();
+        let posture = LaunchPosture::resolve(RunnerRole::ProviderController, &intent);
+        assert_eq!(posture, LaunchPosture::ServingWorker);
+
+        // The daemon's serving-worker ticket paths, realized the way it
+        // provisions them: a private socket directory below the broker's
+        // runtime directory (0700, daemon-owned) and a served view root.
+        let socket_dir = root.join("vms").join("host-system");
+        std::fs::create_dir_all(&socket_dir).expect("create socket dir");
+        std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("chmod socket dir");
+        let served = root.join("store-view").join("live");
+        std::fs::create_dir_all(&served).expect("create served root");
+        std::fs::set_permissions(&served, std::fs::Permissions::from_mode(0o750))
+            .expect("chmod served root");
+        let argv = vec![
+            "virtiofsd".to_owned(),
+            format!("--socket-path={}", socket_dir.join("vol-abcd.vfd.sock").display()),
+            format!("--shared-dir={}", served.display()),
+        ];
+
+        let (uid, gid, namespace) =
+            prepare_runner_launch_identity(posture, &config, &intent, &argv)
+                .expect("serving-worker launch identity");
+        assert_eq!(
+            (uid, gid),
+            (intent.uid, intent.gid),
+            "a serving worker runs as the trusted intent's principal"
+        );
+        assert_ne!(
+            (uid, gid),
+            (config.d2bd_uid, config.d2bd_gid),
+            "a serving worker must never carry the daemon identity: the \
+             privileged socket admits exactly that uid/gid"
+        );
+        assert_eq!(
+            namespace.map(|spec| (spec.host_uid_for_zero, spec.host_gid_for_zero)),
+            Some((intent.uid, intent.gid)),
+            "in-namespace root maps to the intent's principal (ADR 0021), \
+             not to the daemon identity"
+        );
+        // The two trees the ticket names are opened to that principal
+        // (asserted through the setfacl xattr, skipped when the host has no
+        // setfacl binary).
+        if ["/run/current-system/sw/bin/setfacl", "/usr/bin/setfacl", "/bin/setfacl"]
+            .iter()
+            .any(|candidate| Path::new(candidate).exists())
+        {
+            for path in [&socket_dir, &served] {
+                let fd = crate::sys::path_safe::open_dir_path_safe(path).expect("open dir");
+                assert_eq!(
+                    crate::sys::path_safe::fd_extended_acl_present(fd.as_fd())
+                        .expect("inspect ACL"),
+                    (true, false),
+                    "{} must carry the per-runner access ACL",
+                    path.display()
+                );
+            }
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Non-serving ProviderController posture: the whole decision set at once.
+    /// It must carry the bootstrap escrow descriptor (the broker retains its
+    /// duplicate as custody and advertises index 1), keeps the intent
+    /// uid/gid, and its owner fence is the bundle owner.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn controller_escrow_posture_decides_the_whole_launch() {
+        use d2b_contracts_resource::v3::ResourceRef;
+        use d2b_core::processes::ProcessRole;
+
+        let intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
+            .with_intent_id("runner:vm:host-system:role:volume-worker")
+            .with_vm_name("host-system")
+            .with_role(ProcessRole::ProviderController)
+            .with_role_id("volume-worker")
+            .with_profile_id("controller-worker")
+            .with_execution_ref("Host/host-system")
+            .with_uid(4242)
+            .with_gid(4242)
+            .build();
+        let posture = LaunchPosture::resolve(RunnerRole::ProviderController, &intent);
+        assert_eq!(posture, LaunchPosture::ControllerEscrow);
+
+        assert_eq!(
+            posture_decisions(posture),
+            PostureDecisions {
+                bootstrap_response_index: Some(1),
+                console_response_index_with_extras: None,
+                carries_controller_escrow: true,
+                accepts_zero_fds: false,
+                accepts_escrow_fd_shape: true,
+                accepts_two_escrow_fds: true,
+                rejects_unattached_inherited_fd: true,
+                rejects_over_max_fds: true,
+            }
+        );
+
+        let request = typed_runner_request(
+            &intent,
+            RunnerRole::ProviderController,
+            "vol-worker",
+            None,
+            1,
+        );
+        let admitted = admission_posture(&request, &intent, 2).expect("escrow controller");
+        assert_eq!(admitted, LaunchPosture::ControllerEscrow);
+        // A controller-role launch that presents no escrow descriptor, or an
+        // owner other than the bundle owner, is refused before any spawn.
+        let mut escrowless = request.clone();
+        escrowless.inherited_fd_count = 0;
+        assert!(admission_posture(&escrowless, &intent, 0).is_err());
+        let mut foreign_owner = request;
+        foreign_owner.owner_ref =
+            Some(ResourceRef::parse("VolumeBinding/forged").expect("owner ref"));
+        assert!(
+            validate_spawn_runner_request_matches_intent(&foreign_owner, &intent, posture, None).is_err()
+        );
+    }
+
+    /// Ordinary runner posture: the descriptor decision set at once. No
+    /// escrow descriptor is admitted or advertised, and the console-socket
+    /// index is used when the launch carries extra response fds.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn standard_posture_decides_the_whole_launch() {
+        use d2b_core::processes::ProcessRole;
+
+        let intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
+            .with_intent_id("runner:vm:corp-vm:role:virtiofsd")
+            .with_vm_name("corp-vm")
+            .with_role(ProcessRole::Virtiofsd)
+            .with_role_id("virtiofsd")
+            .with_execution_ref("Host/host-system")
+            .with_uid(2000)
+            .with_gid(2000)
+            .build();
+        let posture = LaunchPosture::resolve(RunnerRole::Virtiofsd, &intent);
+        assert_eq!(posture, LaunchPosture::Standard);
+
+        assert_eq!(
+            posture_decisions(posture),
+            PostureDecisions {
+                bootstrap_response_index: None,
+                console_response_index_with_extras: Some(1),
+                carries_controller_escrow: false,
+                accepts_zero_fds: true,
+                accepts_escrow_fd_shape: false,
+                accepts_two_escrow_fds: false,
+                rejects_unattached_inherited_fd: true,
+                rejects_over_max_fds: true,
+            }
+        );
+
+        let request = typed_runner_request(&intent, RunnerRole::Virtiofsd, "fs", None, 0);
+        let admitted = admission_posture(&request, &intent, 0).expect("ordinary runner");
+        assert_eq!(admitted, LaunchPosture::Standard);
+        // An ordinary launch may never carry a controller escrow descriptor.
+        let mut with_inherited_fd = request;
+        with_inherited_fd.inherited_fd_count = 1;
+        assert!(admission_posture(&with_inherited_fd, &intent, 2).is_err());
+    }
+
+    /// Device-worker posture: a Device-owned worker row (`Process/swtpm-<device>`,
+    /// `Process/gpu-<device>`, `EphemeralProcess/swtpm-flush-<device>`) launches
+    /// through its own closed broker runner role, never as a Provider
+    /// controller: zero escrow descriptors, the intent's principal uid/gid,
+    /// and a Device owner (the Device the row is declared under). Its template
+    /// identity is the declared template, not the per-row role id.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn device_worker_posture_decides_the_whole_launch() {
+        use d2b_contracts_resource::v3::ResourceRef;
+        use d2b_core::processes::ProcessRole;
+
+        let intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
+            .with_intent_id("runner:vm:host-system:role:swtpm-tpm")
+            .with_vm_name("host-system")
+            .with_role(ProcessRole::Swtpm)
+            .with_role_id("swtpm-tpm")
+            .with_profile_id("swtpm-socket")
+            .with_execution_ref("Host/host-system")
+            .with_uid(60_100)
+            .with_gid(60_100)
+            .build();
+        let posture = LaunchPosture::resolve(RunnerRole::Swtpm, &intent);
+        assert_eq!(posture, LaunchPosture::Standard);
+        assert!(!posture.is_provider_controller());
+
+        let request = typed_runner_request(&intent, RunnerRole::Swtpm, "swtpm-tpm", Some("Device/tpm"), 0);
+        let admitted = admission_posture(&request, &intent, 0).expect("device worker");
+        assert_eq!(admitted, LaunchPosture::Standard);
+
+        // The row's semantic owner is the Device it is declared under: another
+        // owner type, or none at all, is refused before any spawn.
+        for owner in [Some("Provider/device-tpm"), Some("Guest/dev"), None] {
+            let mut forged = request.clone();
+            forged.owner_ref = owner.map(|owner| ResourceRef::parse(owner).expect("owner ref"));
+            assert!(
+                validate_spawn_runner_request_matches_intent(&forged, &intent, posture, None).is_err(),
+                "a Device worker must carry its Device owner, got {owner:?}"
+            );
+        }
+        // The Device the request names must be the Device that owns the
+        // launched row under the verified bundle: the arm pins that scope and
+        // this fence refuses any request that disagrees with it (a launch
+        // aimed at another Device would derive another Guest's runtime paths).
+        let pinned = crate::ops::device_worker::DeviceWorkerScope {
+            zone_uid: d2b_contracts_resource::v3::ResourceUid::parse(
+                "123e4567-e89b-42d3-a456-426614174000",
+            )
+            .expect("zone uid"),
+            device_ref: ResourceRef::parse("Device/gpu0").expect("device ref"),
+            device_uid: d2b_contracts_resource::v3::ResourceUid::parse(
+                "4f37d6a6-759a-4c81-9a55-eaf2e00665e8",
+            )
+            .expect("device uid"),
+            guest: "other-guest".to_owned(),
+        };
+        let error =
+            validate_spawn_runner_request_matches_intent(&request, &intent, posture, Some(&pinned))
+                .expect_err("a request claiming another Device must be refused by name");
+        match error {
+            BrokerError::SpawnRunnerIntentMismatch {
+                field,
+                requested,
+                resolved,
+            } => {
+                assert_eq!(field, "owner_ref");
+                assert_eq!(requested, "Device/tpm");
+                assert_eq!(resolved, "Device/gpu0");
+            }
+            other => panic!("expected an owner_ref refusal, got {other:?}"),
+        }
+        // The template identity is the declared template; the per-row role id
+        // is not admitted.
+        let mut wrong_template = request;
+        wrong_template.template_identity =
+            Some(provider_controller_template_identity("swtpm-tpm"));
+        assert!(
+            validate_spawn_runner_request_matches_intent(&wrong_template, &intent, posture, None).is_err()
+        );
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -15284,6 +16377,8 @@ mod tests {
             _plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
             _resolver: &BundleResolver,
             _req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+            _posture: LaunchPosture,
+            _device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
             request_fds: Vec<OwnedFd>,
             _audit_log: &crate::audit::AuditLog,
         ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
@@ -15601,6 +16696,119 @@ mod tests {
         assert_eq!(qmp_records.len(), 2);
         assert_eq!(qmp_records[0].operation, "QemuMediaSystemPowerdown");
         assert_eq!(qmp_records[1].operation, "QemuMediaQuit");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `PrepareStateDir` resolves the same trusted storage contract the
+    /// spawn-time swtpm-dir fence reads (`find_storage_path_spec`, via
+    /// `swtpm_dir::resource_backed_identity`): a zone-native Guest the
+    /// verified bundle names with a `path:swtpm-state:<guest>` row is
+    /// accepted even though no legacy manifest VM carries that subject, and a
+    /// subject no trusted row names is still refused by name.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn prepare_state_dir_dispatch_resolves_the_zone_native_subject_from_the_storage_contract() {
+        use d2b_contracts::types::{PathClass, VmId};
+        use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest, PrepareDirRequest};
+
+        let root = test_audit_dir("prepare-state-dir-zone-native");
+        fs::create_dir_all(&root).expect("create test root");
+        let config = test_server_config(&root, &root.join("bundle").join("vms.json"));
+        let (log, capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let resolver = Arc::new(crate::ops::state_dir::resolver_with_swtpm_state_row(
+            "acceptance-guest",
+        ));
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let caller_gid = Gid::current().as_raw();
+        let request = |vm: &str| {
+            BrokerRequest::PrepareStateDir(PrepareDirRequest {
+                vm_id: VmId::new(vm),
+                path_class: PathClass::Vm,
+                tracing_span_id: None,
+            })
+        };
+        let dispatch = |request: BrokerRequest| {
+            let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+                .expect("audit context");
+            dispatch_request_with_backend(
+                request,
+                1000,
+                caller_gid,
+                caller_role.clone(),
+                &audit_context,
+                &config,
+                &log,
+                Some(&resolver),
+                &backend,
+            )
+        };
+
+        let dispatched =
+            dispatch(request("acceptance-guest")).expect("the trusted storage row prepares");
+        match dispatched.response {
+            BrokerResponse::Ack(ack) => {
+                assert!(ack.accepted);
+                assert_eq!(ack.operation, "PrepareStateDir");
+            }
+            other => panic!("expected an Ack, got {other:?}"),
+        }
+
+        let records = capture.lock().expect("capture lock");
+        let record = records
+            .iter()
+            .find(|record| record.operation == "PrepareStateDir")
+            .expect("PrepareStateDir audit record");
+        assert_eq!(record.decision, "allowed");
+        assert_eq!(record.result, "success");
+        let fields = OperationFields::from_operation_value(
+            "PrepareStateDir",
+            record.operation_fields.clone().expect("operation fields"),
+        )
+        .expect("operation fields parse");
+        match fields {
+            OperationFields::PrepareStateDir {
+                vm_id,
+                base_dir,
+                owner_uid,
+                owner_gid,
+                mode,
+            } => {
+                assert_eq!(vm_id, "acceptance-guest");
+                // The record names the directory the worker opens: the state
+                // Volume of the Guest's own TPM Device under the trusted root.
+                let device_uid = crate::ops::device_worker::deterministic_resource_uid(
+                    "work",
+                    "Device",
+                    "tpm0",
+                );
+                assert_eq!(
+                    base_dir,
+                    format!(
+                        "/var/lib/d2b/tpm-state/{}",
+                        crate::ops::swtpm_dir::state_volume_name(&device_uid)
+                    )
+                );
+                assert_eq!((owner_uid, owner_gid, mode), (0, 0, 0o700));
+            }
+            other => panic!("expected PrepareStateDir fields, got {other:?}"),
+        }
+        drop(records);
+
+        let error = dispatch(request("other-guest")).expect_err("an unnamed subject is refused");
+        match error {
+            BrokerError::LiveHandler(detail) => {
+                assert_eq!(detail, "PrepareStateDir: unknown subject \"other-guest\"");
+            }
+            other => panic!("expected a LiveHandler refusal, got {other:?}"),
+        }
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -16231,6 +17439,7 @@ mod tests {
                 generation: None,
                 runtime_scope: None,
                 activation_input: None,
+                launch_args: None,
                 sandbox_plan: None,
                 workload_identity: None,
                 inherited_fd_count: 0,
@@ -16725,6 +17934,7 @@ mod tests {
                 generation: None,
                 runtime_scope: None,
                 activation_input: None,
+                launch_args: None,
                 sandbox_plan: None,
                 workload_identity: None,
                 inherited_fd_count: 0,
@@ -17443,6 +18653,7 @@ mod tests {
                 generation: None,
                 runtime_scope: None,
                 activation_input: None,
+                launch_args: None,
                 sandbox_plan: None,
                 workload_identity: None,
                 inherited_fd_count: 0,
@@ -17594,6 +18805,7 @@ mod tests {
                 generation: None,
                 runtime_scope: None,
                 activation_input: None,
+                launch_args: None,
                 sandbox_plan: None,
                 workload_identity: None,
                 inherited_fd_count: 0,

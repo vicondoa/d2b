@@ -39,7 +39,6 @@ pub mod readiness;
 pub mod resource_api;
 pub mod resource_operator_activation;
 pub mod resource_runtime_support;
-pub mod resource_store_runtime;
 pub mod runtime_capability;
 pub mod runtime_process;
 pub mod runtime_util;

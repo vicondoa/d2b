@@ -136,7 +136,7 @@ let
           providerRef = providerRef;
           endpointClass = "service";
           transport = "opaque-carriage";
-          purpose = "notification-desktop.d2bus.org/sink";
+          purpose = "notification-desktop-sink";
           serviceFingerprint = null;
           locality = "host-local";
           visibility = "provider";

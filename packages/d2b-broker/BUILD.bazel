@@ -22,6 +22,7 @@ d2b_broker_compile_data = [
     "//tests/fixtures:deny-unknown/host-valid.json",  # keep
     "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
     "Cargo.toml",
+    "src/ops/state-posture-contract.json",
     "src/sys.rs",
 ]
 

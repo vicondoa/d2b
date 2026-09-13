@@ -13,7 +13,8 @@ use d2b_contracts_broker::broker_wire::{
     AuditJoinContext, BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerRequestEnvelope,
     BrokerResponse, CanonicalAuditDigest, DeregisterRunnerPidfdRequest,
     GuestExecutionBinding as BrokerGuestExecutionBinding, ObserveRunnerRequest, OpenPidfdRequest,
-    RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest, SpawnRunnerRequest,
+    RunnerLaunchArgs, RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest,
+    SpawnRunnerRequest,
 };
 use d2b_contracts_resource::v3::{ActivationRunnerInput, execution_policy::ExecutionDomain};
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
@@ -83,6 +84,9 @@ pub struct BrokerLaunchIntent {
     pub activation_input: Option<ActivationRunnerInput>,
     /// Exact authenticated binding for a Guest-local Process.
     pub guest_execution: Option<BrokerGuestExecutionBinding>,
+    /// Whether the resolved template admits controller-supplied launch
+    /// arguments (the broker re-checks the same fence before exec).
+    pub accepts_launch_args: bool,
 }
 
 impl std::fmt::Debug for BrokerLaunchIntent {
@@ -404,29 +408,47 @@ impl BrokerLaunchResolver for BundleBackedLaunchResolver {
 }
 
 impl BundleBackedLaunchResolver {
+    /// Resolve one launch ticket against the trusted bundle.
+    ///
+    /// Every fence refusal below - no trusted intent for the ticket's role,
+    /// template, execution target, scope, or descriptor posture - is a
+    /// *resolution* refusal: the daemon holds no trusted launch configuration
+    /// this ticket names, so nothing was launched, nothing was observed, and
+    /// no process identity is in question. It is reported as
+    /// [`ProcessEffectError::ResolutionFailed`] (never
+    /// [`ProcessEffectError::IdentityChanged`]), so the effect ports project it
+    /// under the `resolution-failed` conformance code rather than
+    /// `AdoptionAmbiguous` (an adopt probe the fence refuses must not read as
+    /// an ambiguous identity, which the Process driver would quarantine as
+    /// terminal - R15 is about observed identity, not about a ticket that
+    /// never resolved) and rather than `LaunchFailed` (which the Process
+    /// driver retries under its restart budget for a refusal no retry can
+    /// reverse).
     fn resolve_intent(
         &self,
         request: &ProcessRequest,
     ) -> Result<BrokerLaunchIntent, ProcessEffectError> {
         let ticket = request.ticket();
+        // The launch identity was resolved once from the durable row; this
+        // fence reads it instead of re-deriving the VM scope, the legacy
+        // role, or the binding worker's host-exec/guest-target split.
+        let identity = ticket.launch_identity();
         if !matches!(
             ticket.execution_ref().resource_type().as_str(),
             "Host" | "Guest"
         ) {
             return Err(ProcessEffectError::UnsupportedProvider);
         }
-        let vm_name = match (
-            ticket.execution_ref().resource_type().as_str(),
-            ticket.target_ref(),
-        ) {
-            ("Guest", None) => ticket.execution_ref().name().as_str(),
-            ("Host", None) => ticket.execution_ref().name().as_str(),
-            ("Host", Some(target)) if target.resource_type().as_str() == "Guest" => {
-                target.name().as_str()
-            }
-            _ => return Err(ProcessEffectError::IdentityChanged),
-        };
-        let process_role_id = ticket.process_ref().name().as_str();
+        let vm_name = identity.vm_or_execution();
+        let binding_worker_launch = identity.is_binding_worker();
+        // KTD7 host-exec/guest-target split: a binding-owned serving worker
+        // executes on the Host the signed serving template binds; the
+        // attachment's Guest is only the ticket's target ref. The launch's
+        // VM identity is therefore the execution host, exactly as the
+        // serving intent was minted under it (the broker daemon fences the
+        // requested vm_id against the intent's own vm name).
+        let launch_vm_name = identity.launch_vm();
+        let process_role_id = identity.role();
         let intent_id = intent_id_legacy_runner(vm_name, process_role_id);
         let expected_execution_ref = ticket.execution_ref().to_canonical_string();
         let expected_execution_domain = match ticket.domain() {
@@ -458,7 +480,46 @@ impl BundleBackedLaunchResolver {
                     Some("Provider/credential-managed-identity"),
                 )
             });
-        let generic_intent = if let Some(owner) = ticket
+        let binding_worker_intent = if binding_worker_launch {
+            self.bundle.find_volume_binding_worker_intent(
+                &expected_execution_ref,
+                expected_execution_domain,
+                expected_user_ref.as_deref(),
+                ticket.template().as_str(),
+            )
+        } else {
+            None
+        };
+        // A Device-owned worker row (`Process/swtpm-<device>`,
+        // `Process/gpu-<device>`, `Process/video-<device>`, and the
+        // `EphemeralProcess/swtpm-flush-<device>` flush) is declared by the
+        // Device's own Provider and carries that Device as its semantic
+        // owner. It resolves through the exact declared row: the row name is
+        // the role id, and the declared template pins the closed Device
+        // worker posture the broker enforces at spawn. The arm below is
+        // terminal for Device-owned tickets - a row the bundle does not
+        // declare refuses instead of falling through - because the generic
+        // lookup matches by template name, which two Devices in one Zone
+        // share, so it can never stand in for the declared row.
+        let device_owned = ticket
+            .owner_ref()
+            .is_some_and(|owner| owner.resource_type().as_str() == "Device");
+        let device_worker_intent = if device_owned {
+            self.bundle.find_device_worker_intent(
+                ticket.process_ref(),
+                &expected_execution_ref,
+                expected_execution_domain,
+                expected_user_ref.as_deref(),
+                ticket.template().as_str(),
+            )
+        } else {
+            None
+        };
+        let generic_intent = if device_owned {
+            // Unreachable by construction: the process-controller arm
+            // resolves Device-owned tickets through the declared row alone.
+            None
+        } else if let Some(owner) = ticket
             .owner_ref()
             .filter(|owner| owner.resource_type().as_str() == "Guest")
             .filter(|owner| {
@@ -470,7 +531,7 @@ impl BundleBackedLaunchResolver {
                     resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: guest vmm launch requires a zone uid"
                 );
-                return Err(ProcessEffectError::IdentityChanged);
+                return Err(ProcessEffectError::ResolutionFailed);
             };
             self.bundle.find_guest_vmm_intent_for_zone_uid(
                 zone_uid,
@@ -500,9 +561,22 @@ impl BundleBackedLaunchResolver {
                 })?;
                 (intent, true)
             }
+            "process-controller" if device_owned => {
+                let intent = device_worker_intent.ok_or_else(|| {
+                    warn!(
+                        provider = "supervisor",
+                        resource = %ticket.process_ref().to_canonical_string(),
+                        template = ticket.template().as_str(),
+                        "assignment rejected: no declared device worker intent for this row"
+                    );
+                    ProcessEffectError::UnsupportedProvider
+                })?;
+                (intent, false)
+            }
             "process-controller" => (
                 static_controller_intent
                     .or(provider_component_intent)
+                    .or(binding_worker_intent)
                     .or(generic_intent)
                     .ok_or_else(|| {
                         warn!(
@@ -536,13 +610,15 @@ impl BundleBackedLaunchResolver {
             ProcessRole::CloudHypervisorRunner => "ch-runner",
             _ => intent.role_id.as_str(),
         };
-        if intent.vm_name != vm_name || (legacy_identity && intent.role_id != process_role_id) {
+        if intent.vm_name != launch_vm_name
+            || (legacy_identity && intent.role_id != process_role_id)
+        {
             warn!(
                 provider = "supervisor",
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: resolved intent vm or legacy role mismatch"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         let typed_identity = !legacy_identity && !ticket.has_controller_launch_binding();
         if typed_identity {
@@ -552,7 +628,7 @@ impl BundleBackedLaunchResolver {
                     resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: typed launch requires a zone uid"
                 );
-                return Err(ProcessEffectError::IdentityChanged);
+                return Err(ProcessEffectError::ResolutionFailed);
             };
             let Some(runtime_scope) = ticket.runtime_scope() else {
                 warn!(
@@ -560,7 +636,7 @@ impl BundleBackedLaunchResolver {
                     resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: typed launch requires a runtime scope"
                 );
-                return Err(ProcessEffectError::IdentityChanged);
+                return Err(ProcessEffectError::ResolutionFailed);
             };
             let expected_scope = runtime_scope_commitment(
                 zone_uid,
@@ -579,19 +655,24 @@ impl BundleBackedLaunchResolver {
                     resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: runtime scope commitment mismatch"
                 );
-                return Err(ProcessEffectError::IdentityChanged);
+                return Err(ProcessEffectError::ResolutionFailed);
             }
         }
         let inherited_fd_count = ticket.inherited_fd_table().count();
-        if (role == RunnerRole::ProviderController && !(1..=2).contains(&inherited_fd_count))
-            || (role != RunnerRole::ProviderController && inherited_fd_count != 0)
+        // A binding-owned serving worker is a controller-role launch that
+        // carries no broker escrow descriptors: it receives none and must
+        // request none.
+        let expects_bootstrap_fds =
+            role == RunnerRole::ProviderController && !binding_worker_launch;
+        if (expects_bootstrap_fds && !(1..=2).contains(&inherited_fd_count))
+            || (!expects_bootstrap_fds && inherited_fd_count != 0)
         {
             warn!(
                 provider = "supervisor",
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: inherited descriptor table does not match the runner role"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         if intent.execution_ref != expected_execution_ref {
             warn!(
@@ -599,7 +680,7 @@ impl BundleBackedLaunchResolver {
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: resolved execution ref mismatch"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         let expected_domain = match intent.execution_domain {
             d2b_core::processes::ProcessExecutionDomain::System => ExecutionDomain::System,
@@ -611,7 +692,7 @@ impl BundleBackedLaunchResolver {
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: resolved execution domain mismatch"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         let expected_user_ref = intent
             .user_ref
@@ -624,7 +705,7 @@ impl BundleBackedLaunchResolver {
                     resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: resolved user ref failed to parse"
                 );
-                ProcessEffectError::IdentityChanged
+                ProcessEffectError::ResolutionFailed
             })?;
         if ticket.user_ref() != expected_user_ref.as_ref() {
             warn!(
@@ -632,7 +713,7 @@ impl BundleBackedLaunchResolver {
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: resolved user ref mismatch"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         if ticket.execution_ref().resource_type().as_str() == "Guest"
             && ticket.guest_execution_binding().is_none()
@@ -642,7 +723,7 @@ impl BundleBackedLaunchResolver {
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: guest execution requires a guest binding"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         if ticket.execution_ref().resource_type().as_str() == "Host"
             && ticket.guest_execution_binding().is_some()
@@ -652,7 +733,7 @@ impl BundleBackedLaunchResolver {
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: host execution must not carry a guest binding"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         let guest_execution =
             ticket
@@ -666,7 +747,7 @@ impl BundleBackedLaunchResolver {
                     controller_generation: binding.controller_generation().get(),
                 });
         Ok(BrokerLaunchIntent {
-            vm_id: VmId::new(vm_name),
+            vm_id: VmId::new(launch_vm_name),
             zone_uid: ticket.zone_uid().cloned(),
             owner_ref: ticket.owner_ref().cloned(),
             owner_uid: ticket.owner_uid().cloned(),
@@ -699,12 +780,13 @@ impl BundleBackedLaunchResolver {
                     warn!(
                         provider = "supervisor",
                         resource = %ticket.process_ref().to_canonical_string(),
-                "identity-rejection: trusted bundle content identity missing"
-                    );
-                    ProcessEffectError::IdentityChanged
+                    "identity-rejection: trusted bundle content identity missing"
+                );
+                    ProcessEffectError::ResolutionFailed
                 })?,
             activation_input: ticket.activation_input().cloned(),
             guest_execution,
+            accepts_launch_args: intent.accepts_launch_args,
             sandbox_plan: ticket.sandbox_plan().map(|plan| {
                 let spec = plan.spec();
                 SandboxLaunchPlan {
@@ -943,6 +1025,23 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         let (request, inherited_fds) = request.into_parts();
         let intent = self.resolver.resolve(&request)?;
         let inherited_fd_count = request.ticket().inherited_fd_table().count();
+        // Controller-supplied arguments are admitted only by the resolved
+        // template's own declaration; every other template refuses them here
+        // (and the broker re-checks the same fence).
+        let launch_args = if request.ticket().launch_args().is_empty() {
+            None
+        } else if intent.accepts_launch_args {
+            Some(
+                RunnerLaunchArgs::new(request.ticket().launch_args().to_vec())
+                    .map_err(|_| ProcessEffectError::LaunchFailed)?,
+            )
+        } else {
+            warn!(
+                provider = "supervisor",
+                "launch rejected: resolved template does not admit controller-supplied arguments"
+            );
+            return Err(ProcessEffectError::UnsupportedProvider);
+        };
         let frame = self.request_with_fds(
             BrokerRequest::SpawnRunner(SpawnRunnerRequest {
                 execution_ref: Some(intent.execution_ref.clone()),
@@ -961,9 +1060,10 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                 template_identity: intent.wire_template_identity(),
                 generation: intent.wire_generation(),
                 runtime_scope: intent.wire_runtime_scope(),
-                guest_execution: intent.guest_execution.clone(),
                 sandbox_plan: intent.sandbox_plan.clone(),
                 activation_input: intent.activation_input.clone(),
+                guest_execution: intent.guest_execution.clone(),
+                launch_args,
                 role: intent.role,
                 bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
                 runtime_allocations: Vec::new(),
@@ -1008,13 +1108,12 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             .controller_bootstrap_fd_index
             .map(|index| frame.take_fd(index))
             .transpose()?;
-        if read_proc_start_time(response.pid)? != Some(response.start_time_ticks) {
-            warn!(
-                provider = "supervisor",
-                pid = response.pid,
-                "spawned process start time does not match the broker response"
-            );
-            return Err(ProcessEffectError::IdentityChanged);
+        if let Some(error) = launch_adoption_error(
+            response.pid,
+            read_proc_start_time(response.pid)?,
+            response.start_time_ticks,
+        ) {
+            return Err(error);
         }
         let observed = BrokerObservedProcess {
             intent,
@@ -1350,6 +1449,50 @@ enum BrokerOperation<'a> {
     Other,
 }
 
+/// Classify the start time observed for a freshly spawned child against the
+/// value the broker reported for it, and report the adoption refusal when the
+/// child cannot be adopted.
+///
+/// The comparison is the fence against identifier reuse: a *different* live
+/// process now owning the reported pid must never be adopted, so a
+/// mismatching value stays [`ProcessEffectError::IdentityChanged`] - the
+/// Process driver reports that as `adoption-ambiguous`.
+///
+/// A child that is already *gone* is not a drift claim. A broker-spawned
+/// process that exits before this read leaves a zombie (or is reaped), and
+/// [`read_proc_start_time`] yields `None` for both: there is no observed
+/// identity to compare, and nothing to adopt. Reporting that as an identity
+/// ambiguity would quarantine a launch that never produced a running process
+/// (`d2bd::process_driver` classifies every `identity` / `ambiguous` provider
+/// code as terminal), so the definite outcome is reported instead: the child
+/// vanished, which the conformance port projects as the `pidfd-unavailable`
+/// conformance code and the daemon reads as a retryable launch effect.
+fn launch_adoption_error(
+    pid: i32,
+    observed_start_time: Option<u64>,
+    reported_start_time_ticks: u64,
+) -> Option<ProcessEffectError> {
+    match observed_start_time {
+        Some(observed) if observed == reported_start_time_ticks => None,
+        Some(_) => {
+            warn!(
+                provider = "supervisor",
+                pid = pid,
+                "spawned process start time does not match the broker response"
+            );
+            Some(ProcessEffectError::IdentityChanged)
+        }
+        None => {
+            warn!(
+                provider = "supervisor",
+                pid = pid,
+                "spawned process is gone before adoption"
+            );
+            Some(ProcessEffectError::Vanished)
+        }
+    }
+}
+
 fn response_error(response: &BrokerResponse, operation: BrokerOperation<'_>) -> ProcessEffectError {
     match response {
         BrokerResponse::Error(error)
@@ -1466,6 +1609,7 @@ mod tests {
                 sandbox_plan: None,
                 activation_input: None,
                 guest_execution: None,
+                accepts_launch_args: false,
             },
             pid: i32::from(seed) + 1,
             start_time_ticks: u64::from(seed) + 1,
@@ -1593,6 +1737,25 @@ mod tests {
         );
     }
 
+    /// The launch fence classifies the spawned child's observed start time:
+    /// a *different* live process owning the reported pid is a genuine drift
+    /// and stays refused (`adoption-ambiguous`), while a child that is already
+    /// gone (exited before adoption: absent or zombie, `None`) is the definite
+    /// launch failure - it must never be reported as an ambiguous identity,
+    /// which `d2bd::process_driver` would classify as terminal and quarantine.
+    #[test]
+    fn launch_fence_separates_start_time_drift_from_a_gone_process() {
+        assert_eq!(launch_adoption_error(1234, Some(77), 77), None);
+        assert_eq!(
+            launch_adoption_error(1234, Some(78), 77),
+            Some(ProcessEffectError::IdentityChanged)
+        );
+        assert_eq!(
+            launch_adoption_error(1234, None, 77),
+            Some(ProcessEffectError::Vanished)
+        );
+    }
+
     #[test]
     fn generic_process_roles_map_only_to_closed_broker_roles() {
         assert_eq!(
@@ -1610,6 +1773,371 @@ mod tests {
         assert_eq!(
             runner_role_for_process_role(&ProcessRole::SecurityKeyFrontend),
             None
+        );
+    }
+
+    /// A Zone bundle whose Device Provider signs one declared swtpm worker
+    /// row - the shape `d2b-resource-compiler` emits for a Device-owned worker
+    /// template.
+    fn device_worker_resolver() -> BundleBackedLaunchResolver {
+        use d2b_contracts_resource::v3::{
+            CanonicalJsonObject, ResourceName, ResourceTypeName, Timestamp, ZoneId,
+        };
+        use d2b_contracts_zone_session::v3::resource_bundle::{
+            BundleResource, BundleResourceMetadata, ResourceBundle,
+        };
+        use d2b_core::bundle::{Bundle, BundleGeneration};
+        use d2b_core::bundle_resolver::BundleResolver;
+        use d2b_core::host::HostJson;
+        use d2b_core::manifest_v04::ManifestV04;
+        use d2b_core::processes::ProcessesJson;
+
+        let zone = ZoneId::parse("dev").expect("zone");
+        let provider_ref =
+            ResourceRef::parse("Provider/device-tpm").expect("provider ref");
+        let device_ref = ResourceRef::parse("Device/tpm").expect("device ref");
+        // A second Device declaring the same worker template: the declared
+        // row, never the shared template name, is the launch identity.
+        let device2_ref = ResourceRef::parse("Device/tpm2").expect("second device ref");
+        let host_ref = ResourceRef::parse("Host/host-system").expect("host ref");
+        let rows = [
+            (
+                "Process",
+                "swtpm-tpm",
+                device_ref.clone(),
+                r#"{"domain":"system","executionRef":"Host/host-system","processClass":"worker","providerRef":"Provider/system-minijail","template":"swtpm-socket"}"#,
+            ),
+            (
+                "EphemeralProcess",
+                "swtpm-flush-tpm",
+                device_ref.clone(),
+                r#"{"domain":"system","executionRef":"Host/host-system","processClass":"worker","providerRef":"Provider/system-minijail","template":"swtpm-init-flush"}"#,
+            ),
+            (
+                "Process",
+                "swtpm-tpm2",
+                device2_ref.clone(),
+                r#"{"domain":"system","executionRef":"Host/host-system","processClass":"worker","providerRef":"Provider/system-minijail","template":"swtpm-socket"}"#,
+            ),
+        ];
+        let mut resources = vec![
+            BundleResource::new(
+                ResourceTypeName::parse("Host").expect("host type"),
+                BundleResourceMetadata::new(
+                    host_ref.name().clone(),
+                    zone.clone(),
+                    None,
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(br#"{}"#).expect("host spec"),
+            )
+            .expect("host resource"),
+            BundleResource::new(
+                ResourceTypeName::parse("Provider").expect("provider type"),
+                BundleResourceMetadata::new(
+                    provider_ref.name().clone(),
+                    zone.clone(),
+                    None,
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(
+                    br#"{"artifactId":"device-tpm","config":{"controllerExecutionRef":"Host/host-system"}}"#,
+                )
+                .expect("provider spec"),
+            )
+            .expect("provider resource"),
+            BundleResource::new(
+                ResourceTypeName::parse("Device").expect("device type"),
+                BundleResourceMetadata::new(
+                    device_ref.name().clone(),
+                    zone.clone(),
+                    Some(ResourceRef::parse("Guest/dev").expect("guest ref")),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(br#"{"providerRef":"Provider/device-tpm"}"#)
+                    .expect("device spec"),
+            )
+            .expect("device resource"),
+            BundleResource::new(
+                ResourceTypeName::parse("Device").expect("device type"),
+                BundleResourceMetadata::new(
+                    device2_ref.name().clone(),
+                    zone.clone(),
+                    Some(ResourceRef::parse("Guest/dev").expect("guest ref")),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(br#"{"providerRef":"Provider/device-tpm"}"#)
+                    .expect("device spec"),
+            )
+            .expect("second device resource"),
+        ];
+        for (row_type, row_name, owner_ref, spec) in rows {
+            resources.push(
+                BundleResource::new(
+                    ResourceTypeName::parse(row_type).expect("row type"),
+                    BundleResourceMetadata::new(
+                        ResourceName::parse(row_name).expect("row name"),
+                        zone.clone(),
+                        Some(owner_ref),
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                    ),
+                    CanonicalJsonObject::parse(spec.as_bytes()).expect("row spec"),
+                )
+                .expect("row resource"),
+            );
+        }
+        let resource_bundle = ResourceBundle::new(
+            zone,
+            resources,
+            format!("sha256:{}", "b".repeat(64)),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("1970-01-01T00:00:00.000Z").expect("timestamp"),
+        )
+        .expect("resource bundle");
+        let mut value = serde_json::to_value(&resource_bundle).expect("resource bundle value");
+        value["processTemplates"] = serde_json::json!([
+            {
+                "processRef": "Process/swtpm-tpm",
+                "ownerRef": "Provider/device-tpm",
+                "executionRef": "Host/host-system",
+                "template": "swtpm-socket",
+                "artifactId": "device-tpm",
+                "binaryRef": "swtpm",
+                "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+                "binaryPath": "/nix/store/device-tpm/bin/swtpm",
+                "launchArgs": true
+            },
+            {
+                "processRef": "EphemeralProcess/swtpm-flush-tpm",
+                "ownerRef": "Provider/device-tpm",
+                "executionRef": "Host/host-system",
+                "template": "swtpm-init-flush",
+                "artifactId": "device-tpm",
+                "binaryRef": "swtpm-ioctl",
+                "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+                "binaryPath": "/nix/store/device-tpm/bin/swtpm-ioctl",
+                "launchArgs": true
+            },
+            {
+                "processRef": "Process/swtpm-tpm2",
+                "ownerRef": "Provider/device-tpm",
+                "executionRef": "Host/host-system",
+                "template": "swtpm-socket",
+                "artifactId": "device-tpm",
+                "binaryRef": "swtpm",
+                "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+                "binaryPath": "/nix/store/device-tpm/bin/swtpm",
+                "launchArgs": true
+            }
+        ]);
+        let bytes = serde_json::to_vec(&value).expect("resource bundle bytes");
+        let host = serde_json::from_str::<HostJson>(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        let manifest = ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        BundleBackedLaunchResolver::new(BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 11,
+                schema_version: "v2".to_owned(),
+                public_manifest_path: "vms.json".to_owned(),
+                host_path: "host.json".to_owned(),
+                processes_path: "processes.json".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                sync_path: None,
+                allocator_path: None,
+                realm_controllers_path: None,
+                realm_identity_path: None,
+                realm_workloads_launcher_v2_path: None,
+                unsafe_local_workloads_path: None,
+                closures: Vec::new(),
+                minijail_profiles: Vec::new(),
+                managed_keys: Default::default(),
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            manifest,
+            BTreeMap::from([("dev".to_owned(), bytes)]),
+        ))
+    }
+
+    /// Build one typed Device-owned worker ticket against the declared
+    /// `Process/swtpm-tpm` row (the `Device/tpm` worker).
+    fn device_worker_request(template: &str) -> ProcessRequest {
+        device_worker_request_for(
+            "Process/swtpm-tpm",
+            "Device/tpm",
+            template,
+            "swtpm-tpm",
+            "swtpm-tpm",
+        )
+    }
+
+    /// Build one typed Device-owned worker ticket for an arbitrary row,
+    /// owner Device, template, legacy process name, and runtime-scope role.
+    ///
+    /// `process_name` is the ticket's own row name; `scope_role` is the role
+    /// id the runtime-scope commitment is computed against, so a test can
+    /// hand a ticket the commitment of a row it does not name.
+    fn device_worker_request_for(
+        process_ref: &str,
+        device_ref: &str,
+        template: &str,
+        process_name: &str,
+        scope_role: &str,
+    ) -> ProcessRequest {
+        use d2b_contracts_resource::v3::{
+            ControllerGeneration, ResourceGeneration, execution_policy::BoundedToken,
+        };
+        use d2b_process_conformance::testing::fixtures::{compiled_digests, operation_uid};
+        use d2b_process_conformance::{
+            LaunchIdentity, LaunchTicket, OperationBinding, runtime_scope_commitment,
+        };
+
+        let process_ref = ResourceRef::parse(process_ref).expect("process ref");
+        let execution_ref = ResourceRef::parse("Host/host-system").expect("execution ref");
+        let device_ref = ResourceRef::parse(device_ref).expect("device ref");
+        let zone_uid = d2b_contracts_resource::v3::ResourceUid::parse(
+            "223e4567-e89b-42d3-a456-426614174001",
+        )
+        .expect("zone uid");
+        let process_uid = operation_uid();
+        let ticket = LaunchTicket::new(
+            process_ref.clone(),
+            process_uid.clone(),
+            ResourceGeneration::new(1).expect("generation"),
+            ControllerGeneration::new(1).expect("controller generation"),
+            BoundedToken::parse("system-minijail").expect("owner provider"),
+            BoundedToken::parse("process-controller").expect("component"),
+            BoundedToken::parse(template).expect("template"),
+            execution_ref.clone(),
+            ExecutionDomain::System,
+            None,
+            BoundedToken::parse("system-minijail").expect("selected provider"),
+            compiled_digests(),
+            OperationBinding::new(operation_uid(), 30_000).expect("operation"),
+            std::collections::BTreeSet::from([IdentityBinding::Cgroup]),
+        )
+        .expect("device worker ticket")
+        .with_launch_identity(
+            LaunchIdentity::new(
+                Some(device_ref.clone()),
+                None,
+                execution_ref,
+                None,
+                process_name,
+                false,
+            )
+            .expect("launch identity"),
+        )
+        .expect("launch identity binding")
+        .with_runtime_identity(
+            zone_uid.clone(),
+            Some(device_ref),
+            runtime_scope_commitment(
+                &zone_uid,
+                None,
+                &process_ref,
+                &process_uid,
+                scope_role,
+                1,
+            ),
+        )
+        .expect("runtime identity");
+        ProcessRequest::new(ticket)
+    }
+
+    #[test]
+    fn device_owned_worker_row_resolves_through_its_declared_row() {
+        let resolver = device_worker_resolver();
+        let intent = resolver
+            .resolve(&device_worker_request("swtpm-socket"))
+            .expect("swtpm worker intent");
+        assert_eq!(intent.role, RunnerRole::Swtpm);
+        assert_eq!(intent.role_id.as_str(), "swtpm-tpm");
+        assert_eq!(intent.vm_id.as_str(), "host-system");
+        assert_eq!(
+            intent
+                .owner_ref
+                .as_ref()
+                .map(ResourceRef::to_canonical_string)
+                .as_deref(),
+            Some("Device/tpm")
+        );
+        assert!(intent.accepts_launch_args);
+        assert_eq!(
+            intent.template_identity,
+            BundleBackedLaunchResolver::identity_digest(
+                "swtpm-socket",
+                b"d2b-process-template-v1"
+            )
+        );
+        // A second Device declares the same worker template under its own
+        // row: the resolution is the exact declared row, so this row never
+        // resolves to the sibling's intent (the generic lookup, which matches
+        // by the shared template name, has two candidates here).
+        let sibling = resolver
+            .resolve(&device_worker_request_for(
+                "Process/swtpm-tpm2",
+                "Device/tpm2",
+                "swtpm-socket",
+                "swtpm-tpm2",
+                "swtpm-tpm2",
+            ))
+            .expect("second swtpm worker intent");
+        assert_eq!(sibling.role, RunnerRole::Swtpm);
+        assert_eq!(sibling.role_id.as_str(), "swtpm-tpm2");
+        assert_eq!(
+            sibling
+                .owner_ref
+                .as_ref()
+                .map(ResourceRef::to_canonical_string)
+                .as_deref(),
+            Some("Device/tpm2")
+        );
+
+        // The declared template is an exact fence: the same row never
+        // resolves through another template's posture.
+        assert_eq!(
+            resolver.resolve(&device_worker_request("gpu-worker")),
+            Err(ProcessEffectError::UnsupportedProvider)
+        );
+
+        // A Device-owned row the bundle does not declare refuses: the Device
+        // arm is terminal, so the shared-template generic lookup never stands
+        // in for the missing declared row and hands the launch a sibling
+        // row's identity. Before this the terminality was not by
+        // construction - this ticket's scope commitment is that of the
+        // declared `swtpm-flush-tpm` role, and the generic lookup resolved it.
+        assert_eq!(
+            resolver.resolve(&device_worker_request_for(
+                "EphemeralProcess/swtpm-flush-ghost",
+                "Device/tpm",
+                "swtpm-init-flush",
+                "swtpm-flush-ghost",
+                "swtpm-flush-tpm",
+            )),
+            Err(ProcessEffectError::UnsupportedProvider)
         );
     }
 
@@ -1670,6 +2198,13 @@ fn read_pidfd_process_id(pidfd: &OwnedFd) -> Result<Option<i32>, ProcessEffectEr
     Ok(observed)
 }
 
+/// Read `/proc/<pid>/stat` field 22 (process start time in clock ticks).
+///
+/// `None` means the pid carries no observable start time: the process is
+/// absent (never existed here, or already reaped) or is a zombie (`Z`/`X`).
+/// A dying child is therefore indistinguishable from an absent one by design
+/// - both are *gone*, never a start-time *drift* - and callers must classify
+/// it as such (`launch_adoption_error`).
 fn read_proc_start_time(pid: i32) -> Result<Option<u64>, ProcessEffectError> {
     let content = match fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(content) => content,

@@ -98,10 +98,6 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
         include_str!("../src/resource_runtime_support.rs"),
     ),
     (
-        "src/resource_store_runtime.rs",
-        include_str!("../src/resource_store_runtime.rs"),
-    ),
-    (
         "src/runtime_capability.rs",
         include_str!("../src/runtime_capability.rs"),
     ),

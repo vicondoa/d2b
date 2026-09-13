@@ -174,6 +174,12 @@ in
           .providerProjectionAudioPipewire.processesByZone.dev);
         endpoints = lib.attrNames (projected.config.d2b._resourceCompiler
           .providerProjectionAudioPipewire.resourcesByZone.dev);
+        # `EndpointSpec.purpose` is a `BoundedToken`; a dotted spelling is a
+        # decode refusal at the daemon.
+        purposes = lib.mapAttrs
+          (_: resource: resource.spec.purpose)
+          (projected.config.d2b._resourceCompiler
+            .providerProjectionAudioPipewire.resourcesByZone.dev);
         processRefs = projected.config.d2b._resourceCompiler
           .providerProjectionAudioPipewire.privateArtifact.processRefs;
         hostExecution = projected.config.d2b._resourceCompiler
@@ -184,6 +190,10 @@ in
         enabled = true;
         processes = [ "audio-guest-audio-binding" "audio-host-audio-binding" ];
         endpoints = [ "audio-guest-audio-binding" "audio-host-audio-binding" ];
+        purposes = {
+          "audio-guest-audio-binding" = "audio-pipewire-guest-agent";
+          "audio-host-audio-binding" = "audio-pipewire-host-worker";
+        };
         processRefs = [
           "Process/audio-host-audio-binding"
           "Process/audio-guest-audio-binding"

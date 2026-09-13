@@ -726,7 +726,12 @@ let
           }
           else {
             kind = "local-path";
-            sourcePolicyId = "state-root";
+            # The daemon creates this Volume's per-Guest subdirectory itself
+            # (`ZoneVolumeRootResolver::resolve_root` runs `mkdirat` as the
+            # daemon's own uid), and the shared state root is owned
+            # `root:d2bd 0750` for a reader, so it has no write there. The
+            # daemon-owned policy root is the same choice the spec store made.
+            sourcePolicyId = "daemon-state";
             imageFormat = null;
             preallocate = false;
           };

@@ -56,7 +56,7 @@ impl GpuProcessDeclaration {
     pub const fn template(&self) -> &'static str {
         match self.role {
             GpuProcessRole::FullGpu => "gpu-worker",
-            GpuProcessRole::RenderNode => "render-node-worker",
+            GpuProcessRole::RenderNode => "gpu-render-node",
             GpuProcessRole::Video => "video-worker",
         }
     }

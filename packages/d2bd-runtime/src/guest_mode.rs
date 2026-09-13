@@ -44,8 +44,13 @@ use crate::{
 pub const GUEST_COMPONENT_SESSION_PORT: u32 = 14_318;
 /// The kernel source of truth for boot identity.
 pub const KERNEL_BOOT_ID_PATH: &str = "/proc/sys/kernel/random/boot_id";
-/// The fixed enrolled session purpose.
-pub const GUEST_COMPONENT_SESSION_PURPOSE: &str = "zone-link";
+/// The fixed enrolled session purpose of the generic Guest target-control
+/// ComponentSession (R20).
+///
+/// This session is the parent Zone's target-control path to one Guest. It is
+/// not a ZoneLink: a ZoneLink is a Zone-topology resource that may itself
+/// consume this path, never the other way round.
+pub const GUEST_COMPONENT_SESSION_PURPOSE: &str = "component-session";
 /// The parent-Zone service package carried by the session.
 pub const GUEST_COMPONENT_SESSION_SERVICE: ServicePackage = ServicePackage::ResourceV3;
 /// The session schema domain used by the Guest target agent.
@@ -245,7 +250,7 @@ impl GuestIdentity {
 
     pub fn endpoint_policy_for_generation(&self, generation: u64) -> EndpointPolicy {
         EndpointPolicy {
-            purpose: EndpointPurpose::ZoneLink,
+            purpose: EndpointPurpose::ComponentSession,
             purpose_class: PurposeClass::Enrolled,
             initiator_role: EndpointRole::ZoneController,
             responder_role: EndpointRole::GuestAgent,
@@ -398,14 +403,12 @@ impl GuestRuntime {
         broker_socket: PathBuf,
         broker_uid: u32,
         limits: AdmissionLimits,
-        state_dir: impl AsRef<Path>,
     ) -> Result<Self, GuestModeError> {
         let admission = AdmissionBudget::new(limits).map_err(GuestModeError::Admission)?;
         let deployment = ProviderDeployment::new(DaemonMode::Guest, limits)
             .map_err(GuestModeError::Admission)?;
-        let resource_runtime = GuestResourceRuntime::new(identity.clone(), state_dir)
-            .await
-            .map_err(GuestModeError::Resource)?;
+        let resource_runtime =
+            GuestResourceRuntime::new(identity.clone()).map_err(GuestModeError::Resource)?;
         let active_generation = resource_runtime.active_generation();
         let broker = ModeBoundBrokerAdapter::guest(broker_socket, broker_uid);
         broker.validate_instance().map_err(GuestModeError::Broker)?;
@@ -949,7 +952,7 @@ mod tests {
         let identity = identity(7);
         let policy = identity.endpoint_policy();
         assert_eq!(policy.reconnect_generation, 7);
-        assert_eq!(policy.purpose, EndpointPurpose::ZoneLink);
+        assert_eq!(policy.purpose, EndpointPurpose::ComponentSession);
         assert_eq!(policy.service, ServicePackage::ResourceV3);
         assert_eq!(
             policy.transport_binding.transport,
@@ -961,13 +964,11 @@ mod tests {
     #[tokio::test]
     async fn guest_runtime_exposes_no_host_authority_surfaces() {
         let identity = identity(1);
-        let state_dir = tempfile::tempdir().expect("state directory");
         let runtime = GuestRuntime::new(
             identity,
             PathBuf::from("/run/d2b/guest-broker.sock"),
             997,
             AdmissionLimits::guest_default(),
-            state_dir.path(),
         )
         .await
         .expect("runtime");

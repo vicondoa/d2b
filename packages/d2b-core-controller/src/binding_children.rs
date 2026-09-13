@@ -17,7 +17,7 @@ use d2b_contracts_resource::v3::{
 use d2b_contracts_zone_session::v3::resource_bundle::BundleResource;
 
 use crate::{
-    DesiredChild, HintTarget, ObservedChild, OwnedChildIntent, OwnerBatchRecovery,
+    DesiredChild, ResourceKey, ObservedChild, OwnedChildIntent, OwnerBatchRecovery,
     OwnerBatchResult, OwnerChildBatch, OwnerIndex, OwnerLimits, OwnerReconcileError,
     OwnerReconcilePlan, TeardownPlan,
 };
@@ -175,8 +175,8 @@ pub fn semantic_child_digest(
 /// payload digest, keeping UID/revision fencing separate from desired-state
 /// convergence.
 pub fn observed_child_from_resource(
-    target: HintTarget,
-    owner: &HintTarget,
+    target: ResourceKey,
+    owner: &ResourceKey,
     owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
     revision: ZoneRevision,
     canonical_resource: &[u8],
@@ -452,7 +452,7 @@ impl BindingChildReconciler {
     /// Replace an owner's complete authoritative child relist.
     pub fn relist(
         &mut self,
-        owner: HintTarget,
+        owner: ResourceKey,
         observed: Vec<ObservedChild>,
     ) -> Result<(), OwnerReconcileError> {
         self.owner_index.relist(owner, observed)
@@ -461,7 +461,7 @@ impl BindingChildReconciler {
     /// Replace a relist while requiring the current owner generation.
     pub fn relist_with_owner_generation(
         &mut self,
-        owner: HintTarget,
+        owner: ResourceKey,
         owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
         observed: Vec<ObservedChild>,
     ) -> Result<(), OwnerReconcileError> {
@@ -472,7 +472,7 @@ impl BindingChildReconciler {
     /// Replace a relist after consuming the exact U10 owner-child admission.
     pub fn relist_for_admission(
         &mut self,
-        owner: HintTarget,
+        owner: ResourceKey,
         scope: &crate::OwnerChildScope,
         observed: Vec<ObservedChild>,
     ) -> Result<(), OwnerReconcileError> {
@@ -488,7 +488,7 @@ impl BindingChildReconciler {
     /// owner index with exact UID and revision preconditions.
     pub fn plan(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
         child_set: &BindingChildSet,
         resources: &[BindingChildResource],
     ) -> Result<OwnerReconcilePlan, BindingChildMaterializationError> {
@@ -534,7 +534,7 @@ impl BindingChildReconciler {
     /// Resource API reconciliation path.
     pub fn plan_intents(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
         child_set: &BindingChildSet,
     ) -> Result<OwnerReconcilePlan, BindingChildMaterializationError> {
         if owner.resource_ref() != child_set.owner_ref() {
@@ -559,7 +559,7 @@ impl BindingChildReconciler {
     /// Plan a generic provider-neutral UID-free child set.
     pub fn plan_owned(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
         desired: impl IntoIterator<Item = OwnedChildIntent>,
     ) -> Result<OwnerReconcilePlan, BindingChildMaterializationError> {
         self.owner_index
@@ -570,7 +570,7 @@ impl BindingChildReconciler {
     /// Plan a semantic Binding only when its admitted owner fence is current.
     pub fn plan_for_admission(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
         scope: &crate::OwnerChildScope,
         child_set: &BindingChildSet,
     ) -> Result<OwnerReconcilePlan, BindingChildMaterializationError> {
@@ -596,7 +596,7 @@ impl BindingChildReconciler {
     /// Return the pending UID-free create batch for one semantic Binding.
     pub fn create_batch(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
         child_set: &BindingChildSet,
     ) -> Result<Option<OwnerChildBatch>, BindingChildMaterializationError> {
         Ok(self.plan_intents(owner, child_set)?.create_batch().cloned())
@@ -605,7 +605,7 @@ impl BindingChildReconciler {
     /// Alias for the complete child CommitBatch planning operation.
     pub fn plan_batch(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
         child_set: &BindingChildSet,
     ) -> Result<Option<OwnerChildBatch>, BindingChildMaterializationError> {
         self.create_batch(owner, child_set)
@@ -626,7 +626,7 @@ impl BindingChildReconciler {
     /// Return a bounded dependent-first teardown projection.
     pub fn teardown_plan(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
     ) -> Result<TeardownPlan, BindingChildMaterializationError> {
         self.owner_index
             .teardown_plan(owner)
@@ -636,7 +636,7 @@ impl BindingChildReconciler {
     /// Plan deletion of every currently indexed child.
     pub fn plan_empty(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
     ) -> Result<OwnerReconcilePlan, BindingChildMaterializationError> {
         self.owner_index
             .plan(owner, Vec::new())
@@ -644,7 +644,7 @@ impl BindingChildReconciler {
     }
 
     /// Return the indexed child count after the latest complete relist.
-    pub fn child_count(&self, owner: &HintTarget) -> usize {
+    pub fn child_count(&self, owner: &ResourceKey) -> usize {
         self.owner_index.child_count(owner)
     }
 }
@@ -793,8 +793,8 @@ mod tests {
         .unwrap()
     }
 
-    fn owner(set: &BindingChildSet) -> HintTarget {
-        HintTarget::new(
+    fn owner(set: &BindingChildSet) -> ResourceKey {
+        ResourceKey::new(
             ZoneId::parse("dev").unwrap(),
             set.owner_ref().clone(),
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
@@ -954,7 +954,7 @@ mod tests {
         let parent = owner(&set);
         let observed = vec![
             ObservedChild::new(
-                HintTarget::new(
+                ResourceKey::new(
                     ZoneId::parse("dev").unwrap(),
                     process.intent().resource_ref().clone(),
                     ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap(),
@@ -965,7 +965,7 @@ mod tests {
             )
             .unwrap(),
             ObservedChild::new(
-                HintTarget::new(
+                ResourceKey::new(
                     ZoneId::parse("dev").unwrap(),
                     endpoint.intent().resource_ref().clone(),
                     ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap(),

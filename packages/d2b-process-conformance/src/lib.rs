@@ -25,6 +25,7 @@
 
 mod error;
 mod identity;
+mod launch_identity;
 mod port;
 mod provider;
 mod sandbox;
@@ -41,6 +42,7 @@ pub use identity::{
     ConfigurationDigest, IdentityBinding, ObservedIdentity, PidfdEvidence, ProcessIdentityDigest,
     WaitReapOwner,
 };
+pub use launch_identity::{LaunchIdentity, LaunchIdentityError};
 pub use port::{AdoptionCandidate, LaunchedProcess, ProcessLaunchEffectPort, StopClass};
 pub use provider::{AdoptionOutcome, ProcessProvider, ProcessProviderProfile};
 pub use sandbox::{CompiledSandbox, SandboxCompiler, SandboxPlan, StopProof, validate_stop_proof};

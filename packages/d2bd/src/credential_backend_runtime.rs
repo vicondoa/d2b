@@ -4,6 +4,14 @@
 //! composes this responder beside the Guest-local Process supervisor, while
 //! the Provider child receives only an inherited endpoint and one-use
 //! delivery-key handoff.
+//!
+//! Retained while its composition site is rebuilt: the Guest-local Process
+//! supervisor this responder was composed beside retired in U12 (the
+//! EphemeralProcess conversion moved one-shot launches onto the manager
+//! plane), so nothing constructs it today. The module and its tests are kept
+//! for the Guest-side realization follow-on rather than deleted, and the
+//! dead-code allowance is the tree's marker for exactly that state.
+#![allow(dead_code)]
 
 #[cfg(test)]
 use std::{

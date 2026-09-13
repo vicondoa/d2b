@@ -6,6 +6,13 @@
 # any process sharing the host network namespace.
 { pkgs, self }:
 
+let
+  # Shared fixture diagnostics (issue #513): row dumps and per-stage markers.
+  d2bLib = import ./lib.nix {
+    inherit self;
+    inherit (pkgs) lib;
+  };
+in
 pkgs.testers.runNixOSTest {
   name = "d2b-guest-agent-cap-confinement";
 
@@ -61,8 +68,12 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    ${d2bLib.fixtureDiagnostics}
+
     start_all()
+    stage("boot")
     machine.wait_for_unit("multi-user.target", timeout=180)
+    stage("agent-netns")
     machine.succeed("systemctl start d2b-test-agent-netns.service")
 
     capability_mask = (1 << 10) | (1 << 12) | (1 << 13)
@@ -118,11 +129,13 @@ pkgs.testers.runNixOSTest {
             identities.add((pid, start))
         return identities
 
+    stage("baseline-caps")
     host_namespace = network_namespace(1)
     baseline = host_namespace_capabilities()
 
+    stage("agent-up")
     machine.succeed("systemctl start d2b-test-guest-agent.service")
-    machine.wait_for_unit("d2b-test-guest-agent.service", timeout=60)
+    diag_unit("guest-agent-up", "d2b-test-guest-agent.service", 60)
     agent_pid = machine.succeed(
         "systemctl show -P MainPID d2b-test-guest-agent.service"
     ).strip()
@@ -138,6 +151,7 @@ pkgs.testers.runNixOSTest {
         "network agent unexpectedly shares the host network namespace"
     )
 
+    stage("confinement-assertions")
     agent_capabilities = effective_capabilities(agent_pid)
     assert agent_capabilities & capability_mask == capability_mask, (
         "network agent is missing a required effective network capability"

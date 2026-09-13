@@ -259,15 +259,29 @@ test-host-integration:
 	[ -f "$$source" ] && [ -x "$$source" ] || { echo "test-host-integration: invalid Bazel Cloud Hypervisor controller" >&2; exit 1; }; \
 	install -m 755 "$$source" "$$controller_stage/d2b-cloud-hypervisor-controller"; \
 	echo "test-host-integration: staged Bazel host-tool bundle"; \
-	set --; \
+	echo "test-host-integration: building vmChecks serially: $$names"; \
+	: >"$$run_dir/outputs"; \
+	: >"$$run_dir/summary"; \
+	lane_rc=0; \
 	for name in $$names; do \
-	set -- "$$@" "git+file://$$root#vmChecks.$$system.$$name"; \
-	done; \
-	echo "test-host-integration: building vmChecks: $$names"; \
+	check_start="$$(date +%s)"; \
+	rc=0; \
 	D2B_HOST_TOOL_BUNDLE="$$stage" D2B_CH_CONTROLLER_BUNDLE="$$controller_stage" \
 	D2B_HOST_RUNTIME_PATH="$$run_dir/absent-host-runtime.json" \
-	nix build --impure --out-link "$$run_dir/result" --print-build-logs --print-out-paths "$$@" >"$$run_dir/outputs"; \
-	cat "$$run_dir/outputs"; \
+	sudo -A -E nix build --option build-users-group "" --option extra-sandbox-paths "/dev/vhost-vsock" --impure --out-link "$$run_dir/result-$$name" --print-build-logs --print-out-paths "git+file://$$root#vmChecks.$$system.$$name" >"$$run_dir/$$name.outputs" || rc=$$?; \
+	check_duration="$$(( $$(date +%s) - check_start ))"; \
+	if [ "$$rc" -eq 0 ]; then \
+	status=PASS; \
+	cat "$$run_dir/$$name.outputs" >>"$$run_dir/outputs"; \
+	cat "$$run_dir/$$name.outputs"; \
+	else \
+	status=FAIL; \
+	lane_rc=1; \
+	fi; \
+	printf 'test-host-integration: vmCheck %-42s %s  %ss\n' "$$name" "$$status" "$$check_duration" | tee -a "$$run_dir/summary"; \
+	done; \
+	echo "test-host-integration: vmCheck summary (name, status, wall time):"; \
+	cat "$$run_dir/summary"; \
 	if [ -n "$$attic_cache" ]; then \
 	: >"$$run_dir/attic-closure-all"; \
 	while IFS= read -r output; do \
@@ -276,11 +290,9 @@ test-host-integration:
 	exit 1; \
 	}; \
 	if [ "$$drv" = "unknown-deriver" ]; then \
-	closure_source="$$output"; \
-	else \
-	closure_source="$$drv"; \
+	continue; \
 	fi; \
-	if ! nix-store -qR --include-outputs "$$closure_source" >>"$$run_dir/attic-closure-all"; then \
+	if ! nix-store -qR --include-outputs "$$drv" >>"$$run_dir/attic-closure-all"; then \
 	echo "test-host-integration: could not resolve a vmCheck dependency closure for Attic" >&2; \
 	exit 1; \
 	fi; \
@@ -289,15 +301,17 @@ test-host-integration:
 	awk 'NR == FNR { skip[$$0] = 1; next } !skip[$$0]' \
 	"$$run_dir/outputs" "$$run_dir/attic-closure-all" >"$$run_dir/attic-closure"; \
 	if [ ! -s "$$run_dir/attic-closure" ]; then \
-	echo "test-host-integration: no dependency closure paths available for Attic" >&2; \
-	exit 1; \
-	fi; \
-	if ! timeout 60s attic push --jobs 16 --no-closure --stdin "$$attic_cache" <"$$run_dir/attic-closure" >"$$run_dir/attic-push.log" 2>&1; then \
+	echo "test-host-integration: no Attic closure paths to upload (vmChecks satisfied from substituters)"; \
+	elif ! timeout 60s attic push --jobs 16 --no-closure --stdin "$$attic_cache" <"$$run_dir/attic-closure" >"$$run_dir/attic-push.log" 2>&1; then \
 	echo "test-host-integration: warning: Attic closure upload failed" >&2; \
 	cat "$$run_dir/attic-push.log" >&2; \
 	else \
 	echo "test-host-integration: Attic closure upload succeeded"; \
 	fi; \
+	fi; \
+	if [ "$$lane_rc" -ne 0 ]; then \
+	echo "test-host-integration: at least one vmCheck failed (see the summary above)" >&2; \
+	exit "$$lane_rc"; \
 	fi
 
 ## perf - run the advisory performance budget suite.

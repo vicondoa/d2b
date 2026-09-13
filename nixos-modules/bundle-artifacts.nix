@@ -124,6 +124,7 @@ let
   singletonArtifactNames = [
     "bundle"
     "privilegesJson"
+    "siteJson"
     "storageJson"
     "realmWorkloadsLauncherV2Json"
   ];
@@ -175,6 +176,14 @@ in
       internal = true;
       visible = false;
       description = "Internal typed storage.json artifact metadata.";
+    };
+
+    siteJson = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed site.json artifact metadata.";
     };
 
     realmWorkloadsLauncherV2Json = lib.mkOption {

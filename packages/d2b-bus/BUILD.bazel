@@ -32,7 +32,6 @@ d2b_bus_deps = [
     "//packages/d2b-contracts:d2b_contracts",
     "//packages/d2b-contracts-provider:d2b_contracts_provider",
     "//packages/d2b-resource-api:d2b_resource_api",
-    "//packages/d2b-resource-store:d2b_resource_store",
     "//packages/d2b-session:d2b_session",
     "//packages/d2b-session-unix:d2b_session_unix",
     "//packages/d2b-telemetry:d2b_telemetry",
@@ -75,46 +74,10 @@ rust_library(
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-resource-api:d2b_resource_api_test_support",
-        "//packages/d2b-resource-store:d2b_resource_store_test_support",
         "//packages/d2b-session:d2b_session_test_support",
         "//packages/d2b-session-unix:d2b_session_unix_test_support",
         "//packages/d2b-telemetry:d2b_telemetry_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
-)
-
-rust_library(
-    name = "d2b_bus_production_rss_fixture",
-    srcs = d2b_bus_srcs,
-    compile_data = [
-        "Cargo.toml",
-        "src/transport/unix.rs",
-    ],
-    crate_features = ["production-rss-fixture"],
-    crate_name = "d2b_bus",
-    proc_macro_deps = [
-        "@crates//:async-trait",
-    ],
-    visibility = ["//visibility:public"],
-    deps = d2b_bus_deps + all_crate_deps(normal = True, cargo_only = True),
-)
-
-rust_test(
-    name = "production_watch_rss",
-    srcs = ["tests/production_watch_rss.rs"],
-    compile_data = ["Cargo.toml"],
-    crate_features = ["production-rss-fixture"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_bus_production_rss_fixture",
-        "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
-        "//packages/d2b-resource-api:d2b_resource_api",
-        "//packages/d2b-resource-store:d2b_resource_store",
-        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-    tags = ["no-remote-cache"],
 )
 
 rust_test(
@@ -129,9 +92,6 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-audit:d2b_audit",
         "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
-        "//packages/d2b-resource-store:d2b_resource_store",
-        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
         "//packages/d2b-telemetry:d2b_telemetry",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -139,11 +99,6 @@ rust_test(
 test_suite(
     name = "unit",
     tests = [":d2b_bus_test"],
-)
-
-test_suite(
-    name = "integration",
-    tests = [":production_watch_rss"],
 )
 
 test_suite(

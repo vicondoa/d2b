@@ -107,10 +107,16 @@ in
           .providerProjectionNotificationDesktop.processesByZone.dev);
         endpoint = lib.attrNames (projected.config.d2b._resourceCompiler
           .providerProjectionNotificationDesktop.resourcesByZone.dev);
+        # `EndpointSpec.purpose` is a `BoundedToken`; a dotted spelling is a
+        # decode refusal at the daemon.
+        purpose = (projected.config.d2b._resourceCompiler
+          .providerProjectionNotificationDesktop.resourcesByZone.dev)
+          ."notification-sink".spec.purpose;
       };
       expected = {
         processes = [ "notification-guest-guest" "notification-host" ];
         endpoint = [ "notification-sink" ];
+        purpose = "notification-desktop-sink";
       };
     };
     "provider-notification-desktop/rejects-unknown-provider-field" = {

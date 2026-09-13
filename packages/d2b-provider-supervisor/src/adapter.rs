@@ -861,8 +861,15 @@ fn map_error(error: ProcessEffectError) -> ProcessConformanceError {
         ProcessEffectError::DeadlineExceeded | ProcessEffectError::Busy => {
             ProcessConformanceError::DeadlineExceeded
         }
+        // Trusted launch configuration the ticket names but the bundle holds
+        // no matching intent for: nothing was launched and no observed
+        // identity is in question, so the refusal keeps its own code. Folding
+        // it into `LaunchFailed` made the Process driver re-enter its
+        // budgeted retry arm for a refusal no retry can reverse (the
+        // terminal `resolution-failed` spelling never reached
+        // `provider_error_kind`).
+        ProcessEffectError::ResolutionFailed => ProcessConformanceError::ResolutionFailed,
         ProcessEffectError::UnsupportedProvider
-        | ProcessEffectError::ResolutionFailed
         | ProcessEffectError::LaunchFailed
         | ProcessEffectError::ObserveFailed
         | ProcessEffectError::StopFailed => ProcessConformanceError::LaunchFailed,
@@ -879,6 +886,28 @@ mod tests {
     use d2b_process_conformance::testing::{block_on, fixtures};
 
     use super::*;
+
+    /// A resolution refusal is not an ambiguous identity: the effect ports
+    /// project `ResolutionFailed` under its own code, so an adopt probe the
+    /// trusted-intent fence refuses reaches the Process driver as the
+    /// terminal `resolution-failed` and is neither quarantined as an
+    /// ambiguous identity (R15 is about observed identity) nor retried under
+    /// the restart budget. Observed identity drift keeps `AdoptionAmbiguous`.
+    #[test]
+    fn resolution_refusals_are_not_adoption_ambiguity() {
+        assert_eq!(
+            map_error(ProcessEffectError::ResolutionFailed),
+            ProcessConformanceError::ResolutionFailed
+        );
+        assert_eq!(
+            map_error(ProcessEffectError::ResolutionFailed).code(),
+            "resolution-failed"
+        );
+        assert_eq!(
+            map_error(ProcessEffectError::IdentityChanged),
+            ProcessConformanceError::AdoptionAmbiguous
+        );
+    }
 
     struct ControlledBackend {
         started: Mutex<Option<Sender<()>>>,

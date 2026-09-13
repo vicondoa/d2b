@@ -23,7 +23,7 @@ use d2b_contracts_broker::broker_wire::{BrokerRequest, BrokerResponse};
 use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid, ZoneId};
 use d2b_process_conformance::LaunchTicket;
 use d2b_resource_api::AuthorizationLease;
-use d2b_resource_store::AdmittedVerb;
+use d2b_contracts_resource::v3::AdmittedVerb;
 use d2bd_runtime::{
     broker_transport::{ModeBoundBrokerAdapter, ModeBoundBrokerError},
     target_runtime::DaemonMode,

@@ -123,6 +123,7 @@ fn guest_binary_rejects_spawn_runner_before_bundle_mutation() {
                 generation: None,
                 runtime_scope: None,
                 activation_input: None,
+                launch_args: None,
                 sandbox_plan: None,
                 role: RunnerRole::CloudHypervisor,
                 bundle_runner_intent_ref: BundleOpId::new("runner:test"),

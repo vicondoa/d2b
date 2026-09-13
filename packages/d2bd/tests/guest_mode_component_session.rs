@@ -50,7 +50,6 @@ async fn runtime() -> (GuestRuntime, tempfile::TempDir) {
         "/run/d2b/guest-broker.sock".into(),
         997,
         AdmissionLimits::guest_default(),
-        state_dir.path(),
     )
     .await
     .expect("Guest runtime");
@@ -96,9 +95,7 @@ async fn rejected_parent_handshake(
 
 #[tokio::test]
 async fn guest_resource_runtime_is_target_local() {
-    let state_dir = tempfile::tempdir().expect("state directory");
-    let runtime = GuestResourceRuntime::new(identity(1), state_dir.path())
-        .await
+    let runtime = GuestResourceRuntime::new(identity(1))
         .expect("Guest resource runtime");
     assert!(runtime.is_target_local());
 }
@@ -206,7 +203,7 @@ async fn disconnected_generation_cannot_be_reused() {
 }
 
 #[tokio::test]
-async fn wrong_zone_link_purpose_role_and_service_fail_closed() {
+async fn wrong_component_session_purpose_role_and_service_fail_closed() {
     for mismatch in ["purpose", "role", "service"] {
         let (runtime, _state_dir) = runtime().await;
         let mut policy = identity(1).endpoint_policy();
@@ -275,9 +272,7 @@ async fn authenticated_guest_session_binds_readiness_and_stale_binding_fails_clo
     let parent = parent.await.expect("parent task").expect("parent session");
     assert_eq!(lease.generation(), 2);
     assert_eq!(parent.generation(), 2);
-    let state_dir = tempfile::tempdir().expect("state directory");
-    let resource_runtime = GuestResourceRuntime::new(identity(2), state_dir.path())
-        .await
+    let resource_runtime = GuestResourceRuntime::new(identity(2))
         .expect("target-local resource runtime");
     let route = session.route_binding();
     assert_eq!(route.zone(), &ZoneId::parse("work").expect("Zone"));
@@ -411,9 +406,7 @@ async fn authenticated_guest_session_binds_readiness_and_stale_binding_fails_clo
         GuestResourceRuntimeError::SessionBinding
     );
 
-    let invalid_state_dir = tempfile::tempdir().expect("state directory");
-    let invalid_runtime = GuestResourceRuntime::new(identity(3), invalid_state_dir.path())
-        .await
+    let invalid_runtime = GuestResourceRuntime::new(identity(3))
         .expect("target-local resource runtime");
     assert_eq!(
         invalid_runtime

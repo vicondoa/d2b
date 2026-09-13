@@ -30,7 +30,7 @@ deny-unknown settings:
 | --- | --- |
 | `renderNodeOnly` | shared arbitration is valid only when true |
 | `videoSidecar` | starts the separate video worker; requires full-GPU mode |
-| `videoNvidiaDecode` | valid only with `videoSidecar` |
+| `videoNvidiaDecode` | valid only with `videoSidecar`; selects the `video-worker-nvidia` worker template, whose closed posture binds `/dev/nvidiactl`, `/dev/nvidia-uvm`, and `/dev/nvidia0` (single-GPU default) alongside `/dev/dri/renderD128` |
 | `contextTypes` | 1-3 distinct values from `virgl`, `virgl2`, `cross-domain` |
 | `displays` | at most eight `{ hidden }` entries |
 | `egl`, `vulkan`, `crossDomainTrusted`, `virglVideo` | bounded booleans; `virglVideo` conflicts with `videoSidecar` |
@@ -55,23 +55,29 @@ Core-derived `GpuEffectTokenSet` and returns an opaque `GpuLaunchTicket`.
 The controller starts the GPU worker first and starts video only after that
 worker is Ready.
 
-The worker declarations are `device-<uid-short>-gpu`,
-`device-<uid-short>-render-node`, and `device-<uid-short>-video`. The signed
+The declared worker rows are `Process/gpu-<device>` (template `gpu-worker`
+or `gpu-render-node`) and `Process/video-<device>` (template `video-worker`,
+or `video-worker-nvidia` when `videoNvidiaDecode` is set), named after the
+Device resource that owns them. The signed
 component descriptor selects the crosvm and video-decoder artifacts. GPU and
 video finalization is ordered video first, then GPU/render-node.
 
-Host-global authority is reserved before `OpenDevice` or `SpawnRunner`.
-Restart adoption accepts one exact principal, platform, and generation
-identity and quarantines ambiguity. Finalization releases authority only after
-the broker confirms closure of every owned worker.
+Host-global authority is reserved before the declared worker row is launched
+(`OpenDevice` is no longer part of the path: the device grants travel in the
+row's declared posture). Restart adoption accepts one exact principal,
+platform, and generation identity and quarantines ambiguity. Finalization
+releases authority only after the worker's row is gone, which is the Process
+controller's teardown proof.
 
 ## Placement and dependencies
 
 All Provider workers are Host-placed and are supervised through Core's
 Process controller. The Provider reads its Zone Device and Display-related
 dependencies, writes only its Device status/finalizer and owned Process
-children, and depends on the neutral contracts plus serde. Core maps opaque
-effects to audited `OpenDevice` and `SpawnRunner` operations.
+children, and depends on the neutral contracts plus serde. Core realizes an
+opaque effect as a row mutation of the declared `Process/gpu-<device>` /
+`Process/video-<device>` children, whose launch, restart, adoption and
+teardown belong to the Process controller.
 
 ## RBAC requirements
 

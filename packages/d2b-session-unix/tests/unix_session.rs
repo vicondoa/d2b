@@ -771,6 +771,90 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn seqpacket_transport_waits_out_a_drained_readiness_instead_of_disconnecting() {
+    let (sender_socket, receiver_socket) = seqpacket_pair();
+    let policy = attachment_policy(1, false);
+    let (sender_scopes, _) = scopes(8);
+    let (receiver_scopes, _) = scopes(8);
+    let (receiver_transport_scopes, _) = scopes(8);
+    let limits = LimitProfile::local_default();
+    let capacity = AncillaryCapacity::from_policy(policy).unwrap();
+
+    // Leave the receiver readable with nothing queued: the reactor only clears
+    // that readiness when a receive drains to a would-block, so a burst that
+    // stops on its fairness budget hands the next receive a stale notification.
+    let mut queue = VecDeque::from([OutboundPacket::new(
+        b"first".to_vec(),
+        Vec::new(),
+        None,
+        limits,
+        capacity,
+        &sender_scopes,
+    )
+    .unwrap()]);
+    let sent = sender_socket
+        .send_burst(&mut queue, capacity, 1)
+        .await
+        .unwrap();
+    for packet in sent.sent {
+        packet.acknowledge();
+    }
+    let first = receiver_socket
+        .recv_burst(limits, capacity, &receiver_scopes, 1)
+        .await
+        .unwrap();
+    assert_eq!(first.packets.len(), 1);
+    assert!(!first.drained_to_would_block);
+
+    let receiver_peer = receiver_socket.acceptor_peer_credentials().unwrap();
+    let mut receiver = UnixSeqpacketTransport::new(
+        receiver_socket,
+        Locality::HostLocal,
+        limits,
+        policy,
+        receiver_transport_scopes,
+        Arc::new(|_: &AttachmentDescriptor| Err(UnixSessionError::DescriptorMismatch)),
+        PeerIdentityPolicy::accepted(receiver_peer),
+    )
+    .unwrap();
+    let sender_peer = sender_socket.acceptor_peer_credentials().unwrap();
+    let mut sender = UnixSeqpacketTransport::new(
+        sender_socket,
+        Locality::HostLocal,
+        limits,
+        policy,
+        sender_scopes,
+        Arc::new(|_: &AttachmentDescriptor| Err(UnixSessionError::DescriptorMismatch)),
+        PeerIdentityPolicy::accepted(sender_peer),
+    )
+    .unwrap();
+    let limit = limits.protected_ciphertext_bytes as usize;
+
+    // The stale notification describes a drained socket on a live session, so
+    // the receive must park on readiness instead of reporting a disconnect.
+    let delayed = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        sender
+            .send(TransportPacket::new(b"second".to_vec()))
+            .await
+            .unwrap();
+        sender
+    });
+    let second = tokio::time::timeout(Duration::from_secs(5), receiver.receive(limit))
+        .await
+        .expect("a drained readiness must not stall the session")
+        .expect("second record on a live session");
+    assert_eq!(second.as_bytes(), b"second");
+    drop(delayed.await.unwrap());
+
+    // A peer that really goes away still ends the session.
+    assert!(matches!(
+        receiver.receive(limit).await,
+        Err(d2b_session::TransportError::Disconnected)
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stream_transport_reassembles_partial_and_coalesced_records() {
     let (sender, receiver) = stream_pair();
     let first = protected_record(b"first-record");

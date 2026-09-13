@@ -28,6 +28,11 @@ use serde_json::{Map, Value, json};
 
 /// D113 ResourceName / Zone name spelling: 1 to 63 bytes.
 const NAME_PATTERN: &str = "^[a-z][a-z0-9-]{0,62}$";
+/// `BoundedToken` spelling the resource contracts enforce for purpose, view,
+/// template, and artifact identifiers: `^[a-z][a-z0-9-]*$`, bounded to 63
+/// bytes. An Endpoint whose `purpose` carries dots or slashes is a decode
+/// refusal at the daemon (`EndpointSpec::purpose`), not a naming choice.
+const BOUNDED_TOKEN_PATTERN: &str = "^[a-z][a-z0-9-]{0,62}$";
 /// Same-Zone `Credential/<name>` ref.
 const CREDENTIAL_REF_PATTERN: &str = "^Credential/[a-z][a-z0-9-]{0,62}$";
 /// `ADR-046-resources-zone-control.md` section 3.3: the transport Provider ref
@@ -879,7 +884,7 @@ fn standard_core_schemas() -> Vec<(&'static str, Value)> {
                     "transport",
                     enum_schema(&["unix", "vsock", "tcp", "fd-attachment", "opaque-carriage"]),
                 ),
-                ("purpose", bounded_string(1, 63)),
+                ("purpose", string_schema(BOUNDED_TOKEN_PATTERN)),
                 ("serviceFingerprint", nullable(bounded_string(0, 71))),
                 (
                     "locality",

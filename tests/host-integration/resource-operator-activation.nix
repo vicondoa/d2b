@@ -139,20 +139,52 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    ${d2bLib.fixtureDiagnostics}
+
+    # Row projections the shared diagnostics print on a timed-out wait; they
+    # mirror the fields each wait asserts on (issue #513).
+    diag_projection = (
+        "[.resources[] | {type: .type, name: .metadata.name, "
+        "owner: .metadata.ownerRef, uid: .metadata.uid, "
+        "gen: .metadata.generation, phase: .status.phase, "
+        "obs: .status.observedGeneration, "
+        "conditions: [.status.conditions[]? | {type: .type, reason: .reason}]}]"
+    )
+
+    def live_rows(label, resource_type):
+        return (
+            label,
+            "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+            f"d2b --zone work --json list {resource_type} 2>/dev/null | "
+            f"jq -c '{diag_projection}' 2>/dev/null || true",
+        )
+
+    def saved_rows(label, path):
+        return (
+            label,
+            f"jq -c '{diag_projection}' {path} 2>/dev/null "
+            f"|| cat {path} 2>/dev/null || true",
+        )
+
     start_all()
+    stage("boot")
     machine.wait_for_unit("nftables.service", timeout=180)
     machine.succeed("nft list table inet d2b")
     machine.wait_for_unit("d2b-broker.socket", timeout=30)
-    machine.wait_for_unit("d2bd.service", timeout=180)
+    diag_unit("daemon-up", "d2bd.service", 180)
     machine.wait_for_file("/run/d2b/public.sock", timeout=30)
-    machine.wait_until_succeeds(
+    diag_wait(
+        "provider-session-live",
         "journalctl -u d2bd.service --no-pager -o cat "
         "| grep -F 'external Provider controller ResourceV3 session live'",
         timeout=60,
+        rows=[live_rows("Process rows", "Process")],
+        explain=[("d2bd.service", "ResourceV3 session")],
     )
     machine.succeed("runuser -u alice -- d2b auth status --json >/run/d2b-auth-before.json")
 
-    machine.wait_until_succeeds(
+    diag_wait(
+        "host-row",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Host >/run/d2b-host-before.json && "
         "jq -e '.resources[] | select(.type == \"Host\" and "
@@ -161,6 +193,8 @@ pkgs.testers.runNixOSTest {
         ".status.observedGeneration == .metadata.generation)' "
         "/run/d2b-host-before.json",
         timeout=60,
+        rows=[saved_rows("Host rows", "/run/d2b-host-before.json")],
+        explain=[("d2bd.service", "host-system")],
     )
     machine.succeed(
           "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
@@ -181,7 +215,8 @@ pkgs.testers.runNixOSTest {
         "(.metadata.uid != null and .metadata.generation > 0)' "
         "/run/d2b-provider-before.json"
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "network-controller-process",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Process "
         ">/run/d2b-process-before.json && "
@@ -189,16 +224,29 @@ pkgs.testers.runNixOSTest {
         ".metadata.ownerRef == \"Provider/network-local\")] | length == 1) and "
         "(.resources[] | select(.type == \"Process\" and "
         ".metadata.ownerRef == \"Provider/network-local\") | "
-        "(.status.phase == \"Ready\" and "
-        ".status.observedGeneration == .metadata.generation and "
-        ".status.resource.adopted == false))' "
+        "(.metadata.uid != null and .metadata.generation > 0 and "
+        ".status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation))' "
         "/run/d2b-process-before.json",
         timeout=60,
+        rows=[
+            saved_rows("Process rows", "/run/d2b-process-before.json"),
+            live_rows("Controller Process rows", "Process"),
+        ],
+        explain=[("d2bd.service", "network-local")],
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "controller-pid",
         "test \"$(ps -eo pid=,args= | awk '$NF ~ /acceptance-controller$/ {print $1}' "
         "| wc -l)\" -eq 1",
         timeout=30,
+        rows=[
+            (
+                "controller processes",
+                "ps -eo pid=,args= | grep acceptance-controller || true",
+            ),
+        ],
+        explain=[("d2bd.service", "acceptance-controller")],
     )
     controller_pid_before = machine.succeed(
         "ps -eo pid=,args= | awk '$NF ~ /acceptance-controller$/ {print $1; exit}'"
@@ -209,23 +257,35 @@ pkgs.testers.runNixOSTest {
         ">/run/d2b-unauthorized-resource.log 2>&1"
     )
 
+    stage("restart")
     machine.succeed("systemctl restart d2bd.service")
-    machine.wait_for_unit("d2bd.service", timeout=180)
+    diag_unit("daemon-restarted", "d2bd.service", 180)
     machine.wait_for_file("/run/d2b/public.sock", timeout=30)
-    machine.wait_until_succeeds(
+    diag_wait(
+        "process-adopted-after-restart",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Process "
         ">/run/d2b-process-after.json && "
         "test \"$(ps -eo pid=,args= | awk '$NF ~ /acceptance-controller$/ {print $1}' "
         "| wc -l)\" -eq 1 && "
-        "jq -e '([.resources[] | select(.type == \"Process\" and "
+        "jq -e --slurpfile before /run/d2b-process-before.json "
+        "'([.resources[] | select(.type == \"Process\" and "
         ".metadata.ownerRef == \"Provider/network-local\")] | length == 1) and "
         "(.resources[] | select(.type == \"Process\" and "
-        ".metadata.ownerRef == \"Provider/network-local\") | "
-        "(.status.phase == \"Ready\" and .status.observedGeneration == "
-        ".metadata.generation and .status.resource.adopted == false))' "
+        ".metadata.ownerRef == \"Provider/network-local\") as $after | "
+        "($before[0].resources[] | select(.type == \"Process\" and "
+        ".metadata.ownerRef == \"Provider/network-local\")) as $old | "
+        "($after.metadata.uid == $old.metadata.uid and "
+        "$after.metadata.generation == $old.metadata.generation and "
+        "$after.status.phase == \"Ready\" and "
+        "$after.status.observedGeneration == $after.metadata.generation))' "
         "/run/d2b-process-after.json",
         timeout=60,
+        rows=[
+            saved_rows("Process rows", "/run/d2b-process-after.json"),
+            saved_rows("Pre-restart Process rows", "/run/d2b-process-before.json"),
+        ],
+        explain=[("d2bd.service", "network-local")],
     )
     controller_pid_after = machine.succeed(
         "ps -eo pid=,args= | awk '$NF ~ /acceptance-controller$/ {print $1; exit}'"
@@ -234,25 +294,32 @@ pkgs.testers.runNixOSTest {
         f"controller PID changed across d2bd restart: "
         f"{controller_pid_before} -> {controller_pid_after}"
     )
-    machine.succeed(
-        "date +%s >/run/d2b-resource-restart-observed-at && "
-        "! journalctl -u d2bd.service --no-pager -o cat "
-        "| grep -F 'Process Provider shared runner stopped'"
-    )
-    machine.wait_until_succeeds(
+    machine.succeed("date +%s >/run/d2b-resource-restart-observed-at")
+    diag_wait(
+        "process-resynced-after-restart",
         "test $(( $(date +%s) - $(cat /run/d2b-resource-restart-observed-at) )) -ge 20 && "
-        "! journalctl -u d2bd.service --no-pager -o cat "
-        "| grep -F 'Process Provider shared runner stopped' && "
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Process "
         ">/run/d2b-process-after-resync.json && "
+        "test \"$(ps -eo pid=,args= | awk '$NF ~ /acceptance-controller$/ {print $1}' "
+        "| wc -l)\" -eq 1 && "
         "jq -e '([.resources[] | select(.type == \"Process\" and "
         ".metadata.ownerRef == \"Provider/network-local\")] | length == 1) and "
         "(.resources[] | select(.type == \"Process\" and "
         ".metadata.ownerRef == \"Provider/network-local\") | "
-        "(.status.phase == \"Ready\" and .status.resource.adopted == false))' "
+        "(.metadata.uid != null and .metadata.generation > 0 and "
+        ".status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation))' "
         "/run/d2b-process-after-resync.json",
         timeout=60,
+        rows=[
+            saved_rows("Process rows", "/run/d2b-process-after-resync.json"),
+            (
+                "controller processes",
+                "ps -eo pid=,args= | grep acceptance-controller || true",
+            ),
+        ],
+        explain=[("d2bd.service", "network-local")],
     )
     machine.succeed("runuser -u alice -- d2b auth status --json >/run/d2b-auth-after.json")
     machine.succeed(

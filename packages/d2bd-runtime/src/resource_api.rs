@@ -3,7 +3,7 @@ use d2b_contracts_resource::v3::{
     MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, ResourceErrorKind, ResourceName, ResourceRef,
     ResourceTypeName,
 };
-use d2b_resource_store::{StoreFilter, StoreProjection};
+use d2b_contracts_resource::v3::{StoreFilter, StoreProjection};
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -3,12 +3,12 @@
 // hundreds of call sites; the size trade-off is intentional and tracked
 // in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::future::Future;
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 #[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
@@ -18,41 +18,36 @@ use std::sync::{
 type InteractionSupervisor = interaction_composition::UnavailableProcessEffectPort;
 type InteractionRuntime = interaction_composition::InteractionRuntimeSet<InteractionSupervisor>;
 type DaemonResourceApiClient = d2b_resource_api::ResourceApiClient<
-    d2b_resource_api::RedbBackend,
+    d2bd_runtime::resource_runtime_support::ZoneApiBackend,
     d2b_resource_api::service::UnavailableUpgradeDispatcher,
 >;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use d2b_audit::{
-    AuditSink, DurabilityEvidence, OperationIdentity, ZoneId as AuditZoneId, ZoneOperationKey,
-    evidence_from_decision_result,
-};
-use d2b_contracts::workload_identity::{WorkloadIdentity, WorkloadTarget};
+use d2b_contracts::workload_identity::WorkloadTarget;
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
-    types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
+    types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, VmId},
 };
 use d2b_contracts_broker::broker_wire::{
     ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
     ApplyNftablesRequest as BrokerApplyNftablesRequest,
-    ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest, AuditJoinContext, BrokerCallerRole,
+    ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest, BrokerCallerRole,
     BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
-    CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ExportBrokerAuditRequest, HelloRequest,
+    DeregisterRunnerPidfdRequest, ExportBrokerAuditRequest, HelloRequest,
     LegacySwtpmMigrationOutcome, MigrateLegacySwtpmStateRequest,
-    OpenPidfdRequest as BrokerOpenPidfdRequest, OpenZoneStoreRequest as BrokerOpenZoneStoreRequest,
+    OpenPidfdRequest as BrokerOpenPidfdRequest,
     QemuMediaBootRequest as BrokerQemuMediaBootRequest,
     QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
     QemuMediaRefreshRegistryRequest as BrokerQemuMediaRefreshRegistryRequest,
-    ResourceActivationAuditRequest as BrokerResourceActivationAuditRequest,
     RunActivationRequest as BrokerRunActivationRequest, RunGcRequest as BrokerRunGcRequest,
     RunHostInstallRequest as BrokerRunHostInstallRequest,
     RunHostKeyTrustRequest as BrokerRunHostKeyTrustRequest,
     RunKeysRotateRequest as BrokerRunKeysRotateRequest,
     RunMigrateRequest as BrokerRunMigrateRequest,
     RunRotateKnownHostRequest as BrokerRunRotateKnownHostRequest, RunnerRole, RunnerSignal,
-    SignalRunnerRequest, SpawnRunnerRequest as BrokerSpawnRunnerRequest,
+    SignalRunnerRequest,
     StoreVerifyRequest as BrokerStoreVerifyRequest,
 };
 #[cfg(test)]
@@ -64,7 +59,6 @@ use d2b_contracts_control::public_wire::{
 };
 use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
-use d2b_contracts_resource::v3::storage::ZoneStoreId;
 use d2b_contracts_resource::v3::{
     NetworkProvenance, ResourceEnvelope,
     ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
@@ -76,7 +70,6 @@ use d2b_contracts_resource::v3::{
     process::ProcessSpec,
 };
 use d2b_contracts_resource::v3::ResourceBundleGenerationId;
-use d2b_contracts_resource::v3::network::NetworkSpec;
 #[cfg(test)]
 use d2b_contracts_resource::v3::ResourceErrorKind;
 #[cfg(test)]
@@ -96,7 +89,7 @@ use d2b_core::allocator_config::AllocatorZoneTopology;
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
     BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_installer_host,
-    intent_id_keys_rotate, intent_id_legacy_runner, intent_id_migrate_host,
+    intent_id_keys_rotate, intent_id_migrate_host,
     intent_id_nft_host, intent_id_nm_unmanaged_host, intent_id_rotate_known_host, intent_id_trust,
 };
 use d2b_core::bundle_resolver::{
@@ -109,16 +102,15 @@ use d2b_core::host::{HostJson, QemuMediaSourceIntent};
 use d2b_core::host_check;
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
-use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
 #[cfg(test)]
-use d2b_core_controller::{ResourceKey, ResourceSnapshot};
+use d2b_contracts_resource::v3::network::NetworkSpec;
+use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
 use d2b_core_controller::zone_links::{
     BootstrapPsk, SealedEnrollment, ZoneLinkEffect, ZoneLinkError, ZoneLinkEvent,
     ZoneLinkKeyPolicy, ZoneLinkLimits, ZoneLinkRecord, ZoneLinkRouteBinding,
 };
 use d2b_core_controller::zonelink::{ZoneLinkController, ZoneLinkOwnerProof};
 use d2b_host::ssh_keygen;
-use d2b_process_conformance::{ConfigurationDigest, GuestExecutionBinding};
 use d2b_provider_network_local::broker::resolve_tap_identity;
 use d2b_provider_network_local::controller::NetworkAdmissionProof;
 use d2b_provider_network_local::{
@@ -166,9 +158,7 @@ pub use d2bd_runtime::public_read_model::{
     PublicArtifactFingerprint, PublicReadModelKind, PublicStatusReadModel,
     request_invalidates_public_status_model,
 };
-pub(crate) use d2bd_runtime::readiness::{
-    wait_for_one_shot_exit, wait_for_readiness,
-};
+pub(crate) use d2bd_runtime::readiness::wait_for_readiness;
 pub(crate) use d2bd_runtime::resource_api::resource_runtime_error_frame;
 use d2bd_runtime::supervisor::pidfd_table::{
     BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, PidfdTableError, WaitTermination,
@@ -195,7 +185,6 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use socket2::Socket;
 
-mod activation_resource_runtime;
 pub use d2bd_runtime::console_session;
 pub use d2bd_runtime::daemon_client::{
     apply_overrides, maybe_write_state_restore_report, run_test_client,
@@ -642,23 +631,15 @@ struct ServerState {
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
     console_sessions: Arc<Mutex<console_session::ConsoleSessionTable>>,
-    #[allow(dead_code)]
     security_key_sessions: Arc<parking_lot::Mutex<crate::security_key::SkSessionTable>>,
     #[allow(dead_code)]
     unsafe_local_helpers: Arc<d2bd_runtime::unsafe_local_helper::HelperRegistry>,
-}
-
-#[cfg(test)]
-pub(crate) fn install_test_resource_plane(
-    state: &Arc<ServerState>,
-    plane: resource_runtime::ResourcePlane,
-) -> Arc<resource_runtime::ResourcePlane> {
-    let plane = Arc::new(plane);
-    *state
-        .resource_plane
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::clone(&plane));
-    plane
+    /// Per-Zone v3 resource planes (U9/U10): the new runtime the Resource
+    /// API routes converted types to. Parked here so `open_resource_plane`
+    /// publishes them and the resource runtime reaches each plane's
+    /// client + hub for the manager-backed API backend.
+    v3_planes:
+        std::sync::Arc<parking_lot::Mutex<HashMap<String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>>>>,
 }
 
 /// Closed failures while composing one Zone-owned Gateway Guest route.
@@ -3628,6 +3609,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             crate::security_key::SkSessionTable::default(),
         )),
         unsafe_local_helpers: Arc::clone(&unsafe_local_helpers),
+        v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
     };
     if let Some(helper_listener) = unsafe_local_helper_listener {
         std::thread::Builder::new()
@@ -4318,6 +4300,28 @@ fn load_gateway_guest_zone_link_options(
     }))
 }
 
+/// The journal-visible event every accepted Guest ComponentSession publishes.
+///
+/// The host journal is where the Guest console is forwarded, and `d2bd`'s
+/// tracing filter defaults to `info` (`main.rs`), so this is the only level at
+/// which the Guest's accept is observable there. The acceptance lane greps the
+/// exact message and parses the `generation` field out of it.
+pub(crate) const COMPONENT_SESSION_STARTED_EVENT: &str =
+    "Guest ComponentSession Resource API server starting";
+
+/// Publish one accepted ComponentSession's live generation.
+///
+/// Every acceptance - the first one after boot exactly like a replacement
+/// after a parent reconnect - announces the generation carried by the accepted
+/// session's authenticated route. That route generation is the same value the
+/// Guest binds as the live target-control generation
+/// (`GuestTargetService::bind_session`) and the same value the parent records
+/// in the session descriptor, so one line tells the operator which generation
+/// is live on both sides of the boundary.
+pub(crate) fn publish_component_session_started(generation: u64) {
+    tracing::info!(generation, "{COMPONENT_SESSION_STARTED_EVENT}");
+}
+
 /// Start the fixed Guest target agent. Unlike [`serve`], this path never
 /// loads `DaemonConfig`, binds a public operator socket, or opens a Host Zone
 /// store. Any optional credential input belongs to the Guest-local
@@ -4393,7 +4397,6 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         options.broker_socket_path.clone(),
         options.broker_uid,
         d2bd_runtime::target_runtime::AdmissionLimits::guest_default(),
-        &options.state_dir,
     )
     .await
     .map_err(|error| TypedError::InternalConfig {
@@ -4435,29 +4438,6 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     if gateway_zone_link.is_some() {
         tracing::info!("Guest-local ZoneLink transport Provider composed");
     }
-    let process_providers = Arc::new(
-        process_provider_runtime::ProductionProcessProviders::new_for_mode(
-            bundle,
-            options.broker_socket_path.clone(),
-            BrokerCallerRole::LauncherUid {
-                uid: options.broker_uid,
-            },
-            d2bd_runtime::target_runtime::DaemonMode::Guest,
-        )
-        .with_guest_backend_supervisor(
-            {
-                let guest_credential_sources =
-                    credential_backend_runtime::GuestCredentialBackendSources::from_guest_context(
-                        identity.guest_ref().clone(),
-                    );
-                credential_backend_runtime::ProductionGuestCredentialBackendSupervisor::new(
-                    credential_backend_runtime::GuestLocalCredentialBackend::from_sources(
-                        guest_credential_sources,
-                    ),
-                )
-            },
-        ),
-    );
     let local_private_path =
         options
             .local_private_key_path
@@ -4487,6 +4467,27 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                 detail: error.code().to_owned(),
             })?;
     }
+    // Guest target-control (U13 guest half): one target runtime per Guest,
+    // driven by the requests the parent Zone sends over this session. The
+    // service survives reconnects so target-local realizations can be
+    // re-adopted (F5); the live generation is bound at every accept, and the
+    // types it serves are exactly the ones with registered target-local
+    // effect code (none yet - see `guest_target_service`).
+    let guest_target =
+        d2b_resource_runtime::target::TargetRef::guest(identity.guest_ref().name().as_str())
+            .map_err(|error| TypedError::InternalConfig {
+                detail: error.to_string(),
+            })?;
+    let target_service = std::sync::Arc::new(
+        crate::guest_target_service::GuestTargetService::new(
+            std::sync::Arc::new(d2b_resource_runtime::guest_target::GuestTargetRuntime::new(
+                guest_target,
+            )),
+            identity.zone().clone(),
+            crate::guest_target_service::production_guest_target_effects(),
+        ),
+    );
+    tracing::info!("Guest target-control service composed");
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|_| TypedError::InternalIo {
             context: "install Guest SIGTERM handler".to_owned(),
@@ -4499,26 +4500,21 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         })?;
     let mut active: Option<(
         tokio::task::JoinHandle<Result<(), d2b_session::SessionServerError>>,
-        tokio::task::JoinHandle<()>,
         d2bd_runtime::guest_mode::GuestSessionLease,
     )> = None;
     loop {
         let local_private = read_secret32(&local_private_path)?;
-        if let Some((mut serving, processing, lease)) = active.take() {
+        if let Some((mut serving, lease)) = active.take() {
             tokio::select! {
                 _ = sigterm.recv() => {
                     serving.abort();
                     let _ = serving.await;
-                    processing.abort();
-                    let _ = processing.await;
                     drop(lease);
                     break;
                 },
                 _ = sigint.recv() => {
                     serving.abort();
                     let _ = serving.await;
-                    processing.abort();
-                    let _ = processing.await;
                     drop(lease);
                     break;
                 },
@@ -4527,14 +4523,12 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                         Ok(session) => session,
                         Err(error) => {
                             tracing::warn!(error = %error, "Guest ComponentSession handshake refused");
-                            active = Some((serving, processing, lease));
+                            active = Some((serving, lease));
                             continue;
                         }
                     };
                     serving.abort();
                     let _ = serving.await;
-                    processing.abort();
-                    let _ = processing.await;
                     drop(lease);
                     let route = session.route_binding();
                     let resource_session = match runtime.resource_runtime().bind_session(&route) {
@@ -4545,6 +4539,15 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                             continue;
                         }
                     };
+                    if let Err(error) =
+                        target_service.bind_session(route.reconnect_generation().get())
+                    {
+                        tracing::warn!(
+                            error = %error,
+                            generation = route.reconnect_generation().get(),
+                            "Guest target-control session binding refused",
+                        );
+                    }
                     let config_services = match guest_config_services(&identity, &route, &options.guest_config_path) {
                         Ok(services) => services,
                         Err(error) => {
@@ -4555,41 +4558,14 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                     };
                     let mut services = resource_session.ttrpc_services();
                     services.extend(config_services);
+                    services.extend(
+                        crate::guest_target_service::target_control_services(Arc::clone(
+                            &target_service,
+                        )),
+                    );
                     let ttrpc = session.into_ttrpc_handle();
-                    let resource_client = Arc::new(resource_session.client());
-                    let mut process_runtime =
-                        process_resource_runtime::ProcessResourceRuntime::new_for_target(
-                            identity.zone().clone(),
-                            Arc::clone(&process_providers),
-                            Some(identity.guest_ref().clone()),
-                        );
-                    if let Ok(generation) =
-                        d2b_contracts_resource::v3::ControllerGeneration::new(
-                            identity.controller_generation(),
-                        )
-                    {
-                        process_runtime.set_controller_generation(generation);
-                    }
-                    process_runtime.set_guest_execution_binding(
-                        guest_process_execution_binding(
-                            &identity,
-                            route.reconnect_generation(),
-                        )?,
-                    );
-                    let process_store = resource_session.store_backend();
-                    let process_task = tokio::spawn(
-                        process_resource_runtime::run_guest_process_reconciliation(
-                            process_runtime,
-                            process_store,
-                            resource_client,
-                            identity.zone().clone(),
-                        ),
-                    );
-                    tracing::debug!(
-                        generation = route.reconnect_generation().get(),
-                        "Guest ComponentSession Resource API server starting",
-                    );
                     let generation = route.reconnect_generation().get();
+                    publish_component_session_started(generation);
                     active = Some((
                         tokio::spawn(async move {
                             let result = ttrpc.serve_ttrpc_services(services).await;
@@ -4600,7 +4576,6 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                             );
                             result
                         }),
-                        process_task,
                         new_lease,
                     ));
                 },
@@ -4608,8 +4583,6 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                     if let Ok(Err(error)) = result {
                         tracing::debug!(error = %error, "Guest ComponentSession resource server stopped");
                     }
-                    processing.abort();
-                    let _ = processing.await;
                     drop(lease);
                 },
             }
@@ -4644,6 +4617,13 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                     continue;
                 }
             };
+            if let Err(error) = target_service.bind_session(route.reconnect_generation().get()) {
+                tracing::warn!(
+                    error = %error,
+                    generation = route.reconnect_generation().get(),
+                    "Guest target-control session binding refused",
+                );
+            }
             let config_services =
                 match guest_config_services(&identity, &route, &options.guest_config_path) {
                     Ok(services) => services,
@@ -4655,34 +4635,13 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                 };
             let mut services = resource_session.ttrpc_services();
             services.extend(config_services);
+            services.extend(crate::guest_target_service::target_control_services(
+                Arc::clone(&target_service),
+            ));
             let ttrpc = session.into_ttrpc_handle();
-            let resource_client = Arc::new(resource_session.client());
-            let mut process_runtime =
-                process_resource_runtime::ProcessResourceRuntime::new_for_target(
-                    identity.zone().clone(),
-                    Arc::clone(&process_providers),
-                    Some(identity.guest_ref().clone()),
-                );
-            if let Ok(generation) = d2b_contracts_resource::v3::ControllerGeneration::new(
-                identity.controller_generation(),
-            ) {
-                process_runtime.set_controller_generation(generation);
-            }
-            process_runtime.set_guest_execution_binding(guest_process_execution_binding(
-                &identity,
-                route.reconnect_generation(),
-            )?);
-            let process_store = resource_session.store_backend();
-            let process_task =
-                tokio::spawn(process_resource_runtime::run_guest_process_reconciliation(
-                    process_runtime,
-                    process_store,
-                    resource_client,
-                    identity.zone().clone(),
-                ));
+            publish_component_session_started(route.reconnect_generation().get());
             active = Some((
                 tokio::spawn(async move { ttrpc.serve_ttrpc_services(services).await }),
-                process_task,
                 lease,
             ));
         }
@@ -4711,32 +4670,6 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             Ok(d2b_provider_config_nixos::create_ttrpc_services(
                 std::sync::Arc::new(backend),
             ))
-        }
-
-        fn guest_process_execution_binding(
-            identity: &d2bd_runtime::guest_mode::GuestIdentity,
-            session_generation: ReconnectGeneration,
-        ) -> Result<GuestExecutionBinding, TypedError> {
-            GuestExecutionBinding::new(
-                identity.guest_uid().clone(),
-                ConfigurationDigest::from_bytes(identity.boot_identity().digest()),
-                session_generation,
-                identity.assignment_epoch(),
-                ResourceGeneration::new(identity.provider_generation()).map_err(|_| {
-                    TypedError::InternalConfig {
-                        detail: "guest Provider generation is invalid".to_owned(),
-                    }
-                })?,
-                d2b_contracts_resource::v3::ControllerGeneration::new(
-                    identity.controller_generation(),
-                )
-                .map_err(|_| TypedError::InternalConfig {
-                    detail: "guest controller generation is invalid".to_owned(),
-                })?,
-            )
-            .map_err(|_| TypedError::InternalConfig {
-                detail: "guest Process execution binding is invalid".to_owned(),
-            })
         }
     }
     Ok(())
@@ -5349,216 +5282,6 @@ async fn run_startup_autostart(state: &ServerState, kernel_module_degraded: &BTr
     // Starting the listener here would expose TCP/3240 before the
     // per-busid ownership decision.
     let _ = resolver;
-}
-
-/// Drive the per-env usbipd spawn plan derived from the manifest.
-/// Best-effort: any failure to dispatch a single env's spawn is
-/// logged and the loop continues; the transitional NixOS units
-/// remain in place to keep operators served while the daemon path
-/// bakes in production.
-#[allow(dead_code)]
-async fn run_usbipd_perenv_autostart(
-    state: &ServerState,
-    resolver: &d2b_core::bundle_resolver::BundleResolver,
-) {
-    let specs = d2bd_runtime::usbipd_perenv_autostart::derive_per_env_usbipd_specs(
-        &resolver.manifest,
-        &resolver.host,
-    );
-    if specs.is_empty() {
-        tracing::debug!("usbipd-perenv autostart: no usbip-enabled envs in manifest");
-        return;
-    }
-    tracing::info!(
-        spec_count = specs.len(),
-        env_count = specs.len() / 2,
-        "usbipd-perenv autostart: dispatching per-env usbipd backend+proxy spawns",
-    );
-    let state_arc = Arc::new(state.clone());
-    let report = tokio::task::spawn_blocking(move || {
-        let spawner = BrokerPerEnvUsbipdSpawner {
-            state: Arc::clone(&state_arc),
-            tracing_span_id: None,
-        };
-        d2bd_runtime::usbipd_perenv_autostart::execute_usbipd_perenv_autostart(&specs, &spawner)
-    })
-    .await
-    .unwrap_or_else(|join_err| {
-        tracing::warn!(error = ?join_err, "usbipd-perenv autostart: join task failed");
-        d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdAutostartReport::default()
-    });
-    tracing::info!(
-        spawned = report.spawned(),
-        already_running = report.already_running(),
-        skipped_pending_bundle = report.skipped_pending_bundle(),
-        failed = report.failed(),
-        "usbipd-perenv autostart: complete",
-    );
-    for entry in &report.specs {
-        match &entry.outcome {
-            d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdOutcome::Spawned => {
-                tracing::info!(
-                    env = %entry.env, role = ?entry.role, port = entry.backend_port,
-                    "usbipd-perenv: spawned"
-                );
-            }
-            d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdOutcome::AlreadyRunning => {
-                tracing::info!(env = %entry.env, role = ?entry.role, "usbipd-perenv: already-running (idempotent)");
-            }
-            d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdOutcome::SkippedPendingBundle => {
-                tracing::info!(
-                    env = %entry.env, role = ?entry.role,
-                    "usbipd-perenv: skipped - bundle has no sys-<env>-usbipd runner intent yet (transitional NixOS unit serves this env)"
-                );
-            }
-            d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdOutcome::Failed { reason } => {
-                tracing::warn!(env = %entry.env, role = ?entry.role, reason = %reason, "usbipd-perenv: failed");
-            }
-        }
-    }
-}
-
-/// Live broker adapter for the per-env usbipd spawner trait.
-/// Translates `BundleIntentMissing` into `SkippedPendingBundle` per the
-/// trait contract so the transitional window does not fail-closed before
-/// `processes-json.nix` grows the new DAGs.
-struct BrokerPerEnvUsbipdSpawner {
-    state: Arc<ServerState>,
-    tracing_span_id: Option<TracingSpanId>,
-}
-
-impl d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnvUsbipdSpawner {
-    fn is_running(&self, vm_id: &str, role_id: &str) -> bool {
-        if let Err(error) = self.state.pidfd_table.prune_dead_entries() {
-            tracing::warn!(
-                vm = %vm_id,
-                role = %role_id,
-                error = %error,
-                "usbipd-perenv: failed to prune stale pidfd entries before is_running check"
-            );
-        }
-        self.state.pidfd_table.contains(vm_id, role_id)
-    }
-
-    fn spawn(
-        &self,
-        spec: &d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdSpec,
-    ) -> d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdOutcome {
-        use d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdOutcome;
-        // Per-env usbipd runners (`sys-<env>-usbipd`) are framework
-        // infrastructure services, not realm workloads.  They serve the
-        // USBIP transport layer for ALL VMs in an env and are never
-        // declared under `d2b.realms.<realm>.workloads`.  Their
-        // `workload_identity` is correctly `None`: no realm workload row
-        // exists for them and threading a synthetic identity would
-        // misrepresent their scope in the broker audit trail.
-        let request = BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
-            execution_ref: None,
-            execution_domain: None,
-            user_ref: None,
-            guest_execution: None,
-            workload_identity: None,
-            vm_id: VmId::new(spec.vm_id.clone()),
-            role_id: RoleId::new(spec.role.role_id().to_owned()),
-            resource_ref: None,
-            resource_uid: None,
-            zone_uid: None,
-            owner_ref: None,
-            owner_uid: None,
-            provider_ref: None,
-            bundle_content_identity: None,
-            provider_identity: None,
-            template_identity: None,
-            generation: None,
-            runtime_scope: None,
-            activation_input: None,
-            sandbox_plan: None,
-            role: d2bd_runtime::usbipd_perenv_autostart::spawn_runner_role(spec),
-            bundle_runner_intent_ref: BundleOpId::new(spec.intent_id()),
-            runtime_allocations: vec![],
-            tracing_span_id: self.tracing_span_id.clone(),
-            inherited_fd_count: 0,
-            network_tap_context: None,
-        });
-        match dispatch_broker_request_with_fds_timeout(
-            &self.state,
-            request,
-            Duration::from_secs(10),
-        ) {
-            Ok((BrokerResponse::SpawnRunner(response), received_fds)) => {
-                let pidfd = match duplicate_received_fd(
-                    &received_fds,
-                    response.pidfd_index,
-                    "duplicate per-env usbipd SpawnRunner pidfd",
-                ) {
-                    Ok(fd) => fd,
-                    Err(error) => {
-                        close_received_fds(&received_fds);
-                        return PerEnvUsbipdOutcome::Failed {
-                            reason: format!("pidfd-duplicate:{}", error.kind()),
-                        };
-                    }
-                };
-                if let Err(error) = self.state.pidfd_table.register(
-                    spec.vm_id.clone(),
-                    spec.role.role_id().to_owned(),
-                    PidfdEntry {
-                        pidfd,
-                        pid: response.pid,
-                        start_time_ticks: response.start_time_ticks,
-                    },
-                ) {
-                    close_received_fds(&received_fds);
-                    return PerEnvUsbipdOutcome::Failed {
-                        reason: format!("pidfd-register:{error}"),
-                    };
-                }
-                if let Err(error) = self.state.pidfd_table.snapshot() {
-                    let _ = self
-                        .state
-                        .pidfd_table
-                        .deregister(&spec.vm_id, spec.role.role_id());
-                    close_received_fds(&received_fds);
-                    return PerEnvUsbipdOutcome::Failed {
-                        reason: format!("pidfd-snapshot:{error}"),
-                    };
-                }
-                if let Err(error) = write_runner_snapshot(
-                    &self.state,
-                    &spec.vm_id,
-                    spec.role.role_id(),
-                    d2bd_runtime::usbipd_perenv_autostart::spawn_runner_role(spec),
-                    response.pid,
-                    response.start_time_ticks,
-                ) {
-                    cleanup_vm_start_registration(&self.state, &spec.vm_id, spec.role.role_id());
-                    close_received_fds(&received_fds);
-                    return PerEnvUsbipdOutcome::Failed { reason: error };
-                }
-                close_received_fds(&received_fds);
-                PerEnvUsbipdOutcome::Spawned
-            }
-            Ok((BrokerResponse::Error(error), received_fds)) => {
-                close_received_fds(&received_fds);
-                if error.kind == "bundle-intent-missing" {
-                    PerEnvUsbipdOutcome::SkippedPendingBundle
-                } else {
-                    PerEnvUsbipdOutcome::Failed {
-                        reason: format!("broker-error:{}", error.kind),
-                    }
-                }
-            }
-            Ok((other, received_fds)) => {
-                close_received_fds(&received_fds);
-                PerEnvUsbipdOutcome::Failed {
-                    reason: format!("broker-protocol:{}", broker_response_kind(&other)),
-                }
-            }
-            Err(error) => PerEnvUsbipdOutcome::Failed {
-                reason: format!("broker-dispatch:{}", error.message()),
-            },
-        }
-    }
 }
 
 /// Thin wrapper used by the `options.once` test path and by direct
@@ -6817,7 +6540,7 @@ fn admit_gateway_zone_request(
             resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
         })?;
         composition
-            .bind_gateway_session(session)
+            .bind_gateway_session(Arc::clone(&session))
             .map_err(|error| {
                 tracing::warn!(
                     error = ?error,
@@ -6827,6 +6550,9 @@ fn admit_gateway_zone_request(
                 );
                 resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
             })?;
+        // U13: this session generation is now the realization authority for
+        // Host-zone resources targeting the gateway Guest.
+        bind_plane_guest_target(state, &session);
     }
     let gateway_guest_for_invalidation = gateway_guest.clone();
     let target_zone = composition.child_path().clone();
@@ -6862,6 +6588,9 @@ fn admit_gateway_zone_request(
                 | resource_runtime::ResourceRuntimeError::AuthenticationUnavailable
         )
     ) {
+        // U13/R21: the target went away - observed state becomes unavailable
+        // while desired resources and assignments stay exactly as they are.
+        unbind_plane_guest_target(state, &session);
         composition.fence_gateway_session();
         block_on_future(invalidate_guest_component_session_for_guest(
             state,
@@ -6869,6 +6598,70 @@ fn admit_gateway_zone_request(
         ));
     }
     result
+}
+
+/// Bind one authenticated guest session generation as the realization
+/// authority of the Zone's target directory (U13, F5).
+///
+/// A failure here never denies gateway forwarding - it leaves the target path
+/// unbound, which is the fail-closed direction: no Host-zone resource can
+/// claim realization authority through this session.
+fn bind_plane_guest_target(
+    state: &ServerState,
+    session: &Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+) {
+    let zone = session.identity().zone().as_str().to_owned();
+    let plane = state
+        .v3_planes
+        .lock()
+        .get(&zone)
+        .map(std::sync::Arc::clone);
+    let Some(plane) = plane else {
+        tracing::warn!(zone = %zone, "guest target bind skipped: Zone v3 plane unavailable");
+        return;
+    };
+    let Some(guest) = crate::guest_target_control::guest_target_ref(session.identity().guest_ref())
+    else {
+        tracing::warn!(zone = %zone, "guest target bind skipped: session subject is not a guest");
+        return;
+    };
+    let generation = session.generation();
+    let control = match crate::guest_target_control::session_target_control(
+        Arc::clone(session),
+        generation,
+    ) {
+        Ok(control) => control,
+        Err(error) => {
+            tracing::warn!(zone = %zone, error = %error, "guest target control unavailable");
+            return;
+        }
+    };
+    if let Err(error) = plane.bind_guest_target(&guest, generation, control) {
+        tracing::warn!(zone = %zone, generation, error = %error, "guest target bind refused");
+    }
+}
+
+/// Mark the guest target unavailable on the fencing path (U13, R21): the
+/// desired resources and their assignments stay, only observed state becomes
+/// unavailable, and a newer session is never torn down by a stale fence.
+fn unbind_plane_guest_target(
+    state: &ServerState,
+    session: &Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+) {
+    let zone = session.identity().zone().as_str().to_owned();
+    let plane = state
+        .v3_planes
+        .lock()
+        .get(&zone)
+        .map(std::sync::Arc::clone);
+    let Some(plane) = plane else {
+        return;
+    };
+    let Some(guest) = crate::guest_target_control::guest_target_ref(session.identity().guest_ref())
+    else {
+        return;
+    };
+    let _ = plane.unbind_guest_target(&guest, session.generation());
 }
 
 fn gateway_route_operation_id(request: &Value, peer_uid: u32, method: &str) -> String {
@@ -7372,6 +7165,23 @@ fn resolve_volume_storage_ref(
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     Ok(BundleOpId::new(storage_id))
+}
+
+#[cfg(test)]
+fn parse_committed_network_spec(
+    resource: &Value,
+) -> Result<NetworkSpec, resource_runtime::ResourceRuntimeError> {
+    let mut spec = resource
+        .get("spec")
+        .cloned()
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let object = spec
+        .as_object_mut()
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    for field in ["providerRef", "updatePolicy", "provider"] {
+        object.remove(field);
+    }
+    serde_json::from_value(spec).map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)
 }
 
 pub(crate) fn resolve_network_effect_context(
@@ -7879,7 +7689,7 @@ fn dispatch_wave6_resource_reconcile(
         .and_then(Value::as_str)
         .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
     if resource_type == "Guest"
-        && !resource_runtime::U6_SHARED_PROVIDER_RUNNERS
+        && !crate::guest_driver::GUEST_REGISTRATIONS
             .iter()
             .any(|registration| registration.provider_ref == provider_ref)
     {
@@ -7946,13 +7756,9 @@ fn dispatch_wave6_resource_reconcile(
         "Network" => {
             let resolver = load_bundle_resolver(state)
                 .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-            block_on_future(runtime.persist_public_reconcile_status(
-                &resource_ref,
-                &uid,
-                operation_id,
-                "Pending",
-                None,
-            ))?;
+            // U14: the "Pending" status write this used to make went to the
+            // durable store; the plane's status projection is the manager's
+            // now, and this simulation only drives the effect.
             ready = reconcile_wave6_network_effect(Wave6NetworkEffectRequest {
                 state,
                 peer,
@@ -8051,22 +7857,6 @@ struct Wave6NetworkEffectRequest<'a> {
     resource: &'a Value,
     operation_id: &'a str,
     ensure_host_base: bool,
-}
-
-fn parse_committed_network_spec(
-    resource: &Value,
-) -> Result<NetworkSpec, resource_runtime::ResourceRuntimeError> {
-    let mut spec = resource
-        .get("spec")
-        .cloned()
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let object = spec
-        .as_object_mut()
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    for field in ["providerRef", "updatePolicy", "provider"] {
-        object.remove(field);
-    }
-    serde_json::from_value(spec).map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)
 }
 
 fn committed_resource_uid(
@@ -8356,10 +8146,10 @@ fn reconcile_wave6_network_effect(
         peer,
         runtime,
         resolver,
-        resource_ref,
+        resource_ref: _,
         uid,
         resource,
-        operation_id,
+        operation_id: _,
         ensure_host_base,
     } = request;
     let caller_role = broker_caller_role_for_peer(peer);
@@ -8460,7 +8250,7 @@ fn reconcile_wave6_network_effect(
     );
     let reconciler = NetworkReconciler::new(effects, resources);
     let mut durable_resource = resource.clone();
-    for pass in 0..MAX_NETWORK_CHILD_READINESS_PASSES {
+    for _pass in 0..MAX_NETWORK_CHILD_READINESS_PASSES {
         let observed_before = network_child_readiness_from_resource(&durable_resource);
         input.volume_ready = observed_before.volume_ready;
         input.guest_ready = observed_before.guest_ready;
@@ -8477,41 +8267,11 @@ fn reconcile_wave6_network_effect(
                     );
                     return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
                 }
-                let projection =
-                    network_child_readiness_projection_for_resource(&durable_resource, completed);
-                let status_operation_id = format!("{operation_id}-network-status-{pass}");
-                block_on_future(runtime.persist_public_reconcile_status(
-                    resource_ref,
-                    uid,
-                    &status_operation_id,
-                    "Ready",
-                    Some(&projection),
-                ))?;
-                durable_resource = fetch_public_resource(runtime, peer, resource_ref)?;
-                let committed_generation = durable_resource
-                    .get("metadata")
-                    .and_then(|metadata| metadata.get("generation"))
-                    .and_then(Value::as_u64);
-                let committed_ready = committed_generation == Some(generation.get())
-                    && durable_resource
-                        .get("status")
-                        .and_then(|status| status.get("phase"))
-                        .and_then(Value::as_str)
-                        == Some("Ready")
-                    && durable_resource
-                        .get("status")
-                        .and_then(|status| status.get("observedGeneration"))
-                        .and_then(Value::as_u64)
-                        == Some(generation.get())
-                    && network_child_readiness_from_resource(&durable_resource).is_ready();
-                if committed_ready {
-                    return Ok(true);
-                }
-                tracing::warn!(
-                    stage = "network-reconciler",
-                    "Network Provider status commit did not produce durable Ready"
-                );
-                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                // U14: the Provider's status commit is the manager's status
+                // projection now, so the simulated durable re-read that used
+                // to verify it here retired with the store; the completed
+                // child readiness is the evidence.
+                return Ok(true);
             }
             Ok(ReconcileProgress::Pending(_)) => {
                 let observed_after = observer
@@ -8524,28 +8284,15 @@ fn reconcile_wave6_network_effect(
                     );
                     return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
                 }
+                // U14: the status write goes to the manager's in-memory
+                // status projection, so this simulation carries the observed
+                // progress in its local row view instead of re-reading a
+                // durable row that no longer exists.
                 let projection = network_child_readiness_projection_for_resource(
                     &durable_resource,
                     observed_after,
                 );
-                let status_operation_id = format!("{operation_id}-network-status-{pass}");
-                block_on_future(runtime.persist_public_reconcile_status(
-                    resource_ref,
-                    uid,
-                    &status_operation_id,
-                    "Pending",
-                    Some(&projection),
-                ))?;
-                let committed = fetch_public_resource(runtime, peer, resource_ref)?;
-                let committed_after = network_child_readiness_from_resource(&committed);
-                if committed_after == observed_before {
-                    tracing::warn!(
-                        stage = "network-reconciler",
-                        "Network Provider child readiness was not durably observed"
-                    );
-                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-                }
-                durable_resource = committed;
+                durable_resource["status"]["resource"] = projection;
             }
             Ok(progress) => {
                 tracing::warn!(
@@ -8648,10 +8395,6 @@ fn dispatch_device_tpm_reconcile_inner(
     let runtime = plane.zone(&zone).inspect_err(|error| {
         tracing::warn!(?error, zone = %zone.as_str(), "Device TPM reconcile Zone lookup failed");
     })?;
-    let resolver = load_bundle_resolver(state).map_err(|error| {
-        tracing::warn!(?error, "Device TPM reconcile bundle resolver unavailable");
-        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-    })?;
     let migration_intent = format!("legacy-swtpm:vm:{vm_id}");
     let inventory = dispatch_broker_legacy_tpm_inventory(
         state,
@@ -8679,11 +8422,6 @@ fn dispatch_device_tpm_reconcile_inner(
         operation_id,
         legacy_intent_anchor,
     ))?;
-    let intent = tpm_state_intent(&device_uid, vm_id);
-    let binary = d2b_provider_device_tpm::SignedBinaryRef::from_core(
-        d2b_provider_device_tpm::BinaryKind::Swtpm,
-        tpm_opaque_bytes("d2b:tpm-binary/v1", vm_id),
-    );
     let guest_ref = ResourceRef::parse(&format!("Guest/{vm_id}"))
         .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
     let lifecycle_operation_id =
@@ -8701,29 +8439,34 @@ fn dispatch_device_tpm_reconcile_inner(
         lifecycle_admission.provider_assignment_generation,
     )
     .map_err(|_| resource_runtime::ResourceRuntimeError::AuthenticationUnavailable)?;
-    let outcome = tpm_effect_port::reconcile_device_tpm(
-            state,
-            &resolver,
-            VmId::new(vm_id),
-            BundleOpId::new(migration_intent),
-            decision,
-            tpm_effect_port::AdmittedTpmDevice::new(
-                device_uid,
-                device_ref,
-                zone.as_str(),
-                ResourceRef::parse("Host/host-system")
-                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?,
-                lifecycle_authorization,
-            ),
-            intent,
-            d2b_provider_device_tpm::SwtpmSettings { log_level },
-            binary,
-            broker_caller_role_for_peer(peer),
-        )
-        .map_err(|error| {
-            tracing::warn!(?error, vm_id, "Device TPM production reconcile failed");
-            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-        })?;
+    let execution_ref = ResourceRef::parse("Host/host-system")
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let mut controller = d2b_provider_device_tpm::TpmResourceController::new(
+        device_uid.clone(),
+        device_ref.clone(),
+        execution_ref.clone(),
+    )
+    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let outcome = tpm_effect_port::reconcile_device_tpm_controller(
+        state,
+        VmId::new(vm_id),
+        BundleOpId::new(migration_intent),
+        decision,
+        tpm_effect_port::AdmittedTpmDevice::new(
+            device_uid,
+            device_ref,
+            zone.as_str(),
+            execution_ref,
+            lifecycle_authorization,
+        ),
+        broker_caller_role_for_peer(peer),
+        &tpm_effect_port::NoManagerChildSurface,
+        &mut controller,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, vm_id, "Device TPM production reconcile failed");
+        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+    })?;
     Ok(json!({
         "resourceType": "Device",
         "provider": d2b_provider_device_tpm::PROVIDER_REF,
@@ -9796,6 +9539,7 @@ mod workload_observability_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
         (state, dir)
     }
@@ -11588,17 +11332,58 @@ fn cloud_hypervisor_api_socket(argv: &[String]) -> Option<PathBuf> {
     })
 }
 
+/// The producer-derived Endpoint generation one guest-control Endpoint
+/// carries.
+///
+/// The old daemon publication stage stamped `status.resource.endpointGeneration`
+/// from the Endpoint row's own generation; `Endpoint` is a converted type, so
+/// a manager row has no durable status to read and the row's committed
+/// generation is the same value the old stage published.
 fn status_generation(value: &Value) -> Option<ResourceGeneration> {
     value
         .pointer("/status/resource/endpointGeneration")
         .or_else(|| value.pointer("/status/resource/endpoint_generation"))
         .and_then(Value::as_u64)
+        .or_else(|| value.pointer("/metadata/generation").and_then(Value::as_u64))
         .and_then(|generation| ResourceGeneration::new(generation).ok())
+}
+
+/// The committed-identity admission rule for one row a Guest session target
+/// is resolved from.
+///
+/// The row must carry a complete committed identity (Zone, uid, generation)
+/// and must not have published a terminal phase - *unless* `deleting` says it
+/// is in its delete pass. The wire vocabulary has no `Deleting` phase: the
+/// manager projects a deleting row as the `Deleted` tombstone and a retried
+/// delete failure as `Failed` (see `manager_backend::stamp_status`), so the
+/// projected phase cannot tell "deleting" from "gone". The row's own deletion
+/// mark is that fact, and a deleting row still exists, still owns the
+/// committed identity its session was authenticated against, and still owns
+/// the live session the deletion path reuses - so it is admitted.
+fn session_target_row_admitted(
+    envelope: &ResourceEnvelope,
+    zone: &ZoneId,
+    deleting: bool,
+) -> bool {
+    envelope.metadata().zone() == zone
+        && !envelope.metadata().uid().as_str().is_empty()
+        && envelope.metadata().generation().get() != 0
+        && (deleting
+            || !matches!(
+                envelope.status().phase(),
+                ResourcePhase::Failed | ResourcePhase::Deleted
+            ))
 }
 
 /// Resolve one committed Guest and its controller-owned guest-control
 /// Endpoint. The returned target contains only store identities; endpoint
 /// carriage remains private to the Process Provider intent.
+///
+/// A row in its delete pass is admitted on its deletion mark - the Guest and,
+/// while the Guest is deleting, the guest-control Endpoint the cascade marked
+/// with it - so the delete pass can still resolve the live session it reuses
+/// while closing it (see [`session_target_row_admitted`] for the wire-phase
+/// consequence).
 pub(crate) async fn resolve_committed_guest_session_target(
     runtime: &resource_runtime::ZoneResourceRuntime,
     guest_ref: &ResourceRef,
@@ -11614,14 +11399,8 @@ pub(crate) async fn resolve_committed_guest_session_target(
         &serde_json::to_vec(&guest_value).map_err(|_| "guest-session:guest-invalid".to_owned())?,
     )
     .map_err(|_| "guest-session:guest-invalid".to_owned())?;
-    if guest.metadata().zone() != runtime.zone()
-        || guest.metadata().uid().as_str().is_empty()
-        || guest.metadata().generation().get() == 0
-        || matches!(
-            guest.status().phase(),
-            ResourcePhase::Failed | ResourcePhase::Deleted
-        )
-    {
+    let guest_deleting = guest.metadata().deletion_requested_at().is_some();
+    if !session_target_row_admitted(&guest, runtime.zone(), guest_deleting) {
         return Err("guest-session:guest-identity-invalid".to_owned());
     }
     let provider_ref = guest
@@ -11655,10 +11434,19 @@ pub(crate) async fn resolve_committed_guest_session_target(
         d2b_provider_runtime_cloud_hypervisor::ChildRole::GuestControlEndpoint,
     )
     .map_err(|_| "guest-session:endpoint-ref-invalid".to_owned())?;
-    let endpoint_value = runtime
-        .committed_resource_value(&endpoint_ref, "guest-session-endpoint")
+    // `Endpoint` is a converted type: the manager is its only writer, so the
+    // row is read from the manager authority - an absent row is the honest
+    // not-committed answer (the provider controller has not committed the
+    // child batch yet), and the pre-v3 store is never consulted for a row it
+    // does not own (a store `ResourceNotFound` would read as absence for a
+    // manager-owned row). A manager or plane failure stays a read failure.
+    let Some(endpoint_value) = runtime
+        .committed_manager_row_optional(&endpoint_ref)
         .await
-        .map_err(|_| "guest-session:endpoint-unavailable".to_owned())?;
+        .map_err(|_| "guest-session:endpoint-read-failed".to_owned())?
+    else {
+        return Err("guest-session:endpoint-unavailable".to_owned());
+    };
     let endpoint = ResourceEnvelope::from_json(
         &serde_json::to_vec(&endpoint_value)
             .map_err(|_| "guest-session:endpoint-invalid".to_owned())?,
@@ -11684,10 +11472,14 @@ pub(crate) async fn resolve_committed_guest_session_target(
             .consumer_policy()
             .allowed_operations()
             .contains(&EndpointOperation::Resolve)
-        || matches!(
-            endpoint.status().phase(),
-            ResourcePhase::Failed | ResourcePhase::Deleted
-        )
+        // The guest-control Endpoint is the Guest's owned child: a deleting
+        // Guest has cascaded the deletion mark onto it, so the Guest's
+        // deleting fact admits the endpoint's terminal projection for the
+        // same reason it admits the Guest's (the carriage row still exists
+        // and still holds the identity the session was fenced on). A terminal
+        // Endpoint under a Guest that is *not* deleting stays refused: that
+        // carriage is going away under a live Guest.
+        || !session_target_row_admitted(&endpoint, runtime.zone(), guest_deleting)
         || endpoint.metadata().generation().get() == 0
     {
         return Err("guest-session:endpoint-identity-invalid".to_owned());
@@ -11705,6 +11497,120 @@ pub(crate) async fn resolve_committed_guest_session_target(
         provider_uid: provider.metadata().uid().clone(),
         provider_generation: provider.metadata().generation(),
     })
+}
+
+#[cfg(test)]
+mod guest_session_target_admission_tests {
+    use super::*;
+
+    const UID: &str = "123e4567-e89b-42d3-a456-426614174000";
+
+    /// One committed row as the manager renders it: the wire phase the closed
+    /// status vocabulary carries and the deletion mark the writer committed.
+    /// Rendered from the contract's golden envelope shape so the strict
+    /// reader decodes exactly what a live read serves.
+    fn row(phase: &str, uid: &str, generation: u64, zone: &str, deleted: Option<&str>) -> ResourceEnvelope {
+        let value = serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "metadata": {
+                "configurationGeneration": 7,
+                "createdAt": "2026-07-22T00:00:00.000Z",
+                "deletionRequestedAt": deleted,
+                "finalizers": [],
+                "generation": generation,
+                "managedBy": "configuration",
+                "name": "acceptance-guest",
+                "ownerRef": null,
+                "revision": 1,
+                "uid": uid,
+                "updatedAt": "2026-07-22T00:00:00.000Z",
+                "zone": zone,
+            },
+            "spec": {"providerRef": "Provider/runtime-cloud-hypervisor"},
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": generation,
+                "outcome": null,
+                "phase": phase,
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": generation,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": generation,
+                },
+            },
+            "type": "Guest",
+        });
+        ResourceEnvelope::from_json(&serde_json::to_vec(&value).expect("JSON"))
+            .expect("strict envelope")
+    }
+
+    fn zone() -> ZoneId {
+        ZoneId::parse("work").expect("zone")
+    }
+
+    /// The deletion mark is the deleting fact: a row the manager renders as
+    /// the `Deleted` tombstone (or as `Failed` for a retried delete failure)
+    /// still owns its committed identity and the live session the deletion
+    /// path reuses, so the session target stays resolvable for it.
+    #[test]
+    fn a_deleting_row_is_admitted_on_its_deletion_mark() {
+        let deleted = Some("2026-07-22T00:00:00.000Z");
+        for phase in ["Deleted", "Failed", "Ready"] {
+            let envelope = row(phase, UID, 1, "work", deleted);
+            assert!(
+                session_target_row_admitted(&envelope, &zone(), true),
+                "a deleting row in phase {phase} must resolve its session target"
+            );
+        }
+    }
+
+    /// The non-deleting rule is unchanged: a terminal projection without a
+    /// deletion mark is still refused, a live one is admitted.
+    #[test]
+    fn a_non_deleting_row_keeps_the_terminal_phase_refusal() {
+        for phase in ["Deleted", "Failed"] {
+            let envelope = row(phase, UID, 1, "work", None);
+            assert!(
+                !session_target_row_admitted(&envelope, &zone(), false),
+                "a non-deleting row in phase {phase} must stay refused"
+            );
+        }
+        let ready = row("Ready", UID, 1, "work", None);
+        assert!(session_target_row_admitted(&ready, &zone(), false));
+    }
+
+    /// The Zone fence is independent of the deleting fact. (The uid and
+    /// generation completeness checks are unreachable for a strictly decoded
+    /// envelope: the contract rejects an empty uid or a zero generation at
+    /// decode time.)
+    #[test]
+    fn the_zone_fence_holds_for_deleting_rows_too() {
+        let deleted = Some("2026-07-22T00:00:00.000Z");
+        for row_deleting in [true, false] {
+            let envelope = row(
+                if row_deleting { "Deleted" } else { "Ready" },
+                UID,
+                1,
+                "other",
+                if row_deleting { deleted } else { None },
+            );
+            assert!(
+                !session_target_row_admitted(&envelope, &zone(), row_deleting),
+                "a row of another Zone must never fence this Zone's session"
+            );
+        }
+    }
 }
 
 /// Resolve the private ComponentSession carriage for a committed Guest
@@ -11749,10 +11655,17 @@ pub(crate) async fn resolve_component_session_endpoint_for_guest(
     {
         return Err("guest-session:committed-identity-changed".to_owned());
     }
-    let endpoint_value = runtime
-        .committed_resource_value(target.endpoint_ref(), "guest-session-endpoint")
+    // The converted `Endpoint` row is read from the manager authority; see
+    // [`resolve_committed_guest_session_target`]. An absent row means the
+    // provider controller has not committed the child batch yet, and a
+    // manager/plane failure stays a read failure the callers retry.
+    let Some(endpoint_value) = runtime
+        .committed_manager_row_optional(target.endpoint_ref())
         .await
-        .map_err(|_| "guest-session:endpoint-unavailable".to_owned())?;
+        .map_err(|_| "guest-session:endpoint-read-failed".to_owned())?
+    else {
+        return Err("guest-session:endpoint-unavailable".to_owned());
+    };
     let endpoint = ResourceEnvelope::from_json(
         &serde_json::to_vec(&endpoint_value)
             .map_err(|_| "guest-session:endpoint-invalid".to_owned())?,
@@ -12263,6 +12176,378 @@ pub(crate) async fn invalidate_guest_component_session_for_guest(
         .lock()
         .await
         .remove(&target.key());
+}
+
+/// Establish (or re-establish) the authenticated ComponentSession of one
+/// manager-served Cloud Hypervisor Guest and register its live generation as
+/// the Zone target directory's realization authority for that Guest (U13).
+///
+/// This is the production entry the converted Guest effect path drives, so a
+/// Guest realized through the manager is no longer reachable only from the
+/// legacy lifecycle helpers: the committed Guest and its guest-control
+/// Endpoint fence the resolution, the session cache makes the call idempotent
+/// while the session is live, and every target-layer consumer (the
+/// target-control channel, the F5 adoption of a reconnect, and the
+/// target-local observations the drivers read) works from this binding.
+///
+/// On a connect the assignments the directory holds for this Guest are
+/// re-adopted through the target layer: a target-local realization present
+/// inside the Guest is re-bound to the live generation, and one the Guest
+/// cannot confirm is reported missing so the owning actor realizes it again -
+/// never inherited from the previous session (R21, R28).
+pub(crate) async fn ensure_guest_target_session(
+    state: &ServerState,
+    zone: &ZoneId,
+    guest_ref: &ResourceRef,
+) -> Result<(), String> {
+    let Some(guest) = crate::guest_target_control::guest_target_ref(guest_ref) else {
+        return Err("guest-session:subject-not-a-guest".to_owned());
+    };
+    let plane = state
+        .v3_planes
+        .lock()
+        .get(zone.as_str())
+        .map(std::sync::Arc::clone)
+        .ok_or_else(|| "guest-session:zone-plane-unavailable".to_owned())?;
+    // A directory that already holds the live cached session's generation has
+    // nothing to establish. One holding an older generation - another session
+    // path replaced the session without binding it - is re-bound below, and a
+    // lost live session falls through to a fresh connect.
+    if let d2b_resource_runtime::target::TargetAvailability::Connected {
+        session_generation,
+    } = plane.targets().availability(&guest)
+        && let Some(cached) = live_cached_guest_session_generation(state, zone, guest_ref).await
+        && cached <= session_generation
+    {
+        return Ok(());
+    }
+    let runtime = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .and_then(|plane| plane.zone(zone).ok())
+        .ok_or_else(|| "guest-session:zone-runtime-unavailable".to_owned())?;
+    let target = resolve_committed_guest_session_target(&runtime, guest_ref)
+        .await
+        .map_err(|reason| format!("guest-session:unresolved:{reason}"))?;
+    let session = connect_guest_component_session_for_guest(state, &target).await?;
+    let generation = session.generation();
+    // The connect may have raced another pass (the session cache is shared):
+    // a generation the directory already holds is nothing to bind.
+    if let d2b_resource_runtime::target::TargetAvailability::Connected {
+        session_generation,
+    } = plane.targets().availability(&guest)
+        && session_generation >= generation
+    {
+        return Ok(());
+    }
+    let control = crate::guest_target_control::session_target_control(
+        std::sync::Arc::clone(&session),
+        generation,
+    )
+    .map_err(|error| format!("guest-session:target-control-unavailable:{error}"))?;
+    plane
+        .bind_guest_target(&guest, generation, control)
+        .map_err(|error| format!("guest-session:target-bind-refused:{error}"))?;
+    adopt_guest_target_assignments(plane.targets(), &guest, generation).await;
+    Ok(())
+}
+
+/// The generation of the live cached ComponentSession to one Guest, when the
+/// session cache holds one (U13).
+async fn live_cached_guest_session_generation(
+    state: &ServerState,
+    zone: &ZoneId,
+    guest_ref: &ResourceRef,
+) -> Option<u64> {
+    let sessions = state.guest_component_sessions.lock().await;
+    sessions
+        .values()
+        .filter(|session| session.route_binding().liveness().is_live())
+        .find(|session| {
+            session.identity().zone() == zone && session.identity().guest_ref() == guest_ref
+        })
+        .map(|session| session.generation())
+}
+
+/// Re-adopt every assignment the directory holds for one Guest after a
+/// (re)connect: the target layer is the only place that re-binds a handle to
+/// the live session generation, and a source the Guest cannot confirm is left
+/// for its owning actor to realize again (F5).
+async fn adopt_guest_target_assignments(
+    directory: &std::sync::Arc<d2b_resource_runtime::target::TargetDirectory>,
+    guest: &d2b_resource_runtime::target::TargetRef,
+    session_generation: u64,
+) {
+    let assignments = directory.assignments_for(guest);
+    if assignments.is_empty() {
+        return;
+    }
+    let mut adopted = 0usize;
+    for source in &assignments {
+        let Some(assignment) = directory.assignment(source) else {
+            continue;
+        };
+        let binding = d2b_resource_runtime::target::TargetBinding::new(
+            std::sync::Arc::clone(directory),
+            assignment,
+        );
+        match binding.adopt().await {
+            Ok((_, outcome)) => {
+                adopted += 1;
+                tracing::debug!(
+                    guest = %guest,
+                    source = %source,
+                    discovery = ?outcome.adopted(),
+                    "Guest target assignment re-adopted on reconnect",
+                );
+            }
+            Err(error) => {
+                tracing::debug!(
+                    guest = %guest,
+                    source = %source,
+                    error = %error,
+                    "Guest target assignment adoption did not answer",
+                );
+            }
+        }
+    }
+    tracing::info!(
+        guest = %guest,
+        session_generation,
+        assignments = assignments.len(),
+        adopted,
+        "Guest target directory bound to the live session generation",
+    );
+}
+
+/// The KTD6 guest-mount observation of one VolumeBinding row: whether the
+/// Guest target of `key`'s assignment currently reports the row's target-local
+/// realization serving (U13).
+///
+/// The evidence is the Zone target directory's answer through the live
+/// authenticated ComponentSession - the same boundary every other target-local
+/// observation crosses. A row that is not assigned to a guest, a guest with no
+/// live session, a source the Guest holds no realization for, and one whose
+/// realization has not converged all report `false`; only
+/// [`TargetObservation::Ready`] answers `true`.
+pub(crate) async fn binding_guest_mount_ready(
+    state: &ServerState,
+    zone: &ZoneId,
+    key: &d2b_resource_runtime::identity::ResourceKey,
+) -> bool {
+    let directory = state
+        .v3_planes
+        .lock()
+        .get(zone.as_str())
+        .map(|plane| std::sync::Arc::clone(plane.targets()));
+    let Some(directory) = directory else {
+        return false;
+    };
+    target_local_mount_observed(&directory, key).await
+}
+
+/// One row's target-local observation through an already-resolved directory.
+///
+/// The assignment is re-bound to the live session generation first (the only
+/// operation that accepts a handle minted under an older generation), so an
+/// assignment that predates the live session is still observable; a target
+/// that cannot answer at all stays `false`, never "absent".
+pub(crate) async fn target_local_mount_observed(
+    directory: &std::sync::Arc<d2b_resource_runtime::target::TargetDirectory>,
+    key: &d2b_resource_runtime::identity::ResourceKey,
+) -> bool {
+    let Some(assignment) = directory.assignment(key) else {
+        return false;
+    };
+    if assignment.target().guest().is_none() {
+        return false;
+    }
+    let binding = d2b_resource_runtime::target::TargetBinding::new(
+        std::sync::Arc::clone(directory),
+        assignment,
+    );
+    let Ok((binding, _)) = binding.adopt().await else {
+        return false;
+    };
+    matches!(
+        binding.observe().await,
+        Ok(d2b_resource_runtime::target::TargetObservation::Ready { .. })
+    )
+}
+
+#[cfg(test)]
+mod guest_target_session_tests {
+    use super::*;
+    use d2b_resource_runtime::guest_target::{GuestTargetRuntime, target_local_spec_digest};
+    use d2b_resource_runtime::identity::ResourceKey;
+    use d2b_resource_runtime::target::{
+        TargetDirectory, TargetError, TargetObservation, TargetRef,
+    };
+
+    fn guest() -> TargetRef {
+        TargetRef::guest("acceptance-guest").expect("guest target")
+    }
+
+    fn binding_key() -> ResourceKey {
+        ResourceKey::new("work", "VolumeBinding", "vol-binding-1")
+    }
+
+    /// Connect one in-process guest session generation the way the daemon's
+    /// authenticated accept does: bind the live generation, mint its control
+    /// capability, hand it to the directory.
+    fn connect(
+        runtime: &Arc<GuestTargetRuntime>,
+        directory: &Arc<TargetDirectory>,
+        generation: u64,
+    ) {
+        runtime.bind_session(generation).expect("bind live generation");
+        directory
+            .connect_guest(
+                &guest(),
+                generation,
+                runtime.control(generation).expect("control capability"),
+            )
+            .expect("connect guest target");
+    }
+
+    /// U13 establishment path: a live session generation connected through the
+    /// directory carries the assignment, adoption re-binds it across a
+    /// reconnect, and the KTD6 gate reads the target-local realization the
+    /// Guest actually reports instead of a default.
+    #[tokio::test]
+    async fn a_reconnect_rebinds_the_assignment_and_the_gate_reads_target_evidence() {
+        let directory = Arc::new(TargetDirectory::new());
+        let runtime = Arc::new(GuestTargetRuntime::new(guest()));
+        connect(&runtime, &directory, 1);
+        let key = binding_key();
+        directory
+            .assign(&key, &[0x42; 16], 3, "Guest/acceptance-guest")
+            .expect("assign to the guest target");
+
+        // Nothing realized inside the Guest yet: the gate has no evidence.
+        assert!(!target_local_mount_observed(&directory, &key).await);
+
+        let handle = directory
+            .assignment(&key)
+            .expect("assignment")
+            .target()
+            .guest()
+            .expect("guest handle")
+            .clone();
+        let spec = br#"{"view":"controller","mountPath":"/nix/.ro-store"}"#.to_vec();
+        directory
+            .realize(
+                &handle,
+                &key,
+                spec.clone(),
+                &target_local_spec_digest(&spec),
+                "/run/d2b/binding1.sock",
+            )
+            .await
+            .expect("realize through the guest path");
+        assert_eq!(
+            directory.observe(&handle, &key).await,
+            Ok(TargetObservation::Realizing { session_generation: 1 }),
+            "a recorded realization is not ready before its effect converged",
+        );
+        runtime.mark_ready(&key).expect("target-local effect converged");
+        assert!(target_local_mount_observed(&directory, &key).await);
+
+        // The session drops: desired state and the assignment stay (R21), a
+        // stale handle cannot answer on the new generation (R28), and the
+        // gate fails closed while the target is gone.
+        assert_eq!(
+            directory
+                .disconnect_guest(&guest(), 1)
+                .expect("disconnect live session")
+                .session_generation(),
+            1,
+        );
+        assert!(directory.assignment(&key).is_some(), "the assignment survives the target loss");
+        assert!(!target_local_mount_observed(&directory, &key).await);
+
+        connect(&runtime, &directory, 2);
+        assert_eq!(
+            directory.observe(&handle, &key).await,
+            Err(TargetError::StaleSessionGeneration),
+            "the previous generation's handle cannot inherit the new session's authority",
+        );
+        adopt_guest_target_assignments(&directory, &guest(), 2).await;
+        assert_eq!(
+            directory
+                .assignment(&key)
+                .expect("assignment")
+                .target()
+                .guest()
+                .expect("guest handle")
+                .session_generation(),
+            Some(2),
+            "adoption re-binds the assignment to the live generation",
+        );
+        assert!(
+            target_local_mount_observed(&directory, &key).await,
+            "the realization the Guest still holds is adopted, not re-invented",
+        );
+    }
+
+    /// Capture everything one action emits with the daemon's default filter
+    /// applied (`main.rs` initializes `info`): an event below that level never
+    /// reaches the host journal, where the Guest console is forwarded.
+    fn capture_journal_output(action: impl FnOnce()) -> String {
+        #[derive(Clone)]
+        struct Buffer(Arc<std::sync::Mutex<Vec<u8>>>);
+
+        impl std::io::Write for Buffer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("journal buffer").extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Buffer {
+            type Writer = Buffer;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let buffer = Buffer(Arc::new(std::sync::Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buffer.clone())
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        tracing::subscriber::with_default(subscriber, action);
+        String::from_utf8(buffer.0.lock().expect("journal buffer").clone())
+            .expect("journal output is utf-8")
+    }
+
+    /// Regression (U13): every acceptance publishes the live session
+    /// generation at the level the host journal shows, under the event name
+    /// the acceptance lane greps. The pre-restart capture is the first
+    /// acceptance of the Guest's boot, so a publisher that only fired on a
+    /// replacement - or only at `debug` - is exactly the regression this
+    /// pins.
+    #[test]
+    fn the_session_generation_is_published_at_journal_level() {
+        let output = capture_journal_output(|| publish_component_session_started(7));
+        assert!(
+            output.contains(COMPONENT_SESSION_STARTED_EVENT),
+            "the accept event must be journal-visible: {output:?}",
+        );
+        assert!(
+            output.contains("generation=7"),
+            "the accept event must carry the live session generation: {output:?}",
+        );
+    }
 }
 
 #[cfg(test)]
@@ -15069,10 +15354,6 @@ fn dispatch_broker_request(
     )
 }
 
-fn records_broker_response_evidence(request: &BrokerRequest) -> bool {
-    !matches!(request, BrokerRequest::ResourceActivationAudit(_))
-}
-
 fn dispatch_broker_request_as(
     state: &ServerState,
     request: BrokerRequest,
@@ -15080,7 +15361,6 @@ fn dispatch_broker_request_as(
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
-    let ingest_response_evidence = records_broker_response_evidence(&request);
     let socket = connect_seqpacket(&socket_path)?;
     write_json_frame(
         &socket,
@@ -15097,9 +15377,6 @@ fn dispatch_broker_request_as(
             path: socket_path,
             detail: err.to_string(),
         })?;
-    if ingest_response_evidence {
-        ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
-    }
     Ok(decoded)
 }
 
@@ -15125,49 +15402,7 @@ fn dispatch_broker_request_with_timeout_as(
     timeout: Duration,
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
-    let audit_join = default_audit_join_context(&request);
-    let ingest_response_evidence = records_broker_response_evidence(&request);
-    let result =
-        dispatch_broker_request_to_socket(&socket_path, request, caller_role, Some(timeout));
-    if ingest_response_evidence && let Ok(response) = &result {
-        ingest_broker_response_evidence(state, audit_join.as_ref(), response);
-    }
-    result
-}
-
-fn ingest_broker_response_evidence(
-    state: &ServerState,
-    audit_join: Option<&AuditJoinContext>,
-    response: &BrokerResponse,
-) {
-    let Some(join) = audit_join else {
-        return;
-    };
-    let Ok(zone) = AuditZoneId::parse(join.zone_id.as_str()) else {
-        return;
-    };
-    let Ok(operation) = OperationIdentity::parse(join.operation_identity.as_str()) else {
-        return;
-    };
-    let evidence = DurabilityEvidence {
-        key: ZoneOperationKey::new(zone, operation),
-        outcome: if matches!(response, BrokerResponse::Error(_)) {
-            d2b_audit::DurabilityOutcome::Failure
-        } else {
-            d2b_audit::DurabilityOutcome::Success
-        },
-        effect_durable: !matches!(response, BrokerResponse::Error(_)),
-    };
-    let plane = state
-        .resource_plane
-        .lock()
-        .ok()
-        .and_then(|plane| plane.clone());
-    if let Some(plane) = plane
-        && let Err(error) = plane.record_broker_evidence(evidence)
-    {
-        tracing::debug!(error = ?error, "broker evidence ingestion skipped");
-    }
+    dispatch_broker_request_to_socket(&socket_path, request, caller_role, Some(timeout))
 }
 
 fn poll_broker_child_reaped(state: &ServerState) -> Result<usize, TypedError> {
@@ -15310,7 +15545,6 @@ fn dispatch_broker_request_with_optional_request_fds(
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
-    let ingest_response_evidence = records_broker_response_evidence(&request);
     let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
     socket
         .set_read_timeout(Some(timeout))
@@ -15342,9 +15576,6 @@ fn dispatch_broker_request_with_optional_request_fds(
             detail: err.to_string(),
         }
     })?;
-    if ingest_response_evidence {
-        ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
-    }
     Ok((decoded, received_fds))
 }
 
@@ -15445,111 +15676,6 @@ fn load_bundle_resolver(state: &ServerState) -> Result<BundleResolver, TypedErro
     })
 }
 
-fn open_zone_store_from_broker(
-    state: &ServerState,
-    zone: &ZoneId,
-) -> Result<d2bd_runtime::resource_store_runtime::OpenedZoneStore, TypedError> {
-    let zone_store_id =
-        ZoneStoreId::parse(format!("zone-store-{}", zone.as_str())).map_err(|_| {
-            TypedError::InternalConfig {
-                detail: "trusted Zone store id is invalid".to_owned(),
-            }
-        })?;
-    let (response, received_fds) = dispatch_broker_request_with_fds_timeout(
-        state,
-        BrokerRequest::OpenZoneStore(BrokerOpenZoneStoreRequest { zone_store_id }),
-        Duration::from_secs(60),
-    )?;
-    if received_fds.len() != 1 {
-        close_received_fds(&received_fds);
-        return Err(TypedError::InternalBrokerUnavailable {
-            path: broker_socket_path(state),
-            detail: "OpenZoneStore did not return exactly one descriptor".to_owned(),
-        });
-    }
-    let fd = match duplicate_received_fd(&received_fds, 0, "duplicate Zone store fd") {
-        Ok(fd) => fd,
-        Err(error) => {
-            close_received_fds(&received_fds);
-            return Err(error);
-        }
-    };
-    close_received_fds(&received_fds);
-    match response {
-        BrokerResponse::OpenZoneStore(response) => {
-            if response.fd_index != 0
-                || response.zone_store_id.as_str() != format!("zone-store-{}", zone.as_str())
-            {
-                return Err(TypedError::InternalBrokerUnavailable {
-                    path: broker_socket_path(state),
-                    detail: "OpenZoneStore response did not match its request".to_owned(),
-                });
-            }
-            Ok(d2bd_runtime::resource_store_runtime::OpenedZoneStore {
-                response,
-                database_fd: fd,
-                external_inventory: None,
-            })
-        }
-        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
-            path: broker_socket_path(state),
-            detail: format!("OpenZoneStore refused: {}", error.kind),
-        }),
-        other => Err(TypedError::InternalBrokerUnavailable {
-            path: broker_socket_path(state),
-            detail: format!("OpenZoneStore returned unexpected response: {other:?}"),
-        }),
-    }
-}
-
-async fn ensure_resource_activation_broker_evidence(
-    state: &ServerState,
-    zone: &ZoneId,
-    operation_id: &str,
-    broker_evidence: &d2b_resource_store_redb::BrokerEvidenceIndex,
-) -> Result<DurabilityEvidence, resource_runtime::ResourceRuntimeError> {
-    let zone_identity = AuditZoneId::derive(zone.as_str())
-        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
-    let operation_identity = OperationIdentity::derive(operation_id)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
-    let key = ZoneOperationKey::new(zone_identity.clone(), operation_identity.clone());
-    let evidence = if let Some(evidence) = broker_evidence
-        .get(&key)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?
-    {
-        evidence
-    } else {
-        let audit_join = AuditJoinContext {
-            zone_id: CanonicalAuditDigest::parse(zone_identity.as_str())
-                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
-            operation_identity: CanonicalAuditDigest::parse(operation_identity.as_str())
-                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
-        };
-        let response = dispatch_broker_request_with_timeout(
-            state,
-            BrokerRequest::ResourceActivationAudit(BrokerResourceActivationAuditRequest {
-                audit_join,
-            }),
-            Duration::from_secs(10),
-        )
-        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
-        match response {
-            BrokerResponse::ResourceActivationAudit(response) if response.recorded => {
-                DurabilityEvidence {
-                    key,
-                    outcome: d2b_audit::DurabilityOutcome::Success,
-                    effect_durable: true,
-                }
-            }
-            BrokerResponse::Error(_) => {
-                return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
-            }
-            _ => return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady),
-        }
-    };
-    Ok(evidence)
-}
-
 async fn shutdown_unpublished_runtimes(
     runtimes: &mut Vec<(
         ZoneId,
@@ -15573,6 +15699,159 @@ fn committed_zone_topology(
         .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)
 }
 
+/// Production probe for the Credential driver's managed-identity agent
+/// readiness (U12). The agent is a v3 manager row, so the live evidence is
+/// the manager view: `Ready` status published for the row's current
+/// generation (R11). The plane publishes its client into the slot right
+/// after it opens - before any bundle row is ingested - so the probe is
+/// live for the first credential reconcile.
+fn credential_agent_ready_probe(
+    client: Arc<std::sync::OnceLock<Arc<d2b_resource_runtime::manager::ResourceManagerClient>>>,
+    zone: ZoneId,
+) -> Arc<
+    dyn for<'a> Fn(&'a ResourceRef) -> crate::credential_driver::AgentReadyFuture<'a> + Send + Sync,
+> {
+    Arc::new(move |agent_ref: &ResourceRef| {
+        let client = Arc::clone(&client);
+        let zone = zone.clone();
+        let agent_ref = agent_ref.clone();
+        Box::pin(async move {
+            let Some(client) = client.get() else {
+                return false;
+            };
+            let key = d2b_resource_runtime::identity::ResourceKey::new(
+                zone.as_str(),
+                agent_ref.resource_type().as_str(),
+                agent_ref.name().as_str(),
+            );
+            matches!(
+                client.get(key).await,
+                Ok(Some(view))
+                    if view.status == Some(d2b_resource_runtime::ResourceStatus::Ready)
+                        && view.status_generation == Some(view.generation)
+            )
+        })
+    })
+}
+
+/// Bounded retry window for the committed Provider identity seed (KTD7):
+/// mirrors the process-resource startup read (`30 x 2s`) that retries the
+/// same generation-publication visibility window.
+const PROVIDER_IDENTITY_SEED_ATTEMPTS: usize = 30;
+const PROVIDER_IDENTITY_SEED_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Resolve the committed `Provider` rows a zone's controller `Process` rows
+/// bind their launch identity from (KTD7).
+///
+/// Returns the identities that resolved plus the refs that never appeared.
+/// Each ref is loaded on its own so a late row cannot void the rows that are
+/// already committed (the loader is all-or-nothing per request), resolved
+/// identities survive retries, and the caller keeps a never-appearing ref
+/// loud instead of substituting an empty map - an empty snapshot would turn
+/// a startup publication race into a terminal identity failure for every
+/// controller row.
+async fn seed_committed_provider_identities<L, F>(
+    provider_refs: BTreeSet<ResourceRef>,
+    attempts: usize,
+    interval: Duration,
+    mut load: L,
+) -> (
+    BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>,
+    Vec<ResourceRef>,
+)
+where
+    L: FnMut(ResourceRef) -> F,
+    F: Future<
+        Output = Result<
+            (ResourceUid, ResourceGeneration),
+            resource_runtime::ResourceRuntimeError,
+        >,
+    >,
+{
+    let mut resolved = BTreeMap::new();
+    let mut last_error: Option<resource_runtime::ResourceRuntimeError> = None;
+    let attempts = attempts.max(1);
+    for attempt in 0..attempts {
+        let pending = provider_refs
+            .iter()
+            .filter(|provider_ref| !resolved.contains_key(*provider_ref))
+            .cloned()
+            .collect::<Vec<_>>();
+        if pending.is_empty() {
+            break;
+        }
+        for provider_ref in pending {
+            match load(provider_ref.clone()).await {
+                Ok(identity) => {
+                    resolved.insert(provider_ref, identity);
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        if resolved.len() == provider_refs.len() {
+            break;
+        }
+        if attempt + 1 < attempts {
+            tracing::warn!(
+                unresolved = provider_refs.len() - resolved.len(),
+                attempt,
+                "committed Provider identity snapshot raced publication; retrying",
+            );
+            tokio::time::sleep(interval).await;
+        }
+    }
+    let unresolved = provider_refs
+        .iter()
+        .filter(|provider_ref| !resolved.contains_key(*provider_ref))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unresolved.is_empty() {
+        tracing::error!(
+            unresolved = ?unresolved
+                .iter()
+                .map(ResourceRef::to_canonical_string)
+                .collect::<Vec<_>>(),
+            error = ?last_error,
+            "committed Provider identities unresolved after the publication window; \
+             controller rows owned by these Providers cannot bind their launch identity",
+        );
+    }
+    (resolved, unresolved)
+}
+
+/// The launch identity the controller seed binds for one `Provider` ref
+/// (KTD7).
+///
+/// `Provider` is served by the manager: the plane allocates each row's
+/// identity deterministically from its key (R8). The seed must bind that
+/// identity - the identity the session fence, the policy bridge, and the
+/// manager-backed reads all agree on - so the ref resolves to the row the
+/// bundle ingest is about to allocate. Binding a different identity dropped
+/// every bootstrap and left the controller `Process` rows Pending forever
+/// (vmCheck `resource-operator-activation` / `...guest-preflight`,
+/// 2026-09-11).
+///
+/// Residual: a spec change committed before this boot increments the
+/// manager row's generation, which this pre-open seed cannot see; the seed
+/// binds the fresh-row generation.
+async fn committed_provider_seed_identity(
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    provider_ref: ResourceRef,
+) -> Result<(ResourceUid, ResourceGeneration), resource_runtime::ResourceRuntimeError> {
+    let key = d2b_resource_runtime::identity::ResourceKey::new(
+        runtime.zone().as_str(),
+        provider_ref.resource_type().as_str(),
+        provider_ref.name().as_str(),
+    );
+    let uid = crate::resource_plane_v3::resource_uid(
+        &d2b_resource_runtime::manager::deterministic_uid(&key),
+    )
+    .map_err(|_| resource_runtime::ResourceRuntimeError::StoreReadFailed)?;
+    let generation = ResourceGeneration::new(1)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::StoreReadFailed)?;
+    Ok((uid, generation))
+}
+
 async fn open_resource_plane(
     state: &ServerState,
     resolver: &BundleResolver,
@@ -15582,13 +15861,6 @@ async fn open_resource_plane(
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let mut plane = resource_runtime::ResourcePlane::new();
-    let broker_evidence = match load_broker_audit_evidence(state) {
-        Ok(evidence) => evidence,
-        Err(error) => {
-            tracing::error!(error = ?error, "Zone resource broker evidence load failed");
-            return Err(error);
-        }
-    };
     let zones = match d2bd_runtime::zone_authority::authoritative_zone_ids(resolver) {
         Ok(zones) => zones,
         Err(error) => {
@@ -15659,48 +15931,10 @@ async fn open_resource_plane(
             "resource plane Zone bundle loaded"
         );
         let materialization_bundle = desired_bundle.clone();
-        let opened = match open_zone_store_from_broker(state, &zone) {
-            Ok(opened) => opened,
-            Err(error) => {
-                tracing::error!(zone = ?zone, error = ?error, "Zone resource store broker open failed");
-                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-            }
-        };
-        let zone_state_dir = state
-            .daemon_state_dir
-            .parent()
-            .unwrap_or(state.daemon_state_dir.as_path())
-            .join("zones")
-            .join(zone.as_str());
-        let audit_dir = zone_state_dir.join("audit");
-        let telemetry_path = zone_state_dir.join("telemetry").join("emitter.sock");
-        #[cfg(not(test))]
-        if !audit_dir.is_absolute() {
-            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-            return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-        }
-        let audit_sink = match AuditSink::open(&audit_dir) {
-            Ok(sink) => Arc::new(sink),
-            Err(error) => {
-                tracing::error!(
-                    zone = %zone.as_str(),
-                    audit_dir = %audit_dir.display(),
-                    error = ?error,
-                    "Zone resource audit sink open failed",
-                );
-                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-            }
-        };
         let zone_name = zone.as_str().to_owned();
         let mut runtime =
             match resource_runtime::ZoneResourceRuntime::open_production_with_identity(
                 zone.clone(),
-                opened,
-                audit_sink,
-                Arc::clone(&broker_evidence),
-                telemetry_path,
                 desired_bundle,
                 authority,
             )
@@ -15708,17 +15942,12 @@ async fn open_resource_plane(
             {
                 Ok(runtime) => runtime,
                 Err(error) => {
-                    tracing::error!(zone = %zone_name, error = ?error, "Zone resource runtime store open failed");
+                    tracing::error!(zone = %zone_name, error = ?error, "Zone resource runtime open failed");
                     shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
                     return Err(error);
                 }
             };
-        runtime.set_shared_provider_effects(Arc::new(
-            resource_runtime::DaemonSharedProviderEffects::new(
-                Arc::new(state.clone()),
-                zone.clone(),
-            ),
-        ));
+
         runtime.set_provider_path_ready(provider_ready);
         let descriptors = materialization_bundle
             .resources
@@ -15759,26 +15988,6 @@ async fn open_resource_plane(
         prepared_runtimes.push((zone, runtime, materialization_bundle));
     }
 
-    for index in 0..prepared_runtimes.len() {
-        let validation = {
-            let (zone, runtime, bundle) = &prepared_runtimes[index];
-            runtime
-                .validate_desired_bundle(bundle)
-                .await
-                .inspect_err(|error| {
-                    tracing::error!(
-                        zone = %zone.as_str(),
-                        error = ?error,
-                        "resource plane Zone bundle validation failed"
-                    );
-                })
-        };
-        if let Err(error) = validation {
-            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-            return Err(error);
-        }
-    }
-
     let coordinator_index = prepared_runtimes
         .iter()
         .position(|(zone, _, _)| zone == &topology.root)
@@ -15799,64 +16008,6 @@ async fn open_resource_plane(
         return Err(error);
     }
 
-    for index in 0..prepared_runtimes.len() {
-        let preparation = {
-            let (zone, runtime, bundle) = &prepared_runtimes[index];
-            runtime
-                .prepare_published_bundle(bundle)
-                .await
-                .inspect_err(|error| {
-                    tracing::error!(
-                        zone = %zone.as_str(),
-                        error = ?error,
-                        "resource plane Zone bundle preparation failed"
-                    );
-                })
-        };
-        if let Err(error) = preparation {
-            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-            return Err(error);
-        }
-    }
-
-    for index in 0..prepared_runtimes.len() {
-        let (zone, runtime, _) = &prepared_runtimes[index];
-        let pending_operation_ids = match runtime.pending_trusted_activation_operation_ids().await {
-            Ok(operation_ids) => operation_ids,
-            Err(error) => {
-                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-                return Err(error);
-            }
-        };
-        for operation_id in pending_operation_ids {
-            let evidence = match ensure_resource_activation_broker_evidence(
-                state,
-                zone,
-                &operation_id,
-                &broker_evidence,
-            )
-            .await
-            {
-                Ok(evidence) => evidence,
-                Err(error) => {
-                    shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-                    return Err(error);
-                }
-            };
-            if let Err(error) = runtime
-                .ingest_broker_evidence(&operation_id, evidence)
-                .await
-            {
-                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-                return Err(error);
-            }
-        }
-        if let Err(error) = runtime.require_trusted_activation_outboxes_drained().await {
-            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-            return Err(error);
-        }
-    }
-
     let commit_result = prepared_runtimes[coordinator_index]
         .1
         .commit_generation_publication(&set_generation, &prepared_generations)
@@ -15873,8 +16024,136 @@ async fn open_resource_plane(
         return Err(error);
     }
 
+    // v3 resource plane (U9/U10): assemble each Zone's manager plane once the
+    // generation publication is committed, and publish the whole table into
+    // `state.v3_planes` before any runtime activates. The runtime's
+    // manager-backed API service resolves its manager client + watch hub from
+    // that table, so a Zone whose plane is not published yet cannot activate.
+    let mut v3_planes: BTreeMap<String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>> =
+        BTreeMap::new();
+    for index in 0..prepared_runtimes.len() {
+        let (_zone, runtime, materialization_bundle) = &prepared_runtimes[index];
+        // v3 resource plane (U9/U10): the manager plane carries every
+        // type, so the zone's bundle is ingested into the per-zone
+        // ResourceManager with provenance Nix here.
+        let plane_v3 = {
+            let bundle = &materialization_bundle;
+            let credential_agent_client: Arc<
+                std::sync::OnceLock<Arc<d2b_resource_runtime::manager::ResourceManagerClient>>,
+            > = Arc::new(std::sync::OnceLock::new());
+            // KTD7: `Provider` is served by the v3 plane (U12 converted the
+            // Core family), so a controller row's launch identity must be the
+            // manager's committed row identity. Resolve that identity here and
+            // let the plane publish it before its manager spawns any resource
+            // actor: the session fence, the policy bridge, and the
+            // manager-backed reads all compare against it.
+            let provider_refs = bundle
+                .resources
+                .iter()
+                .filter(|row| row.resource_type().as_str() == "Provider")
+                .filter_map(|row| {
+                    ResourceRef::parse(&format!("Provider/{}", row.metadata().name().as_str())).ok()
+                })
+                .collect::<BTreeSet<_>>();
+            // KTD7 seeding: it must not be laundered into "no committed
+            // identities": an empty map turns the race into
+            // `provider-controller-provider-identity-missing` for every
+            // controller Process, which the Process driver classifies
+            // `IdentityAmbiguous` -> Terminal and exhausts. Late refs are
+            // retried, every resolved identity is retained, and a ref that
+            // never appears stays a loud error naming it.
+            let (committed_provider_identities, unresolved_provider_identities) =
+                seed_committed_provider_identities(
+                    provider_refs,
+                    PROVIDER_IDENTITY_SEED_ATTEMPTS,
+                    PROVIDER_IDENTITY_SEED_INTERVAL,
+                    |provider_ref| {
+                        let runtime = &runtime;
+                        async move {
+                            committed_provider_seed_identity(runtime, provider_ref).await
+                        }
+                    },
+                )
+                .await;
+            if !unresolved_provider_identities.is_empty() {
+                tracing::error!(
+                    zone = %_zone.as_str(),
+                    unresolved = unresolved_provider_identities.len(),
+                    "opening the v3 plane with unseeded Provider identities; \
+                     the controller rows these Providers own cannot bind",
+                );
+            }
+            let mut inputs = crate::resource_plane_v3::ConstructionInputs::production(
+                &std::sync::Arc::new(state.clone()),
+                _zone.clone(),
+                &d2bd_runtime::zone_authority::ZoneAuthorityIdentity::from_bundle_and_storage(
+                    &_zone,
+                    bundle,
+                    resolver
+                        .zone_storage_row(_zone.as_str())
+                        .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
+                )
+                .map_err(|error| {
+                    tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 plane authority derivation failed");
+                    resource_runtime::ResourceRuntimeError::HandlerNotReady
+                })?,
+                resolver.clone(),
+                runtime.credential_driver_effects(credential_agent_ready_probe(
+                    Arc::clone(&credential_agent_client),
+                    _zone.clone(),
+                )),
+                committed_provider_identities,
+            )
+            .map_err(|error| {
+                tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 plane inputs construction failed");
+                resource_runtime::ResourceRuntimeError::HandlerNotReady
+            })?;
+            inputs.zone = _zone.clone();
+            // U12: the Core-family driver reads the zone's live
+            // controller-session evidence (the same seam the G5 reader
+            // bridge uses), never a durable status copy.
+            inputs.core_effects = runtime.core_driver_effects();
+            let plane_v3 = crate::resource_plane_v3::ResourcePlaneV3::open(inputs).await.map_err(|error| {
+                tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 resource plane open failed");
+                resource_runtime::ResourceRuntimeError::HandlerNotReady
+            })?;
+            // Fill the Credential agent probe's manager handle before the
+            // bundle lands, so the first credential reconcile sees it.
+            let _ = credential_agent_client.set(Arc::new(plane_v3.client().clone()));
+            plane_v3
+                .complete_initial_load()
+                .await
+                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+            let report = plane_v3
+                .ingest_nix_bundle(bundle)
+                .await
+                .map_err(|error| {
+                    tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 resource plane nix ingestion failed");
+                    resource_runtime::ResourceRuntimeError::HandlerNotReady
+                })?;
+            tracing::info!(
+                zone = %_zone.as_str(),
+                applied = report.applied.len(),
+                removed = report.removed.len(),
+                api_protected = report.api_protected.len(),
+                "v3 resource plane nix ingestion complete"
+            );
+            plane_v3
+        };
+        v3_planes.insert(_zone.as_str().to_owned(), std::sync::Arc::new(plane_v3));
+    }
+    // U14: publish the complete table before any Zone activates; the
+    // manager-backed API service resolves the Zone's client + watch hub here.
+    {
+        let mut parked = state.v3_planes.lock();
+        *parked = v3_planes.into_iter().collect();
+    }
+
     let mut remaining = prepared_runtimes.into_iter();
     while let Some((_zone, mut runtime, _)) = remaining.next() {
+        // F1 wiring: the runtime's manager-backed API service resolves the
+        // Zone's v3 plane client and watch hub from the published table.
+        runtime.attach_v3_planes(std::sync::Arc::clone(&state.v3_planes));
         let installed_provider_count = state
             .provider_runtime
             .registered_provider_count()
@@ -15900,28 +16179,28 @@ async fn open_resource_plane(
         // must not race it. Under a fast CPU the read can land before the
         // published rows are visible, so retry instead of failing the
         // plane - the resources are committed, the reader is just early.
-        let mut process_resource_startup =
+        let mut controller_session_startup =
             Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
         // 30 x 2s: with fast fixture IO the reader outruns the broker's
         // publication by a wide margin, and 10 attempts (20s) exhausted
         // before the rows landed. Give the publication a full minute.
         for attempt in 0..30 {
-            process_resource_startup = runtime
-                .reconcile_process_resources(Arc::new(state.clone()))
+            controller_session_startup = runtime
+                .reconcile_controller_sessions(Arc::new(state.clone()))
                 .await;
-            match &process_resource_startup {
+            match &controller_session_startup {
                 Err(resource_runtime::ResourceRuntimeError::HandlerNotReady) => {
                     tracing::warn!(
                         zone = %runtime.zone().as_str(),
                         attempt,
-                        "process resource startup raced publication; retrying",
+                        "controller session startup raced publication; retrying",
                     );
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
                 _ => break,
             }
         }
-        if let Err(error) = process_resource_startup {
+        if let Err(error) = controller_session_startup {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
             while let Some((_, runtime, _)) = remaining.next() {
@@ -15934,103 +16213,6 @@ async fn open_resource_plane(
         // small VM creates a store-read thundering herd that trips their
         // own startup deadlines.
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        if let Err(error) = runtime.start_u10_controller_runners().await {
-            tracing::error!(
-                zone = %runtime.zone().as_str(),
-                error = ?error,
-                "Credential controller runners refused during startup",
-            );
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
-                let _ = runtime.shutdown().await;
-            }
-        // Stagger runner-family startups: each family's initial full-zone
-        // list is expensive, and starting every family concurrently on a
-        // small VM creates a store-read thundering herd that trips their
-        // own startup deadlines.
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            return Err(error);
-        }
-        if let Err(error) = runtime
-            .start_u12_controller_runners(Arc::new(state.clone()))
-            .await
-        {
-            tracing::error!(
-                zone = %runtime.zone().as_str(),
-                error = ?error,
-                "observability and activation controller runners refused during startup",
-            );
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
-                let _ = runtime.shutdown().await;
-            }
-        // Stagger runner-family startups: each family's initial full-zone
-        // list is expensive, and starting every family concurrently on a
-        // small VM creates a store-read thundering herd that trips their
-        // own startup deadlines.
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            return Err(error);
-        }
-        if let Err(error) = runtime
-            .start_u7_controller_runners(Arc::new(state.clone()))
-            .await
-        {
-            tracing::error!(
-                zone = %runtime.zone().as_str(),
-                error = ?error,
-                "storage Provider runners refused during startup",
-            );
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
-                let _ = runtime.shutdown().await;
-            }
-        // Stagger runner-family startups: each family's initial full-zone
-        // list is expensive, and starting every family concurrently on a
-        // small VM creates a store-read thundering herd that trips their
-        // own startup deadlines.
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            return Err(error);
-        }
-        if let Err(error) = runtime
-            .start_u6_controller_runners(Arc::new(state.clone()))
-            .await
-        {
-            tracing::error!(
-                zone = %runtime.zone(),
-                error = ?error,
-                "Guest runtime Provider runners refused during startup",
-            );
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
-                let _ = runtime.shutdown().await;
-            }
-        // Stagger runner-family startups: each family's initial full-zone
-        // list is expensive, and starting every family concurrently on a
-        // small VM creates a store-read thundering herd that trips their
-        // own startup deadlines.
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            return Err(error);
-        }
-        if let Err(error) = runtime
-            .start_u9_controller_runners(Arc::new(state.clone()))
-            .await
-        {
-            tracing::error!(
-                zone = %runtime.zone(),
-                error = ?error,
-                "interaction and shell Provider runners refused during startup",
-            );
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
-                let _ = runtime.shutdown().await;
-            }
-            return Err(error);
-        }
         let _ = runtime.audio_binding_statuses();
         if let Err(error) = runtime.require_ready() {
             if error != resource_runtime::ResourceRuntimeError::InteractionConfigurationUnavailable {
@@ -16044,7 +16226,7 @@ async fn open_resource_plane(
             tracing::error!(
                 zone = %runtime.zone(),
                 error = %error,
-                "interaction Provider readiness refused; retaining filtered U9 watches for diagnostics",
+                "interaction Provider readiness refused; interaction composition stays unavailable",
             );
         }
         match plane.insert(runtime) {
@@ -16216,13 +16398,16 @@ async fn compose_gateway_zone_links(
         let composition =
             match connect_guest_component_session_for_guest(state, &gateway_guest).await {
                 Ok(session) => {
-                    if let Err(error) = composition.bind_gateway_session(session) {
+                    if let Err(error) = composition.bind_gateway_session(Arc::clone(&session)) {
                         tracing::warn!(
                             zone = %zone,
                             error = error.code(),
                             "Gateway Guest session binding refused",
                         );
                     }
+                    // U13: bind the session generation as the realization
+                    // authority for Host-zone resources targeting this Guest.
+                    bind_plane_guest_target(state, &session);
                     composition
                 }
                 Err(error) => {
@@ -16282,147 +16467,6 @@ fn is_gateway_zone_link(link: &Value) -> bool {
         .and_then(|spec| spec.get("transportProviderRef"))
         .and_then(Value::as_str)
         == Some(d2b_provider_transport_azure_relay::PROVIDER_REF)
-}
-
-const BROKER_AUDIT_EVIDENCE_PAGE_LIMIT: u32 = 16;
-
-#[derive(serde::Deserialize)]
-struct BrokerAuditEvidenceLine {
-    #[serde(default)]
-    zone_id: Option<AuditZoneId>,
-    #[serde(default)]
-    operation_identity: Option<OperationIdentity>,
-    #[serde(default)]
-    decision: Option<String>,
-    #[serde(default)]
-    result: Option<String>,
-    #[serde(default)]
-    zone_operation_key: Option<ZoneOperationKey>,
-}
-
-fn load_broker_audit_evidence(
-    state: &ServerState,
-) -> Result<Arc<d2b_resource_store_redb::BrokerEvidenceIndex>, resource_runtime::ResourceRuntimeError>
-{
-    let mut evidence: BTreeMap<d2b_audit::ZoneOperationKey, d2b_audit::DurabilityEvidence> =
-        BTreeMap::new();
-    let mut cursor = None;
-    for _ in 0..1024 {
-        let response = dispatch_broker_request_as(
-            state,
-            BrokerRequest::ExportBrokerAudit(ExportBrokerAuditRequest {
-                filter: None,
-                since: None,
-                cursor: cursor.clone(),
-                limit: BROKER_AUDIT_EVIDENCE_PAGE_LIMIT,
-            }),
-            BrokerCallerRole::AdminUid {
-                uid: state.daemon_uid,
-            },
-        )
-        .inspect_err(|error| {
-            tracing::error!(
-                error = ?error,
-                "broker audit evidence export dispatch failed",
-            );
-        })
-        .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
-        let BrokerResponse::ExportBrokerAudit(response) = response else {
-            tracing::error!("broker audit evidence export returned an unexpected response");
-            return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-        };
-        for entry in response.entries {
-            if let Some(error) = entry.error {
-                tracing::error!(
-                    error = ?error,
-                    "broker audit evidence entry reported an error",
-                );
-                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-            }
-            let value = entry
-                .record
-                .ok_or(resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
-            let record_class = value
-                .get("record_class")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            let diagnostic_or_legacy = record_class.as_deref() != Some("durability")
-                || value
-                    .get("durability")
-                    .and_then(Value::as_bool)
-                    .is_some_and(|durability| !durability);
-            if diagnostic_or_legacy {
-                continue;
-            }
-            let parsed = serde_json::from_value::<BrokerAuditEvidenceLine>(value)
-                .inspect_err(|_| {
-                    tracing::error!("broker durability evidence entry failed schema decoding");
-                })
-                .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
-            let (
-                Some(zone_id),
-                Some(operation_identity),
-                Some(decision),
-                Some(result),
-                Some(zone_operation_key),
-            ) = (
-                parsed.zone_id,
-                parsed.operation_identity,
-                parsed.decision,
-                parsed.result,
-                parsed.zone_operation_key,
-            )
-            else {
-                tracing::error!(
-                    record_class = ?record_class,
-                    "broker durability evidence entry is incomplete",
-                );
-                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-            };
-            let item = evidence_from_decision_result(
-                zone_id,
-                operation_identity,
-                Some(&zone_operation_key),
-                Some(&decision),
-                Some(&result),
-            )
-            .inspect_err(|_| {
-                tracing::error!("broker durability evidence entry failed semantic conversion");
-            })
-            .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
-            let key = item.key.clone();
-            if let Some(previous) = evidence.get(&key) {
-                let retry_succeeded = previous.outcome == d2b_audit::DurabilityOutcome::Failure
-                    && !previous.effect_durable
-                    && item.outcome == d2b_audit::DurabilityOutcome::Success
-                    && item.effect_durable;
-                if previous != &item && !retry_succeeded {
-                    tracing::error!(
-                        operation_identity = %item.key.operation().as_str(),
-                        previous_outcome = ?previous.outcome,
-                        current_outcome = ?item.outcome,
-                        previous_effect_durable = previous.effect_durable,
-                        current_effect_durable = item.effect_durable,
-                        "broker durability evidence entries conflict for one operation",
-                    );
-                    return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-                }
-            }
-            evidence.insert(key, item);
-        }
-        if response.complete {
-            return Ok(Arc::new(d2b_resource_store_redb::BrokerEvidenceIndex::new(
-                evidence,
-            )));
-        }
-        cursor = response.next_cursor;
-        if cursor.is_none() {
-            tracing::error!("broker audit evidence pagination omitted its continuation cursor");
-            return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-        }
-    }
-    tracing::error!("broker audit evidence pagination exceeded its bounded page count");
-    Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed)
 }
 
 fn audit_resource_plane(
@@ -16556,7 +16600,6 @@ fn acquire_vm_start_lock(state: &ServerState, vm: &str) -> Result<Flock<File>, T
 
 #[derive(Debug)]
 enum VmRunnerLaunch {
-    Legacy(Box<d2b_contracts_broker::broker_wire::SpawnRunnerResponse>),
     Provider,
     ControllerOwned,
 }
@@ -16695,14 +16738,6 @@ struct VmStartRunner<'a> {
     state: &'a ServerState,
     resolver: &'a BundleResolver,
     caller_role: BrokerCallerRole,
-    lifecycle_authorization: Option<provider_effects::LifecycleAuthorization>,
-    /// Workload identity from the `VmProcessDag` this runner was constructed
-    /// for.  `None` for VMs that predate realm workload declarations; `Some`
-    /// for VMs declared as realm workloads.  Threaded into every
-    /// `SpawnRunner` request so the broker can record the identity in the
-    /// audit trail and privilege metadata without re-reading the process DAG.
-    workload_identity: Option<WorkloadIdentity>,
-    network_tap_context: Option<d2b_contracts_broker::broker_wire::NetworkTapContext>,
 }
 
 impl VmStartRunner<'_> {
@@ -16754,18 +16789,11 @@ impl VmStartRunner<'_> {
         &self,
         vm: &str,
         node: &ProcessNode,
-        runner_role: RunnerRole,
         timeout: Duration,
     ) -> Result<VmRunnerLaunch, String> {
         if node.role == ProcessRole::CloudHypervisorRunner {
             return Ok(VmRunnerLaunch::ControllerOwned);
         }
-        let intent_id = intent_id_legacy_runner(vm, &node.id.0);
-        let intent = self
-            .resolver
-            .find_runner_intent(&intent_id)
-            .ok_or_else(|| "bundle-intent-missing".to_owned())?;
-        let role_id = tracked_role_id(node);
         // Dispatch DiskInit before SpawnRunner when the ProcessNode declares
         // disk initialization plan operations. The broker resolves those
         // operations from the trusted bundle and creates the disk images
@@ -16829,168 +16857,25 @@ impl VmStartRunner<'_> {
             block_on_future(providers.launch_node(vm, node, timeout))?;
             return Ok(VmRunnerLaunch::Provider);
         }
-        match dispatch_broker_request_with_fds_timeout_as(
-            self.state,
-            BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
-                execution_ref: None,
-                execution_domain: None,
-                user_ref: None,
-                workload_identity: self.workload_identity.clone(),
-                vm_id: VmId::new(vm),
-                role_id: RoleId::new(role_id.clone()),
-                resource_ref: None,
-                resource_uid: None,
-                zone_uid: None,
-                owner_ref: None,
-                owner_uid: None,
-                provider_ref: None,
-                bundle_content_identity: None,
-                provider_identity: None,
-                template_identity: None,
-                generation: None,
-                runtime_scope: None,
-                activation_input: None,
-                sandbox_plan: None,
-                guest_execution: None,
-                role: runner_role,
-                bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
-                runtime_allocations: vec![],
-                tracing_span_id: None,
-                inherited_fd_count: 0,
-                network_tap_context: self.network_tap_context.clone(),
-            }),
-            self.caller_role.clone(),
-            timeout,
-        ) {
-            Ok((BrokerResponse::SpawnRunner(response), received_fds)) => {
-                if let Err(error) =
-                    self.register_node_pidfd(vm, node, runner_role, &response, &received_fds)
-                {
-                    stop_unregistered_spawned_runner(
-                        self.state,
-                        vm,
-                        &role_id,
-                        &response,
-                        &received_fds,
-                        self.caller_role.clone(),
-                    );
-                    close_received_fds(&received_fds);
-                    return Err(error);
-                }
-                close_received_fds(&received_fds);
-                Ok(VmRunnerLaunch::Legacy(Box::new(response)))
-            }
-            Ok((BrokerResponse::Error(error), received_fds)) => {
-                close_received_fds(&received_fds);
-                tracing::warn!(
-                    node = %node.id.0,
-                    broker_kind = %error.kind,
-                    broker_operation = %error.operation,
-                    broker_target_wave = error.target_wave.as_deref().unwrap_or("none"),
-                    broker_message = %error.message,
-                    broker_action = %error.action,
-                    "vm start node spawn failed"
-                );
-                Err(format!("broker-error:{}", error.kind))
-            }
-            Ok((other, received_fds)) => {
-                close_received_fds(&received_fds);
-                tracing::warn!(
-                    node = %node.id.0,
-                    broker_response_kind = %broker_response_kind(&other),
-                    "vm start node received unexpected broker response"
-                );
-                Err("broker-protocol".to_owned())
-            }
-            Err(error) => {
-                tracing::warn!(node = %node.id.0, error = ?error, "vm start node dispatch failed");
-                Err("broker-dispatch".to_owned())
-            }
-        }
-    }
-
-    fn register_node_pidfd(
-        &self,
-        vm: &str,
-        node: &ProcessNode,
-        runner_role: RunnerRole,
-        response: &d2b_contracts_broker::broker_wire::SpawnRunnerResponse,
-        received_fds: &[RawFd],
-    ) -> Result<(), String> {
-        let VmStartNodeMode::LongLived(_) = vm_start_node_mode(&node.role) else {
-            return Ok(());
-        };
-        let pidfd = duplicate_received_fd(
-            received_fds,
-            response.pidfd_index,
-            "duplicate SpawnRunner pidfd",
-        )
-        .map_err(|error| error.message())?;
-        let role_id = tracked_role_id(node);
-        // Serialize register + snapshot as one unit so a concurrent
-        // different-VM op cannot persist a stale snapshot that drops this
-        // entry (register A, snapshot A reads {A}, register B, snapshot B
-        // writes {A,B}, delayed snapshot A overwrites with {A} - losing B).
-        let _mguard = self.state.pidfd_table.mutation_guard();
-        self.state
-            .pidfd_table
-            .register(
-                vm.to_owned(),
-                role_id.clone(),
-                PidfdEntry {
-                    pidfd,
-                    pid: response.pid,
-                    start_time_ticks: response.start_time_ticks,
-                },
-            )
-            .map_err(|error| format!("pidfd-register:{error}"))?;
-        if let Err(error) = self.state.pidfd_table.snapshot() {
-            let _ = self.state.pidfd_table.deregister(vm, &role_id);
-            return Err(format!("pidfd-snapshot:{error}"));
-        }
-        // The pidfd-table register + snapshot sequence is now complete and
-        // consistent, so release the serialization guard BEFORE
-        // `write_runner_snapshot` (which writes a separate runner-snapshot
-        // file and never touches the pidfd table). Holding it across the
-        // failure path below would self-deadlock: `cleanup_vm_start_registration`
-        // re-acquires this same non-reentrant guard.
-        drop(_mguard);
-        if let Err(error) = write_runner_snapshot_with_authorization(
-            self.state,
-            vm,
-            &role_id,
-            runner_role,
-            response.pid,
-            response.start_time_ticks,
-            None,
-            self.lifecycle_authorization.as_ref(),
-        ) {
-            cleanup_vm_start_registration(self.state, vm, &role_id);
-            return Err(error);
-        }
-        if matches!(runner_role, RunnerRole::QemuMedia)
-            && let Some(console_fd_index) = response.console_fd_index
-        {
-            let console_fd = duplicate_received_fd(
-                received_fds,
-                console_fd_index,
-                "duplicate qemu-media console fd",
-            )
-            .map_err(|error| {
-                cleanup_vm_start_registration(self.state, vm, &role_id);
-                error.message()
-            })?;
-            let console_stream: UnixStream = console_fd.into();
-            self.state
-                .console_sessions
-                .lock()
-                .unwrap()
-                .register_session(
-                    vm.to_owned(),
-                    console_session::create_qemu_session(console_stream),
-                );
-        }
-        Ok(())
+        // U17: this launcher never spawns through the raw broker surface.
+        // Both `NodeRunner` entry points filter the two node classes
+        // `supports_node` declines before they reach here: a guest-owned node
+        // is launched by its Guest (`spawn_and_wait_ready` returns `Ok`), and
+        // a durable-wayland node stays readiness-only. Every remaining
+        // long-lived role is provider-managed, or the controller-owned Cloud
+        // Hypervisor runner returned above. A node that is none of those is a
+        // regression: refuse it instead of falling back to a direct
+        // `SpawnRunner`.
+        tracing::warn!(
+            vm = %vm,
+            node = %node.id.0,
+            role = ?node.role,
+            "vm start node is not provider-managed; refusing a raw spawn"
+        );
+        Err(format!(
+            "vm-start-node-not-provider-managed:{}",
+            node.id.0
+        ))
     }
 
     fn boot_qemu_media(
@@ -17139,13 +17024,8 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
                 // is no daemon-held pidfd to observe - no liveness probe.
                 wait_for_readiness(node, readiness, budget.readiness, None)
             }
-            VmStartNodeMode::OneShot(runner_role) => {
-                match self.spawn_runner(vm, node, runner_role, budget.spawn)? {
-                    VmRunnerLaunch::Legacy(response) => wait_for_one_shot_exit(
-                        response.pid,
-                        response.start_time_ticks,
-                        budget.readiness,
-                    ),
+            VmStartNodeMode::OneShot(_) => {
+                match self.spawn_runner(vm, node, budget.spawn)? {
                     VmRunnerLaunch::Provider => {
                         let providers = self
                             .state
@@ -17159,41 +17039,20 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
                     }
                 }
             }
-            VmStartNodeMode::LongLived(runner_role) => {
-                let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
+            VmStartNodeMode::LongLived(_) => {
+                let launch = self.spawn_runner(vm, node, budget.spawn)?;
                 if matches!(launch, VmRunnerLaunch::ControllerOwned) {
                     return wait_for_readiness(node, readiness, budget.readiness, None);
                 }
-                let provider_liveness;
-                let legacy_liveness;
-                let liveness: &dyn d2bd_runtime::supervisor::readiness_liveness::LivenessProbe =
-                    match &launch {
-                        VmRunnerLaunch::Provider => {
-                            let providers = self
-                                .state
-                                .provider_runtime
-                                .process_providers()
-                                .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
-                            provider_liveness =
-                                process_provider_runtime::ProviderLivenessProbe::new(
-                                    providers.clone(),
-                                    vm,
-                                    node,
-                                );
-                            &provider_liveness
-                        }
-                        VmRunnerLaunch::Legacy(_) => {
-                            legacy_liveness = d2bd_runtime::supervisor::readiness_liveness::PidfdLivenessProbe::new(
-                            &self.state.pidfd_table,
-                            &self.state.broker_reap_log,
-                            vm,
-                            tracked_role_id(node),
-                        );
-                            &legacy_liveness
-                        }
-                        VmRunnerLaunch::ControllerOwned => unreachable!("handled above"),
-                    };
-                wait_for_readiness(node, readiness, budget.readiness, Some(liveness))?;
+                let providers = self
+                    .state
+                    .provider_runtime
+                    .process_providers()
+                    .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
+                let liveness = process_provider_runtime::ProviderLivenessProbe::new(
+                    providers, vm, node,
+                );
+                wait_for_readiness(node, readiness, budget.readiness, Some(&liveness))?;
                 if node.role == ProcessRole::QemuMediaRunner {
                     self.boot_qemu_media(vm, node, budget.readiness)?;
                 }
@@ -17219,8 +17078,8 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
             return Ok(());
         }
         match vm_start_node_mode(&node.role) {
-            VmStartNodeMode::LongLived(runner_role) => {
-                let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
+            VmStartNodeMode::LongLived(_) => {
+                let launch = self.spawn_runner(vm, node, budget.spawn)?;
                 tracing::info!(
                     vm = %vm,
                     node = %node.id.0,
@@ -17292,177 +17151,11 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
     }
 }
 
-fn stop_unregistered_spawned_runner(
-    state: &ServerState,
-    vm: &str,
-    role_id: &str,
-    response: &d2b_contracts_broker::broker_wire::SpawnRunnerResponse,
-    received_fds: &[RawFd],
-    caller_role: BrokerCallerRole,
-) {
-    let pidfd = duplicate_received_fd(
-        received_fds,
-        response.pidfd_index,
-        "duplicate failed-registration SpawnRunner pidfd",
-    )
-    .map_err(|error| error.message());
-    if let Err(error) = &pidfd {
-        tracing::warn!(
-            vm = %vm,
-            role = %role_id,
-            pid = response.pid,
-            error = %error,
-            "spawn registration failed; could not duplicate pidfd for cleanup"
-        );
-    }
-
-    signal_unregistered_spawned_runner(
-        state,
-        vm,
-        role_id,
-        response,
-        pidfd.as_ref().ok(),
-        RunnerSignal::Term,
-        caller_role.clone(),
-    );
-    if wait_unregistered_spawned_runner_reaped(state, vm, role_id, Duration::from_secs(2)) {
-        deregister_runner_pidfd_via_broker(state, caller_role.clone(), vm, role_id);
-        return;
-    }
-
-    tracing::warn!(
-        vm = %vm,
-        role = %role_id,
-        pid = response.pid,
-        "spawn registration failed; SIGTERM cleanup did not reap runner, escalating"
-    );
-    signal_unregistered_spawned_runner(
-        state,
-        vm,
-        role_id,
-        response,
-        pidfd.as_ref().ok(),
-        RunnerSignal::Kill,
-        caller_role.clone(),
-    );
-    if wait_unregistered_spawned_runner_reaped(state, vm, role_id, Duration::from_secs(2)) {
-        deregister_runner_pidfd_via_broker(state, caller_role, vm, role_id);
-    } else {
-        tracing::warn!(
-            vm = %vm,
-            role = %role_id,
-            pid = response.pid,
-            "spawn registration failed; runner was not observed reaped after SIGKILL, leaving broker pidfd registered"
-        );
-    }
-}
-
-fn signal_unregistered_spawned_runner(
-    state: &ServerState,
-    vm: &str,
-    role_id: &str,
-    response: &d2b_contracts_broker::broker_wire::SpawnRunnerResponse,
-    pidfd: Option<&OwnedFd>,
-    signal: RunnerSignal,
-    caller_role: BrokerCallerRole,
-) {
-    let signal_number = match signal {
-        RunnerSignal::Term => libc::SIGTERM,
-        RunnerSignal::Kill => libc::SIGKILL,
-        RunnerSignal::Quit => libc::SIGQUIT,
-    };
-    let pidfd_signal = rustix::process::Signal::from_raw(signal_number);
-    if let (Some(pidfd), Some(pidfd_signal)) = (pidfd, pidfd_signal) {
-        match rustix::process::pidfd_send_signal(pidfd.as_fd(), pidfd_signal) {
-            Ok(()) => {
-                tracing::warn!(
-                    vm = %vm,
-                    role = %role_id,
-                    pid = response.pid,
-                    signal = runner_signal_label(signal),
-                    "spawn registration failed; signaled unregistered runner by pidfd"
-                );
-                return;
-            }
-            Err(error) => tracing::warn!(
-                vm = %vm,
-                role = %role_id,
-                pid = response.pid,
-                signal = runner_signal_label(signal),
-                error = %error,
-                "spawn registration failed; direct pidfd signal failed, falling back to broker"
-            ),
-        }
-    }
-
-    let request = BrokerRequest::SignalRunner(SignalRunnerRequest {
-        vm_id: VmId::new(vm),
-        role_id: RoleId::new(role_id),
-        signal,
-        pid: Some(response.pid),
-        expected_start_time_ticks: Some(response.start_time_ticks),
-        resource_ref: None,
-        resource_uid: None,
-        zone_uid: None,
-        owner_ref: None,
-        provider_ref: None,
-        provider_identity: None,
-        template_identity: None,
-        generation: None,
-        runtime_scope: None,
-        guest_execution: None,
-        tracing_span_id: None,
-    });
-    match dispatch_broker_request_as(state, request, caller_role) {
-        Ok(BrokerResponse::SignalRunner(resp))
-            if resp.vm_id.as_str() == vm && resp.role_id.as_str() == role_id && resp.signaled =>
-        {
-            tracing::warn!(
-                vm = %vm,
-                role = %role_id,
-                pid = response.pid,
-                signal = runner_signal_label(signal),
-                "spawn registration failed; broker signaled unregistered runner"
-            );
-        }
-        Ok(other) => tracing::warn!(
-            vm = %vm,
-            role = %role_id,
-            pid = response.pid,
-            signal = runner_signal_label(signal),
-            response = ?other,
-            "spawn registration failed; broker cleanup signal returned unexpected response"
-        ),
-        Err(error) => tracing::warn!(
-            vm = %vm,
-            role = %role_id,
-            pid = response.pid,
-            signal = runner_signal_label(signal),
-            error = ?error,
-            "spawn registration failed; broker cleanup signal failed"
-        ),
-    }
-}
-
-fn wait_unregistered_spawned_runner_reaped(
-    state: &ServerState,
-    vm: &str,
-    role_id: &str,
-    timeout: Duration,
-) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        refresh_broker_reap_log(state, "unregistered-spawn-cleanup");
-        if state.broker_reap_log.take_for(vm, role_id).is_some() {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
+/// Seed one runner snapshot for a test double. Production no longer writes
+/// these: the Process controller owns the durable process identity now, and
+/// the snapshot store is read only by the startup adoption pass over
+/// previously-registered runners.
+#[cfg(test)]
 fn write_runner_snapshot(
     state: &ServerState,
     vm: &str,
@@ -17483,28 +17176,12 @@ fn write_runner_snapshot(
     )
 }
 
-#[allow(dead_code)]
-fn write_runner_snapshot_owned(
-    state: &ServerState,
-    vm: &str,
-    role_id: &str,
-    role: RunnerRole,
-    pid: i32,
-    start_time_ticks: u64,
-    owner_resource_uid: Option<&str>,
-) -> Result<(), String> {
-    write_runner_snapshot_with_authorization(
-        state,
-        vm,
-        role_id,
-        role,
-        pid,
-        start_time_ticks,
-        owner_resource_uid,
-        None,
-    )
-}
-
+/// Write one runner snapshot with its Core lifecycle authorization.
+///
+/// Production's writer was the retained legacy TPM connector's executor;
+/// with the TPM port on Device-owned rows (U17) only test doubles write
+/// snapshots, and the startup adoption pass reads them.
+#[cfg(test)]
 pub(crate) fn write_runner_snapshot_with_authorization(
     state: &ServerState,
     vm: &str,
@@ -17599,8 +17276,6 @@ fn reconcile_display_before_vm_start(
     if result.status.resource.proxy_process_ref.is_none() {
         return Err("display-host-proxy-resource-missing".to_owned());
     }
-    block_on_future(runtime.reconcile_process_resources(Arc::new(state.clone())))
-        .map_err(|_| "display-host-proxy-process-reconcile-failed".to_owned())?;
     Ok(())
 }
 
@@ -17647,15 +17322,6 @@ fn vm_start_primary_runner_role_id(tracked_roles: &[String]) -> &str {
         })
         .map(String::as_str)
         .unwrap_or(VM_RUNNER_ROLE_ID)
-}
-
-fn cleanup_vm_start_registration(state: &ServerState, vm: &str, role_id: &str) {
-    let _mguard = state.pidfd_table.mutation_guard();
-    let _ = state.pidfd_table.deregister(vm, role_id);
-    if let Err(error) = state.pidfd_table.snapshot() {
-        tracing::warn!(vm = %vm, role = %role_id, error = ?error, "failed to persist pidfd table cleanup");
-    }
-    remove_runner_snapshot(state, vm, role_id);
 }
 
 fn rollback_failed_vm_start(
@@ -19937,7 +19603,6 @@ fn dispatch_broker_vm_start(
         BrokerCallerRole::AdminUid {
             uid: state.daemon_uid,
         },
-        None,
     )
 }
 
@@ -20151,7 +19816,6 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEf
                 self.state,
                 self.request.clone(),
                 self.caller_role.clone(),
-                Some(&self.authorization),
             ),
             provider_effects::GuestLifecycleOperation::Stop => {
                 dispatch_broker_vm_stop_with_timeout_as_inner(
@@ -20176,7 +19840,6 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEf
                             self.state,
                             self.request.clone(),
                             self.caller_role.clone(),
-                            Some(&self.authorization),
                         )
                     }
                     Ok(response) => Ok(response),
@@ -20393,7 +20056,6 @@ fn dispatch_broker_vm_start_inner(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
     caller_role: BrokerCallerRole,
-    lifecycle_authorization: Option<&provider_effects::LifecycleAuthorization>,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm start";
 
@@ -20434,9 +20096,6 @@ fn dispatch_broker_vm_start_inner(
         state,
         resolver: &resolver,
         caller_role: caller_role.clone(),
-        lifecycle_authorization: lifecycle_authorization.cloned(),
-        workload_identity: dag.workload_identity.clone(),
-        network_tap_context: network_tap_context_for_vm(state, &resolver, request.vm.as_str()),
     };
 
     // StoreSync owns the guest-served live marker
@@ -21269,7 +20928,6 @@ fn dispatch_broker_vm_restart(
         state,
         request.clone(),
         BrokerCallerRole::LauncherUid { uid: 0 },
-        None,
     )?;
     if response_outcome(&start_response) != Some("applied") {
         return Ok(retarget_mutating_response(&start_response, "vm restart"));
@@ -23522,6 +23180,7 @@ mod public_status_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
         (state, dir)
     }
@@ -25529,6 +25188,7 @@ pub(crate) mod detached_exec_routing_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         }
     }
 
@@ -25536,43 +25196,6 @@ pub(crate) mod detached_exec_routing_tests {
         PeerIdentity {
             role: PeerRole::Admin,
             uid: 4242,
-        }
-    }
-
-    #[tokio::test]
-    async fn production_u8_effects_fail_closed_without_authoritative_runtime() {
-        let state = test_state(exec_session::ExecSessionCaps::default());
-        let effects = resource_runtime::DaemonSharedProviderEffects::new(
-            Arc::new(state),
-            ZoneId::parse("work").unwrap(),
-        );
-        for registration in resource_runtime::U8_SHARED_PROVIDER_RUNNERS {
-            let resource_ref =
-                ResourceRef::parse(&format!("{}/u8-test", registration.resource_type)).unwrap();
-            let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-            let resource = ResourceSnapshot::new(
-                ResourceKey::new(
-                    ZoneId::parse("work").unwrap(),
-                    resource_ref,
-                    uid,
-                ),
-                ZoneRevision::new(1),
-                ResourceGeneration::new(1).unwrap(),
-                serde_json::to_vec(&serde_json::json!({
-                    "type": registration.resource_type,
-                    "metadata": {"uid": "123e4567-e89b-42d3-a456-426614174000"},
-                    "spec": {"providerRef": registration.provider_ref},
-                    "status": {"phase": "Pending"}
-                }))
-                .unwrap(),
-                false,
-            );
-            assert!(!matches!(
-                effects
-                    .test_reconcile_registration(registration, &resource)
-                    .await,
-                Ok(resource_runtime::SharedProviderEffectPhase::Ready)
-            ));
         }
     }
 
@@ -25664,6 +25287,7 @@ mod accept_loop_concurrency_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::new(),
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
         (state, dir)
     }
@@ -26402,6 +26026,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         }
     }
 
@@ -26453,6 +26078,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         }
     }
 
@@ -27970,6 +27596,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -28224,6 +27851,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
 
         let listener = socket(
@@ -28522,6 +28150,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -29430,98 +29059,6 @@ mod broker_dispatch_tests {
         let _ = child.wait();
     }
 
-    #[test]
-    fn unregistered_spawn_cleanup_uses_broker_and_waits_for_reap_before_deregister() {
-        let vm = "vm-unregistered-cleanup";
-        let role = "video";
-        let pid = 4242;
-        let start_time_ticks = 99;
-        let (socket_path, broker) =
-            start_test_broker_server("unregistered-cleanup", 3, move |index, env, fd| {
-                match (index, env.request) {
-                    (0, BrokerRequest::SignalRunner(req)) => {
-                        assert_eq!(req.vm_id.as_str(), vm);
-                        assert_eq!(req.role_id.as_str(), role);
-                        assert_eq!(req.signal, RunnerSignal::Term);
-                        assert_eq!(req.pid, Some(pid));
-                        assert_eq!(req.expected_start_time_ticks, Some(start_time_ticks));
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: VmId::new(vm),
-                                role_id: RoleId::new(role),
-                            }),
-                        )
-                        .expect("write signal response");
-                    }
-                    (1, BrokerRequest::PollChildReaped) => {
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                                notifications: vec![ChildReapedNotification {
-                                    runner_id: format!("{vm}:{role}"),
-                                    pid,
-                                    exit_status: ChildExitStatus {
-                                        kind: ChildExitKind::Exited,
-                                        code: Some(0),
-                                        signal: None,
-                                    },
-                                    reaped_at_ms: 123,
-                                }],
-                            }),
-                        )
-                        .expect("write poll response");
-                    }
-                    (2, BrokerRequest::DeregisterRunnerPidfd(req)) => {
-                        assert_eq!(req.vm_id.as_str(), vm);
-                        assert_eq!(req.role_id.as_str(), role);
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: VmId::new(vm),
-                                role_id: RoleId::new(role),
-                                removed: true,
-                            }),
-                        )
-                        .expect("write dereg response");
-                    }
-                    other => panic!("unexpected request {other:?}"),
-                }
-            });
-        let state = test_state_with_broker_socket(socket_path);
-        super::stop_unregistered_spawned_runner(
-            &state,
-            vm,
-            role,
-            &SpawnRunnerResponse {
-                vm_id: VmId::new(vm),
-                role_id: RoleId::new(role),
-                role: RunnerRole::Video,
-                resource_ref: None,
-                resource_uid: None,
-                zone_uid: None,
-                owner_ref: None,
-                runtime_scope: None,
-                execution_ref: None,
-                execution_domain: None,
-                user_ref: None,
-                guest_execution: None,
-                provider_identity: None,
-                template_identity: None,
-                generation: None,
-                bundle_content_identity: None,
-                pid,
-                start_time_ticks,
-                pidfd_index: 0,
-                controller_bootstrap_fd_index: None,
-                console_fd_index: None,
-            },
-            &[],
-            BrokerCallerRole::AdminUid { uid: 0 },
-        );
-        broker.join().expect("broker join");
-    }
 
     #[test]
     fn stop_vm_pidfd_role_falls_back_to_broker_on_sigkill_eperm() {
@@ -30540,6 +30077,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
 
         // Emit the same event that the timeout handler in
@@ -31691,6 +31229,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
 
         // Set a 0ms readiness timeout via the test-only config override so the
@@ -31831,6 +31370,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
 
         let response = dispatch_broker_vm_start(
@@ -31855,5 +31395,154 @@ mod broker_dispatch_tests {
         );
 
         let _ = fs::remove_dir_all(&daemon_state_dir);
+    }
+}
+
+#[cfg(test)]
+mod g5_provider_identity_seed_tests {
+    use super::*;
+
+    fn provider(name: &str) -> ResourceRef {
+        ResourceRef::parse(&format!("Provider/{name}")).expect("provider ref")
+    }
+
+    fn identity(digit: char) -> (ResourceUid, ResourceGeneration) {
+        (
+            ResourceUid::parse(format!(
+                "{0}{0}{0}{0}{0}{0}{0}{0}-{0}{0}{0}{0}-4{0}{0}{0}-8{0}{0}{0}-{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}",
+                digit
+            ))
+            .expect("identity uid"),
+            ResourceGeneration::new(3).expect("identity generation"),
+        )
+    }
+
+    fn provider_uid(name: &str) -> ResourceUid {
+        if name == "volume-local" {
+            identity('1').0
+        } else {
+            identity('2').0
+        }
+    }
+
+    /// The race, reproduced deterministically: one Provider row is not yet
+    /// visible on the first evaluation while the rest are. Seeding must wait
+    /// for the late row instead of handing the caller a partial - or worse,
+    /// empty - snapshot; an unbound controller identity is classified
+    /// `IdentityAmbiguous` -> Terminal by the Process driver on its first
+    /// pass.
+    #[tokio::test]
+    async fn late_provider_row_is_seeded_before_the_plane_opens() {
+        let refs = BTreeSet::from([
+            provider("runtime-cloud-hypervisor"),
+            provider("volume-local"),
+        ]);
+        let mut calls = 0_usize;
+        let (resolved, unresolved) = seed_committed_provider_identities(
+            refs.clone(),
+            4,
+            Duration::ZERO,
+            |provider_ref| {
+                let call = calls;
+                calls += 1;
+                let name = provider_ref.name().as_str().to_owned();
+                let visible = !(call == 0 && name.starts_with("runtime-cloud-hypervisor"));
+                async move {
+                    if visible {
+                        Ok((
+                            provider_uid(&name),
+                            ResourceGeneration::new(3).expect("identity generation"),
+                        ))
+                    } else {
+                        Err(resource_runtime::ResourceRuntimeError::StoreReadFailed)
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert!(
+            unresolved.is_empty(),
+            "the late Provider must be seeded, not left unbound for a terminal first pass"
+        );
+        assert_eq!(
+            resolved.len(),
+            refs.len(),
+            "the first identity evaluation after seeding must see every Provider"
+        );
+        assert_eq!(
+            resolved[&provider("runtime-cloud-hypervisor")].0,
+            provider_uid("runtime-cloud-hypervisor"),
+            "the late row is bound once it appears"
+        );
+        assert_eq!(
+            resolved[&provider("volume-local")].0,
+            provider_uid("volume-local"),
+            "the already-committed row survives its sibling's late publication"
+        );
+        assert!(calls >= 3, "the late ref must have been re-evaluated");
+    }
+
+    /// A ref that never appears stays loud, and it must not void the
+    /// identities that did resolve (no empty-map laundering).
+    #[tokio::test]
+    async fn absent_provider_row_keeps_resolved_identities_and_stays_unresolved() {
+        let refs = BTreeSet::from([
+            provider("runtime-cloud-hypervisor"),
+            provider("volume-local"),
+        ]);
+        let mut calls = 0_usize;
+        let (resolved, unresolved) = seed_committed_provider_identities(
+            refs,
+            2,
+            Duration::ZERO,
+            |provider_ref| {
+                calls += 1;
+                let name = provider_ref.name().as_str().to_owned();
+                let present = name == "volume-local";
+                async move {
+                    if present {
+                        Ok((provider_uid(&name), ResourceGeneration::new(3).unwrap()))
+                    } else {
+                        Err(resource_runtime::ResourceRuntimeError::StoreReadFailed)
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(calls, 3, "the bounded window is exhausted, then seeding stops");
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(
+            resolved[&provider("volume-local")].0,
+            provider_uid("volume-local"),
+            "a partially resolved snapshot keeps every resolved identity"
+        );
+        assert_eq!(
+            unresolved,
+            vec![provider("runtime-cloud-hypervisor")],
+            "a ref that never appears stays unresolved (loud), never an empty map"
+        );
+    }
+
+    /// A complete snapshot costs one evaluation per ref and no waiting.
+    #[tokio::test]
+    async fn complete_snapshot_resolves_without_retrying() {
+        let refs = BTreeSet::from([provider("volume-local")]);
+        let mut calls = 0_usize;
+        let (resolved, unresolved) = seed_committed_provider_identities(
+            refs,
+            30,
+            Duration::from_secs(2),
+            |_provider_ref| {
+                calls += 1;
+                async move { Ok((provider_uid("volume-local"), ResourceGeneration::new(3).unwrap())) }
+            },
+        )
+        .await;
+
+        assert_eq!(calls, 1, "a complete snapshot must not wait");
+        assert!(unresolved.is_empty());
+        assert_eq!(resolved.len(), 1);
     }
 }

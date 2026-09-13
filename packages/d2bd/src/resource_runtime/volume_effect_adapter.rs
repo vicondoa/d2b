@@ -25,8 +25,8 @@ use nix::{
 };
 use rustix::{
     fs::{
-        AtFlags, FileType, Mode, OFlags, RawDir, ResolveFlags, fchmod, fstat, fsync, mkdirat,
-        openat2, renameat, symlinkat, unlinkat,
+        AtFlags, FileType, Mode, OFlags, RawDir, ResolveFlags, XattrFlags, fchmod, fstat, fsync,
+        mkdirat, openat2, renameat, symlinkat, unlinkat,
     },
     io::fcntl_dupfd_cloexec,
 };
@@ -369,21 +369,10 @@ impl<R: VolumeRootResolver> VolumeLayoutEffectPort for AnchoredVolumeEffectAdapt
 
     fn apply_acl(
         &self,
-        _root: &VolumeRootHandle,
+        root: &VolumeRootHandle,
         entry: &EntryRequest,
     ) -> impl Future<Output = Result<(), VolumeLocalError>> + Send {
-        let result = if entry.has_acl() {
-            // Cardinality: per distinct entry carrying an ACL; such a spec
-            // is rejected on every pass until corrected.
-            tracing::warn!(
-                volume = ?_root.volume_uid(),
-                path = entry.declared().path(),
-                "volume entry with ACL declared rejected (ACL unsupported)",
-            );
-            Err(VolumeLocalError::InvariantViolated)
-        } else {
-            Ok(())
-        };
+        let result = self.apply_acl_sync(root, entry);
         async move { result }
     }
 
@@ -596,18 +585,41 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
             guard
                 .validate_resource(root_uid(root)?)
                 .map_err(|_| VolumeLocalError::EffectFailed)?;
+            let owner_proof = match entry.lease_class() {
+                // No declared lease: nothing to prove about a live owner.
+                d2b_contracts_resource::v3::volume::LeaseClass::None => {
+                    OwnerProof::NotApplicable
+                }
+                // `file-record`: the file must carry the live owner's record.
+                // The broker (or the daemon itself, for a lock it created)
+                // writes it under the exclusive lock; ownership is verified
+                // against the kernel, never against a caller-supplied name.
+                d2b_contracts_resource::v3::volume::LeaseClass::FileRecord => {
+                    match d2b_host::hardlink_farm::SyncLockOwnerRecord::read_locked(&target)
+                        .and_then(|record| record.verify_live())
+                    {
+                        Ok(()) => OwnerProof::Live,
+                        Err(reason) => {
+                            tracing::debug!(
+                                volume = ?root_uid(root)?,
+                                path = entry.declared().path(),
+                                reason = %reason,
+                                "volume file-record lease owner is not verifiable; quarantining",
+                            );
+                            OwnerProof::Unknown
+                        }
+                    }
+                }
+                // No live-lease reader exists for the other classes: an
+                // entry that declares one never adopts on an unproven owner.
+                _ => OwnerProof::Unknown,
+            };
             Ok(ObservedEntry {
                 present: true,
                 drift,
                 symlink_encountered: false,
                 foreign_children: false,
-                owner_proof: if entry.lease_class()
-                    == d2b_contracts_resource::v3::volume::LeaseClass::None
-                {
-                    OwnerProof::NotApplicable
-                } else {
-                    OwnerProof::Unknown
-                },
+                owner_proof,
             })
         })
     }
@@ -654,6 +666,17 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
                     )
                     .map_err(|_| VolumeLocalError::EffectFailed)?;
                     apply_metadata(&target, &self.resolver, entry)?;
+                    if entry.lease_class()
+                        == d2b_contracts_resource::v3::volume::LeaseClass::FileRecord
+                    {
+                        // The creator of a file-record lock is its first live
+                        // owner: record the identity the kernel reports for
+                        // this process so a later pass can verify (or refute)
+                        // that ownership. A broker StoreSync that takes the
+                        // lock overwrites the record with its own identity.
+                        d2b_host::hardlink_farm::SyncLockOwnerRecord::record_current_process(&target)
+                            .map_err(|_| VolumeLocalError::EffectFailed)?;
+                    }
                     fsync(&target).map_err(|_| VolumeLocalError::EffectFailed)?;
                 }
                 EntryType::Symlink => {
@@ -676,12 +699,10 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
         entry: &EntryRequest,
         drift: &BTreeSet<DriftClass>,
     ) -> Result<(), VolumeLocalError> {
-        if drift.iter().any(|class| {
-            matches!(
-                class,
-                DriftClass::Acl | DriftClass::EntryType | DriftClass::SameFilesystem
-            )
-        }) {
+        if drift
+            .iter()
+            .any(|class| matches!(class, DriftClass::EntryType | DriftClass::SameFilesystem))
+        {
             // Cardinality: per distinct repair request; unrecoverable drift
             // repeats until the spec is corrected.
             tracing::warn!(
@@ -692,6 +713,9 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
             );
             return Err(VolumeLocalError::InvariantViolated);
         }
+        // ACL drift is applied by the separate `apply_acl` pass, not here: a
+        // repair set that names the class converges through that pass instead
+        // of failing this one.
         self.with_lock(root, |_guard| {
             let fd = root_fd(root)?.ok_or(VolumeLocalError::EffectFailed)?;
             ensure_root_identity(root)?;
@@ -703,6 +727,40 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
                 fsync(&target).map_err(|_| VolumeLocalError::EffectFailed)?;
             }
             Ok(())
+        })
+    }
+
+    /// Apply the declared access and default ACLs of one entry.
+    ///
+    /// Every grant principal is a `User` reference resolved through the
+    /// trusted resolver; the daemon owns the entry it created, so the xattrs
+    /// are applied without any capability. The mask carries the group-class
+    /// permissions, so the declared mode's group bits must cover it for the
+    /// declaration to be idempotent (`setfacl` semantics: the mask is
+    /// mirrored in the file's group bits).
+    fn apply_acl_sync(
+        &self,
+        root: &VolumeRootHandle,
+        entry: &EntryRequest,
+    ) -> Result<(), VolumeLocalError> {
+        if !entry.has_acl() {
+            return Ok(());
+        }
+        self.with_lock(root, |_guard| {
+            let fd = root_fd(root)?.ok_or(VolumeLocalError::EffectFailed)?;
+            ensure_root_identity(root)?;
+            let Some((target, _)) = open_entry(fd, entry.declared().path(), false, false)? else {
+                return Err(VolumeLocalError::EntryMissing);
+            };
+            let mode = parse_mode(entry.declared().mode())? & 0o777;
+            let access = acl_entries(mode, declared_acl_entries(&self.resolver, entry, "accessAcl")?);
+            set_acl_xattr(&target, POSIX_ACL_ACCESS_XATTR, &access)?;
+            if entry.entry_type() == EntryType::Directory {
+                let default =
+                    acl_entries(mode, declared_acl_entries(&self.resolver, entry, "defaultAcl")?);
+                set_acl_xattr(&target, POSIX_ACL_DEFAULT_XATTR, &default)?;
+            }
+            fsync(&target).map_err(|_| VolumeLocalError::EffectFailed)
         })
     }
 
@@ -1168,6 +1226,164 @@ fn apply_metadata<R: VolumeRootResolver>(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// POSIX ACL application
+//
+// The declared grants are real kernel ACLs: the daemon owns the entry it
+// creates, so it applies them through the `system.posix_acl_*` xattrs without
+// any capability. The encoding is the kernel's `posix_acl_xattr_header` +
+// `posix_acl_xattr_entry` layout, and the mask carries the group-class
+// permissions exactly as `setfacl` computes it - the kernel requires the mask
+// whenever named entries exist, and mirrors it in the file's group bits.
+// ---------------------------------------------------------------------------
+
+/// `POSIX_ACL_XATTR_VERSION`.
+const POSIX_ACL_XATTR_VERSION: u32 = 2;
+/// The id of every base ACL entry (`owner`/`group`/`mask`/`other`).
+const ACL_UNDEFINED_ID: u32 = u32::MAX;
+// ACL entry tags (`linux/posix_acl.h`).
+const ACL_USER_OBJ_TAG: u16 = 0x01;
+const ACL_USER_TAG: u16 = 0x02;
+const ACL_GROUP_OBJ_TAG: u16 = 0x04;
+const ACL_MASK_TAG: u16 = 0x10;
+const ACL_OTHER_TAG: u16 = 0x20;
+// ACL permission bits.
+const ACL_READ: u16 = 0x04;
+const ACL_WRITE: u16 = 0x02;
+const ACL_EXECUTE: u16 = 0x01;
+/// The POSIX ACL xattr names.
+const POSIX_ACL_ACCESS_XATTR: &str = "system.posix_acl_access";
+const POSIX_ACL_DEFAULT_XATTR: &str = "system.posix_acl_default";
+
+/// One encoded ACL entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AclEntry {
+    tag: u16,
+    perm: u16,
+    id: u32,
+}
+
+/// Parse one declared `permissions` spelling into ACL permission bits.
+fn acl_permission_bits(permissions: &str) -> Result<u16, VolumeLocalError> {
+    if permissions.is_empty() || permissions.len() > 3 {
+        return Err(VolumeLocalError::InvalidSpec);
+    }
+    let mut bits = 0u16;
+    for byte in permissions.bytes() {
+        bits |= match byte {
+            b'r' => ACL_READ,
+            b'w' => ACL_WRITE,
+            b'x' => ACL_EXECUTE,
+            _ => return Err(VolumeLocalError::InvalidSpec),
+        };
+    }
+    Ok(bits)
+}
+
+/// Build the full entry set for one declared mode and named-user grants.
+///
+/// The owner, group-object, and other entries come from the declared mode;
+/// every declared grant is one named-user entry; the mask is the union of the
+/// group-class permissions (what `setfacl` computes), and it is present
+/// exactly when named entries are.
+fn acl_entries(mode: u32, mut named: Vec<AclEntry>) -> Vec<AclEntry> {
+    let class = |shift: u32| u16::try_from((mode >> shift) & 0o7).unwrap_or(0);
+    let (owner, group, other) = (class(6), class(3), class(0));
+    named.sort_by_key(|entry| entry.id);
+    let mut mask = group;
+    for entry in &named {
+        mask |= entry.perm;
+    }
+    let mut entries = vec![AclEntry {
+        tag: ACL_USER_OBJ_TAG,
+        perm: owner,
+        id: ACL_UNDEFINED_ID,
+    }];
+    entries.extend(named.iter().copied());
+    entries.push(AclEntry {
+        tag: ACL_GROUP_OBJ_TAG,
+        perm: group,
+        id: ACL_UNDEFINED_ID,
+    });
+    if !named.is_empty() {
+        entries.push(AclEntry {
+            tag: ACL_MASK_TAG,
+            perm: mask,
+            id: ACL_UNDEFINED_ID,
+        });
+    }
+    entries.push(AclEntry {
+        tag: ACL_OTHER_TAG,
+        perm: other,
+        id: ACL_UNDEFINED_ID,
+    });
+    entries
+}
+
+/// Encode one entry set as the `system.posix_acl_*` xattr value.
+fn acl_xattr_bytes(entries: &[AclEntry]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(4 + entries.len() * 8);
+    bytes.extend_from_slice(&POSIX_ACL_XATTR_VERSION.to_le_bytes());
+    for entry in entries {
+        bytes.extend_from_slice(&entry.tag.to_le_bytes());
+        bytes.extend_from_slice(&entry.perm.to_le_bytes());
+        bytes.extend_from_slice(&entry.id.to_le_bytes());
+    }
+    bytes
+}
+
+/// Decode one declared grant list into named-user ACL entries.
+///
+/// Every grant principal is a `User` reference, so each grant is one
+/// `ACL_USER` entry and the resolver turns the reference into the host uid
+/// the account carries.
+fn declared_acl_entries<R: VolumeRootResolver>(
+    resolver: &R,
+    entry: &EntryRequest,
+    field: &str,
+) -> Result<Vec<AclEntry>, VolumeLocalError> {
+    let rendered =
+        serde_json::to_value(entry.declared()).map_err(|_| VolumeLocalError::InvalidSpec)?;
+    let Some(grants) = rendered.get(field).and_then(serde_json::Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut entries = Vec::with_capacity(grants.len());
+    for grant in grants {
+        let reference = grant
+            .get("principal")
+            .and_then(|principal| principal.get("ref"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or(VolumeLocalError::InvalidSpec)
+            .and_then(|reference| {
+                ResourceRef::parse(reference).map_err(|_| VolumeLocalError::InvalidSpec)
+            })?;
+        if reference.resource_type().as_str() != "User" {
+            return Err(VolumeLocalError::InvalidSpec);
+        }
+        let permissions = grant
+            .get("permissions")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(VolumeLocalError::InvalidSpec)?;
+        entries.push(AclEntry {
+            tag: ACL_USER_TAG,
+            perm: acl_permission_bits(permissions)?,
+            id: resolver.resolve_principal(&reference)?,
+        });
+    }
+    Ok(entries)
+}
+
+/// Write one encoded ACL xattr onto an open target.
+fn set_acl_xattr(
+    target: &OwnedFd,
+    name: &str,
+    entries: &[AclEntry],
+) -> Result<(), VolumeLocalError> {
+    let bytes = acl_xattr_bytes(entries);
+    rustix::fs::fsetxattr(target, name, &bytes, XattrFlags::empty())
+        .map_err(|_| VolumeLocalError::EffectFailed)
+}
+
 fn marker_state_unlocked(root: &VolumeRootHandle) -> Result<MarkerState, VolumeLocalError> {
     ensure_root_identity(root)?;
     let mut store = FdMarkerStore::new(root)?;
@@ -1564,6 +1780,7 @@ fn inspect_content_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
 
     #[test]
     fn marker_root_fd_supplies_marker_file_ownership() {
@@ -1603,5 +1820,196 @@ mod tests {
                 "{bad:?} must not become a volume subdirectory"
             );
         }
+    }
+
+    /// A resolver that binds one root descriptor and maps declared `User`
+    /// names to arbitrary uids, so a test can name principals other than the
+    /// one running it (the kernel accepts named ACL entries for any uid).
+    struct NamedUidResolver {
+        root: Arc<OwnedFd>,
+        volume_uid: ResourceUid,
+        uids: std::collections::BTreeMap<String, u32>,
+    }
+
+    impl VolumeRootResolver for NamedUidResolver {
+        fn resolve_root(
+            &self,
+            volume_uid: &ResourceUid,
+            _source_policy_id: Option<&BoundedToken>,
+            _system_artifact_id: Option<&BoundedToken>,
+            _kind: SourceKind,
+        ) -> Result<ResolvedVolumeRoot, VolumeLocalError> {
+            if volume_uid != &self.volume_uid {
+                return Err(VolumeLocalError::SourceUnresolved);
+            }
+            let fd = fcntl_dupfd_cloexec(self.root.as_ref(), 0)
+                .map_err(|_| VolumeLocalError::EffectFailed)?;
+            ResolvedVolumeRoot::new(fd, volume_uid.clone())
+        }
+
+        fn resolve_principal(&self, reference: &ResourceRef) -> Result<u32, VolumeLocalError> {
+            self.uids
+                .get(reference.name().as_str())
+                .copied()
+                .ok_or(VolumeLocalError::EffectFailed)
+        }
+
+        fn resolve_group(&self, reference: &ResourceRef) -> Result<u32, VolumeLocalError> {
+            self.resolve_principal(reference)
+        }
+    }
+
+    /// One directory entry that declares the same access/default grants the
+    /// Device TPM Provider's state Volume declares.
+    fn acl_layout_entry() -> d2b_contracts_resource::v3::volume::LayoutEntry {
+        serde_json::from_value(serde_json::json!({
+            "path": "",
+            "type": "directory",
+            "ownerRef": "User/owner",
+            "groupRef": "User/owner",
+            "mode": "0770",
+            "target": null,
+            "accessAcl": [
+                { "principal": { "ref": "User/worker" }, "permissions": "rwx" },
+                { "principal": { "ref": "User/flush" }, "permissions": "rx" }
+            ],
+            "defaultAcl": [
+                { "principal": { "ref": "User/worker" }, "permissions": "rwx" },
+                { "principal": { "ref": "User/flush" }, "permissions": "rw" }
+            ],
+            "foreignChildPolicy": "preserve",
+            "noFollow": true,
+            "recursive": false,
+            "sensitivity": "private",
+            "createPolicy": "create-if-never-provisioned",
+            "repairPolicy": "exact-owner",
+            "cleanupPolicy": "never",
+            "adoptionPolicy": "quarantine-on-ambiguity",
+            "restartPolicy": "preserve-across-controller-restart",
+            "leaseClass": "none",
+            "invariants": ["no-symlink"]
+        }))
+        .expect("layout entry")
+    }
+
+    fn read_xattr(path: &std::path::Path, name: &str) -> Option<Vec<u8>> {
+        let mut buffer = vec![0u8; 256];
+        let size = rustix::fs::lgetxattr(path, name, &mut buffer).ok()?;
+        buffer.truncate(size);
+        Some(buffer)
+    }
+
+    /// Regression (U17 TPM state Volume): a declared ACL entry must be
+    /// applied for real - the daemon owns the entry it creates, so no
+    /// capability is needed, and the encoded access/default ACLs must be what
+    /// the kernel stores (mask = the group-class union, mirrored in the mode).
+    #[test]
+    fn declared_acls_are_applied_to_the_owned_entry() {
+        let dir = tempfile::tempdir().expect("volume root");
+        let root = File::open(dir.path()).expect("open root");
+        let volume_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("volume UID");
+        let own = Uid::current().as_raw();
+        let resolver = NamedUidResolver {
+            root: Arc::new(root.into()),
+            volume_uid: volume_uid.clone(),
+            uids: std::collections::BTreeMap::from([
+                ("owner".to_owned(), own),
+                ("worker".to_owned(), own + 1),
+                ("flush".to_owned(), own + 2),
+            ]),
+        };
+        let adapter = AnchoredVolumeEffectAdapter::new(resolver);
+        let handle = d2b_provider_volume_local::testing::block_on(adapter.resolve_root_for(
+            &volume_uid,
+            None,
+            None,
+            SourceKind::LocalPath,
+        ))
+        .expect("root handle");
+        let entry = EntryRequest::resolve(&volume_uid, &acl_layout_entry()).expect("entry");
+        d2b_provider_volume_local::testing::block_on(adapter.apply_acl(&handle, &entry))
+            .expect("acl applied");
+
+        let expected_access = acl_entries(
+            0o770,
+            vec![
+                AclEntry {
+                    tag: ACL_USER_TAG,
+                    perm: ACL_READ | ACL_WRITE | ACL_EXECUTE,
+                    id: own + 1,
+                },
+                AclEntry {
+                    tag: ACL_USER_TAG,
+                    perm: ACL_READ | ACL_EXECUTE,
+                    id: own + 2,
+                },
+            ],
+        );
+        assert_eq!(
+            read_xattr(dir.path(), POSIX_ACL_ACCESS_XATTR).expect("access acl xattr"),
+            acl_xattr_bytes(&expected_access)
+        );
+        let expected_default = acl_entries(
+            0o770,
+            vec![
+                AclEntry {
+                    tag: ACL_USER_TAG,
+                    perm: ACL_READ | ACL_WRITE | ACL_EXECUTE,
+                    id: own + 1,
+                },
+                AclEntry {
+                    tag: ACL_USER_TAG,
+                    perm: ACL_READ | ACL_WRITE,
+                    id: own + 2,
+                },
+            ],
+        );
+        assert_eq!(
+            read_xattr(dir.path(), POSIX_ACL_DEFAULT_XATTR).expect("default acl xattr"),
+            acl_xattr_bytes(&expected_default)
+        );
+        // The kernel mirrors the mask into the group bits.
+        let mode = std::fs::metadata(dir.path())
+            .expect("stat root")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o770);
+    }
+
+    /// Entries without declared grants are a no-op, and an unresolvable
+    /// principal is a spec failure rather than a silent skip.
+    #[test]
+    fn acl_application_fails_closed_on_unresolved_principals() {
+        let dir = tempfile::tempdir().expect("volume root");
+        let root = File::open(dir.path()).expect("open root");
+        let volume_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("volume UID");
+        let resolver = NamedUidResolver {
+            root: Arc::new(root.into()),
+            volume_uid: volume_uid.clone(),
+            uids: std::collections::BTreeMap::from([("owner".to_owned(), Uid::current().as_raw())]),
+        };
+        let adapter = AnchoredVolumeEffectAdapter::new(resolver);
+        let handle = d2b_provider_volume_local::testing::block_on(adapter.resolve_root_for(
+            &volume_uid,
+            None,
+            None,
+            SourceKind::LocalPath,
+        ))
+        .expect("root handle");
+        let mut rendered = serde_json::to_value(acl_layout_entry()).expect("entry renders");
+        rendered["accessAcl"] =
+            serde_json::json!([{ "principal": { "ref": "User/absent" }, "permissions": "rx" }]);
+        let entry = EntryRequest::resolve(
+            &volume_uid,
+            &serde_json::from_value(rendered).expect("entry stays valid"),
+        )
+        .expect("entry");
+        assert!(
+            d2b_provider_volume_local::testing::block_on(adapter.apply_acl(&handle, &entry))
+                .is_err()
+        );
     }
 }

@@ -12,12 +12,14 @@ d2b.vms.<vm>.graphics.videoSidecar = true;
 ```
 
 The implementation is still intentionally narrow: H264 decode only and
-daemon/broker supervision only. The default host-device allowlist is
-render-node-only (`/dev/dri/renderD128`). NVIDIA VA-API/NVDEC decode requires
-the explicit `graphics.videoNvidiaDecode = true` opt-in, which adds only
-`/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` inside the broker's
-private masked `/dev`. There is no per-VM video systemd unit and no stock
-crosvm or stock Cloud Hypervisor fallback.
+daemon/broker supervision only. The video sidecar's declared Process row
+selects one of two closed worker templates. `video-worker` binds only the
+render node (`/dev/dri/renderD128`); the explicit
+`graphics.videoNvidiaDecode = true` opt-in selects `video-worker-nvidia`,
+whose posture adds only `/dev/nvidiactl`, `/dev/nvidia0`, and
+`/dev/nvidia-uvm` alongside the render node inside the broker's private
+masked `/dev`. There is no per-VM video systemd unit and no stock crosvm or
+stock Cloud Hypervisor fallback.
 
 ## Historical blocker
 
@@ -45,8 +47,9 @@ closed:
 - `--backend vaapi` only;
 - no free-form crosvm video extra args;
 - no TCP/vsock listener forms;
-- `/dev/dri/renderD128` by default for the video runner;
-- optional NVIDIA decode adds only the three reviewed NVIDIA nodes above;
+- the `video-worker` template binds `/dev/dri/renderD128` only;
+- `graphics.videoNvidiaDecode = true` selects `video-worker-nvidia`, which
+  adds only the three reviewed NVIDIA nodes above;
 - empty capabilities and `w1-video` seccomp profile.
 
 Any NVIDIA device-node access beyond the reviewed `videoNvidiaDecode` allowlist
