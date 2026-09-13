@@ -19,13 +19,11 @@ use std::{
 use std::sync::atomic::AtomicUsize;
 
 use crate::audio_resource_runtime::{AudioBindingRuntimeStatus, AudioResourceRuntime};
-use crate::credential_driver::{
-    AgentReadyFuture, CredentialDependencyFacts, CredentialDriverEffects,
-    ProductionCredentialDriverEffects,
+use crate::credential_effects::{
+    AgentReadyFuture, ProductionCredentialDriverEffects,
 };
 use crate::credential_resource_runtime::{
-    CredentialSession, CredentialSessionRegistry, ComponentCredentialSession,
-    is_credential_provider_ref,
+    CredentialSessionRegistry, ComponentCredentialSession,
 };
 use async_trait::async_trait;
 use d2b_bus::{
@@ -71,6 +69,10 @@ use d2b_core_controller::zone_status::{
     SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
 };
 use d2b_provider_clipboard_wayland::Policy as ClipboardPolicy;
+use d2b_provider_credential::{
+    CredentialDependencyFacts, CredentialDriverEffects, CredentialSession,
+    is_credential_provider_ref,
+};
 use d2b_provider_display_wayland::WaylandSessionSpec;
 use d2b_provider_network_local::{
     ExternalNicAdmissionError, ExternalNicClaim, admit_external_nic_claims,

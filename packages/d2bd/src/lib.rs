@@ -2,7 +2,7 @@
 
 pub(crate) mod endpoint_effects;
 pub mod process_effects;
-pub mod credential_driver;
+pub(crate) mod credential_effects;
 pub(crate) mod binding_effects;
 pub(crate) mod volume_effects;
 pub mod activation_driver;

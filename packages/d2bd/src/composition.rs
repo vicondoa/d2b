@@ -15708,7 +15708,7 @@ fn credential_agent_ready_probe(
     client: Arc<std::sync::OnceLock<Arc<d2b_resource_runtime::manager::ResourceManagerClient>>>,
     zone: ZoneId,
 ) -> Arc<
-    dyn for<'a> Fn(&'a ResourceRef) -> crate::credential_driver::AgentReadyFuture<'a> + Send + Sync,
+    dyn for<'a> Fn(&'a ResourceRef) -> crate::credential_effects::AgentReadyFuture<'a> + Send + Sync,
 > {
     Arc::new(move |agent_ref: &ResourceRef| {
         let client = Arc::clone(&client);

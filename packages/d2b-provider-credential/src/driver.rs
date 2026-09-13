@@ -1,6 +1,6 @@
-//! Credential resource driver (U12): the v3 `ResourceDriver` conversion of
-//! the daemon-owned Credential controller path for the three Credential
-//! Providers (secret-service, entra, managed-identity; R3, R4, R30).
+//! The Credential resource driver: the v3 `ResourceDriver` conversion of the
+//! daemon-owned Credential controller path for the three Credential Providers
+//! (secret-service, entra, managed-identity; R3, R4, R30).
 //!
 //! The driver keeps the old controller behavior and nothing else: reconcile
 //! reports Provider readiness for every Credential and, for the
@@ -9,13 +9,14 @@
 //! it through the manager-routed child ensure (the child spec is committed
 //! BEFORE the child actor exists, F1). The agent is never spawned here: it
 //! is a Process resource whose lifetime belongs to the Process driver
-//! (KTD13). Delete preserves the revocation-first ordering - the provider
-//! RevokeToken call is confirmed (or already confirmed) before any owned
-//! Process child is marked deleting - and fails closed when the session
-//! generation is missing or no longer current (R28). The manager holds the
-//! Credential row until its owned children retire (F3), so the durable
-//! deleting mark stays observable for the whole teardown exactly as the old
-//! revoke-finalizer ordering made it.
+//! (KTD13), and the child creation is declared on
+//! [`credential_descriptor`]. Delete preserves the revocation-first ordering
+//! - the provider RevokeToken call is confirmed (or already confirmed)
+//! before any owned Process child is marked deleting - and fails closed when
+//! the session generation is missing or no longer current (R28). The manager
+//! holds the Credential row until its owned children retire (F3), so the
+//! durable deleting mark stays observable for the whole teardown exactly as
+//! the old revoke-finalizer ordering made it.
 //!
 //! Conversion mapping (spec section 13):
 //! - `describe` -> [`CredentialDriverFactory`] registration under `Credential`.
@@ -26,16 +27,14 @@
 //! - `prepare_finalize`/`execute_finalize`/`finalize` -> [`ResourceDriver::delete`].
 //! - `UpdateStatus` -> `ctx.set_status` (in-memory only, R11).
 //!
-//! One input has no durable home in the new runtime and is flagged for the
-//! merged wiring: the old revocation gate read the lease facts from the
-//! Credential's persisted status (`/status/resource/credential/...`), which
-//! R11 deletes. The driver reads them from
-//! [`CredentialDriverEffects::lease_facts`] instead; `None` reproduces the
-//! old "no lease state" case (skip revocation) byte for byte.
-#![allow(dead_code)]
+//! One input has no durable home in the new runtime below the port: the old
+//! revocation gate read the lease facts from the Credential's persisted
+//! status (`/status/resource/credential/...`), which R11 deletes. The driver
+//! reads them from [`CredentialDriverEffects::lease_facts`] instead; `None`
+//! reproduces the old "no lease state" case (skip revocation) byte for byte.
+//! The production implementation of the port, and of the session the delete
+//! path revokes through, stays in the daemon.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use d2b_contracts_provider::v3::credential::{
@@ -61,30 +60,35 @@ use d2b_resource_runtime::driver::{
 };
 use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_types::{
+    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
+};
 
-use crate::credential_resource_runtime::{
+use crate::session::{
     CredentialResourceRuntimeError, CredentialRevocationEvidence, CredentialRevocationInputs,
     CredentialRevocationOutcome, CredentialRevocationRequest, CredentialSession,
     credential_provider_kind,
 };
 
 /// The one resource type this factory serves (KTD4 Phase A).
-pub(crate) const CREDENTIAL_TYPE_NAME: &str = "Credential";
+pub const CREDENTIAL_TYPE_NAME: &str = "Credential";
 
 /// Deterministic owned-child resource type (the managed-identity agent).
 const PROCESS_TYPE_NAME: &str = "Process";
 
-/// The Process Provider the agent child runs under (old agent payload).
-const AGENT_PROCESS_PROVIDER_REF: &str = "Provider/system-minijail";
+/// The Process Provider the agent child runs under: the minijail Process
+/// Provider crate's own exported reference, so the declared creation and the
+/// minted child spec cannot drift from the Provider that owns the child.
+const AGENT_PROCESS_PROVIDER_REF: &str = d2b_provider_process_minijail::PROVIDER_REF;
 
 /// Non-secret annotation the old agent payload carried: the Provider that
 /// owns the supervised controller route. The Process launch path keys the
 /// co-located agent intent on it.
-pub(crate) const CONTROLLER_PROVIDER_REF_ANNOTATION: &str = "d2b.d2bus.org/controller-provider-ref";
+pub const CONTROLLER_PROVIDER_REF_ANNOTATION: &str = "d2b.d2bus.org/controller-provider-ref";
 /// Immutable identity of the Controller Provider annotation.
-pub(crate) const CONTROLLER_PROVIDER_UID_ANNOTATION: &str = "d2b.d2bus.org/controller-provider-uid";
+pub const CONTROLLER_PROVIDER_UID_ANNOTATION: &str = "d2b.d2bus.org/controller-provider-uid";
 /// Controller Provider generation annotation.
-pub(crate) const CONTROLLER_PROVIDER_GENERATION_ANNOTATION: &str =
+pub const CONTROLLER_PROVIDER_GENERATION_ANNOTATION: &str =
     "d2b.d2bus.org/controller-provider-generation";
 
 // ---------------------------------------------------------------------------
@@ -132,7 +136,7 @@ impl CredentialDriverErrorKind {
 /// `CredentialResourceRuntimeError`: `InvalidResource` was terminal,
 /// everything else retryable.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct CredentialDriverError {
+pub struct CredentialDriverError {
     kind: CredentialDriverErrorKind,
     op: DriverOp,
 }
@@ -165,7 +169,7 @@ impl std::error::Error for CredentialDriverError {}
 /// exact phase/outcome classification the old durable status published, so
 /// the conversion stays observable without a status store.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CredentialDriverStatus {
+pub enum CredentialDriverStatus {
     /// Old `Degraded` / `credential-provider-unavailable`.
     ProviderUnavailable,
     /// Old `Pending` / `credential-agent-pending`.
@@ -178,19 +182,21 @@ pub(crate) enum CredentialDriverStatus {
     Ready,
     /// Old `Pending` / `credential-lease-revoked`.
     LeaseRevoked {
+        /// The confirmed revocation the Provider reported.
         evidence: CredentialRevocationEvidence,
     },
     /// Old `Degraded` / `credential-revocation-uncertain`. `evidence` is
     /// absent when no revocation call could be made at all (the old status
     /// candidate's `revocation: null` case).
     RevocationUncertain {
+        /// The unconfirmed revocation attempt, when one was made.
         evidence: Option<CredentialRevocationEvidence>,
     },
 }
 
 impl CredentialDriverStatus {
     /// The phase the old status candidate published.
-    pub(crate) const fn phase(&self) -> &'static str {
+    pub const fn phase(&self) -> &'static str {
         match self {
             Self::ProviderUnavailable
             | Self::AgentUnavailable
@@ -202,7 +208,7 @@ impl CredentialDriverStatus {
     }
 
     /// The outcome code the old status candidate published.
-    pub(crate) const fn outcome_code(&self) -> &'static str {
+    pub const fn outcome_code(&self) -> &'static str {
         match self {
             Self::ProviderUnavailable => "credential-provider-unavailable",
             Self::AgentPending => "credential-agent-pending",
@@ -223,15 +229,15 @@ impl CredentialDriverStatus {
 /// persisted: the universal desired-state layer (`providerRef`) plus the
 /// typed Credential base fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CredentialSpecEnvelope {
+struct CredentialSpecEnvelope {
     /// The exact stored spec bytes; never rewritten by this driver.
-    pub(crate) raw: Vec<u8>,
+    raw: Vec<u8>,
     provider_ref: Option<ResourceRef>,
     base: CanonicalJsonObject,
 }
 
 /// The manager-wired decode hook for Credential rows.
-pub(crate) fn credential_spec_decoder() -> Arc<dyn SpecDecoder> {
+pub fn credential_spec_decoder() -> Arc<dyn SpecDecoder> {
     typed_spec_decoder(|bytes| {
         serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| CredentialSpecEnvelope {
             raw: bytes.to_vec(),
@@ -249,15 +255,15 @@ pub(crate) fn credential_spec_decoder() -> Arc<dyn SpecDecoder> {
 /// Provider row (readiness is `phase == Ready` at its current generation)
 /// and the declared execution target row.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CredentialDependencyFacts {
+pub struct CredentialDependencyFacts {
     /// Provider row uid (the old agent annotation value).
-    pub(crate) provider_uid: String,
+    pub provider_uid: String,
     /// Provider row generation (the revocation request binds it).
-    pub(crate) provider_generation: u64,
+    pub provider_generation: u64,
     /// Provider row is `Ready` at its current generation.
-    pub(crate) provider_ready: bool,
+    pub provider_ready: bool,
     /// Execution target row is `Ready` at its current generation.
-    pub(crate) execution_ready: bool,
+    pub execution_ready: bool,
 }
 
 /// The provider-side lease facts the old reconciler read from the durable
@@ -267,9 +273,11 @@ pub(crate) struct CredentialDependencyFacts {
 /// lease source supplies them; `None` is exactly the old "no lease state"
 /// case, where the old code skipped revocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CredentialLeaseFacts {
-    pub(crate) state: CredentialLeaseState,
-    pub(crate) rotation_generation: u64,
+pub struct CredentialLeaseFacts {
+    /// The lease state the provider-side source reports.
+    pub state: CredentialLeaseState,
+    /// The rotation generation the revocation request binds.
+    pub rotation_generation: u64,
 }
 
 /// The provider-facing effect surface the Credential driver needs. The
@@ -277,7 +285,7 @@ pub(crate) struct CredentialLeaseFacts {
 /// the ProviderSupervisor session handoff registry; test doubles implement
 /// the same seam (R4).
 #[async_trait::async_trait]
-pub(crate) trait CredentialDriverEffects: Send + Sync + 'static {
+pub trait CredentialDriverEffects: Send + Sync + 'static {
     /// Provider + execution-target facts. `None` when the Provider row is
     /// not observable to this daemon (the old controller was never started
     /// without it; deletion still fails closed rather than guessing).
@@ -300,76 +308,6 @@ pub(crate) trait CredentialDriverEffects: Send + Sync + 'static {
     fn session(&self, provider_ref: &ResourceRef) -> Option<Arc<dyn CredentialSession>>;
 }
 
-/// Boxed future returned by one production dependency probe: resolving the
-/// Provider and target rows is store-backed (the old dependency snapshots
-/// were assembled from the same reads), so the port cannot be a sync
-/// closure.
-pub(crate) type DependencyFactsFuture<'a> =
-    Pin<Box<dyn Future<Output = Option<CredentialDependencyFacts>> + Send + 'a>>;
-
-/// Boxed future of one production lease-fact read.
-pub(crate) type LeaseFactsFuture<'a> =
-    Pin<Box<dyn Future<Output = Option<CredentialLeaseFacts>> + Send + 'a>>;
-
-/// Boxed future of one production agent-readiness probe.
-pub(crate) type AgentReadyFuture<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
-
-/// The production effects over the preserved provider reads and the
-/// ProviderSupervisor handoff registry. The merge-owner wiring supplies the
-/// closures (the same inputs the old `start_u10_controller_runners`
-/// assembled) and the daemon's session registry.
-pub(crate) struct ProductionCredentialDriverEffects {
-    facts: Arc<
-        dyn for<'a> Fn(&'a ResourceRef, &'a ResourceRef) -> DependencyFactsFuture<'a> + Send + Sync,
-    >,
-    lease: Arc<dyn for<'a> Fn(&'a ResourceRef) -> LeaseFactsFuture<'a> + Send + Sync>,
-    agent: Arc<dyn for<'a> Fn(&'a ResourceRef) -> AgentReadyFuture<'a> + Send + Sync>,
-    sessions: crate::credential_resource_runtime::CredentialSessionRegistry,
-}
-
-impl ProductionCredentialDriverEffects {
-    pub(crate) fn new(
-        facts: Arc<
-            dyn for<'a> Fn(&'a ResourceRef, &'a ResourceRef) -> DependencyFactsFuture<'a>
-                + Send
-                + Sync,
-        >,
-        lease: Arc<dyn for<'a> Fn(&'a ResourceRef) -> LeaseFactsFuture<'a> + Send + Sync>,
-        agent: Arc<dyn for<'a> Fn(&'a ResourceRef) -> AgentReadyFuture<'a> + Send + Sync>,
-        sessions: crate::credential_resource_runtime::CredentialSessionRegistry,
-    ) -> Self {
-        Self {
-            facts,
-            lease,
-            agent,
-            sessions,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl CredentialDriverEffects for ProductionCredentialDriverEffects {
-    async fn dependency_facts(
-        &self,
-        provider_ref: &ResourceRef,
-        execution_ref: &ResourceRef,
-    ) -> Option<CredentialDependencyFacts> {
-        (self.facts)(provider_ref, execution_ref).await
-    }
-
-    async fn lease_facts(&self, credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts> {
-        (self.lease)(credential_ref).await
-    }
-
-    async fn agent_ready(&self, agent_ref: &ResourceRef) -> bool {
-        (self.agent)(agent_ref).await
-    }
-
-    fn session(&self, provider_ref: &ResourceRef) -> Option<Arc<dyn CredentialSession>> {
-        Some(self.sessions.for_provider(provider_ref.clone()))
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Factory (merge-owner wiring shape)
 // ---------------------------------------------------------------------------
@@ -377,23 +315,26 @@ impl CredentialDriverEffects for ProductionCredentialDriverEffects {
 /// Everything the composition unit must construct to instantiate the
 /// Credential driver factory for one zone: the preserved provider effects
 /// and the zone-authority controller generation (KTD7).
-pub(crate) struct CredentialDriverArgs {
-    pub(crate) zone: String,
+pub struct CredentialDriverArgs {
+    /// The zone the plane serves.
+    pub zone: String,
     /// Zone controller generation folded into every revocation request
     /// (old `policy_snapshot.controller_generation`).
-    pub(crate) controller_generation: ControllerGeneration,
-    pub(crate) effects: Arc<dyn CredentialDriverEffects>,
+    pub controller_generation: ControllerGeneration,
+    /// The family's effect port.
+    pub effects: Arc<dyn CredentialDriverEffects>,
 }
 
 /// [`ResourceDriverFactory`] for the `Credential` resource type.
 /// Construction is infallible by contract (R3).
-pub(crate) struct CredentialDriverFactory {
+pub struct CredentialDriverFactory {
     types: [ResourceTypeName; 1],
     args: CredentialDriverArgs,
 }
 
 impl CredentialDriverFactory {
-    pub(crate) fn new(args: CredentialDriverArgs) -> Self {
+    /// Build the factory for one zone's plane.
+    pub fn new(args: CredentialDriverArgs) -> Self {
         Self {
             types: [ResourceTypeName::new(CREDENTIAL_TYPE_NAME)],
             args,
@@ -422,14 +363,15 @@ impl ResourceDriverFactory for CredentialDriverFactory {
 
 /// One Credential resource's driver.
 #[derive(Clone)]
-pub(crate) struct CredentialDriver {
+pub struct CredentialDriver {
     zone: String,
     controller_generation: ControllerGeneration,
     effects: Arc<dyn CredentialDriverEffects>,
 }
 
 impl CredentialDriver {
-    pub(crate) fn new(args: CredentialDriverArgs) -> Self {
+    /// Build one Credential row's driver.
+    pub fn new(args: CredentialDriverArgs) -> Self {
         Self {
             zone: args.zone,
             controller_generation: args.controller_generation,
@@ -1031,6 +973,86 @@ impl ResourceDriver for CredentialDriver {
 }
 
 // ---------------------------------------------------------------------------
+// Registration: the type's driver declaration
+// ---------------------------------------------------------------------------
+
+/// The resource verbs the Credential type supports.
+///
+/// The closed `RoleResourceVerb` set: the nine manager verbs every converted
+/// type shares, plus the two credential-scoped verbs (`use-credential`,
+/// `admin-credential`) the plane gates to this type. Role rules and the typed
+/// CLI nouns resolve their gating from this declaration.
+const CREDENTIAL_VERBS: &[&str] = &[
+    "get",
+    "list",
+    "watch",
+    "create",
+    "update-spec",
+    "update-status",
+    "update-metadata",
+    "update-finalizers",
+    "delete",
+    "use-credential",
+    "admin-credential",
+];
+
+/// The execution domains the Credential type can be reconciled in.
+///
+/// A Credential row names a Host or a Guest execution target
+/// (`spec.scope.executionRef`; the old `credential_execution_ref` admitted
+/// exactly those two), so the type spans both domains.
+const CREDENTIAL_EXECUTION_DOMAINS: &[&str] = &["host", "guest"];
+
+/// The resource types the Credential driver reads while reconciling.
+///
+/// Derived from the driver's row reads: the Provider row and the declared
+/// execution target row are probed for readiness (and the Provider row's
+/// committed uid and generation are carried into the agent metadata), and the
+/// owned managed-identity agent is resolved as a `Process` child row.
+const CREDENTIAL_READS: &[WellKnownType] = &[
+    WellKnownType::PROCESS,
+    WellKnownType::HOST,
+    WellKnownType::GUEST,
+    WellKnownType::PROVIDER,
+];
+
+/// The children this driver may create.
+///
+/// The managed-identity agent is the Credential's only child: a `Process`
+/// minted under the minijail Process Provider's own reference, created and
+/// torn down by this driver (DriverOwned) behind the revocation gate.
+const CREDENTIAL_CREATIONS: &[ChildCreation] = &[ChildCreation {
+    child: WellKnownType::PROCESS,
+    provider_ref: AGENT_PROCESS_PROVIDER_REF,
+    custody: ChildCustody::DriverOwned,
+    order: 0,
+}];
+
+/// The Credential type's driver declaration.
+///
+/// `Credential` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot
+/// serve credential rows without it, so it must be registered before the
+/// plane opens. The type is not exportable (`ResourceExport` admits only
+/// qualified `*.d2bus.org.*Service` types), and it serves no broker
+/// operations.
+pub fn credential_descriptor(args: CredentialDriverArgs) -> DriverDescriptor {
+    DriverDescriptor {
+        resource_type: WellKnownType::CREDENTIAL,
+        allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+        verbs: CREDENTIAL_VERBS,
+        execution: CREDENTIAL_EXECUTION_DOMAINS,
+        exportable: false,
+        reads: CREDENTIAL_READS,
+        operations: &[],
+        creations: CREDENTIAL_CREATIONS,
+        startup: &[],
+        services: &[],
+        decoder: credential_spec_decoder(),
+        factory: Arc::new(CredentialDriverFactory::new(args)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests: driver unit tests over a scripted effect port and a recording
 // manager endpoint with one shared ordered log (R4; revocation ordering,
 // child minting, and fail-closed session binding observed as they happen).
@@ -1057,7 +1079,7 @@ mod tests {
     use d2b_resource_runtime::target::TargetHandle;
     use parking_lot::Mutex;
 
-    use crate::credential_resource_runtime::{
+    use crate::session::{
         CredentialResourceRuntimeError, CredentialRevocationOutcome, CredentialRevocationRequest,
         CredentialSession,
     };
@@ -1071,7 +1093,6 @@ mod tests {
 
     const MI_PROVIDER: &str = "Provider/credential-managed-identity";
     const SECRET_SERVICE_PROVIDER: &str = "Provider/credential-secret-service";
-    const AGENT_KEY: &str = "Process/mi-agent-relay";
 
     type Log = Arc<Mutex<Vec<String>>>;
 

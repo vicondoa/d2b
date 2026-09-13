@@ -29,6 +29,7 @@ test_suite(
         "//packages/d2b-provider-activation-nixos:all-tests",
         "//packages/d2b-provider-audio-pipewire:all-tests",
         "//packages/d2b-provider-clipboard-wayland:all-tests",
+        "//packages/d2b-provider-credential:all-tests",
         "//packages/d2b-provider-credential-entra:all-tests",
         "//packages/d2b-provider-credential-managed-identity:all-tests",
         "//packages/d2b-provider-credential-secret-service:all-tests",
