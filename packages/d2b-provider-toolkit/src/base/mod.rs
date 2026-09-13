@@ -48,7 +48,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::identity::SessionPurpose;
-use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
+#[cfg(feature = "unix-transport")]
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::ZoneId;
 use d2b_resource_types::{DriverDescriptor, ProviderDeclaration};
 
 use crate::plane::{DrainDeadline, PlaneError, SharedClock, SystemClock, ZonePlaneHandle};
