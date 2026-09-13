@@ -203,6 +203,20 @@ impl ProductionPlanePort {
             .ledger
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self::refuse_locked(&mut ledger, provider_ref, row, reason)
+    }
+
+    /// Record a refusal through a ledger the caller already holds.
+    ///
+    /// The ledger lock is not reentrant, so a refusal taken while one action
+    /// is already writing the ledger goes through this seat instead of
+    /// re-acquiring it.
+    fn refuse_locked(
+        ledger: &mut PlaneLedger,
+        provider_ref: &'static str,
+        row: String,
+        reason: &'static str,
+    ) -> PlaneError {
         if ledger.refusal.is_none() {
             ledger.refusal = Some(PlaneRefusal {
                 provider_ref,
@@ -375,24 +389,37 @@ impl ZonePlanePort for ProductionPlanePort {
             .ledger
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let deployed = ledger.adapters.entry(provider_ref).or_default();
-        if deployed.contains(&adapter.id) {
-            return Err(self.refuse(provider_ref, adapter.id.to_owned(), "adapter-duplicate"));
-        }
-        for dependency in adapter.depends_on {
-            let owned = surface
-                .adapters
-                .iter()
-                .any(|declared| declared.id == *dependency);
-            if owned && !deployed.contains(dependency) {
-                return Err(self.refuse(
-                    provider_ref,
-                    adapter.id.to_owned(),
-                    "adapter-dependency-not-deployed",
-                ));
+        let refusal = {
+            let deployed = ledger.adapters.entry(provider_ref).or_default();
+            if deployed.contains(&adapter.id) {
+                Some("adapter-duplicate")
+            } else {
+                adapter
+                    .depends_on
+                    .iter()
+                    .find(|dependency| {
+                        surface
+                            .adapters
+                            .iter()
+                            .any(|declared| declared.id == **dependency)
+                            && !deployed.contains(*dependency)
+                    })
+                    .map(|_| "adapter-dependency-not-deployed")
             }
+        };
+        if let Some(reason) = refusal {
+            return Err(Self::refuse_locked(
+                &mut ledger,
+                provider_ref,
+                adapter.id.to_owned(),
+                reason,
+            ));
         }
-        deployed.push(adapter.id);
+        ledger
+            .adapters
+            .entry(provider_ref)
+            .or_default()
+            .push(adapter.id);
         Ok(())
     }
 
@@ -411,11 +438,24 @@ impl ZonePlanePort for ProductionPlanePort {
             .ledger
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let published = ledger.services.entry(provider_ref).or_default();
-        if published.contains(&service.id) {
-            return Err(self.refuse(provider_ref, service.id.to_owned(), "service-duplicate"));
+        let duplicate = ledger
+            .services
+            .entry(provider_ref)
+            .or_default()
+            .contains(&service.id);
+        if duplicate {
+            return Err(Self::refuse_locked(
+                &mut ledger,
+                provider_ref,
+                service.id.to_owned(),
+                "service-duplicate",
+            ));
         }
-        published.push(service.id);
+        ledger
+            .services
+            .entry(provider_ref)
+            .or_default()
+            .push(service.id);
         Ok(())
     }
 }
