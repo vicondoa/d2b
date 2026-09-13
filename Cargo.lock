@@ -2200,6 +2200,12 @@ dependencies = [
 name = "d2b-sk-frontend"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-provider-toolkit",
+ "d2b-session",
+ "d2b-session-unix",
  "libc",
  "tokio",
  "tokio-vsock",

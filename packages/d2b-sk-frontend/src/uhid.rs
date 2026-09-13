@@ -26,7 +26,7 @@ use std::path::Path;
 
 use tokio::io::unix::AsyncFd;
 
-use crate::framing::CTAPHID_REPORT_LEN;
+
 
 // ---------------------------------------------------------------------------
 // UHID event type constants (from include/uapi/linux/uhid.h)
@@ -48,6 +48,9 @@ const UHID_OPEN: u32 = 4;
 const UHID_CLOSE: u32 = 5;
 /// Kernel requests a GET_REPORT from the device.
 const UHID_GET_REPORT: u32 = 9;
+
+/// Fixed size of a CTAPHID HID report (input or output).
+pub const CTAPHID_REPORT_LEN: usize = 64;
 
 // ---------------------------------------------------------------------------
 // HID descriptor constants
@@ -116,7 +119,14 @@ pub enum UhidEvent {
     /// Device start/stop/open/close lifecycle signal.
     Lifecycle(()),
     /// Get-report request from the kernel (feature reports).
-    GetReport { id: u32, _rtype: u8, _rnum: u8 },
+    GetReport {
+        /// The kernel's request id, echoed back on the reply.
+        id: u32,
+        /// Report type (`HID_FEATURE_REPORT`).
+        rtype: u8,
+        /// Report number.
+        rnum: u8,
+    },
     /// Other/unhandled event type.
     Other(u32),
 }
@@ -199,8 +209,8 @@ impl UhidDevice {
                 let rtype = payload[5];
                 UhidEvent::GetReport {
                     id,
-                    _rtype: rtype,
-                    _rnum: rnum,
+                    rtype,
+                    rnum,
                 }
             }
             UHID_START | UHID_STOP | UHID_OPEN | UHID_CLOSE => {

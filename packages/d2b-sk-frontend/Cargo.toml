@@ -3,13 +3,24 @@ name = "d2b-sk-frontend"
 version = "0.0.0-bootstrap"
 edition = "2024"
 publish = false
-license.workspace = true
-description = "d2b guest-side virtual FIDO/security-key UHID frontend"
+license = "Apache-2.0"
 
-[lints]
-workspace = true
+
+
+[lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
+
+[features]
+default = []
 
 [dependencies]
+async-trait = "0.1"
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
+d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
+d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
+d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap" }
 libc = "0.2"
-tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time", "fs"] }
-tokio-vsock = "0.7.2"
+tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tokio-vsock = "0.7"
