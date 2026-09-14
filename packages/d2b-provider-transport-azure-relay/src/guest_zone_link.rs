@@ -376,8 +376,7 @@ mod tests {
 
     fn sealed_runtime(dir: &Path) -> GatewayGuestZoneLinkRuntime {
         let credential_path = dir.join("credential.sealed.json");
-        let seal_key =
-            SealingKey::from_bytes([7_u8; crate::guest_credential::GATEWAY_SEAL_KEY_LEN]);
+        let seal_key = crate::guest_credential::sealing_key();
         crate::guest_credential::seal_envelope_for_test(
             &credential_path,
             &seal_key,
@@ -394,7 +393,7 @@ mod tests {
         let seal_key_path = dir.join("seal.key");
         fs::write(
             &seal_key_path,
-            [7_u8; crate::guest_credential::GATEWAY_SEAL_KEY_LEN],
+            crate::guest_credential::sealing_key_bytes(),
         )
         .expect("seal key");
         fs::set_permissions(&seal_key_path, fs::Permissions::from_mode(0o600))

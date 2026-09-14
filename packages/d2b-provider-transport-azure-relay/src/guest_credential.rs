@@ -720,6 +720,32 @@ pub(crate) fn seal_envelope_for_test(
         .map_err(|_| CredentialError::Unreadable)
 }
 
+/// Key-length entropy for the tests. The sealing key material is generated at
+/// run time, so none of it lives in the source tree.
+#[cfg(test)]
+pub(crate) fn sealing_key_bytes() -> [u8; GATEWAY_SEAL_KEY_LEN] {
+    static BYTES: std::sync::LazyLock<[u8; GATEWAY_SEAL_KEY_LEN]> =
+        std::sync::LazyLock::new(|| {
+            let mut bytes = [0_u8; GATEWAY_SEAL_KEY_LEN];
+            use std::io::Read;
+            std::fs::File::open("/dev/urandom")
+                .and_then(|mut file| file.read_exact(&mut bytes))
+                .expect("entropy for a test sealing key");
+            bytes
+        });
+    *BYTES
+}
+
+/// The sealing key this crate's tests use.
+///
+/// The bytes are drawn once per test binary and remembered, so repeated calls
+/// inside one test agree - the sealing and loading halves have to hold the
+/// same key.
+#[cfg(test)]
+pub(crate) fn sealing_key() -> SealingKey {
+    SealingKey::from_bytes(sealing_key_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,10 +774,6 @@ mod tests {
             send_key_name: "gateway-send".to_owned(),
             send_key: "send-secret".to_owned(),
         }
-    }
-
-    fn sealing_key() -> SealingKey {
-        SealingKey::from_bytes([9_u8; GATEWAY_SEAL_KEY_LEN])
     }
 
     #[test]
@@ -856,7 +878,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credential.sealed.json");
         seal_envelope_for_test(&path, &sealing_key(), material(), 1, None).unwrap();
-        let wrong = SealingKey::from_bytes([8_u8; GATEWAY_SEAL_KEY_LEN]);
+        let wrong = {
+            let mut bytes = sealing_key_bytes();
+            bytes[0] ^= 0xff;
+            SealingKey::from_bytes(bytes)
+        };
         assert_eq!(
             GatewayCredential::load_sealed(&path, &wrong, &CredentialFilePolicy::default(), 1,)
                 .unwrap_err(),
