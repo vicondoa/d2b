@@ -72,17 +72,21 @@ let
       # helper is reached with the plain `self`, so resolving it through
       # `self.packages` failed every check that builds this artifact.
       stagedControllerBundle = builtins.getEnv "D2B_CH_CONTROLLER_BUNDLE";
+      # The staged bundle holds the Bazel-built binary, which still points at
+      # the build environment's interpreter. It has to go through the same
+      # fixup the flake's own package applies - patched interpreter, resolved
+      # runtime libraries - or the broker cannot start it inside the VM
+      # ("Could not start dynamically linked executable").
       controller =
         if stagedControllerBundle != "" then
-          pkgs.runCommand "d2b-cloud-hypervisor-controller" { } ''
-            mkdir -p $out/bin
-            install -m 755 \
-              ${builtins.path {
-                path = /. + stagedControllerBundle;
-                name = "d2b-staged-cloud-hypervisor-controller";
-              }}/d2b-cloud-hypervisor-controller \
-              $out/bin/d2b-cloud-hypervisor-controller
-          ''
+          (import ../../nix/test-support/bazel-host-tools.nix {
+            inherit pkgs;
+            rawBundle = null;
+            rawCloudHypervisorController = builtins.path {
+              path = /. + stagedControllerBundle;
+              name = "d2b-staged-cloud-hypervisor-controller";
+            };
+          }).cloudHypervisorControllerPackage
         else
           self.packages.${pkgs.stdenv.hostPlatform.system}.d2b-cloud-hypervisor-controller;
       controllerBinary = "${controller}/bin/d2b-cloud-hypervisor-controller";
