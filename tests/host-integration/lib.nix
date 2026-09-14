@@ -73,15 +73,19 @@ let
       # `self.packages` failed every check that builds this artifact.
       stagedControllerBundle = builtins.getEnv "D2B_CH_CONTROLLER_BUNDLE";
       controller =
-        self.packages.${pkgs.stdenv.hostPlatform.system}.d2b-cloud-hypervisor-controller;
-      controllerBinary =
         if stagedControllerBundle != "" then
-          "${builtins.path {
-            path = /. + stagedControllerBundle;
-            name = "d2b-staged-cloud-hypervisor-controller";
-          }}/d2b-cloud-hypervisor-controller"
+          pkgs.runCommand "d2b-cloud-hypervisor-controller" { } ''
+            mkdir -p $out/bin
+            install -m 755 \
+              ${builtins.path {
+                path = /. + stagedControllerBundle;
+                name = "d2b-staged-cloud-hypervisor-controller";
+              }}/d2b-cloud-hypervisor-controller \
+              $out/bin/d2b-cloud-hypervisor-controller
+          ''
         else
-          "${controller}/bin/d2b-cloud-hypervisor-controller";
+          self.packages.${pkgs.stdenv.hostPlatform.system}.d2b-cloud-hypervisor-controller;
+      controllerBinary = "${controller}/bin/d2b-cloud-hypervisor-controller";
       signer = pkgs.python3.withPackages
         (pythonPackages: [ pythonPackages.cryptography ]);
       manifest = ../../packages/d2b-provider-guest-cloud-hypervisor/provider-manifest.json;
