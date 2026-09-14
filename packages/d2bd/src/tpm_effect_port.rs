@@ -28,9 +28,10 @@
 
 use std::sync::Mutex;
 
-use d2b_contracts::types::{PathClass, VmId};
+use d2b_contracts::types::{BundleOpId, PathClass, VmId};
 use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest, BrokerResponse};
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
+use d2b_core_controller::migration::LegacyTpmMigrationDecision;
 use d2b_provider_device_tpm::{
     TpmResourceController, TpmResourceEffectError, TpmResourceEffectPort, TpmResourceOutcome,
     build_tpm_state_volume_resource,
@@ -240,12 +241,15 @@ enum TpmLifecycleAdmission {
 /// Concrete daemon-side TPM resource effect port.
 ///
 /// The port holds no broker spawn surface by construction: every effect is a
-/// manager child mutation or a manager view of a Device-owned row. The one
-/// broker call that remains is the broker-owned state-directory preparation,
-/// which does not launch a process.
+/// manager child mutation or a manager view of a Device-owned row. The two
+/// broker calls that remain are the one-time legacy state adoption and the
+/// broker-owned state-directory preparation, neither of which launches a
+/// process.
 struct LiveTpmResourceEffectPort<'a> {
     state: &'a crate::ServerState,
     vm_id: VmId,
+    migration_intent_ref: BundleOpId,
+    migration_decision: LegacyTpmMigrationDecision,
     caller_role: BrokerCallerRole,
     rows: DeclaredTpmRows<'a>,
     device_uid: ResourceUid,
@@ -383,6 +387,17 @@ impl TpmResourceEffectPort for LiveTpmResourceEffectPort<'_> {
         execution_ref: &ResourceRef,
     ) -> Result<ResourceRef, TpmResourceEffectError> {
         self.identity_matches(device_uid, device_ref, execution_ref)?;
+        // The broker-owned legacy swTPM adoption op is removed; every v3
+        // admission is anchorless, so a decision that still requires
+        // migration - or whose intent no longer binds the current VM -
+        // fail-closes instead of dispatching a removed op.
+        if self.migration_decision.requires_migration()
+            || !self
+                .migration_decision
+                .validates_binding(self.vm_id.as_str(), self.migration_intent_ref.as_str())
+        {
+            return Err(TpmResourceEffectError::StateIntegrity);
+        }
         self.prepare_state_dir()?;
         // The Volume row is committed before the flush and swtpm rows can use
         // it, so the caller waits for its own controller here.
@@ -506,12 +521,16 @@ impl AdmittedTpmDevice {
         self,
         state: &'a crate::ServerState,
         vm_id: VmId,
+        migration_intent_ref: BundleOpId,
+        migration_decision: LegacyTpmMigrationDecision,
         caller_role: BrokerCallerRole,
         children: &'a dyn SharedProviderChildSurface,
     ) -> LiveTpmResourceEffectPort<'a> {
         LiveTpmResourceEffectPort {
             state,
             vm_id,
+            migration_intent_ref,
+            migration_decision,
             caller_role,
             rows: DeclaredTpmRows {
                 children,
@@ -533,13 +552,21 @@ impl AdmittedTpmDevice {
 pub(crate) fn reconcile_device_tpm_controller(
     state: &crate::ServerState,
     vm_id: VmId,
+    migration_intent_ref: BundleOpId,
+    migration_decision: LegacyTpmMigrationDecision,
     admitted_device: AdmittedTpmDevice,
     caller_role: BrokerCallerRole,
     children: &dyn SharedProviderChildSurface,
     controller: &mut TpmResourceController,
 ) -> Result<TpmResourceOutcome, d2b_provider_device_tpm::TpmResourceControllerError> {
-    let resource_effect =
-        admitted_device.into_port(state, vm_id, caller_role, children);
+    let resource_effect = admitted_device.into_port(
+        state,
+        vm_id,
+        migration_intent_ref,
+        migration_decision,
+        caller_role,
+        children,
+    );
     crate::block_on_future(controller.reconcile(&resource_effect))
 }
 
@@ -547,13 +574,21 @@ pub(crate) fn reconcile_device_tpm_controller(
 pub(crate) fn finalize_device_tpm_controller(
     state: &crate::ServerState,
     vm_id: VmId,
+    migration_intent_ref: BundleOpId,
+    migration_decision: LegacyTpmMigrationDecision,
     admitted_device: AdmittedTpmDevice,
     caller_role: BrokerCallerRole,
     children: &dyn SharedProviderChildSurface,
     controller: &mut TpmResourceController,
 ) -> Result<TpmResourceOutcome, d2b_provider_device_tpm::TpmResourceControllerError> {
-    let resource_effect =
-        admitted_device.into_port(state, vm_id, caller_role, children);
+    let resource_effect = admitted_device.into_port(
+        state,
+        vm_id,
+        migration_intent_ref,
+        migration_decision,
+        caller_role,
+        children,
+    );
     crate::block_on_future(controller.finalize(&resource_effect))
 }
 

@@ -44,28 +44,24 @@ let
     import json
     import sys
 
+    # Zone-native v3 bundle: the loader (BundleResolver) accepts only the
+    # v3 contract. The self-hash is computed over the serialization with
+    # bundleHash absent and artifactHashes nullified (verify_bundle_hash).
     bundle = {
-        "artifactHashes": None,
-        "bundleVersion": 4,
-        "closures": [],
+        "artifactHashes": {},
+        "bundleVersion": 1,
+        "schemaVersion": "v3",
+        "privilegesPath": "privileges.json",
+        "zones": [],
         "generation": {
             "generatedAt": None,
             "generator": "host-integration",
             "sourceRevision": None,
         },
-        "hostPath": "host.json",
-        "managedKeys": {
-            "keysDir": "/var/lib/d2b/keys",
-            "knownHostsPath": "/var/lib/d2b/known_hosts.d2b",
-            "overrides": [],
-        },
-        "minijailProfiles": [],
-        "privilegesPath": "privileges.json",
-        "processesPath": "processes.json",
-        "publicManifestPath": "vms.json",
-        "schemaVersion": "v2",
     }
-    canonical = json.dumps(bundle, sort_keys=True, separators=(",", ":")).encode()
+    preimage = dict(bundle)
+    preimage["artifactHashes"] = None
+    canonical = json.dumps(preimage, sort_keys=True, separators=(",", ":")).encode()
     bundle["bundleHash"] = "sha256:" + hashlib.sha256(canonical).hexdigest()
     with open(sys.argv[1], "w", encoding="utf-8") as output:
         json.dump(bundle, output, sort_keys=True, separators=(",", ":"))
