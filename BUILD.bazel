@@ -46,6 +46,7 @@ exports_files([
     ".gitignore",
     "AGENTS.md",
     "CHANGELOG.md",
+    "clippy.toml",
     "CONTRIBUTING.md",
     "LICENSE",
     "Makefile",
