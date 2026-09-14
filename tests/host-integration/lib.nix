@@ -65,8 +65,23 @@ let
 
   mkRuntimeCloudHypervisorArtifact = pkgs:
     let
+      # The controller arrives through the Bazel-staged bundle that
+      # `make test-host-integration` hands to the evaluation
+      # (`D2B_CH_CONTROLLER_BUNDLE`). The flake's own package overlay exposes
+      # `d2b-cloud-hypervisor-controller` only inside `testSelf`, and this
+      # helper is reached with the plain `self`, so resolving it through
+      # `self.packages` failed every check that builds this artifact.
+      stagedControllerBundle = builtins.getEnv "D2B_CH_CONTROLLER_BUNDLE";
       controller =
         self.packages.${pkgs.stdenv.hostPlatform.system}.d2b-cloud-hypervisor-controller;
+      controllerBinary =
+        if stagedControllerBundle != "" then
+          "${builtins.path {
+            path = /. + stagedControllerBundle;
+            name = "d2b-staged-cloud-hypervisor-controller";
+          }}/d2b-cloud-hypervisor-controller"
+        else
+          "${controller}/bin/d2b-cloud-hypervisor-controller";
       signer = pkgs.python3.withPackages
         (pythonPackages: [ pythonPackages.cryptography ]);
       manifest = ../../packages/d2b-provider-guest-cloud-hypervisor/provider-manifest.json;
@@ -75,7 +90,7 @@ let
         nativeBuildInputs = [ pkgs.coreutils signer ];
       } ''
         ${signer}/bin/python3 - "${manifest}" \
-          "${controller}/bin/d2b-cloud-hypervisor-controller" "$out" <<'PY'
+          "${controllerBinary}" "$out" <<'PY'
         import hashlib
         import json
         import pathlib
