@@ -17903,12 +17903,47 @@ fn execute_host_prep_dag(
                     },
                 )
             }
-            HostPrepStepKind::OwnershipMatrixCheck => BrokerRequest::OwnershipMatrixCheck(
-                d2b_contracts_broker::broker_wire::OwnershipMatrixCheckRequest {
-                    vm_id: step.bundle_ref.vm_id.clone(),
-                    tracing_span_id: None,
-                },
-            ),
+            HostPrepStepKind::OwnershipMatrixCheck => {
+                // Run the daemon-native ownership preflight instead of
+                // dispatching the broker stub. The check is a pure stat walk
+                // over the per-VM state subtree the daemon already has
+                // `CAP_DAC_READ_SEARCH` for, and the real implementation
+                // lives in `d2bd-runtime` (`ownership_preflight`); the typed
+                // variant therefore has no production caller and retires with
+                // the typed arms.
+                let Some(state_dir) = per_vm_state_dir.as_ref() else {
+                    tracing::warn!(
+                        vm = %vm,
+                        step_id = %step.id,
+                        op_kind = op_name,
+                        "ownership-matrix preflight skipped: no per-VM state ledger",
+                    );
+                    continue;
+                };
+                match d2bd_runtime::ownership_preflight::preflight(vm, state_dir) {
+                    d2bd_runtime::ownership_preflight::OwnershipPreflightOutcome::Clean => {
+                        continue;
+                    }
+                    d2bd_runtime::ownership_preflight::OwnershipPreflightOutcome::Drift(drift) => {
+                        let message = d2bd_runtime::ownership_preflight::render_drift_message(
+                            vm, &drift,
+                        );
+                        tracing::warn!(
+                            vm = %vm,
+                            step_id = %step.id,
+                            outcome = "ownership-matrix-drift",
+                            "host-prep DAG step failed: ownership drift (path in typed envelope + audit log)",
+                        );
+                        return Err(broker_failure_response(
+                            VERB,
+                            message,
+                            "Restore the ownership matrix the preflight names and retry VM start."
+                                .to_owned(),
+                            None,
+                        ));
+                    }
+                }
+            }
             HostPrepStepKind::SshHostKeyPreflight => {
                 // Run the daemon-native posture check instead of dispatching
                 // the broker stub. The broker variant remains in the
