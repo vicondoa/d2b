@@ -279,23 +279,40 @@ test-host-integration:
 	: >"$$run_dir/outputs"; \
 	: >"$$run_dir/summary"; \
 	lane_rc=0; \
-	for name in $$names; do \
+	max_jobs="$${D2B_HOST_VM_JOBS:-1}"; \
+	case "$$max_jobs" in ''|*[!0-9]*) echo "test-host-integration: invalid D2B_HOST_VM_JOBS (want a positive integer)" >&2; exit 1;; esac; \
+	if [ "$$max_jobs" -lt 1 ]; then echo "test-host-integration: D2B_HOST_VM_JOBS must be at least 1" >&2; exit 1; fi; \
+	echo "test-host-integration: building vmChecks (jobs=$$max_jobs): $$names"; \
+	: >"$$run_dir/failed"; \
+	run_vm_check() { \
+	name="$$1"; \
 	check_start="$$(date +%s)"; \
 	rc=0; \
 	D2B_HOST_TOOL_BUNDLE="$$stage" D2B_CH_CONTROLLER_BUNDLE="$$controller_stage" \
 	D2B_HOST_RUNTIME_PATH="$$run_dir/absent-host-runtime.json" \
-	sudo -A -E nix build --option build-users-group "" --option extra-sandbox-paths "/dev/vhost-vsock" --impure --out-link "$$run_dir/result-$$name" --print-build-logs --print-out-paths "git+file://$$root#vmChecks.$$system.$$name" >"$$run_dir/$$name.outputs" || rc=$$?; \
+	sudo -A -E nix build --option build-users-group "" --option extra-sandbox-paths "/dev/vhost-vsock" --impure --out-link "$$run_dir/result-$$name" --print-build-logs --print-out-paths "git+file://$$root#vmChecks.$$system.$$name" >"$$run_dir/$$name.outputs" 2>"$$run_dir/$$name.log" || rc=$$?; \
 	check_duration="$$(( $$(date +%s) - check_start ))"; \
 	if [ "$$rc" -eq 0 ]; then \
 	status=PASS; \
 	cat "$$run_dir/$$name.outputs" >>"$$run_dir/outputs"; \
-	cat "$$run_dir/$$name.outputs"; \
 	else \
 	status=FAIL; \
-	lane_rc=1; \
+	printf '%s\n' "$$name" >>"$$run_dir/failed"; \
 	fi; \
 	printf 'test-host-integration: vmCheck %-42s %s  %ss\n' "$$name" "$$status" "$$check_duration" | tee -a "$$run_dir/summary"; \
+	if [ "$$rc" -ne 0 ]; then \
+	printf 'test-host-integration: %s tail of %s:\n' "$$name" "$$run_dir/$$name.log" >&2; \
+	tail -20 "$$run_dir/$$name.log" >&2 || true; \
+	fi; \
+	}; \
+	running=0; \
+	for name in $$names; do \
+	if [ "$$running" -ge "$$max_jobs" ]; then wait || true; running=0; fi; \
+	run_vm_check "$$name" & \
+	running="$$((running + 1))"; \
 	done; \
+	wait || true; \
+	if [ -s "$$run_dir/failed" ]; then lane_rc=1; fi; \
 	echo "test-host-integration: vmCheck summary (name, status, wall time):"; \
 	cat "$$run_dir/summary"; \
 	if [ -n "$$attic_cache" ]; then \
