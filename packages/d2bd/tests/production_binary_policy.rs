@@ -70,6 +70,7 @@ fn production_binary_contains_no_peer_override_surface() {
         "legacy_scheduler_disabled",
         "CoreRegisteredSource",
         "AcceptanceBatch",
+        "BrokerRequest::OwnershipMatrixCheck",
     ] {
         assert!(
             !rendered.contains(retired),
@@ -114,6 +115,7 @@ fn production_binary_contains_no_peer_override_surface() {
         "legacy_scheduler_disabled",
         "CoreRegisteredSource",
         "AcceptanceBatch",
+        "BrokerRequest::OwnershipMatrixCheck",
     ] {
         assert!(
             !source_paths.iter().any(|source| source.contains(retired)),
