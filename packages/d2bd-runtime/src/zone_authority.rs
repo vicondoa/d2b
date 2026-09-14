@@ -196,15 +196,6 @@ pub fn register_authoritative_zones(
     for zone in authoritative_zone_ids(resolver)? {
         let _ = coordinator.register_zone(zone);
     }
-    for runtime in &resolver.host.vm_runtimes {
-        let Some(environment) = runtime.env.as_deref() else {
-            continue;
-        };
-        let zone = ZoneId::parse(environment).map_err(|_| "VM Zone identity invalid")?;
-        coordinator
-            .bind_vm(runtime.vm.clone(), &zone)
-            .map_err(|_| "VM Zone binding unavailable")?;
-    }
     for (vm, runtime) in &resolver.manifest.vms {
         let Some(environment) = runtime.env.as_deref() else {
             continue;

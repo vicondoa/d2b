@@ -38,7 +38,6 @@
 //! | `BringUpTapInterface`      | [`BrokerRequest::CreateTapFd`] / `CreatePersistentTap` |
 //! | `PreOpenVhostNetFd`        | [`BrokerRequest::OpenVhostNet`] (or `OpenDevice`)    |
 //! | `SeedDnsmasqLease`         | [`BrokerRequest::SeedDnsmasqLease`] *(stub)*         |
-//! | `BindMountFromHardlinkFarm`| [`BrokerRequest::BindMountFromHardlinkFarm`]         |
 //! | `ApplyNftablesRules`       | [`BrokerRequest::ApplyNftables`]                     |
 //! | `OwnershipMatrixCheck`     | [`BrokerRequest::OwnershipMatrixCheck`] *(stub)*     |
 //! | `SshHostKeyPreflight`      | [`BrokerRequest::SshHostKeyPreflight`] *(stub)*      |
@@ -47,7 +46,6 @@
 //! [`BrokerRequest::OpenVhostNet`]: d2b_contracts_broker::broker_wire::BrokerRequest::OpenVhostNet
 //! [`BrokerRequest::ApplyNftables`]: d2b_contracts_broker::broker_wire::BrokerRequest::ApplyNftables
 //! [`BrokerRequest::SeedDnsmasqLease`]: d2b_contracts_broker::broker_wire::BrokerRequest::SeedDnsmasqLease
-//! [`BrokerRequest::BindMountFromHardlinkFarm`]: d2b_contracts_broker::broker_wire::BrokerRequest::BindMountFromHardlinkFarm
 //! [`BrokerRequest::OwnershipMatrixCheck`]: d2b_contracts_broker::broker_wire::BrokerRequest::OwnershipMatrixCheck
 //! [`BrokerRequest::SshHostKeyPreflight`]: d2b_contracts_broker::broker_wire::BrokerRequest::SshHostKeyPreflight
 //!
@@ -60,13 +58,14 @@
 //!          \                 /
 //!           +---> ApplyNftablesRules ---> BringUpTapInterface ---> PreOpenVhostNetFd
 //!                       \                       /
-//!                        +---> SeedDnsmasqLease (net-VM only) -> BindMountFromHardlinkFarm
+//!                        +---> SeedDnsmasqLease (net-VM only)
 //! ```
 //!
 //! The exact graph and the per-VM set is derived in
 //! [`build_host_prep_dag`].
 
 use d2b_contracts::types::{BundleOpId, ScopeId, VmId};
+use d2b_contracts_resource::v3::resource_schema::CanonicalJsonValue;
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::runtime::RuntimeKind;
 use schemars::JsonSchema;
@@ -131,10 +130,6 @@ pub enum HostPrepStepKind {
     /// **Net-VM-only**: workload VMs do not run dnsmasq, so the
     /// builder skips this step for them.
     SeedDnsmasqLease,
-    /// Per-VM `/var/lib/d2b/vms/<vm>/store-view` bind-mount from the
-    /// per-VM hardlink farm (`store/`). Dispatches the
-    /// `BindMountFromHardlinkFarm` broker op.
-    BindMountFromHardlinkFarm,
     /// nftables fragment apply via broker `ApplyNftables`. Already
     /// fully typed; here we just register it as a DAG step. The per-VM
     /// rules live in the bundle's `nft:env:<env>` intent.
@@ -189,7 +184,6 @@ impl HostPrepStepKind {
             Self::BringUpTapInterface => "bring-up-tap-interface",
             Self::PreOpenVhostNetFd => "pre-open-vhost-net-fd",
             Self::SeedDnsmasqLease => "seed-dnsmasq-lease",
-            Self::BindMountFromHardlinkFarm => "bind-mount-from-hardlink-farm",
             Self::ApplyNftablesRules => "apply-nftables-rules",
             Self::OwnershipMatrixCheck => "ownership-matrix-check",
             Self::SshHostKeyPreflight => "ssh-host-key-preflight",
@@ -208,7 +202,6 @@ impl HostPrepStepKind {
             Self::BringUpTapInterface => "CreateTapFd",
             Self::PreOpenVhostNetFd => "OpenVhostNet",
             Self::SeedDnsmasqLease => "SeedDnsmasqLease",
-            Self::BindMountFromHardlinkFarm => "BindMountFromHardlinkFarm",
             Self::ApplyNftablesRules => "ApplyNftables",
             Self::OwnershipMatrixCheck => "OwnershipMatrixCheck",
             Self::SshHostKeyPreflight => "SshHostKeyPreflight",
@@ -331,11 +324,11 @@ impl std::error::Error for CycleError {}
 /// trusted bundle:
 ///
 /// - NixOS VMs emit `SshHostKeyPreflight`, `OwnershipMatrixCheck`,
-///   `ApplyNftablesRules`, `BringUpTapInterface`, `PreOpenVhostNetFd`,
-///   and `BindMountFromHardlinkFarm`.
-/// - QEMU media VMs skip the NixOS-only SSH, ownership-matrix, store,
+///   `ApplyNftablesRules`, `BringUpTapInterface`, and
+///   `PreOpenVhostNetFd`.
+/// - QEMU media VMs skip the NixOS-only SSH, ownership-matrix,
 ///   and vhost-net steps.
-/// - Net VMs (`VmEntry::is_net_vm`) additionally emit
+/// - Net VMs (Guest resource `spec.netVm` flag) additionally emit
 ///   `SeedDnsmasqLease`.
 ///
 /// Steps unrelated to the VM's optional sidecars (obs / usbip /
@@ -349,15 +342,36 @@ impl std::error::Error for CycleError {}
 /// the resolver (the daemon-side caller is responsible for
 /// surfacing that as a typed error).
 pub fn build_host_prep_dag(vm: &str, resolver: &BundleResolver) -> Vec<HostPrepStep> {
-    let Some(vm_entry) = resolver.find_manifest_vm(vm) else {
+    let Some(resource) = resolver
+        .guest_vm_resources()
+        .find(|(_, resource)| resource.metadata().name().as_str() == vm)
+        .map(|(_, resource)| resource)
+    else {
         return Vec::new();
     };
-    build_host_prep_dag_for_runtime(
-        vm,
-        vm_entry.is_net_vm,
-        vm_entry.env.as_deref(),
-        &vm_entry.runtime.kind,
-    )
+    let spec = resource.spec();
+    let runtime_kind = if matches!(
+        spec.get("providerRef"),
+        Some(CanonicalJsonValue::String(provider_ref))
+            if provider_ref.as_str() == "Provider/runtime-qemu-media"
+    ) {
+        RuntimeKind::QemuMedia
+    } else {
+        RuntimeKind::Nixos
+    };
+    // Best-effort env: top-level `spec.env`, else `spec.executionPolicy.env`.
+    let env = match spec.get("env") {
+        Some(CanonicalJsonValue::String(env)) => Some(env.as_str()),
+        _ => spec
+            .get("executionPolicy")
+            .and_then(CanonicalJsonValue::as_object)
+            .and_then(|policy| match policy.get("env") {
+                Some(CanonicalJsonValue::String(env)) => Some(env.as_str()),
+                _ => None,
+            }),
+    };
+    let is_net_vm = matches!(spec.get("netVm"), Some(CanonicalJsonValue::Bool(true)));
+    build_host_prep_dag_for_runtime(vm, is_net_vm, env, &runtime_kind)
 }
 
 /// Bundle-free constructor used by unit tests and integrators that
@@ -381,7 +395,7 @@ pub fn build_host_prep_dag_for_runtime(
 
     let id = |k: HostPrepStepKind| HostPrepStepId::new(vm, k);
 
-    let mut steps = Vec::with_capacity(10);
+    let mut steps = Vec::with_capacity(9);
 
     // Preflights - no upstream deps; siblings of one another.
     if !is_qemu_media {
@@ -518,21 +532,6 @@ pub fn build_host_prep_dag_for_runtime(
         });
     }
 
-    // Per-VM store-view bind: depends on ownership matrix (parent
-    // dir must already be correct mode/owner). Tap-independent.
-    if !is_qemu_media {
-        steps.push(HostPrepStep {
-            id: id(HostPrepStepKind::BindMountFromHardlinkFarm),
-            depends_on: vec![id(HostPrepStepKind::OwnershipMatrixCheck)],
-            kind: HostPrepStepKind::BindMountFromHardlinkFarm,
-            bundle_ref: BundleStepRef {
-                vm_id,
-                scope_id: None,
-                bundle_op_id: None,
-            },
-        });
-    }
-
     topo_sort(steps).expect("static host-prep DAG is acyclic")
 }
 
@@ -617,7 +616,6 @@ mod tests {
             HostPrepStepKind::ApplyNftablesRules,
             HostPrepStepKind::BringUpTapInterface,
             HostPrepStepKind::PreOpenVhostNetFd,
-            HostPrepStepKind::BindMountFromHardlinkFarm,
         ] {
             let expected = format!("work:{}", k.as_str());
             assert!(
@@ -647,11 +645,6 @@ mod tests {
             "work:ownership-matrix-check",
             "work:apply-nftables-rules",
         );
-        assert_before(
-            &steps,
-            "work:ownership-matrix-check",
-            "work:bind-mount-from-hardlink-farm",
-        );
     }
 
     #[test]
@@ -675,7 +668,6 @@ mod tests {
 
         assert!(!ids.contains(&"media:ssh-host-key-preflight"));
         assert!(!ids.contains(&"media:ownership-matrix-check"));
-        assert!(!ids.contains(&"media:bind-mount-from-hardlink-farm"));
         assert!(!ids.contains(&"media:pre-open-vhost-net-fd"));
         assert!(ids.contains(&"media:bring-up-tap-interface"));
         let tap = steps
@@ -765,7 +757,6 @@ mod tests {
             HostPrepStepKind::BringUpTapInterface,
             HostPrepStepKind::PreOpenVhostNetFd,
             HostPrepStepKind::SeedDnsmasqLease,
-            HostPrepStepKind::BindMountFromHardlinkFarm,
             HostPrepStepKind::ApplyNftablesRules,
             HostPrepStepKind::OwnershipMatrixCheck,
             HostPrepStepKind::SshHostKeyPreflight,

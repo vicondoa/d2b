@@ -102,39 +102,6 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
-    name = "bundle_resolver_runner_intents",
-    srcs = ["tests/bundle_resolver_runner_intents.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_core",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "d2b-core-fuzz-bundle",
-    srcs = [
-        "//packages/d2b-core/fuzz:src/bin/bundle.rs",  # keep
-        "//packages/d2b-core/fuzz:src/harness.rs",  # keep
-    ],
-    compile_data = ["Cargo.toml"],
-    crate_root = "//packages/d2b-core/fuzz:src/bin/bundle.rs",
-    crate_features = ["fuzz"],
-    data = ["//packages/d2b-core/fuzz:corpus"],
-    rustc_env = {"CARGO_MANIFEST_DIR": "."},
-    use_libtest_harness = False,
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_core",
-        "@crates//:bolero",
-        "@crates//:serde_json",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
 
 rust_test(
     name = "d2b-core-fuzz-host",

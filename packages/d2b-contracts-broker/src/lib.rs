@@ -35,8 +35,6 @@ impl BrokerCapabilities {
                 "Hello",
                 "ExportBrokerAudit",
                 "CreateOrReconcileUsersGroups",
-                "SetupMountNamespace",
-                "PrepareStoreView",
                 "LaunchMinijailChild",
                 "ReadSecretById",
                 "InjectSecretById",

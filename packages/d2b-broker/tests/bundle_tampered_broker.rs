@@ -15,6 +15,7 @@ mod broker_tampered {
     use d2b_broker::runtime::{probe_bundle_load_response, probe_bundle_load_response_with_policy};
     use d2b_contracts_broker::broker_wire::BrokerResponse;
     use d2b_core::bundle_resolver::BundleVerifyPolicy;
+    use sha2::Digest as _;
     use std::fs;
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt;
@@ -28,29 +29,47 @@ mod broker_tampered {
         }
     }
 
-    /// Minimal bundle JSON bytes (no bundleHash - mode check fires first).
+    /// Minimal v3 Zone-native bundle JSON bytes.
+    ///
+    /// The shape mirrors what `nixos-modules/bundle.nix` emits (`bundleVersion`
+    /// 1, `schemaVersion` "v3", a per-zone `zones` ref, `privilegesPath`,
+    /// `artifactHashes`, and a self-hash `bundleHash`). The `bundleHash` is
+    /// computed over the canonical serialization with the field absent and
+    /// `artifactHashes` nullified, exactly as
+    /// `d2b_core::bundle_resolver::verify_bundle_hash` re-derives it.
+    ///
+    /// The sibling artifacts are never written to disk: every test in this
+    /// module tamper-faults at the bundle.json file-level check (mode 0644,
+    /// symlink) inside `secure_open_and_read`, which fires before any bundle
+    /// content or sibling artifact is opened.
     fn minimal_bundle_json() -> Vec<u8> {
-        serde_json::to_vec(&serde_json::json!({
-            "bundleVersion": 4,
-            "schemaVersion": "v2",
-            "publicManifestPath": "vms.json",
-            "hostPath": "host.json",
-            "processesPath": "processes.json",
+        let mut bundle = serde_json::json!({
+            "artifactHashes": null,
+            "bundleVersion": 1,
+            "schemaVersion": "v3",
             "privilegesPath": "privileges.json",
-            "closures": [],
-            "minijailProfiles": [],
-            "managedKeys": {
-                "keysDir": "/var/lib/d2b/keys",
-                "knownHostsPath": "/var/lib/d2b/known_hosts.d2b",
-                "overrides": []
-            },
+            "zones": [
+                { "zone": "work", "path": "zones/work/resource-bundle.json" }
+            ],
             "generation": {
                 "generator": "test",
                 "sourceRevision": null,
                 "generatedAt": null
             }
-        }))
-        .expect("bundle json serializes")
+        });
+        let bundle_hash = format!(
+            "sha256:{}",
+            sha2::Sha256::digest(&serde_json::to_vec(&bundle).expect("serialize preimage"))
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>(),
+        );
+        bundle["artifactHashes"] = serde_json::json!({
+            "privileges.json": bundle_hash.clone(),
+            "zones/work/resource-bundle.json": bundle_hash.clone(),
+        });
+        bundle["bundleHash"] = serde_json::Value::String(bundle_hash);
+        serde_json::to_vec(&bundle).expect("bundle json serializes")
     }
 
     // ---------------------------------------------------------------

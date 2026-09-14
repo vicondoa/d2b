@@ -70,6 +70,7 @@ zbus = { version = "5.16", features = ["blocking-api"] }
 # the broker test target failed to find `d2b_host::cgroup::fake`.
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap", features = ["fake-backends"] }
+d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 tempfile = "3"
 sha2 = "0.10"
 

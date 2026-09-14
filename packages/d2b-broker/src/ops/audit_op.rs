@@ -238,10 +238,6 @@ pub enum OperationFields {
         owner_gid: u32,
         mode: u32,
     },
-    MigrateLegacySwtpmState {
-        vm_id: String,
-        outcome: String,
-    },
     /// Terminal audit fields for the swtpm-dir first-run hardening
     /// step (issue #64). Emitted as a `SpawnRunner` side-effect for the
     /// long-lived `Swtpm` runner: the broker provisions and hardens ONLY
@@ -252,12 +248,6 @@ pub enum OperationFields {
     /// `tpm.sock` paths. Exactly one record per swtpm spawn attempt
     /// (success or fail-closed).
     PrepareSwtpmDir(SwtpmDirAudit),
-    PrepareStoreView {
-        vm: String,
-        generation: u64,
-        hardlink_farm_path: String,
-        view_root: String,
-    },
     /// Signed ADR 0027 `StoreSync` terminal audit fields. Every
     /// `StoreSync` attempt emits exactly one of these. The full schema,
     /// enums, and invariant-enforcing constructors live in
@@ -266,27 +256,11 @@ pub enum OperationFields {
     /// and host-only context (`bundle_closure_ref`, `hardlink_farm_path`)
     /// but never store-path basenames, `db.dump`, or marker payloads.
     StoreSync(StoreSyncAuditFields),
-    StoreVerify {
-        vm: String,
-        status: String,
-        checked: u32,
-        drifted: u32,
-        repaired: u32,
-        repair_requested: bool,
-    },
     SetBridgePortFlags {
         vm: String,
         role: String,
         ifname: String,
         flags: Value,
-    },
-    SetupMountNamespace {
-        vm: String,
-        role: String,
-        mount_count: u32,
-        mount_root: String,
-        mount_view_path: String,
-        source_view_path: String,
     },
     SpawnRunner {
         bundle_runner_intent_ref: String,
@@ -336,15 +310,6 @@ pub enum OperationFields {
         domain: String,
         action: String,
         stopped: Option<bool>,
-    },
-    RunHostInstall {
-        bundle_installer_intent_ref: String,
-        enable: bool,
-        start: bool,
-        no_start: bool,
-    },
-    RunMigrate {
-        bundle_migrate_intent_ref: String,
     },
     UsbipBind {
         bus_id: String,
@@ -450,17 +415,6 @@ pub enum OperationFields {
         vm_id: String,
         scope_id: String,
     },
-    /// Live BindMountFromHardlinkFarm op fields. The broker resolves
-    /// the per-VM `store-view` intent from the trusted bundle (using
-    /// `vm_id`) and surfaces the hardlink farm path it would bind-mount
-    /// from. The audit row records the opaque store-view intent ref (or
-    /// `None` when the canonical per-VM intent was used) for
-    /// traceability.
-    BindMountFromHardlinkFarm {
-        vm_id: String,
-        bundle_store_view_intent_ref: Option<String>,
-        hardlink_farm_path: String,
-    },
     SignalRunner {
         vm_id: String,
         role_id: String,
@@ -470,32 +424,11 @@ pub enum OperationFields {
         vm_id: String,
         role_id: String,
     },
-    RunActivation {
-        bundle_activation_intent_ref: String,
-        mode: String,
-        vm: String,
-    },
     ApplyHostGenerationHandoff {
         target: String,
         source_generation: u64,
         target_generation: u64,
         state: String,
-    },
-    RunGc {
-        bundle_gc_intent_ref: String,
-        keep_generations: Option<u32>,
-    },
-    RunKeysRotate {
-        bundle_keys_intent_ref: String,
-        vm: String,
-    },
-    RunHostKeyTrust {
-        bundle_trust_intent_ref: String,
-        vm: String,
-    },
-    RunRotateKnownHost {
-        bundle_rotate_known_host_intent_ref: String,
-        vm: String,
     },
     Hello {
         client_version: String,
@@ -662,39 +595,13 @@ impl OperationFields {
                 owner_gid: u32,
                 mode: u32,
             }),
-            "MigrateLegacySwtpmState" => parse_fields!(value => MigrateLegacySwtpmState {
-                vm_id: String,
-                outcome: String,
-            }),
             "PrepareSwtpmDir" => Ok(Self::PrepareSwtpmDir(serde_json::from_value(value)?)),
-            "PrepareStoreView" => parse_fields!(value => PrepareStoreView {
-                vm: String,
-                generation: u64,
-                hardlink_farm_path: String,
-                view_root: String,
-            }),
             "StoreSync" => Ok(Self::StoreSync(serde_json::from_value(value)?)),
-            "StoreVerify" => parse_fields!(value => StoreVerify {
-                vm: String,
-                status: String,
-                checked: u32,
-                drifted: u32,
-                repaired: u32,
-                repair_requested: bool,
-            }),
             "SetBridgePortFlags" => parse_fields!(value => SetBridgePortFlags {
                 vm: String,
                 role: String,
                 ifname: String,
                 flags: Value,
-            }),
-            "SetupMountNamespace" => parse_fields!(value => SetupMountNamespace {
-                vm: String,
-                role: String,
-                mount_count: u32,
-                mount_root: String,
-                mount_view_path: String,
-                source_view_path: String,
             }),
             "SpawnRunner" => parse_fields!(value => SpawnRunner {
                 bundle_runner_intent_ref: String,
@@ -722,15 +629,6 @@ impl OperationFields {
                 applied: bool,
                 host_ready: bool,
                 node_present: bool,
-            }),
-            "RunHostInstall" => parse_fields!(value => RunHostInstall {
-                bundle_installer_intent_ref: String,
-                enable: bool,
-                start: bool,
-                no_start: bool,
-            }),
-            "RunMigrate" => parse_fields!(value => RunMigrate {
-                bundle_migrate_intent_ref: String,
             }),
             "UsbipBind" => parse_fields!(value => UsbipBind {
                 bus_id: String,
@@ -822,11 +720,6 @@ impl OperationFields {
                 vm_id: String,
                 scope_id: String,
             }),
-            "BindMountFromHardlinkFarm" => parse_fields!(value => BindMountFromHardlinkFarm {
-                vm_id: String,
-                bundle_store_view_intent_ref: Option<String>,
-                hardlink_farm_path: String,
-            }),
             "SignalRunner" => parse_fields!(value => SignalRunner {
                 vm_id: String,
                 role_id: String,
@@ -836,32 +729,11 @@ impl OperationFields {
                 vm_id: String,
                 role_id: String,
             }),
-            "RunActivation" => parse_fields!(value => RunActivation {
-                bundle_activation_intent_ref: String,
-                mode: String,
-                vm: String,
-            }),
             "ApplyHostGenerationHandoff" => parse_fields!(value => ApplyHostGenerationHandoff {
                 target: String,
                 source_generation: u64,
                 target_generation: u64,
                 state: String,
-            }),
-            "RunGc" => parse_fields!(value => RunGc {
-                bundle_gc_intent_ref: String,
-                keep_generations: Option<u32>,
-            }),
-            "RunKeysRotate" => parse_fields!(value => RunKeysRotate {
-                bundle_keys_intent_ref: String,
-                vm: String,
-            }),
-            "RunHostKeyTrust" => parse_fields!(value => RunHostKeyTrust {
-                bundle_trust_intent_ref: String,
-                vm: String,
-            }),
-            "RunRotateKnownHost" => parse_fields!(value => RunRotateKnownHost {
-                bundle_rotate_known_host_intent_ref: String,
-                vm: String,
             }),
             "Hello" => parse_fields!(value => Hello {
                 client_version: String,
@@ -1170,16 +1042,6 @@ mod tests {
         }
     );
     roundtrip_test!(
-        prepare_store_view_round_trip,
-        "PrepareStoreView",
-        OperationFields::PrepareStoreView {
-            vm: "corp-vm".to_owned(),
-            generation: 42,
-            hardlink_farm_path: "/var/lib/d2b/vms/corp-vm/store".to_owned(),
-            view_root: "/run/d2b/store-views/corp-vm/42".to_owned(),
-        }
-    );
-    roundtrip_test!(
         store_sync_round_trip,
         "StoreSync",
         OperationFields::StoreSync(StoreSyncAuditFields::ok_non_fast_path(
@@ -1306,18 +1168,6 @@ mod tests {
         }
     );
     roundtrip_test!(
-        setup_mount_namespace_round_trip,
-        "SetupMountNamespace",
-        OperationFields::SetupMountNamespace {
-            vm: "corp-vm".to_owned(),
-            role: "ch-runner".to_owned(),
-            mount_count: 1,
-            mount_root: "/run/d2b/mountns/corp-vm/ch-runner".to_owned(),
-            mount_view_path: "/run/d2b/mountns/corp-vm/ch-runner/nix/store".to_owned(),
-            source_view_path: "/run/d2b/store-views/corp-vm/42".to_owned(),
-        }
-    );
-    roundtrip_test!(
         spawn_runner_round_trip,
         "SpawnRunner",
         OperationFields::SpawnRunner {
@@ -1337,23 +1187,6 @@ mod tests {
         OperationFields::OpenPidfd {
             pid: 4242,
             expected_start_time_ticks: 123456,
-        }
-    );
-    roundtrip_test!(
-        run_host_install_round_trip,
-        "RunHostInstall",
-        OperationFields::RunHostInstall {
-            bundle_installer_intent_ref: "installer:host".to_owned(),
-            enable: true,
-            start: true,
-            no_start: false,
-        }
-    );
-    roundtrip_test!(
-        run_migrate_round_trip,
-        "RunMigrate",
-        OperationFields::RunMigrate {
-            bundle_migrate_intent_ref: "migrate:wave15".to_owned(),
         }
     );
     roundtrip_test!(
@@ -1497,15 +1330,6 @@ mod tests {
         }
     );
     roundtrip_test!(
-        run_activation_round_trip,
-        "RunActivation",
-        OperationFields::RunActivation {
-            bundle_activation_intent_ref: "activation:corp-vm".to_owned(),
-            mode: "switch".to_owned(),
-            vm: "corp-vm".to_owned(),
-        }
-    );
-    roundtrip_test!(
         apply_host_generation_handoff_round_trip,
         "ApplyHostGenerationHandoff",
         OperationFields::ApplyHostGenerationHandoff {
@@ -1513,38 +1337,6 @@ mod tests {
             source_generation: 7,
             target_generation: 8,
             state: "completed".to_owned(),
-        }
-    );
-    roundtrip_test!(
-        run_gc_round_trip,
-        "RunGc",
-        OperationFields::RunGc {
-            bundle_gc_intent_ref: "gc:host".to_owned(),
-            keep_generations: Some(3),
-        }
-    );
-    roundtrip_test!(
-        run_keys_rotate_round_trip,
-        "RunKeysRotate",
-        OperationFields::RunKeysRotate {
-            bundle_keys_intent_ref: "keys:corp-vm".to_owned(),
-            vm: "corp-vm".to_owned(),
-        }
-    );
-    roundtrip_test!(
-        run_host_key_trust_round_trip,
-        "RunHostKeyTrust",
-        OperationFields::RunHostKeyTrust {
-            bundle_trust_intent_ref: "trust:corp-vm".to_owned(),
-            vm: "corp-vm".to_owned(),
-        }
-    );
-    roundtrip_test!(
-        run_rotate_known_host_round_trip,
-        "RunRotateKnownHost",
-        OperationFields::RunRotateKnownHost {
-            bundle_rotate_known_host_intent_ref: "rotate-known-host:corp-vm".to_owned(),
-            vm: "corp-vm".to_owned(),
         }
     );
     roundtrip_test!(

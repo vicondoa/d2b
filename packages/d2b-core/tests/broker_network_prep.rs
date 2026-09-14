@@ -6,6 +6,7 @@ use d2b_core::bundle_resolver::{
 use d2b_core::host::HostJson;
 use d2b_core::manifest_v04::ManifestV04;
 use d2b_core::processes::ProcessesJson;
+use std::collections::BTreeMap;
 
 const HOST_JSON: &str = include_str!("../../../tests/fixtures/deny-unknown/host-valid.json");
 const MANIFEST_JSON: &[u8] = include_bytes!("../../../tests/golden/manifest_v04/baseline-vms.json");
@@ -18,24 +19,16 @@ fn trusted_bundle_resolves_network_operation_rows_without_wire_paths() {
     let expected_bridge = host.environments[0].bridge.clone();
     let expected_mtu = host.environments[0].mtu;
     let bundle_hash = format!("sha256:{}", "a".repeat(64));
-    let resolver = BundleResolver::from_artifacts(
+    let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
         Bundle {
-            bundle_version: 11,
-            schema_version: "v2".to_owned(),
-            public_manifest_path: "vms.json".to_owned(),
-            host_path: "host.json".to_owned(),
-            processes_path: "processes.json".to_owned(),
+            bundle_version: 1,
+            schema_version: "v3".to_owned(),
+
             privileges_path: "privileges.json".to_owned(),
             storage_path: None,
-            sync_path: None,
-            allocator_path: None,
-            realm_controllers_path: None,
-            realm_identity_path: None,
+
             realm_workloads_launcher_v2_path: None,
-            unsafe_local_workloads_path: None,
-            closures: Vec::new(),
-            minijail_profiles: Vec::new(),
-            managed_keys: Default::default(),
+
             generation: BundleGeneration {
                 generator: "test".to_owned(),
                 source_revision: None,
@@ -46,10 +39,11 @@ fn trusted_bundle_resolves_network_operation_rows_without_wire_paths() {
         },
         host,
         ProcessesJson {
-            schema_version: "v2".to_owned(),
+            schema_version: "v3".to_owned(),
             vms: Vec::new(),
         },
         ManifestV04::from_slice(MANIFEST_JSON).expect("manifest fixture parses"),
+        BTreeMap::new(),
     );
 
     let bridge = resolver
@@ -91,24 +85,16 @@ fn installed_generation_identity_fails_closed_on_invalid_or_absent_hash() {
 }
 
 fn resolver_with_bundle_hash(bundle_hash: Option<String>) -> BundleResolver {
-    BundleResolver::from_artifacts(
+    BundleResolver::from_artifacts_with_zone_resource_bundles(
         Bundle {
-            bundle_version: 11,
-            schema_version: "v2".to_owned(),
-            public_manifest_path: "vms.json".to_owned(),
-            host_path: "host.json".to_owned(),
-            processes_path: "processes.json".to_owned(),
+            bundle_version: 1,
+            schema_version: "v3".to_owned(),
+
             privileges_path: "privileges.json".to_owned(),
             storage_path: None,
-            sync_path: None,
-            allocator_path: None,
-            realm_controllers_path: None,
-            realm_identity_path: None,
+
             realm_workloads_launcher_v2_path: None,
-            unsafe_local_workloads_path: None,
-            closures: Vec::new(),
-            minijail_profiles: Vec::new(),
-            managed_keys: Default::default(),
+
             generation: BundleGeneration {
                 generator: "test".to_owned(),
                 source_revision: None,
@@ -119,9 +105,10 @@ fn resolver_with_bundle_hash(bundle_hash: Option<String>) -> BundleResolver {
         },
         serde_json::from_str(HOST_JSON).expect("host fixture parses"),
         ProcessesJson {
-            schema_version: "v2".to_owned(),
+            schema_version: "v3".to_owned(),
             vms: Vec::new(),
         },
         ManifestV04::from_slice(MANIFEST_JSON).expect("manifest fixture parses"),
+        BTreeMap::new(),
     )
 }

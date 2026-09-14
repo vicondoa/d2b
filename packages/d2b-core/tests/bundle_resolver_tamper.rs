@@ -7,11 +7,17 @@
 //! uid/gid so that files created without `chown` still pass the owner
 //! check.  The "owner = nobody" test (`tamper_owner_wrong_uid`) requires
 //! `chown` and is skipped automatically when the process is not root.
+//!
+//! These bundles are v3 zone-native (`schemaVersion: "v3"`, `bundleVersion: 1`,
+//! empty `zones`), so they load via the production zone-native path. The
+//! probes below tamper with `bundle.json` itself (identity, ownership, mode,
+//! SHA-256 self-hash), which the loader verifies before sibling artifacts.
 
 use d2b_core::bundle_resolver::{BundleResolver, BundleVerifyPolicy};
 use d2b_core::error::{BundleError, Error};
 use sha2::Digest as _;
 use std::fs;
+use std::io::Write as _;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use tempfile::TempDir;
@@ -50,23 +56,15 @@ fn sha256_hex(data: &[u8]) -> String {
     format!("sha256:{hex}")
 }
 
-/// Build a minimal but fully-parseable bundle JSON (without `bundleHash`).
-/// Returns the canonical JSON bytes *without* the hash field.
+/// Build a minimal but fully-parseable v3 zone-native bundle JSON (without
+/// `bundleHash`). Returns the canonical JSON bytes *without* the hash field.
 fn minimal_bundle_json_no_hash() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
-        "bundleVersion": 4,
-        "schemaVersion": "v2",
-        "publicManifestPath": "vms.json",
-        "hostPath": "host.json",
-        "processesPath": "processes.json",
+        "bundleVersion": 1,
+        "schemaVersion": "v3",
         "privilegesPath": "privileges.json",
-        "closures": [],
-        "minijailProfiles": [],
-        "managedKeys": {
-            "keysDir": "/var/lib/d2b/keys",
-            "knownHostsPath": "/var/lib/d2b/known_hosts.d2b",
-            "overrides": []
-        },
+        "zones": [],
+        "artifactHashes": {},
         "generation": {
             "generator": "test",
             "sourceRevision": null,
@@ -76,39 +74,15 @@ fn minimal_bundle_json_no_hash() -> Vec<u8> {
     .expect("bundle json serializes")
 }
 
-/// Like `minimal_bundle_json_no_hash` but includes `"artifactHashes": null`
-/// so the `bundleHash` computed from these bytes commits to the presence of
-/// the `artifactHashes` field (matching the Nix emitter's `dataWithoutHash`).
-fn minimal_bundle_json_with_null_artifact_hashes() -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "artifactHashes": null,
-        "bundleVersion": 4,
-        "schemaVersion": "v2",
-        "publicManifestPath": "vms.json",
-        "hostPath": "host.json",
-        "processesPath": "processes.json",
-        "privilegesPath": "privileges.json",
-        "closures": [],
-        "minijailProfiles": [],
-        "managedKeys": {
-            "keysDir": "/var/lib/d2b/keys",
-            "knownHostsPath": "/var/lib/d2b/known_hosts.d2b",
-            "overrides": []
-        },
-        "generation": {
-            "generator": "test",
-            "sourceRevision": null,
-            "generatedAt": null
-        }
-    }))
-    .expect("bundle json with null artifact hashes serializes")
-}
-
 /// Build bundle JSON with a correct `bundleHash` embedded.
+///
+/// The verifier re-derives the digest over the serialization with
+/// `bundleHash` absent and `artifactHashes` nullified, so the hash input is
+/// the pre-hash bytes with `artifactHashes` forced to `null`.
 fn bundle_json_with_hash(pre_hash_bytes: &[u8]) -> Vec<u8> {
     let mut value: serde_json::Value =
         serde_json::from_slice(pre_hash_bytes).expect("pre-hash bundle parses");
-    let hash = sha256_hex(pre_hash_bytes);
+    let hash = self_hash(&value);
     value
         .as_object_mut()
         .expect("bundle is object")
@@ -116,117 +90,16 @@ fn bundle_json_with_hash(pre_hash_bytes: &[u8]) -> Vec<u8> {
     serde_json::to_vec(&value).expect("bundle with hash serializes")
 }
 
-/// Minimal valid host.json bytes.
-fn minimal_host_json() -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "schemaVersion": "v2",
-        "site": { "allowUnsafeEastWest": false },
-        "environments": [],
-        "nftables": {
-            "family": "inet",
-            "table": "d2b",
-            "chains": [],
-            "tableHashAfterApply": null,
-            "ownershipId": "test"
-        },
-        "networkManager": {
-            "filePath": "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf",
-            "matchCriteria": [],
-            "reloadBehavior": "atomic-reload",
-            "ownership": {
-                "owner": "root",
-                "group": "root",
-                "mode": "0644",
-                "driftPolicy": "replace"
-            }
-        },
-        "hostsFile": {
-            "startMarker": "# d2b-managed begin",
-            "endMarker": "# d2b-managed end",
-            "rule": "replace-managed-block"
-        },
-        "kernelModules": [],
-        "fdOwnership": [],
-        "cloudHypervisorCapabilities": [],
-        "ifNameMappings": [],
-        "ch": null,
-        "firewallCoexistencePolicy": null
-    }))
-    .expect("host json serializes")
-}
-
-/// Minimal valid processes.json bytes.
-fn minimal_processes_json() -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "schemaVersion": "v2",
-        "vms": []
-    }))
-    .expect("processes json serializes")
-}
-
-/// Minimal valid vms.json (ManifestV04) bytes.
-fn minimal_vms_json() -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "_manifest": {
-            "manifestVersion": 6
-        },
-        "_observability": {
-            "enabled": false,
-            "signozUrl": "http://127.0.0.1:8080",
-            "signozOtlpGrpcPort": 4317,
-            "signozOtlpHttpPort": 4318,
-            "obsVsockCid": 0,
-            "obsVsockHostSocket": "",
-            "vmName": ""
-        }
-    }))
-    .expect("vms json serializes")
-}
-
-fn minimal_unsafe_local_workloads_json() -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "schemaVersion": "v2",
-        "workloads": [{
-            "identity": {
-                "workloadId": "tools",
-                "realmId": "host",
-                "realmPath": ["host"],
-                "canonicalTarget": "tools.host.d2b",
-                "runtimeKind": "unsafe-local",
-                "providerId": "unsafe-local"
-            },
-            "defaultItemId": "browser",
-            "items": [{
-                "type": "exec",
-                "id": "browser",
-                "name": "Browser",
-                "icon": {"name": "firefox"},
-                "argv": ["firefox"],
-                "graphical": true
-            }]
-        }]
-    }))
-    .expect("unsafe-local workloads json serializes")
-}
-
-/// Write all sibling artifacts the resolver needs into `dir`.
-/// `bundle_path` is the bundle.json path that has already been written;
-/// the relative references inside it (`host.json`, etc.) are resolved
-/// relative to `dir`.
-fn write_siblings(dir: &Path, policy: &BundleVerifyPolicy) {
-    let host_path = dir.join("host.json");
-    let processes_path = dir.join("processes.json");
-    let vms_path = dir.join("vms.json");
-
-    write_private(&host_path, &minimal_host_json());
-    write_private(&processes_path, &minimal_processes_json());
-    // vms.json is read with std::fs::read (public manifest, no policy).
-    // Write with world-readable mode so it works regardless of uid.
-    fs::write(&vms_path, minimal_vms_json()).expect("write vms.json");
-
-    // Fix modes to match the policy for host.json and processes.json.
-    set_mode_to(&host_path, policy.required_mode);
-    set_mode_to(&processes_path, policy.required_mode);
+/// Compute the verifier-equivalent self-hash: strip `bundleHash` and
+/// nullify `artifactHashes`, then SHA-256 the canonical serialization.
+fn self_hash(value: &serde_json::Value) -> String {
+    let mut preimage = value.clone();
+    let obj = preimage.as_object_mut().expect("bundle is object");
+    obj.remove("bundleHash");
+    if obj.contains_key("artifactHashes") {
+        obj.insert("artifactHashes".to_owned(), serde_json::Value::Null);
+    }
+    sha256_hex(&serde_json::to_vec(&preimage).expect("hash input serializes"))
 }
 
 fn set_mode_to(path: &Path, mode: u32) {
@@ -280,9 +153,7 @@ fn tamper_owner_wrong_uid() {
     let bundle_path = dir.path().join("bundle.json");
     write_private(&bundle_path, &minimal_bundle_json_no_hash());
 
-    // Change owner to uid=65534 (nobody) with a direct syscall. Spawning the
-    // system `chown` binary would make this hermetic-tier test depend on an
-    // external process and on PATH.
+    // Change owner to uid=65534 (nobody) with a direct syscall.
     nix::unistd::chown(&bundle_path, Some(nix::unistd::Uid::from_raw(65534)), None)
         .expect("chown to uid 65534");
 
@@ -335,8 +206,7 @@ fn tamper_hash_mismatch() {
     let with_hash = bundle_json_with_hash(&pre_hash);
 
     // Rewrite so the bundleHash field value is intact but the other content
-    // differs - replace the first occurrence of the bundleVersion value with
-    // a different number to ensure the parsed Value changes.
+    // differs - replace the bundleVersion value with a different number.
     let mut value: serde_json::Value = serde_json::from_slice(&with_hash).expect("parse with_hash");
     value["bundleVersion"] = serde_json::json!(99);
     let tampered = serde_json::to_vec(&value).expect("re-serialize tampered");
@@ -345,10 +215,6 @@ fn tamper_hash_mismatch() {
     let policy = current_user_policy();
     let err = BundleResolver::load_with_policy(&bundle_path, &policy)
         .expect_err("corrupted file should be rejected");
-    // Could be a parse error (invalid JSON) or hash mismatch depending on
-    // whether serde_json tolerates trailing whitespace.  In practice
-    // serde_json does allow trailing whitespace so we get hash mismatch.
-    // Accept both for robustness.
     match &err {
         Error::Bundle(BundleError::Tampered { reason, .. }) if reason == "hash" => {}
         Error::Manifest(_) => {} // parse failure on truly corrupted JSON is also acceptable
@@ -396,318 +262,70 @@ fn loads_correct() {
     write_private(&bundle_path, &with_hash);
     set_mode_to(&bundle_path, policy.required_mode);
 
-    // Write host.json, processes.json, vms.json.
-    write_siblings(dir.path(), &policy);
-
     let resolver = BundleResolver::load_with_policy(&bundle_path, &policy)
         .expect("all-correct bundle should load without error");
 
-    assert_eq!(resolver.bundle.bundle_version, 4);
-    assert_eq!(resolver.bundle.schema_version, "v2");
-}
-
-/// Build bundle JSON with both `bundleHash` (computed from `pre_hash_bytes`)
-/// and the supplied `artifact_hashes` map.
-///
-/// `pre_hash_bytes` must already contain `"artifactHashes": null` so the
-/// `bundleHash` commits to that field's presence.
-fn bundle_json_with_full_hashes(
-    pre_hash_bytes: &[u8],
-    artifact_hashes: serde_json::Value,
-) -> Vec<u8> {
-    let mut value: serde_json::Value =
-        serde_json::from_slice(pre_hash_bytes).expect("pre-hash bundle with null hashes parses");
-    let hash = sha256_hex(pre_hash_bytes);
-    let obj = value.as_object_mut().expect("bundle is object");
-    obj.insert("bundleHash".to_owned(), serde_json::Value::String(hash));
-    obj.insert("artifactHashes".to_owned(), artifact_hashes);
-    serde_json::to_vec(&value).expect("bundle with full hashes serializes")
-}
-
-fn unsafe_local_bundle_pre_hash() -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "artifactHashes": null,
-        "bundleVersion": 11,
-        "schemaVersion": "v2",
-        "publicManifestPath": "vms.json",
-        "hostPath": "host.json",
-        "processesPath": "processes.json",
-        "privilegesPath": "privileges.json",
-        "realmWorkloadsLauncherV2Path": "realm-workloads-launcher-v2.json",
-        "unsafeLocalWorkloadsPath": "unsafe-local-workloads.json",
-        "closures": [],
-        "minijailProfiles": [],
-        "managedKeys": {
-            "keysDir": "/var/lib/d2b/keys",
-            "knownHostsPath": "/var/lib/d2b/known_hosts.d2b",
-            "overrides": []
-        },
-        "generation": {
-            "generator": "test",
-            "sourceRevision": null,
-            "generatedAt": null
-        }
-    }))
-    .expect("unsafe-local bundle pre-hash serializes")
-}
-
-fn minimal_realm_workloads_launcher_v2_json() -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "schemaVersion": "v2",
-        "runtimeState": "contract-only",
-        "workloads": [],
-        "invariants": {
-            "argvPrivate": true,
-            "providerNeutral": true,
-            "typedExecutionPosture": true,
-            "realmAccentColorOnly": true,
-            "noSecretsOrCredentials": true
-        }
-    }))
-    .expect("launcher v2 fixture serializes")
-}
-
-fn write_unsafe_local_bundle(dir: &Path, policy: &BundleVerifyPolicy) -> std::path::PathBuf {
-    let host = minimal_host_json();
-    let processes = minimal_processes_json();
-    let launcher_v2 = minimal_realm_workloads_launcher_v2_json();
-    let unsafe_local = minimal_unsafe_local_workloads_json();
-    let hashes = serde_json::json!({
-        "host.json": sha256_hex(&host),
-        "processes.json": sha256_hex(&processes),
-        "realm-workloads-launcher-v2.json": sha256_hex(&launcher_v2),
-        "unsafe-local-workloads.json": sha256_hex(&unsafe_local)
-    });
-    let bundle = bundle_json_with_full_hashes(&unsafe_local_bundle_pre_hash(), hashes);
-    let bundle_path = dir.join("bundle.json");
-    let host_path = dir.join("host.json");
-    let processes_path = dir.join("processes.json");
-    let launcher_v2_path = dir.join("realm-workloads-launcher-v2.json");
-    let unsafe_local_path = dir.join("unsafe-local-workloads.json");
-    write_private(&bundle_path, &bundle);
-    write_private(&host_path, &host);
-    write_private(&processes_path, &processes);
-    write_private(&launcher_v2_path, &launcher_v2);
-    write_private(&unsafe_local_path, &unsafe_local);
-    fs::write(dir.join("vms.json"), minimal_vms_json()).expect("write vms.json");
-    for path in [
-        &bundle_path,
-        &host_path,
-        &processes_path,
-        &launcher_v2_path,
-        &unsafe_local_path,
-    ] {
-        set_mode_to(path, policy.required_mode);
-    }
-    bundle_path
-}
-
-#[test]
-fn loads_hashed_unsafe_local_workloads_artifact() {
-    let dir = TempDir::new().expect("tempdir");
-    let policy = current_user_policy();
-    let bundle_path = write_unsafe_local_bundle(dir.path(), &policy);
-    let resolver =
-        BundleResolver::load_with_policy(&bundle_path, &policy).expect("unsafe-local bundle loads");
-    assert_eq!(resolver.bundle.bundle_version, 11);
-    assert!(resolver.realm_workloads_launcher_v2.is_some());
-    assert!(
-        resolver
-            .find_unsafe_local_workload("tools.host.d2b")
-            .is_some()
-    );
-}
-
-#[test]
-fn rejects_tampered_realm_workloads_launcher_v2_artifact() {
-    let dir = TempDir::new().expect("tempdir");
-    let policy = current_user_policy();
-    let bundle_path = write_unsafe_local_bundle(dir.path(), &policy);
-    write_private(
-        &dir.path().join("realm-workloads-launcher-v2.json"),
-        br#"{"schemaVersion":"v2","runtimeState":"contract-only","workloads":[],"invariants":{"argvPrivate":false,"providerNeutral":true,"typedExecutionPosture":true,"realmAccentColorOnly":true,"noSecretsOrCredentials":true}}"#,
-    );
-    let error = BundleResolver::load_with_policy(&bundle_path, &policy)
-        .expect_err("tampered launcher-v2 artifact rejects");
-    assert_tampered(&error, "hash");
-}
-
-#[test]
-fn rejects_tampered_unsafe_local_workloads_artifact() {
-    let dir = TempDir::new().expect("tempdir");
-    let policy = current_user_policy();
-    let bundle_path = write_unsafe_local_bundle(dir.path(), &policy);
-    write_private(
-        &dir.path().join("unsafe-local-workloads.json"),
-        br#"{"schemaVersion":"v2","workloads":[]}"#,
-    );
-    let error = BundleResolver::load_with_policy(&bundle_path, &policy)
-        .expect_err("tampered unsafe-local artifact rejects");
-    assert_tampered(&error, "hash");
+    assert_eq!(resolver.bundle.bundle_version, 1);
+    assert_eq!(resolver.bundle.schema_version, "v3");
 }
 
 // ---------------------------------------------------------------
-// Test 7: schema v2 bundle with bundleHash deleted →
-//         BundleTampered { reason: "missing-bundle-hash" }
+// Test 6: missing bundleHash → BundleTampered { reason: "missing-bundle-hash" }
 // ---------------------------------------------------------------
 #[test]
 fn tamper_missing_bundle_hash() {
     let dir = TempDir::new().expect("tempdir");
     let bundle_path = dir.path().join("bundle.json");
 
-    // A schema v2 bundle without bundleHash must be rejected outright.
+    // A bundle without bundleHash must be rejected outright.
     write_private(&bundle_path, &minimal_bundle_json_no_hash());
 
     let policy = current_user_policy();
     let err = BundleResolver::load_with_policy(&bundle_path, &policy)
-        .expect_err("v2 bundle without bundleHash should be rejected");
+        .expect_err("bundle without bundleHash should be rejected");
     assert_tampered(&err, "missing-bundle-hash");
 }
 
 // ---------------------------------------------------------------
-// Test 8: artifactHashes present but missing the `processes.json`
-//         entry → BundleTampered { reason: "unhashed" }
+// Test 7: schemaVersion v2 → manifest-version-mismatch (v2 removed)
 // ---------------------------------------------------------------
 #[test]
-fn tamper_artifact_unhashed() {
+fn v2_bundle_rejects_with_manifest_version_mismatch() {
     let dir = TempDir::new().expect("tempdir");
-    let policy = current_user_policy();
-
-    let host_bytes = minimal_host_json();
-    let processes_bytes = minimal_processes_json();
-
-    // Bundle declares hashes for host.json but not for processes.json.
-    let pre_hash = minimal_bundle_json_with_null_artifact_hashes();
-    let artifact_hashes = serde_json::json!({
-        "host.json": sha256_hex(&host_bytes),
-        // "processes.json" intentionally absent → "unhashed"
-    });
-    let bundle_bytes = bundle_json_with_full_hashes(&pre_hash, artifact_hashes);
-
     let bundle_path = dir.path().join("bundle.json");
-    write_private(&bundle_path, &bundle_bytes);
 
-    let host_path = dir.path().join("host.json");
-    let processes_path = dir.path().join("processes.json");
-    let vms_path = dir.path().join("vms.json");
-    write_private(&host_path, &host_bytes);
-    write_private(&processes_path, &processes_bytes);
-    fs::write(&vms_path, minimal_vms_json()).expect("write vms.json");
-    set_mode_to(&host_path, policy.required_mode);
-    set_mode_to(&processes_path, policy.required_mode);
-
-    let err = BundleResolver::load_with_policy(&bundle_path, &policy)
-        .expect_err("processes.json absent from artifactHashes should be rejected");
-    assert_tampered(&err, "unhashed");
-}
-
-// ---------------------------------------------------------------
-// Test 9: processes.json modified after bundle hash computed →
-//         BundleTampered { reason: "hash" }
-// ---------------------------------------------------------------
-#[test]
-fn tamper_artifact_hash_mismatch() {
-    let dir = TempDir::new().expect("tempdir");
-    let policy = current_user_policy();
-
-    let host_bytes = minimal_host_json();
-    let processes_bytes = minimal_processes_json();
-
-    // Bundle carries correct hashes for the original artifact content.
-    let pre_hash = minimal_bundle_json_with_null_artifact_hashes();
-    let artifact_hashes = serde_json::json!({
-        "host.json": sha256_hex(&host_bytes),
-        "processes.json": sha256_hex(&processes_bytes),
-    });
-    let bundle_bytes = bundle_json_with_full_hashes(&pre_hash, artifact_hashes);
-
-    let bundle_path = dir.path().join("bundle.json");
-    write_private(&bundle_path, &bundle_bytes);
-
-    let host_path = dir.path().join("host.json");
-    let processes_path = dir.path().join("processes.json");
-    let vms_path = dir.path().join("vms.json");
-    write_private(&host_path, &host_bytes);
-    // Write tampered processes.json - different bytes → hash mismatch.
-    let tampered = b"{\"schemaVersion\":\"v2\",\"vms\":[],\"tampered\":true}";
-    write_private(&processes_path, tampered);
-    fs::write(&vms_path, minimal_vms_json()).expect("write vms.json");
-    set_mode_to(&host_path, policy.required_mode);
-    set_mode_to(&processes_path, policy.required_mode);
-
-    let err = BundleResolver::load_with_policy(&bundle_path, &policy)
-        .expect_err("tampered processes.json should be rejected");
-    assert_tampered(&err, "hash");
-}
-
-// ---------------------------------------------------------------
-// P0fu3 H1 (security-r2-medium): schemaVersion >= 2 - including
-// future v3+ shapes - MUST carry bundleHash. The original code
-// path matched `schemaVersion == "v2"` exactly, so a future
-// "v3" bundle missing bundleHash would silently downgrade to
-// warning-only. These tests fail-closed on that path.
-// ---------------------------------------------------------------
-
-fn minimal_bundle_json_no_hash_with_schema(schema_version: &str) -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "bundleVersion": 4,
-        "schemaVersion": schema_version,
-        "publicManifestPath": "vms.json",
-        "hostPath": "host.json",
-        "processesPath": "processes.json",
+    // The tamper-resistance hash check runs before the schema check, so the
+    // v2 fixture must carry a valid self-hash to reach the version gate.
+    let mut value = serde_json::json!({
+        "bundleVersion": 1,
+        "schemaVersion": "v2",
         "privilegesPath": "privileges.json",
-        "closures": [],
-        "minijailProfiles": [],
-        "managedKeys": {
-            "keysDir": "/var/lib/d2b/keys",
-            "knownHostsPath": "/var/lib/d2b/known_hosts.d2b",
-            "overrides": []
-        },
+        "zones": [],
+        "artifactHashes": {},
         "generation": {
             "generator": "test",
             "sourceRevision": null,
             "generatedAt": null
         }
-    }))
-    .expect("bundle json serializes")
-}
+    });
+    let hash = self_hash(&value);
+    value
+        .as_object_mut()
+        .expect("bundle is object")
+        .insert("bundleHash".to_owned(), serde_json::Value::String(hash));
 
-#[test]
-fn tamper_missing_bundle_hash_schema_v3() {
-    let dir = TempDir::new().expect("tempdir");
-    let bundle_path = dir.path().join("bundle.json");
-
-    // A future schema v3 bundle without bundleHash must also be rejected.
-    // (The old `is_v2` check would have downgraded this to warning-only.)
-    write_private(&bundle_path, &minimal_bundle_json_no_hash_with_schema("v3"));
-
-    let policy = current_user_policy();
-    let err = BundleResolver::load_with_policy(&bundle_path, &policy)
-        .expect_err("v3 bundle without bundleHash should be rejected");
-    assert_tampered(&err, "missing-bundle-hash");
-}
-
-#[test]
-fn tamper_missing_bundle_hash_unknown_schema_fails_closed() {
-    let dir = TempDir::new().expect("tempdir");
-    let bundle_path = dir.path().join("bundle.json");
-
-    // An unparseable schemaVersion ("v2-experimental") that is not
-    // recognized as the legacy v1 shape must fail closed - we don't
-    // know whether the unknown future schema needs bundleHash so we
-    // require it.
     write_private(
         &bundle_path,
-        &minimal_bundle_json_no_hash_with_schema("v2-experimental"),
+        &serde_json::to_vec(&value).expect("v2 json serializes"),
     );
+    set_mode_to(&bundle_path, current_user_policy().required_mode);
 
     let policy = current_user_policy();
     let err = BundleResolver::load_with_policy(&bundle_path, &policy)
-        .expect_err("unknown schemaVersion without bundleHash should be rejected");
-    assert_tampered(&err, "missing-bundle-hash");
+        .expect_err("schemaVersion v2 must be rejected by the v3-only loader");
+    let message = err.message();
+    assert!(
+        message.contains("manifest-version-mismatch"),
+        "expected manifest-version-mismatch, got {message:?}"
+    );
 }
-
-// ---------------------------------------------------------------
-// io::Write import needed by write_private
-// ---------------------------------------------------------------
-use std::io::Write as _;

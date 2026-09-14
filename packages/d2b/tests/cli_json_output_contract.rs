@@ -83,12 +83,6 @@ impl FixtureEnv {
     fn missing_public_socket(&self) -> PathBuf {
         self.tree.join("public.sock")
     }
-
-    fn run_host_install(&self, args: &[&str]) -> Output {
-        base_command(args, &self.home, &self.runtime)
-            .output()
-            .unwrap_or_else(|err| panic!("spawn d2b {}: {err}", args.join(" ")))
-    }
 }
 
 fn fixtures_dir() -> Option<PathBuf> {
@@ -475,24 +469,10 @@ fn audit_output_matches_cli_json_drift_goldens() {
 }
 
 #[test]
-fn host_check_and_auth_status_outputs_match_goldens() {
+fn auth_status_output_matches_goldens() {
     let Some(env) = FixtureEnv::new() else {
         return;
     };
-    let host_check_human = golden("host-check-human.golden");
-    assert!(
-        host_check_human.contains("summary: pass=53 warn=0 fail=0"),
-        "host-check-human.golden keeps the passing fixture summary"
-    );
-    let host_check_json = json_value(
-        golden("host-check-json.golden").as_bytes(),
-        "host-check-json.golden",
-    );
-    assert_eq!(host_check_json["summary"]["pass"], 53);
-    assert_eq!(host_check_json["summary"]["warn"], 0);
-    assert_eq!(host_check_json["summary"]["fail"], 0);
-    assert_eq!(host_check_json["exitCode"], 0);
-
     for (args, envs, golden_name, label) in [
         (
             &["auth", "--test-uid", "1000", "status", "--human"][..],
@@ -551,16 +531,6 @@ fn top_level_lifecycle_dry_run_outputs_match_goldens() {
             &["rollback", "corp-vm", "--dry-run", "--json"][..],
             "rollback",
         ),
-        (&["gc", "--dry-run", "--json"][..], "gc"),
-        (
-            &["keys", "rotate", "corp-vm", "--dry-run", "--json"][..],
-            "keys",
-        ),
-        (&["trust", "corp-vm", "--dry-run", "--json"][..], "trust"),
-        (
-            &["rotate-known-host", "corp-vm", "--dry-run", "--json"][..],
-            "rotate-known-host",
-        ),
     ] {
         let out = env.run(args, &[]);
         let label = format!("retired {marker}");
@@ -573,12 +543,6 @@ fn top_level_lifecycle_dry_run_outputs_match_goldens() {
         &["activation", "boot", "Guest/corp-vm", "--dry-run"][..],
         &["activation", "test", "Guest/corp-vm", "--dry-run"][..],
         &["activation", "rollback", "Guest/corp-vm", "--dry-run"][..],
-        &["activation", "gc", "--dry-run"][..],
-        &["activation", "migrate", "--dry-run"][..],
-        &["activation", "keys", "list"][..],
-        &["activation", "keys", "rotate", "Guest/corp-vm", "--dry-run"][..],
-        &["activation", "trust", "corp-vm"][..],
-        &["activation", "rotate-known-host", "corp-vm"][..],
     ] {
         assert_zone_unavailable_modes(&env, args, &format!("d2b {}", args.join(" ")));
     }
@@ -586,8 +550,8 @@ fn top_level_lifecycle_dry_run_outputs_match_goldens() {
 
 #[test]
 fn host_lifecycle_dry_run_outputs_match_goldens() {
-    // Host install remains a local golden contract; Zone-backed host
-    // mutations use the v3 error envelope instead of retired snapshots.
+    // Zone-backed host mutations use the v3 error envelope instead of
+    // retired snapshots.
     let Some(env) = FixtureEnv::new() else {
         return;
     };
@@ -596,52 +560,6 @@ fn host_lifecycle_dry_run_outputs_match_goldens() {
         &["host", "destroy", "--dry-run"][..],
     ] {
         assert_zone_unavailable_modes(&env, args, &format!("d2b {}", args.join(" ")));
-    }
-
-    let retired_migrate = env.run(&["migrate", "--dry-run", "--json"], &[]);
-    assert_usage_rejection(
-        &retired_migrate,
-        "unrecognized subcommand 'migrate'",
-        "retired migrate",
-    );
-    assert_no_legacy_fallback(
-        &retired_migrate,
-        &env.missing_public_socket(),
-        "retired migrate",
-    );
-
-    for (args, golden_name, label) in [
-        (
-            &["host", "install", "--dry-run", "--human"][..],
-            "host-install-dry-run-human.golden",
-            "host install --dry-run --human",
-        ),
-        (
-            &["host", "install", "--dry-run", "--json"][..],
-            "host-install-dry-run-json.golden",
-            "host install --dry-run --json",
-        ),
-    ] {
-        let out = env.run_host_install(args);
-        assert_matches_golden(&out, golden_name, label);
-    }
-}
-
-#[test]
-fn host_install_help_builds_without_clap_assertion() {
-    let home = tempfile::tempdir().expect("create help HOME");
-    let runtime = tempfile::tempdir().expect("create help XDG_RUNTIME_DIR");
-    let out = base_command(&["host", "install", "--help"], home.path(), runtime.path())
-        .output()
-        .expect("spawn d2b host install --help");
-
-    assert_success(&out, "host install --help");
-    let help = String::from_utf8_lossy(&out.stdout);
-    for option in ["--dry-run", "--apply", "--enable", "--start", "--no-start"] {
-        assert!(
-            help.contains(option),
-            "host install help is missing {option}: {help}"
-        );
     }
 }
 

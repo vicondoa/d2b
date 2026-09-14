@@ -715,21 +715,15 @@ pub fn harden(
                         ));
                     }
                     if marker.origin == MarkerOrigin::LegacyMigration {
-                        let journal_valid =
-                            crate::ops::swtpm_migration::validate_committed_for_harden(
-                                &paths.per_vm_root.join("swtpm-legacy"),
-                                &paths.swtpm_dir,
-                                &paths.per_vm_root.join(".d2b-legacy-swtpm.journal"),
-                                &paths.marker_dir.join(&paths.marker_name),
-                                (cfg.expected_uid, cfg.expected_gid),
-                            )
-                            .unwrap_or(false);
-                        if !journal_valid {
-                            return Err(fail(
-                                reasons::LEGACY_ADOPTION_REQUIRED,
-                                SwtpmMarkerResult::FailedClosed,
-                            ));
-                        }
+                        // The v2 legacy swtpm adoption journal module was
+                        // removed with the v2 Bundle/migration surface.
+                        // Without a trusted journal to verify the
+                        // commitment, a legacy-origin marker cannot be
+                        // proven and fails closed.
+                        return Err(fail(
+                            reasons::LEGACY_ADOPTION_REQUIRED,
+                            SwtpmMarkerResult::FailedClosed,
+                        ));
                     }
                     SwtpmMarkerResult::Verified
                 }
@@ -1020,10 +1014,6 @@ fn unlink_stale_socket(runtime_dir: &Path) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::swtpm_migration::{
-        LegacyMigrationAction, LegacyMigrationJournal, LegacyMigrationObservation,
-        LegacyMigrationPhase, LegacyMigrationStatus,
-    };
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::bundle_resolver::BundleResolver;
     use d2b_core::host::HostJson;
@@ -1033,9 +1023,9 @@ mod tests {
         NodeId, ProcessNode, ProcessRole, ProcessesJson, VmProcessDag, VmProcessInvariants,
     };
     use d2b_core::test_support::RoleProfileBuilder;
-    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
     use std::fs;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     fn cur_uid() -> u32 {
@@ -1197,24 +1187,13 @@ mod tests {
                 "../../../../tests/fixtures/deny-unknown/host-valid.json"
             ))
             .expect("host fixture parses");
-            BundleResolver::from_artifacts(
+            BundleResolver::from_artifacts_with_zone_resource_bundles(
                 Bundle {
                     bundle_version: 4,
                     schema_version: "v2".to_owned(),
-                    public_manifest_path: "vms.json".to_owned(),
-                    host_path: "host.json".to_owned(),
-                    processes_path: "processes.json".to_owned(),
                     privileges_path: "privileges.json".to_owned(),
                     storage_path: None,
-                    sync_path: None,
-                    allocator_path: None,
-                    realm_controllers_path: None,
-                    realm_identity_path: None,
                     realm_workloads_launcher_v2_path: None,
-                    unsafe_local_workloads_path: None,
-                    closures: vec![],
-                    minijail_profiles: vec![],
-                    managed_keys: Default::default(),
                     generation: BundleGeneration {
                         generator: "swtpm-test".to_owned(),
                         source_revision: None,
@@ -1226,6 +1205,7 @@ mod tests {
                 host,
                 processes,
                 manifest,
+                BTreeMap::new(),
             )
         }
     }
@@ -1353,154 +1333,6 @@ mod tests {
         assert!(!paths.marker_dir.join(&paths.marker_name).exists());
         assert!(!paths.marker_dir.exists());
         assert!(legacy.exists());
-    }
-
-    #[test]
-    fn committed_legacy_migration_publishes_the_harden_marker_contract() {
-        let s = Scratch::new("migration-marker");
-        let derived = s.paths("gamma2");
-        let paths = derive_paths(&s.spawn_plan(&derived)).unwrap();
-        s.make_per_vm_root(&paths);
-        let cfg = s.cfg();
-        fs::create_dir_all(&paths.marker_dir).unwrap();
-        let legacy = paths.per_vm_root.join("swtpm-legacy");
-        fs::create_dir_all(&legacy).unwrap();
-        fs::write(legacy.join("tpm2-00.permall"), b"legacy").unwrap();
-        let migration_paths = crate::ops::swtpm_migration::LegacyMigrationPaths::new(
-            legacy,
-            paths.swtpm_dir.clone(),
-            paths.per_vm_root.join(".d2b-legacy-swtpm.journal"),
-            paths.marker_dir.join(&paths.marker_name),
-            (cfg.expected_uid, cfg.expected_gid),
-        )
-        .unwrap();
-        assert_eq!(
-            crate::ops::swtpm_migration::migrate(&migration_paths).unwrap(),
-            crate::ops::swtpm_migration::LegacyMigrationOutcome::Migrated
-        );
-        let audit = harden(&paths, &cfg).expect("committed migration is hardenable");
-        assert_eq!(audit.marker_result, SwtpmMarkerResult::Verified);
-        assert_eq!(mode_of(&paths.swtpm_dir), 0o700);
-    }
-
-    #[test]
-    fn marker_published_before_commit_cannot_start_swtpm() {
-        let s = Scratch::new("marker-before-commit");
-        let paths = s.paths("crash-vm");
-        s.make_per_vm_root(&paths);
-        fs::create_dir_all(&paths.marker_dir).unwrap();
-        let cfg = s.cfg();
-
-        let source = paths.per_vm_root.join("swtpm-legacy");
-        fs::create_dir_all(&source).unwrap();
-        fs::write(source.join("nvram"), b"legacy").unwrap();
-        fs::create_dir_all(&paths.swtpm_dir).unwrap();
-        fs::set_permissions(&paths.swtpm_dir, fs::Permissions::from_mode(0o700)).unwrap();
-        fs::write(paths.swtpm_dir.join("nvram"), b"legacy").unwrap();
-
-        let source_digest = crate::ops::swtpm_migration::digest_tree(&source).unwrap();
-        let destination_digest =
-            crate::ops::swtpm_migration::digest_tree(&paths.swtpm_dir).unwrap();
-        let destination_stat = fs::symlink_metadata(&paths.swtpm_dir).unwrap();
-        let marker_payload = marker_payload(
-            &paths.vm_id,
-            MarkerOrigin::LegacyMigration,
-            destination_stat.dev(),
-            destination_stat.ino(),
-            cfg.expected_uid,
-            cfg.expected_gid,
-            0o700,
-            cfg.now_ms,
-        )
-        .unwrap();
-        fs::write(paths.marker_dir.join(&paths.marker_name), &marker_payload).unwrap();
-        fs::set_permissions(
-            paths.marker_dir.join(&paths.marker_name),
-            fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-
-        let source_stat = fs::symlink_metadata(&source).unwrap();
-        let journal = serde_json::json!({
-            "sourceDigest": serde_json::to_value(source_digest).unwrap(),
-            "destinationDigest": serde_json::to_value(destination_digest).unwrap(),
-            "markerDigest": serde_json::to_value(<[u8; 32]>::from(Sha256::digest(&marker_payload))).unwrap(),
-            "markerFirstProvisionedMs": cfg.now_ms,
-            "phase": "marker-published",
-            "sourceIdentity": {
-                "dev": source_stat.dev(),
-                "ino": source_stat.ino(),
-                "uid": source_stat.uid(),
-                "gid": source_stat.gid(),
-                "mode": source_stat.permissions().mode() & 0o7777,
-            },
-            "destinationIdentity": {
-                "dev": destination_stat.dev(),
-                "ino": destination_stat.ino(),
-                "uid": destination_stat.uid(),
-                "gid": destination_stat.gid(),
-                "mode": destination_stat.permissions().mode() & 0o7777,
-            },
-        });
-        let journal_path = paths.per_vm_root.join(".d2b-legacy-swtpm.journal");
-        fs::write(&journal_path, serde_json::to_vec(&journal).unwrap()).unwrap();
-        fs::set_permissions(&journal_path, fs::Permissions::from_mode(0o600)).unwrap();
-
-        let err = harden(&paths, &cfg).expect_err("commit point is not durable");
-        assert_eq!(err.reason, reasons::LEGACY_ADOPTION_REQUIRED);
-        assert_eq!(fs::read(paths.swtpm_dir.join("nvram")).unwrap(), b"legacy");
-        assert!(source.exists());
-    }
-
-    #[test]
-    fn resolver_to_migration_to_harden_uses_one_marker_contract() {
-        let s = Scratch::new("resolver-migration-harden");
-        let seed = s.paths("corp-vm");
-        let resolver = s.resolver(&seed);
-        let intent = resolver
-            .resolve_legacy_swtpm_intent("corp-vm")
-            .expect("resolver emits TPM migration intent");
-        assert_eq!(intent.marker, s.root.join("swtpm-markers").join("corp-vm"));
-
-        let paths = SwtpmDirPaths {
-            vm_id: intent.vm.clone(),
-            swtpm_dir: intent.destination.clone(),
-            per_vm_root: intent
-                .destination
-                .parent()
-                .expect("destination parent")
-                .to_path_buf(),
-            runtime_dir: s.root.join("run").join("corp-vm"),
-            marker_dir: intent.marker.parent().expect("marker parent").to_path_buf(),
-            marker_name: intent
-                .marker
-                .file_name()
-                .expect("marker name")
-                .to_string_lossy()
-                .into_owned(),
-        };
-        let derived = derive_paths(&s.spawn_plan(&paths)).expect("harden derives paths");
-        assert_eq!(derived.marker_dir.join(&derived.marker_name), intent.marker);
-        s.make_per_vm_root(&derived);
-        fs::create_dir_all(&intent.marker.parent().unwrap()).unwrap();
-        fs::create_dir_all(&intent.source).unwrap();
-        fs::write(intent.source.join("tpm2-00.permall"), b"legacy").unwrap();
-
-        let cfg = s.cfg();
-        let migration_paths = crate::ops::swtpm_migration::LegacyMigrationPaths::new(
-            intent.source,
-            intent.destination,
-            intent.journal,
-            intent.marker,
-            (cfg.expected_uid, cfg.expected_gid),
-        )
-        .unwrap();
-        assert_eq!(
-            crate::ops::swtpm_migration::migrate(&migration_paths).unwrap(),
-            crate::ops::swtpm_migration::LegacyMigrationOutcome::Migrated
-        );
-        let audit = harden(&derived, &cfg).expect("resolver-produced migration hardens");
-        assert_eq!(audit.marker_result, SwtpmMarkerResult::Verified);
     }
 
     #[test]
@@ -2023,87 +1855,5 @@ mod tests {
             state_volume_name(&uid),
             "device-6f9619ff8b864d01b42d00cf4fc964ff-tpm-state"
         );
-    }
-
-    #[test]
-    fn migration_journal_replay_never_repeats_a_committed_host_mutation() {
-        let mut journal = LegacyMigrationJournal::new([1; 32], [2; 32], [3; 32]).unwrap();
-        assert_eq!(
-            journal.next_action(LegacyMigrationObservation::Committed),
-            LegacyMigrationAction::Quarantine
-        );
-        assert_eq!(
-            journal.next_action(LegacyMigrationObservation::Unmigrated),
-            LegacyMigrationAction::PrepareJournal
-        );
-        journal
-            .advance(LegacyMigrationPhase::Prepared)
-            .expect("prepared");
-        journal
-            .advance(LegacyMigrationPhase::PayloadStaged)
-            .expect("payload staged");
-        journal
-            .advance(LegacyMigrationPhase::MarkerPublished)
-            .expect("marker published");
-        journal
-            .advance(LegacyMigrationPhase::Committed)
-            .expect("committed");
-
-        assert_eq!(
-            journal.next_action(LegacyMigrationObservation::Committed),
-            LegacyMigrationAction::RetireSource
-        );
-        journal
-            .advance(LegacyMigrationPhase::SourceRetired)
-            .expect("source retired");
-        assert_eq!(
-            journal.next_action(LegacyMigrationObservation::Committed),
-            LegacyMigrationAction::AlreadyMigrated
-        );
-    }
-
-    #[test]
-    fn migration_journal_quarantines_missing_replacement_and_foreign_state() {
-        for observation in [
-            LegacyMigrationObservation::MissingMarker,
-            LegacyMigrationObservation::ReplacementDetected,
-            LegacyMigrationObservation::Ambiguous,
-            LegacyMigrationObservation::ForeignOwner,
-        ] {
-            let journal = LegacyMigrationJournal::new([4; 32], [5; 32], [6; 32]).unwrap();
-            assert_eq!(
-                journal.next_action(observation),
-                LegacyMigrationAction::Quarantine
-            );
-            assert_eq!(
-                journal.status_for(observation),
-                LegacyMigrationStatus::Quarantined
-            );
-        }
-    }
-
-    #[test]
-    fn redb_status_is_derived_from_the_journal_commit_point() {
-        let mut journal = LegacyMigrationJournal::new([7; 32], [8; 32], [9; 32]).unwrap();
-        assert_eq!(journal.derived_status(), LegacyMigrationStatus::Pending);
-        journal
-            .advance(LegacyMigrationPhase::Prepared)
-            .expect("prepared");
-        journal
-            .advance(LegacyMigrationPhase::PayloadStaged)
-            .expect("payload staged");
-        journal
-            .advance(LegacyMigrationPhase::MarkerPublished)
-            .expect("marker published");
-        assert_eq!(journal.derived_status(), LegacyMigrationStatus::Pending);
-
-        let bytes = serde_json::to_vec(&journal).unwrap();
-        let replayed: LegacyMigrationJournal = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(replayed.derived_status(), LegacyMigrationStatus::Pending);
-
-        journal
-            .advance(LegacyMigrationPhase::Committed)
-            .expect("committed");
-        assert_eq!(journal.derived_status(), LegacyMigrationStatus::Adopted);
     }
 }

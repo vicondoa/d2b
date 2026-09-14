@@ -102,7 +102,6 @@ const CAPABILITIES: &[&str] = &[
     "Hello",
     "ExportBrokerAudit",
     "ConsumeLifecycleLease",
-    "MigrateLegacySwtpmState",
     "ApplyHostGenerationHandoff",
 ];
 const DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND: u32 = 512;
@@ -236,17 +235,6 @@ enum BrokerError {
     BundleIntentMissing {
         kind: &'static str,
         intent_id: String,
-    },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
-    StoreViewFilesystemMismatch {
-        a: String,
-        a_dev: u64,
-        b: String,
-        b_dev: u64,
-    },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
-    StoreViewMarkerMissing {
-        generation_dir: String,
     },
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     UsbipDeviceNotAllowed {
@@ -1018,6 +1006,43 @@ fn try_load_resolver_with_policy(
                 "Bundle resolver could not load; bundle-dependent ops will fail closed"
             );
             BundleSlot::Unavailable
+        }
+    }
+}
+
+/// Test helper: load the bundle at `bundle_path` through the same
+/// `try_load_resolver` path as the broker's `serve` loop and convert the
+/// resulting `BundleSlot` into a `BrokerResponse`. Returns
+/// `BrokerResponse::Error { kind: "bundle-tampered" }` when the bundle
+/// fails its tamper-resistance check, and
+/// `BrokerResponse::Error { kind: "Broker.BundleResolverUnavailable" }` when
+/// the bundle is absent or unreadable. Exposed for the
+/// `bundle_tampered_broker` integration test.
+#[cfg(not(feature = "layer1-bootstrap"))]
+pub fn probe_bundle_load_response(bundle_path: &std::path::Path) -> BrokerResponse {
+    match try_load_resolver(bundle_path) {
+        BundleSlot::Loaded(_) => ack_response("BundleLoad"),
+        BundleSlot::Unavailable => BrokerError::BundleResolverUnavailable.into_response(),
+        BundleSlot::Tampered { path, reason } => {
+            BrokerError::BundleTampered { path, reason }.into_response()
+        }
+    }
+}
+
+/// Like [`probe_bundle_load_response`] but uses an explicit [`BundleVerifyPolicy`].
+/// Tests that need to control uid/gid/mode requirements (e.g. to avoid requiring
+/// root in CI) pass `current_user_policy()` so the uid check passes and only the
+/// intended tamper reason fires.
+#[cfg(not(feature = "layer1-bootstrap"))]
+pub fn probe_bundle_load_response_with_policy(
+    bundle_path: &std::path::Path,
+    policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
+) -> BrokerResponse {
+    match try_load_resolver_with_policy(bundle_path, policy) {
+        BundleSlot::Loaded(_) => ack_response("BundleLoad"),
+        BundleSlot::Unavailable => BrokerError::BundleResolverUnavailable.into_response(),
+        BundleSlot::Tampered { path, reason } => {
+            BrokerError::BundleTampered { path, reason }.into_response()
         }
     }
 }
@@ -2089,14 +2114,6 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
                 operation: "UsbipExplicitFirewallRule",
                 reason,
             }),
-        BrokerRequest::MigrateLegacySwtpmState(req) => {
-            validate_bundle_op_id(req.bundle_legacy_swtpm_intent_ref.as_str()).map_err(|reason| {
-                BrokerError::RequestValidation {
-                    operation: "MigrateLegacySwtpmState",
-                    reason,
-                }
-            })
-        }
         BrokerRequest::PipeWireAudio(req) => {
             validate_small_wire_id(req.vm_id.as_str(), 128, "invalid-vm-id").map_err(|reason| {
                 BrokerError::RequestValidation {
@@ -2477,10 +2494,6 @@ fn dispatch_request(
             operation: "PrepareStateDir",
             target_wave: "W3",
         }),
-        BrokerRequest::PrepareStoreView { .. } => Err(BrokerError::Unimplemented {
-            operation: "PrepareStoreView",
-            target_wave: "W7",
-        }),
         BrokerRequest::StoreSync { .. } => Err(BrokerError::Unimplemented {
             operation: "StoreSync",
             target_wave: "P2",
@@ -2496,10 +2509,6 @@ fn dispatch_request(
         BrokerRequest::SetBridgePortFlags { .. } => Err(BrokerError::Unimplemented {
             operation: "SetBridgePortFlags",
             target_wave: "W3",
-        }),
-        BrokerRequest::SetupMountNamespace { .. } => Err(BrokerError::Unimplemented {
-            operation: "SetupMountNamespace",
-            target_wave: "W7",
         }),
         BrokerRequest::SpawnRunner { .. } => Err(BrokerError::Unimplemented {
             operation: "SpawnRunner",
@@ -4317,32 +4326,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     resolved: "resource/provider/template/generation-required".to_owned(),
                 });
             }
-            if let Err(err) = resolver.validate_minijail_profiles() {
-                write_decision_op_record!(
-                    audit_log,
-                    bundle_metadata,
-                    "SpawnRunner",
-                    req.bundle_runner_intent_ref.as_str(),
-                    caller_uid,
-                    caller_gid,
-                    &caller_role,
-                    req.vm_id.as_str(),
-                    req.role_id.as_str(),
-                    tracing_span_id_str(req.tracing_span_id.as_ref()),
-                    "denied-refused",
-                    Some("minijail-validation"),
-                    OperationFields::SpawnRunner {
-                        bundle_runner_intent_ref: req.bundle_runner_intent_ref.as_str().to_owned(),
-                        vm_id: req.vm_id.as_str().to_owned(),
-                        role_id: req.role_id.as_str().to_owned(),
-                        role: req.role.as_str().to_owned(),
-                        runtime_allocations: req.runtime_allocations.clone(),
-                    },
-                )?;
-                return Err(BrokerError::MinijailValidation {
-                    reason: err.to_string(),
-                });
-            }
             validate_spawn_runner_request_matches_intent(
                 &req,
                 intent,
@@ -4405,7 +4388,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 });
             }
             apply_vm_start_prerequisites(
-                backend,
                 resolver,
                 req.vm_id.as_str(),
                 req.role_id.as_str(),
@@ -5472,137 +5454,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::no_fds(ack_response("PrepareStateDir")))
         }
-        RealBrokerRequest::MigrateLegacySwtpmState(req) => {
-            if !caller_role_is_admin(&caller_role) {
-                return Err(BrokerError::AuditRequiresAdmin);
-            }
-            let resolver = require_resolver(resolver)?;
-            let intent = resolver
-                .resolve_legacy_swtpm_intent(req.vm_id.as_str())
-                .filter(|intent| intent.intent_id == req.bundle_legacy_swtpm_intent_ref.as_str())
-                .ok_or_else(|| BrokerError::BundleIntentMissing {
-                    kind: "legacy-swtpm",
-                    intent_id: req.bundle_legacy_swtpm_intent_ref.as_str().to_owned(),
-                })?;
-            let paths = crate::ops::swtpm_migration::LegacyMigrationPaths::new(
-                intent.source.clone(),
-                intent.destination.clone(),
-                intent.journal.clone(),
-                intent.marker.clone(),
-                (intent.owner_uid, intent.owner_gid),
-            )
-            .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
-            tracing::warn!(
-                ?paths,
-                probe_only = req.probe_only,
-                "TPM migration paths resolved"
-            );
-            let wire_outcome = if req.probe_only {
-                match crate::ops::swtpm_migration::probe(&paths) {
-                    Ok(crate::ops::swtpm_migration::LegacyInventoryState::NeverProvisioned) => {
-                        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::NeverProvisioned
-                    }
-                    Ok(crate::ops::swtpm_migration::LegacyInventoryState::ValidLegacy) => {
-                        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::AdoptionRequired
-                    }
-                    Ok(crate::ops::swtpm_migration::LegacyInventoryState::AlreadyCommitted) => {
-                        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated
-                    }
-                    Ok(
-                        crate::ops::swtpm_migration::LegacyInventoryState::Missing
-                        | crate::ops::swtpm_migration::LegacyInventoryState::Replaced
-                        | crate::ops::swtpm_migration::LegacyInventoryState::Ambiguous
-                        | crate::ops::swtpm_migration::LegacyInventoryState::Foreign,
-                    )
-                    | Err(crate::ops::swtpm_migration::LegacyMigrationError::InventoryInvalid)
-                    | Err(crate::ops::swtpm_migration::LegacyMigrationError::ForeignOwner) => {
-                        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous
-                    }
-                    Err(crate::ops::swtpm_migration::LegacyMigrationError::LockUnavailable) => {
-                        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Pending
-                    }
-                    Err(_) => d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Failed,
-                }
-            } else {
-                let outcome = match crate::ops::swtpm_migration::migrate(&paths) {
-                    Ok(outcome) => outcome,
-                    Err(_) => crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed,
-                };
-                match outcome {
-                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Migrated => {
-                        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Migrated
-                    }
-                    crate::ops::swtpm_migration::LegacyMigrationOutcome::AlreadyMigrated => {
-                        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated
-                    }
-                    crate::ops::swtpm_migration::LegacyMigrationOutcome::NotApplicable => {
-                        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable
-                    }
-                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Pending => {
-                        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Pending
-                    }
-                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed => {
-                        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Failed
-                    }
-                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Ambiguous => {
-                        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous
-                    }
-                }
-            };
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "MigrateLegacySwtpmState",
-                req.vm_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.vm_id.as_str(),
-                req.vm_id.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::MigrateLegacySwtpmState {
-                    vm_id: req.vm_id.as_str().to_owned(),
-                    outcome: wire_outcome.as_str().to_owned(),
-                },
-            )?;
-            Ok(DispatchResult::no_fds(
-                BrokerResponse::MigrateLegacySwtpmState(
-                    d2b_contracts_broker::broker_wire::MigrateLegacySwtpmStateResponse {
-                        outcome: wire_outcome,
-                    },
-                ),
-            ))
-        }
-        RealBrokerRequest::PrepareStoreView(req) => {
-            let resolver = require_resolver(resolver)?;
-            let vm_name = lookup_vm_name(resolver, &req.vm_id);
-            let intent = resolver
-                .find_legacy_store_view_intent(&vm_name)
-                .ok_or_else(|| BrokerError::BundleIntentMissing {
-                    kind: "store-view",
-                    intent_id: vm_name.clone(),
-                })?;
-            let outcome = backend.prepare_store_view(intent)?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "PrepareStoreView",
-                req.vm_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                outcome.vm.as_str(),
-                outcome.vm.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::PrepareStoreView {
-                    vm: outcome.vm.clone(),
-                    generation: outcome.generation,
-                    hardlink_farm_path: outcome.hardlink_farm_path.display().to_string(),
-                    view_root: outcome.target_view_path.display().to_string(),
-                },
-            )?;
-            Ok(DispatchResult::no_fds(ack_response("PrepareStoreView")))
-        }
         // Real-wire dispatch for the typed hardlink-farm op replacing
         // the retired per-VM `d2b-<vm>-store-sync.service` bash
         // oneshot. See the CRITICAL invariant in `ops/store_sync.rs`:
@@ -5636,8 +5487,9 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             let hardlink_farm_path_str = intent.hardlink_farm_path.display().to_string();
             let closure_count = u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX);
             let target_env = resolver
-                .find_manifest_vm(&vm_name)
-                .and_then(|vm| vm.env.clone());
+                .guest_vm_resources()
+                .find(|(_, resource)| resource.metadata().name().as_str() == vm_name)
+                .map(|(zone, _)| zone.as_str().to_owned());
             let timings = match &result {
                 Ok(outcome) => outcome.timings,
                 Err(_) => crate::ops::store_sync_audit::StoreSyncTimings {
@@ -5750,202 +5602,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 }
             }
         }
-        RealBrokerRequest::StoreVerify(req) => {
-            let resolver = require_resolver(resolver)?;
-            let vm_name = lookup_vm_name(resolver, &req.vm_id);
-            let response = if let Some(intent) = resolver.find_legacy_store_view_intent(&vm_name) {
-                let initial =
-                    crate::ops::store_verify::run_store_verify_read_only(intent, req.repair);
-                if req.repair
-                    && matches!(
-                        initial.status,
-                        d2b_contracts_broker::broker_wire::StoreVerifyStatus::Drift
-                            | d2b_contracts_broker::broker_wire::StoreVerifyStatus::Unknown
-                    )
-                {
-                    let sync_started = std::time::Instant::now();
-                    let sync_result = crate::ops::store_sync::run_store_sync_repair(intent);
-                    let sync_total_ms =
-                        u64::try_from(sync_started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    let hardlink_farm_path_str = intent.hardlink_farm_path.display().to_string();
-                    let generation_token = u32::try_from(intent.generation).unwrap_or(u32::MAX);
-                    let closure_count =
-                        u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX);
-                    let target_env = resolver
-                        .find_manifest_vm(&vm_name)
-                        .and_then(|vm| vm.env.clone());
-                    let timings = match &sync_result {
-                        Ok(outcome) => outcome.timings,
-                        Err(_) => crate::ops::store_sync_audit::StoreSyncTimings {
-                            total_ms: sync_total_ms,
-                            ..Default::default()
-                        },
-                    };
-                    let sync_ctx = crate::ops::store_sync_audit::StoreSyncAuditContext {
-                        vm: vm_name.clone(),
-                        vm_id: req.vm_id.as_str().to_owned(),
-                        env: target_env,
-                        bundle_closure_ref: intent.intent_id.clone(),
-                        hardlink_farm_path: hardlink_farm_path_str,
-                        generation_id: crate::ops::store_sync::generation_id_for_intent(intent),
-                        generation_token,
-                        caller_principal: Some(format!(
-                            "uid:{caller_uid}/role:{}",
-                            audit_context.peer_role.as_str()
-                        )),
-                        closure_count,
-                        timings,
-                    };
-                    let sync_audit_fields =
-                        crate::ops::store_sync::audit_fields_for_result(sync_ctx, &sync_result);
-                    debug_assert!(
-                        sync_audit_fields.validate().is_ok(),
-                        "StoreSync repair audit record violates signed schema: {:?}",
-                        sync_audit_fields.validate()
-                    );
-                    let export_record = crate::ops::store_sync_export::StoreSyncObservabilityRecord::from_audit_fields(&sync_audit_fields);
-                    if let Err(err) = crate::ops::store_sync_export::append_export_record(
-                        &config.store_sync_export_dir,
-                        &export_record,
-                    ) {
-                        warn!(
-                            target_vm = %export_record.target_vm,
-                            error = %err,
-                            "failed to write StoreSync observability export record for StoreVerify repair"
-                        );
-                    }
-                    match &sync_result {
-                        Ok(outcome) => {
-                            write_success_op_record!(
-                                audit_log,
-                                bundle_metadata,
-                                "StoreSync",
-                                req.vm_id.as_str(),
-                                caller_uid,
-                                caller_gid,
-                                &caller_role,
-                                outcome.vm.as_str(),
-                                outcome.vm.as_str(),
-                                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                                OperationFields::StoreSync(sync_audit_fields),
-                            )?;
-                        }
-                        Err(err) => {
-                            let error_kind = store_sync_error_kind(err.error_stage());
-                            write_decision_op_record!(
-                                audit_log,
-                                bundle_metadata,
-                                "StoreSync",
-                                req.vm_id.as_str(),
-                                caller_uid,
-                                caller_gid,
-                                &caller_role,
-                                vm_name.as_str(),
-                                vm_name.as_str(),
-                                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                                "errored",
-                                Some(error_kind),
-                                OperationFields::StoreSync(sync_audit_fields),
-                            )?;
-                        }
-                    }
-                    crate::ops::store_verify::finish_repair_after_store_sync(
-                        intent,
-                        initial,
-                        sync_result,
-                    )
-                } else {
-                    initial
-                }
-            } else {
-                crate::ops::store_verify::not_found(&vm_name)
-            };
-            let verify_status = serde_json::to_value(response.status)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_owned))
-                .unwrap_or_else(|| "failed".to_owned());
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "StoreVerify",
-                req.vm_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                vm_name.as_str(),
-                vm_name.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::StoreVerify {
-                    vm: response.vm.clone(),
-                    status: verify_status,
-                    checked: response.checked,
-                    drifted: response.drifted,
-                    repaired: response.repaired,
-                    repair_requested: req.repair,
-                },
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::StoreVerify(
-                response,
-            )))
-        }
-        RealBrokerRequest::RunHostInstall(req) => {
-            let response = backend.run_host_install(&req, resolver.map(std::sync::Arc::as_ref))?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "RunHostInstall",
-                req.bundle_installer_intent_ref.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                "host-installer",
-                "host",
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::RunHostInstall {
-                    bundle_installer_intent_ref: req
-                        .bundle_installer_intent_ref
-                        .as_str()
-                        .to_owned(),
-                    enable: req.enable,
-                    start: req.start,
-                    no_start: req.no_start,
-                },
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::RunHostInstall(
-                response,
-            )))
-        }
-        RealBrokerRequest::RunMigrate(req) => {
-            let resolver = require_resolver(resolver)?;
-            let intent = resolver
-                .find_migrate_intent(req.bundle_migrate_intent_ref.as_str())
-                .ok_or_else(|| BrokerError::BundleIntentMissing {
-                    kind: "migrate",
-                    intent_id: req.bundle_migrate_intent_ref.as_str().to_owned(),
-                })?;
-            let outcome = backend.run_migrate(intent)?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "RunMigrate",
-                req.bundle_migrate_intent_ref.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                "migrate",
-                "host",
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::RunMigrate {
-                    bundle_migrate_intent_ref: req.bundle_migrate_intent_ref.as_str().to_owned(),
-                },
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::RunMigrate(
-                d2b_contracts_broker::broker_wire::RunMigrateResponse {
-                    migrated_vm_count: outcome.migrated_vm_count,
-                    notes: outcome.notes,
-                },
-            )))
-        }
         RealBrokerRequest::ApplyHostGenerationHandoff(req) => {
             let target = req.target.to_canonical_string();
             let fields = OperationFields::ApplyHostGenerationHandoff {
@@ -6005,216 +5661,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 BrokerResponse::ApplyHostGenerationHandoff(response),
             ))
         }
-        RealBrokerRequest::RunActivation(req) => {
-            let resolver = require_resolver(resolver)?;
-            let intent = resolver
-                .find_activation_intent(req.bundle_activation_intent_ref.as_str())
-                .ok_or_else(|| BrokerError::BundleIntentMissing {
-                    kind: "activation",
-                    intent_id: req.bundle_activation_intent_ref.as_str().to_owned(),
-                })?;
-            if intent.vm != req.vm {
-                return Err(BrokerError::Protocol(format!(
-                    "RunActivation vm mismatch: wire vm `{}` != intent vm `{}`",
-                    req.vm, intent.vm,
-                )));
-            }
-            let store_view_intent =
-                resolver
-                    .find_legacy_store_view_intent(&req.vm)
-                    .ok_or_else(|| BrokerError::BundleIntentMissing {
-                        kind: "store-view",
-                        intent_id: req.vm.clone(),
-                    })?;
-            let outcome = backend.run_activation(intent, store_view_intent, req.phase, req.mode)?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "RunActivation",
-                req.bundle_activation_intent_ref.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.vm.as_str(),
-                req.vm.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::RunActivation {
-                    bundle_activation_intent_ref: req
-                        .bundle_activation_intent_ref
-                        .as_str()
-                        .to_owned(),
-                    mode: activation_mode_name(req.mode).to_owned(),
-                    vm: req.vm.clone(),
-                },
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::RunActivation(
-                d2b_contracts_broker::broker_wire::RunActivationResponse {
-                    mode: outcome.mode,
-                    vm: outcome.vm,
-                    generation_number: outcome.generation_number,
-                    guest_switch_script_path: outcome
-                        .guest_switch_script_path
-                        .as_ref()
-                        .map(|path| path.display().to_string()),
-                    summary: outcome.summary,
-                },
-            )))
-        }
-        RealBrokerRequest::RunGc(req) => {
-            let resolver = require_resolver(resolver)?;
-            let intent = resolver
-                .find_gc_intent(req.bundle_gc_intent_ref.as_str())
-                .ok_or_else(|| BrokerError::BundleIntentMissing {
-                    kind: "gc",
-                    intent_id: req.bundle_gc_intent_ref.as_str().to_owned(),
-                })?;
-            let outcome = backend.run_gc(intent, req.keep_generations)?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "RunGc",
-                req.bundle_gc_intent_ref.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                "gc",
-                "host",
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::RunGc {
-                    bundle_gc_intent_ref: req.bundle_gc_intent_ref.as_str().to_owned(),
-                    keep_generations: req.keep_generations,
-                },
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::RunGc(
-                d2b_contracts_broker::broker_wire::RunGcResponse {
-                    keep_generations: outcome.keep_generations,
-                    retained_store_path_count: outcome.retained_store_path_count,
-                    summary: outcome.summary,
-                },
-            )))
-        }
-        RealBrokerRequest::RunKeysRotate(req) => {
-            let resolver = require_resolver(resolver)?;
-            let intent = resolver
-                .find_keys_rotate_intent(req.bundle_keys_intent_ref.as_str())
-                .ok_or_else(|| BrokerError::BundleIntentMissing {
-                    kind: "keys-rotate",
-                    intent_id: req.bundle_keys_intent_ref.as_str().to_owned(),
-                })?;
-            if intent.vm != req.vm {
-                return Err(BrokerError::Protocol(format!(
-                    "RunKeysRotate vm mismatch: wire vm `{}` != intent vm `{}`",
-                    req.vm, intent.vm,
-                )));
-            }
-            let outcome = backend.run_keys_rotate(intent)?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "RunKeysRotate",
-                req.bundle_keys_intent_ref.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.vm.as_str(),
-                req.vm.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::RunKeysRotate {
-                    bundle_keys_intent_ref: req.bundle_keys_intent_ref.as_str().to_owned(),
-                    vm: req.vm.clone(),
-                },
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::RunKeysRotate(
-                d2b_contracts_broker::broker_wire::RunKeysRotateResponse {
-                    vm: outcome.vm,
-                    key_path: outcome.key_path.display().to_string(),
-                    public_key_fingerprint: outcome.public_key_fingerprint,
-                },
-            )))
-        }
-        RealBrokerRequest::RunHostKeyTrust(req) => {
-            let resolver = require_resolver(resolver)?;
-            let intent = resolver
-                .find_host_key_trust_intent(req.bundle_trust_intent_ref.as_str())
-                .ok_or_else(|| BrokerError::BundleIntentMissing {
-                    kind: "host-key-trust",
-                    intent_id: req.bundle_trust_intent_ref.as_str().to_owned(),
-                })?;
-            if intent.vm != req.vm {
-                return Err(BrokerError::Protocol(format!(
-                    "RunHostKeyTrust vm mismatch: wire vm `{}` != intent vm `{}`",
-                    req.vm, intent.vm,
-                )));
-            }
-            let outcome = backend.run_host_key_trust(intent)?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "RunHostKeyTrust",
-                req.bundle_trust_intent_ref.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.vm.as_str(),
-                req.vm.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::RunHostKeyTrust {
-                    bundle_trust_intent_ref: req.bundle_trust_intent_ref.as_str().to_owned(),
-                    vm: req.vm.clone(),
-                },
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::RunHostKeyTrust(
-                d2b_contracts_broker::broker_wire::RunHostKeyTrustResponse {
-                    vm: outcome.vm,
-                    static_ip: outcome.static_ip,
-                    known_hosts_path: outcome.known_hosts_path.display().to_string(),
-                    updated: outcome.updated,
-                },
-            )))
-        }
-        RealBrokerRequest::RunRotateKnownHost(req) => {
-            let resolver = require_resolver(resolver)?;
-            let intent = resolver
-                .find_rotate_known_host_intent(req.bundle_rotate_known_host_intent_ref.as_str())
-                .ok_or_else(|| BrokerError::BundleIntentMissing {
-                    kind: "rotate-known-host",
-                    intent_id: req.bundle_rotate_known_host_intent_ref.as_str().to_owned(),
-                })?;
-            if intent.vm != req.vm {
-                return Err(BrokerError::Protocol(format!(
-                    "RunRotateKnownHost vm mismatch: wire vm `{}` != intent vm `{}`",
-                    req.vm, intent.vm,
-                )));
-            }
-            let outcome = backend.run_rotate_known_host(intent)?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "RunRotateKnownHost",
-                req.bundle_rotate_known_host_intent_ref.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.vm.as_str(),
-                req.vm.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::RunRotateKnownHost {
-                    bundle_rotate_known_host_intent_ref: req
-                        .bundle_rotate_known_host_intent_ref
-                        .as_str()
-                        .to_owned(),
-                    vm: req.vm.clone(),
-                },
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::RunRotateKnownHost(
-                d2b_contracts_broker::broker_wire::RunRotateKnownHostResponse {
-                    vm: outcome.vm,
-                    static_ip: outcome.static_ip,
-                    known_hosts_path: outcome.known_hosts_path.display().to_string(),
-                    removed: outcome.removed,
-                },
-            )))
-        }
         RealBrokerRequest::SetBridgePortFlags(req) => {
             let resolver = require_resolver_ref(resolver.map(|resolver| resolver.as_ref()))?;
             let response = backend.set_bridge_port_flags(&req, resolver)?;
@@ -6243,48 +5689,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             Ok(DispatchResult::no_fds(BrokerResponse::SetBridgePortFlags(
                 response,
             )))
-        }
-        RealBrokerRequest::SetupMountNamespace(req) => {
-            let resolver = require_resolver(resolver)?;
-            let vm_name = lookup_vm_name(resolver, &req.vm_id);
-            let store_view_intent = resolver
-                .find_legacy_store_view_intent(&vm_name)
-                .ok_or_else(|| BrokerError::BundleIntentMissing {
-                    kind: "store-view",
-                    intent_id: vm_name.clone(),
-                })?;
-            let runner_intent_id =
-                d2b_core::bundle_resolver::intent_id_legacy_runner(&vm_name, req.role_id.as_str());
-            resolver
-                .find_runner_intent(&runner_intent_id)
-                .ok_or_else(|| BrokerError::BundleIntentMissing {
-                    kind: "runner",
-                    intent_id: runner_intent_id.clone(),
-                })?;
-            let outcome =
-                backend.setup_mount_namespace(&vm_name, req.role_id.as_str(), store_view_intent)?;
-            let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "SetupMountNamespace",
-                runner_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                outcome.vm.as_str(),
-                req.role_id.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::SetupMountNamespace {
-                    vm: outcome.vm.clone(),
-                    role: outcome.role_id.clone(),
-                    mount_count: 1,
-                    mount_root: outcome.mount_root.display().to_string(),
-                    mount_view_path: outcome.mount_view_path.display().to_string(),
-                    source_view_path: store_view_intent.target_view_path.display().to_string(),
-                },
-            )?;
-            Ok(DispatchResult::no_fds(ack_response("SetupMountNamespace")))
         }
         RealBrokerRequest::UsbipBind(req) => {
             let resolver = require_resolver(resolver)?;
@@ -6556,47 +5960,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(ack_response("SeedDnsmasqLease")))
-        }
-        RealBrokerRequest::BindMountFromHardlinkFarm(req) => {
-            let resolver = require_resolver(resolver)?;
-            let vm_name = lookup_vm_name(resolver, &req.vm_id);
-            let intent = if let Some(intent_ref) = req.bundle_store_view_intent_ref.as_ref() {
-                resolver
-                    .find_store_view_intent(intent_ref.as_str())
-                    .filter(|intent| intent.vm == vm_name)
-            } else {
-                resolver.find_legacy_store_view_intent(&vm_name)
-            }
-            .ok_or_else(|| BrokerError::BundleIntentMissing {
-                kind: "store-view",
-                intent_id: req
-                    .bundle_store_view_intent_ref
-                    .as_ref()
-                    .map_or_else(|| vm_name.clone(), |id| id.as_str().to_owned()),
-            })?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "BindMountFromHardlinkFarm",
-                vm_name.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                vm_name.as_str(),
-                "host",
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::BindMountFromHardlinkFarm {
-                    vm_id: vm_name.clone(),
-                    bundle_store_view_intent_ref: req
-                        .bundle_store_view_intent_ref
-                        .as_ref()
-                        .map(|id| id.as_str().to_owned()),
-                    hardlink_farm_path: intent.hardlink_farm_path.display().to_string(),
-                },
-            )?;
-            Ok(DispatchResult::no_fds(ack_response(
-                "BindMountFromHardlinkFarm",
-            )))
         }
         RealBrokerRequest::UsbipExplicitBind(req) => {
             // Explicit attach: bind a present sysfs busid to a USB-capable VM without
@@ -7092,16 +6455,6 @@ fn write_success_op_record_impl(
         operation_fields,
         audit_context,
     )
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn activation_mode_name(mode: d2b_contracts_broker::broker_wire::ActivationMode) -> &'static str {
-    match mode {
-        d2b_contracts_broker::broker_wire::ActivationMode::Switch => "switch",
-        d2b_contracts_broker::broker_wire::ActivationMode::Boot => "boot",
-        d2b_contracts_broker::broker_wire::ActivationMode::Test => "test",
-        d2b_contracts_broker::broker_wire::ActivationMode::Rollback => "rollback",
-    }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -8223,10 +7576,6 @@ trait DispatchBackend {
         destroy: bool,
     ) -> Result<(), BrokerError>;
 
-    fn prepare_store_view(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedStoreViewIntent,
-    ) -> Result<crate::live_handlers::StoreViewOutcome, BrokerError>;
 
     fn set_bridge_port_flags(
         &self,
@@ -8234,12 +7583,6 @@ trait DispatchBackend {
         resolver: &BundleResolver,
     ) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, BrokerError>;
 
-    fn setup_mount_namespace(
-        &self,
-        vm_name: &str,
-        role_id: &str,
-        store_view_intent: &d2b_core::bundle_resolver::ResolvedStoreViewIntent,
-    ) -> Result<crate::live_handlers::MountNamespaceOutcome, BrokerError>;
 
     fn open_pidfd(
         &self,
@@ -8312,24 +7655,8 @@ trait DispatchBackend {
         audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError>;
 
-    fn run_host_install(
-        &self,
-        req: &d2b_contracts_broker::broker_wire::RunHostInstallRequest,
-        resolver: Option<&BundleResolver>,
-    ) -> Result<d2b_contracts_broker::broker_wire::RunHostInstallResponse, BrokerError>;
 
-    fn run_migrate(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedMigrateIntent,
-    ) -> Result<crate::live_handlers::MigrateOutcome, BrokerError>;
 
-    fn run_activation(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedActivationIntent,
-        store_view_intent: &d2b_core::bundle_resolver::ResolvedStoreViewIntent,
-        phase: d2b_contracts_broker::broker_wire::ActivationPhase,
-        mode: d2b_contracts_broker::broker_wire::ActivationMode,
-    ) -> Result<crate::live_handlers::ActivationOutcome, BrokerError>;
 
     fn apply_host_generation_handoff(
         &self,
@@ -8338,26 +7665,9 @@ trait DispatchBackend {
         request: &d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
     ) -> Result<d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError>;
 
-    fn run_gc(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedGcIntent,
-        keep_generations: Option<u32>,
-    ) -> Result<crate::live_handlers::GcOutcome, BrokerError>;
 
-    fn run_keys_rotate(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedKeysRotateIntent,
-    ) -> Result<crate::live_handlers::KeysRotateOutcome, BrokerError>;
 
-    fn run_host_key_trust(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedHostKeyTrustIntent,
-    ) -> Result<crate::live_handlers::HostKeyTrustOutcome, BrokerError>;
 
-    fn run_rotate_known_host(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedRotateKnownHostIntent,
-    ) -> Result<crate::live_handlers::RotateKnownHostOutcome, BrokerError>;
 
     fn usbip_bind(
         &self,
@@ -8697,14 +8007,6 @@ impl DispatchBackend for LiveDispatchBackend {
         }
     }
 
-    fn prepare_store_view(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedStoreViewIntent,
-    ) -> Result<crate::live_handlers::StoreViewOutcome, BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::live_handlers::live_prepare_store_view(&exec, intent)
-            .map_err(map_activation_live_error)
-    }
 
     fn set_bridge_port_flags(
         &self,
@@ -8715,22 +8017,6 @@ impl DispatchBackend for LiveDispatchBackend {
         dispatch_set_bridge_port_flags_inner(req, resolver, &exec)
     }
 
-    fn setup_mount_namespace(
-        &self,
-        vm_name: &str,
-        role_id: &str,
-        store_view_intent: &d2b_core::bundle_resolver::ResolvedStoreViewIntent,
-    ) -> Result<crate::live_handlers::MountNamespaceOutcome, BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::live_handlers::live_setup_mount_namespace(
-            &exec,
-            vm_name,
-            &store_view_intent.hardlink_farm_path,
-            role_id,
-            &store_view_intent.target_view_path,
-        )
-        .map_err(map_activation_live_error)
-    }
 
     fn open_pidfd(
         &self,
@@ -8917,35 +8203,8 @@ impl DispatchBackend for LiveDispatchBackend {
         Ok(outcome)
     }
 
-    fn run_host_install(
-        &self,
-        req: &d2b_contracts_broker::broker_wire::RunHostInstallRequest,
-        resolver: Option<&BundleResolver>,
-    ) -> Result<d2b_contracts_broker::broker_wire::RunHostInstallResponse, BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        dispatch_run_host_install_response_inner(req, resolver, &exec)
-    }
 
-    fn run_migrate(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedMigrateIntent,
-    ) -> Result<crate::live_handlers::MigrateOutcome, BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::live_handlers::live_run_migrate(&exec, intent)
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
-    }
 
-    fn run_activation(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedActivationIntent,
-        store_view_intent: &d2b_core::bundle_resolver::ResolvedStoreViewIntent,
-        phase: d2b_contracts_broker::broker_wire::ActivationPhase,
-        mode: d2b_contracts_broker::broker_wire::ActivationMode,
-    ) -> Result<crate::live_handlers::ActivationOutcome, BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::live_handlers::live_run_activation(&exec, intent, store_view_intent, phase, mode)
-            .map_err(map_activation_live_error)
-    }
 
     fn apply_host_generation_handoff(
         &self,
@@ -8958,42 +8217,9 @@ impl DispatchBackend for LiveDispatchBackend {
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))
     }
 
-    fn run_gc(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedGcIntent,
-        keep_generations: Option<u32>,
-    ) -> Result<crate::live_handlers::GcOutcome, BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::live_handlers::live_run_gc(&exec, intent, keep_generations)
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
-    }
 
-    fn run_keys_rotate(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedKeysRotateIntent,
-    ) -> Result<crate::live_handlers::KeysRotateOutcome, BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::live_handlers::live_run_keys_rotate(&exec, intent)
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
-    }
 
-    fn run_host_key_trust(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedHostKeyTrustIntent,
-    ) -> Result<crate::live_handlers::HostKeyTrustOutcome, BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::live_handlers::live_run_trust(&exec, intent)
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
-    }
 
-    fn run_rotate_known_host(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedRotateKnownHostIntent,
-    ) -> Result<crate::live_handlers::RotateKnownHostOutcome, BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::live_handlers::live_run_rotate_known_host(&exec, intent)
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
-    }
 
     fn usbip_bind(
         &self,
@@ -9206,174 +8432,6 @@ fn dispatch_set_bridge_port_flags_inner(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn map_activation_live_error(error: crate::live_handlers::LiveHandlerError) -> BrokerError {
-    match error {
-        crate::live_handlers::LiveHandlerError::ReconcileExec(
-            crate::ops::exec_reconcile::ReconcileExecError::DifferentFilesystem {
-                a,
-                a_dev,
-                b,
-                b_dev,
-            },
-        ) => BrokerError::StoreViewFilesystemMismatch { a, a_dev, b, b_dev },
-        crate::live_handlers::LiveHandlerError::ReconcileExec(
-            crate::ops::exec_reconcile::ReconcileExecError::MarkerMissing { generation_dir },
-        ) => BrokerError::StoreViewMarkerMissing { generation_dir },
-        other => BrokerError::LiveHandler(other.to_string()),
-    }
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn dispatch_run_host_install_intent_inner(
-    req: &d2b_contracts_broker::broker_wire::RunHostInstallRequest,
-    intent: &d2b_core::bundle_resolver::ResolvedInstallerIntent,
-    host_runtime: Option<&d2b_core::bundle_resolver::HostRuntimeArtifact>,
-    executor: &dyn crate::ops::exec_reconcile::ReconcileExecutor,
-) -> Result<d2b_contracts_broker::broker_wire::RunHostInstallResponse, BrokerError> {
-    let outcome = crate::live_handlers::live_run_host_install_with_runtime(
-        executor,
-        intent,
-        req.enable,
-        req.start,
-        req.no_start,
-        host_runtime,
-    )
-    .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
-    Ok(d2b_contracts_broker::broker_wire::RunHostInstallResponse {
-        installed: outcome.installed,
-        enabled: outcome.enabled,
-        started: outcome.started,
-        artifacts_written: outcome.artifacts_written,
-    })
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn dispatch_run_host_install_response_inner(
-    req: &d2b_contracts_broker::broker_wire::RunHostInstallRequest,
-    resolver: Option<&BundleResolver>,
-    executor: &dyn crate::ops::exec_reconcile::ReconcileExecutor,
-) -> Result<d2b_contracts_broker::broker_wire::RunHostInstallResponse, BrokerError> {
-    let resolver = require_resolver_ref(resolver)?;
-    let intent = resolver
-        .find_installer_intent(req.bundle_installer_intent_ref.as_str())
-        .ok_or_else(|| BrokerError::BundleIntentMissing {
-            kind: "installer",
-            intent_id: req.bundle_installer_intent_ref.as_str().to_owned(),
-        })?;
-    let host_runtime = d2b_core::bundle_resolver::HostRuntimeArtifact::new(resolver.host_runtime());
-    dispatch_run_host_install_intent_inner(req, intent, Some(&host_runtime), executor)
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-/// Shared helper: resolve + execute `RunHostInstall` against an injected
-/// executor and map failures onto the broker wire envelope.
-/// The live server uses the inner form so it can write the audit row
-/// only after a successful install; integration tests use this wrapper
-/// to assert the typed negative-path responses directly.
-pub fn dispatch_run_host_install_response(
-    req: &d2b_contracts_broker::broker_wire::RunHostInstallRequest,
-    resolver: Option<&BundleResolver>,
-    executor: &dyn crate::ops::exec_reconcile::ReconcileExecutor,
-) -> BrokerResponse {
-    match dispatch_run_host_install_response_inner(req, resolver, executor) {
-        Ok(response) => BrokerResponse::RunHostInstall(response),
-        Err(err) => err.into_response(),
-    }
-}
-
-/// Test helper: load the bundle at `bundle_path` through the same
-/// `try_load_resolver` path as the broker's `serve` loop and convert the
-/// resulting `BundleSlot` into a `BrokerResponse`. Returns
-/// `BrokerResponse::Error { kind: "bundle-tampered" }` when the bundle
-/// fails its tamper-resistance check, and
-/// `BrokerResponse::Error { kind: "Broker.BundleResolverUnavailable" }` when
-/// the bundle is absent or unreadable. Exposed for the
-/// `bundle_tampered_broker` integration test.
-#[cfg(not(feature = "layer1-bootstrap"))]
-pub fn probe_bundle_load_response(bundle_path: &std::path::Path) -> BrokerResponse {
-    match try_load_resolver(bundle_path) {
-        BundleSlot::Loaded(_) => ack_response("BundleLoad"),
-        BundleSlot::Unavailable => BrokerError::BundleResolverUnavailable.into_response(),
-        BundleSlot::Tampered { path, reason } => {
-            BrokerError::BundleTampered { path, reason }.into_response()
-        }
-    }
-}
-
-/// Like [`probe_bundle_load_response`] but uses an explicit [`BundleVerifyPolicy`].
-/// Tests that need to control uid/gid/mode requirements (e.g. to avoid requiring
-/// root in CI) pass `current_user_policy()` so the uid check passes and only the
-/// intended tamper reason fires.
-#[cfg(not(feature = "layer1-bootstrap"))]
-pub fn probe_bundle_load_response_with_policy(
-    bundle_path: &std::path::Path,
-    policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
-) -> BrokerResponse {
-    match try_load_resolver_with_policy(bundle_path, policy) {
-        BundleSlot::Loaded(_) => ack_response("BundleLoad"),
-        BundleSlot::Unavailable => BrokerError::BundleResolverUnavailable.into_response(),
-        BundleSlot::Tampered { path, reason } => {
-            BrokerError::BundleTampered { path, reason }.into_response()
-        }
-    }
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-/// Variant for tests that inject a pre-resolved installer intent with
-/// writable artifact paths while still exercising the dispatch-layer
-/// success/error envelope mapping.
-pub fn dispatch_run_host_install_response_for_intent(
-    req: &d2b_contracts_broker::broker_wire::RunHostInstallRequest,
-    intent: &d2b_core::bundle_resolver::ResolvedInstallerIntent,
-    host_runtime: Option<&d2b_core::bundle_resolver::HostRuntimeArtifact>,
-    executor: &dyn crate::ops::exec_reconcile::ReconcileExecutor,
-) -> BrokerResponse {
-    match dispatch_run_host_install_intent_inner(req, intent, host_runtime, executor) {
-        Ok(response) => BrokerResponse::RunHostInstall(response),
-        Err(err) => err.into_response(),
-    }
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-pub fn dispatch_run_activation_response_for_intent(
-    req: &d2b_contracts_broker::broker_wire::RunActivationRequest,
-    intent: &d2b_core::bundle_resolver::ResolvedActivationIntent,
-    store_view_intent: &d2b_core::bundle_resolver::ResolvedStoreViewIntent,
-    executor: &dyn crate::ops::exec_reconcile::ReconcileExecutor,
-) -> BrokerResponse {
-    if intent.vm != req.vm {
-        return BrokerError::Protocol(format!(
-            "RunActivation vm mismatch: wire vm `{}` != intent vm `{}`",
-            req.vm, intent.vm,
-        ))
-        .into_response();
-    }
-    match crate::live_handlers::live_run_activation(
-        executor,
-        intent,
-        store_view_intent,
-        req.phase,
-        req.mode,
-    )
-    .map_err(map_activation_live_error)
-    {
-        Ok(outcome) => BrokerResponse::RunActivation(
-            d2b_contracts_broker::broker_wire::RunActivationResponse {
-                mode: outcome.mode,
-                vm: outcome.vm,
-                generation_number: outcome.generation_number,
-                guest_switch_script_path: outcome
-                    .guest_switch_script_path
-                    .as_ref()
-                    .map(|path| path.display().to_string()),
-                summary: outcome.summary,
-            },
-        ),
-        Err(err) => err.into_response(),
-    }
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn nft_binary_path() -> PathBuf {
     PathBuf::from(env::var("D2B_BROKER_NFT_BINARY").unwrap_or_else(|_| "/usr/sbin/nft".to_owned()))
 }
@@ -9425,23 +8483,21 @@ fn lookup_vm_name(_resolver: &Arc<BundleResolver>, vm_id: &d2b_contracts::types:
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn apply_vm_start_prerequisites<B: DispatchBackend>(
-    backend: &B,
-    resolver: &Arc<BundleResolver>,
+fn apply_vm_start_prerequisites(
+    resolver: &BundleResolver,
     vm_name: &str,
     role_id: &str,
 ) -> Result<(), BrokerError> {
     for intent in resolver.resolve_vm_start_prerequisites(vm_name, role_id) {
         for action in &intent.actions {
-            execute_vm_start_action(backend, &intent, action)?;
+            execute_vm_start_action(&intent, action)?;
         }
     }
     Ok(())
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn execute_vm_start_action<B: DispatchBackend>(
-    backend: &B,
+fn execute_vm_start_action(
     intent: &d2b_core::bundle_resolver::ResolvedVmStartIntent,
     action: &d2b_core::bundle_resolver::ResolvedVmStartAction,
 ) -> Result<(), BrokerError> {
@@ -9473,9 +8529,6 @@ fn execute_vm_start_action<B: DispatchBackend>(
                     intent.role_id
                 ))
             })
-        }
-        d2b_core::bundle_resolver::ResolvedVmStartAction::PrepareStoreView(store_view) => {
-            backend.prepare_store_view(store_view).map(|_| ())
         }
     }
 }
@@ -10601,10 +9654,15 @@ fn collect_active_explicit_usbip_carveouts(
             if find_wildcard_usbip_bind_intent_for(resolver, &vm, &bus_id).is_some() {
                 return None;
             }
-            // Pure explicit busid - reconstruct rule body from manifest + host config.
-            let vm_entry = resolver.find_manifest_vm(&vm)?;
-            let env = vm_entry.env.as_deref()?;
-            let env_config = resolver.find_host_env(env)?;
+            // Pure explicit busid - reconstruct rule body from the zone
+            // Guest resource + host config. The v3 Guest's environment is
+            // its Zone name (host.json environments are empty in v3, so a
+            // missing host config fails closed by skipping the carveout).
+            let env = resolver
+                .guest_vm_resources()
+                .find(|(_, resource)| resource.metadata().name().as_str() == vm)
+                .map(|(zone, _)| zone.as_str().to_owned())?;
+            let env_config = resolver.find_host_env(env.as_str())?;
             let host_ip = env_config.host_uplink_ip.as_deref()?;
             let net_ip = env_config.net_uplink_ip.as_deref()?;
             // Validate bridge port flags fail-closed: skip carveout if anti-spoof
@@ -12879,30 +11937,6 @@ impl BrokerError {
                     &format!("no {kind} intent in the trusted bundle for opaque id `{intent_id}`"),
                 )?;
             }
-            Self::StoreViewFilesystemMismatch { a, a_dev, b, b_dev } => {
-                audit_log.write_error_entry_with_caller_ids(
-                    operation,
-                    caller_uid,
-                    caller_gid,
-                    "store-view-fs-mismatch",
-                    opaque_target_id,
-                    "Broker.StoreViewFilesystemMismatch",
-                    &format!(
-                        "paths on different filesystems: {a} (dev={a_dev}) vs {b} (dev={b_dev})"
-                    ),
-                )?;
-            }
-            Self::StoreViewMarkerMissing { generation_dir } => {
-                audit_log.write_error_entry_with_caller_ids(
-                    operation,
-                    caller_uid,
-                    caller_gid,
-                    "store-view-marker-missing",
-                    opaque_target_id,
-                    "Broker.StoreViewMarkerMissing",
-                    &format!("generation {generation_dir} lacks marker.json"),
-                )?;
-            }
             Self::UsbipDeviceNotAllowed {
                 busid,
                 vendor,
@@ -13340,20 +12374,6 @@ impl BrokerError {
                 Some("W12"),
                 &format!("trusted bundle does not contain the requested {kind} intent"),
                 "broker operation failed; details are available only in the redacted audit channel",
-            ),
-            Self::StoreViewFilesystemMismatch { a, a_dev, b, b_dev } => error_response(
-                "Broker.StoreViewFilesystemMismatch",
-                "PrepareStoreView",
-                Some("W7"),
-                &format!("paths on different filesystems: {a} (dev={a_dev}) vs {b} (dev={b_dev})"),
-                "Keep /nix/store and the VM store-view root on the same filesystem, then retry.",
-            ),
-            Self::StoreViewMarkerMissing { generation_dir } => error_response(
-                "Broker.StoreViewMarkerMissing",
-                "PrepareStoreView",
-                Some("W7"),
-                &format!("generation {generation_dir} lacks marker.json"),
-                "Rebuild the store-view generation through the trusted broker/native path, then retry.",
             ),
             Self::UsbipDeviceNotAllowed { .. } => error_response(
                 "Broker.UsbipDeviceNotAllowed",
@@ -14013,16 +13033,9 @@ fn cleanup_registered_runner_after_failure(runner_id: &str) {
 mod tests {
     use super::*;
     #[cfg(not(feature = "layer1-bootstrap"))]
-    use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use d2b_contracts::types::BundleOpId;
     #[cfg(not(feature = "layer1-bootstrap"))]
-    use d2b_contracts_broker::broker_wire::{
-        ActivationMode, ActivationPhase, GuestExecutionBinding, RunActivationRequest,
-        RunActivationResponse,
-    };
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    use d2b_core::bundle_resolver::{ResolvedActivationIntent, ResolvedStoreViewIntent};
+    use d2b_contracts_broker::broker_wire::GuestExecutionBinding;
     use nix::unistd::Gid;
     #[cfg(not(feature = "layer1-bootstrap"))]
     use serde::Serialize;
@@ -14648,7 +13661,6 @@ mod tests {
             "ApplyNmUnmanaged",
             "ApplyRoute",
             "ApplySysctl",
-            "BindMountFromHardlinkFarm",
             "CgroupKill",
             "CheckSystemdUserManager",
             "ConsumeLifecycleLease",
@@ -14662,7 +13674,6 @@ mod tests {
             "DiskInit",
             "ExportBrokerAudit",
             "Hello",
-            "MigrateLegacySwtpmState",
             "ModprobeIfAllowed",
             "ObserveRunner",
             "ObserveSystemdUnit",
@@ -14679,7 +13690,6 @@ mod tests {
             "PollChildReaped",
             "PrepareRuntimeDir",
             "PrepareStateDir",
-            "PrepareStoreView",
             "QemuMediaAttach",
             "QemuMediaBoot",
             "QemuMediaDetach",
@@ -14689,22 +13699,13 @@ mod tests {
             "QemuMediaRefreshRegistry",
             "QemuMediaSystemPowerdown",
             "ReconcileStorageScope",
-            "RunActivation",
-            "RunGc",
-            "RunHostInstall",
-            "RunHostKeyTrust",
-            "RunKeysRotate",
-            "RunMigrate",
-            "RunRotateKnownHost",
             "SeedDnsmasqLease",
             "SetBridgePortFlags",
-            "SetupMountNamespace",
             "SignalRunner",
             "SpawnRunner",
             "StartSystemdUnit",
             "StopSystemdUnit",
             "StoreSync",
-            "StoreVerify",
             "UpdateHostsFile",
             "UsbipBind",
             "UsbipBindFirewallRule",
@@ -14875,8 +13876,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn build_test_bundle(root: &Path) -> TestBundle {
         use d2b_contracts_resource::v3::IfName;
-        use d2b_core::bundle::{Bundle, BundleClosureRef, BundleGeneration};
-        use d2b_core::closures::{ClosureGeneration, ClosureMetadata};
+        use d2b_core::bundle::{Bundle, BundleGeneration};
         use d2b_core::host::{
             BridgePortFlags, ChNetHandoffMode, CloudHypervisorCapability, FdOwnershipEntry,
             HostChConfig, HostJson, HostsFileOwnership, IfNameMapping, Ipv6SysctlEntry,
@@ -14899,7 +13899,6 @@ mod tests {
         let manifest_path = bundle_dir.join("vms.json");
         let host_path = bundle_dir.join("host.json");
         let processes_path = bundle_dir.join("processes.json");
-        let closure_path = bundle_dir.join("closures/corp-vm.json");
 
         let host = HostJson {
             schema_version: "v2".to_owned(),
@@ -14989,8 +13988,6 @@ mod tests {
             },
             kernel_modules: Vec::<KernelModulesEntry>::new(),
             fd_ownership: Vec::<FdOwnershipEntry>::new(),
-            runtime_providers: Vec::new(),
-            vm_runtimes: Vec::new(),
             cloud_hypervisor_capabilities: Vec::<CloudHypervisorCapability>::new(),
             if_name_mappings: Vec::<IfNameMapping>::new(),
             qemu_media: None,
@@ -15142,43 +14139,12 @@ mod tests {
             )]),
         };
 
-        let closure = ClosureMetadata {
-            schema_version: "v2".to_owned(),
-            vm: "corp-vm".to_owned(),
-            toplevel: "/nix/store/corp-vm-system".to_owned(),
-            closure_paths: vec!["/nix/store/corp-vm-system".to_owned()],
-            db_dump_path: "/nix/store/corp-vm-registration".to_owned(),
-            declared_runner: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
-            runner_parity_path: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
-            runner_parity_ok: true,
-            generation: ClosureGeneration {
-                host_generation: Some(42),
-                vm_generation: Some("42".to_owned()),
-                source_revision: Some("deadbeef".to_owned()),
-                generated_at: Some("2026-01-01T00:00:00Z".to_owned()),
-            },
-        };
-
         let bundle = Bundle {
-            bundle_version: 3,
-            schema_version: "v2".to_owned(),
-            public_manifest_path: "vms.json".to_owned(),
-            host_path: "host.json".to_owned(),
-            processes_path: "processes.json".to_owned(),
+            bundle_version: 1,
+            schema_version: "v3".to_owned(),
             privileges_path: "privileges.json".to_owned(),
             storage_path: None,
-            sync_path: None,
-            allocator_path: None,
-            realm_controllers_path: None,
-            realm_identity_path: None,
             realm_workloads_launcher_v2_path: None,
-            unsafe_local_workloads_path: None,
-            closures: vec![BundleClosureRef {
-                vm: "corp-vm".to_owned(),
-                path: "closures/corp-vm.json".to_owned(),
-            }],
-            minijail_profiles: Vec::new(),
-            managed_keys: Default::default(),
             generation: BundleGeneration {
                 generator: "unit-test".to_owned(),
                 source_revision: Some("deadbeef".to_owned()),
@@ -15191,46 +14157,14 @@ mod tests {
         write_json_file(&manifest_path, &manifest);
         write_json_file(&host_path, &host);
         write_json_file(&processes_path, &processes);
-        write_json_file(&closure_path, &closure);
 
-        // schemaVersion v2 bundles MUST carry a bundleHash field. Inject
-        // it by replicating the bundle_resolver canonical-hash recipe:
-        // sha256( serde_json::to_vec( bundle as Value with
-        // artifactHashes=null and no bundleHash ) ).
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut as_value: serde_json::Value =
-                serde_json::to_value(&bundle).expect("serialize test bundle to value");
-            if let serde_json::Value::Object(map) = &mut as_value {
-                map.remove("bundleHash");
-                map.insert("artifactHashes".to_owned(), serde_json::Value::Null);
-            }
-            let canonical = serde_json::to_vec(&as_value).expect("canonical-serialize test bundle");
-            let digest = {
-                use sha2::Digest as _;
-                let raw: [u8; 32] = sha2::Sha256::digest(&canonical).into();
-                let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-                format!("sha256:{hex}")
-            };
-            if let serde_json::Value::Object(map) = &mut as_value {
-                map.insert("bundleHash".to_owned(), serde_json::Value::String(digest));
-            }
-            let with_hash = serde_json::to_vec(&as_value).expect("re-serialize test bundle");
-            if let Some(parent) = bundle_path.parent() {
-                fs::create_dir_all(parent).expect("create parent directories for test bundle");
-            }
-            fs::write(&bundle_path, with_hash).expect("write test bundle.json");
-            fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o640))
-                .expect("chmod test bundle.json to 0640");
-        }
-
-        let resolver = Arc::new(
-            BundleResolver::load_with_policy(
-                &bundle_path,
-                &d2b_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
-            )
-            .expect("load test bundle"),
-        );
+        let resolver = Arc::new(BundleResolver::from_artifacts_with_zone_resource_bundles(
+            bundle,
+            host,
+            processes,
+            manifest,
+            BTreeMap::new(),
+        ));
         TestBundle {
             bundle_path,
             manifest_path,
@@ -15241,121 +14175,12 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn broker_bundle_load_sees_rewritten_processes_without_restart() {
-        use d2b_core::bundle_resolver::{BundleVerifyPolicy, intent_id_legacy_runner};
-        use d2b_core::minijail_profile::{CgroupPlacement, WritablePath};
-        use d2b_core::processes::{NodeId, ProcessNode, ProcessRole, ProcessesJson};
-        use d2b_core::test_support::RoleProfileBuilder;
-
-        let root = test_audit_dir("bundle-freshness");
-        let bundle = build_test_bundle(&root);
-        let policy = BundleVerifyPolicy::for_tests();
-
-        let first = match try_load_resolver_with_policy(&bundle.bundle_path, &policy) {
-            BundleSlot::Loaded(resolver) => resolver,
-            other => panic!("initial bundle should load, got {other:?}"),
-        };
-        let video_intent = intent_id_legacy_runner("corp-vm", "video");
-        assert!(
-            first.find_runner_intent(&video_intent).is_none(),
-            "fixture starts without a video runner"
-        );
-
-        let mut processes: ProcessesJson =
-            serde_json::from_slice(&fs::read(&bundle.processes_path).expect("read processes.json"))
-                .expect("parse processes.json");
-        processes.vms[0].nodes.push(ProcessNode {
-            execution_ref: None,
-            execution_domain: None,
-            user_ref: None,
-            id: NodeId("video".to_owned()),
-            role: ProcessRole::Video,
-            unit: None,
-            binary_path: Some("/nix/store/test-crosvm-video/bin/crosvm".to_owned()),
-            argv: vec![
-                "d2b-corp-vm-video".to_owned(),
-                "device".to_owned(),
-                "video-decoder".to_owned(),
-                "--socket-path".to_owned(),
-                "/run/d2b-video/corp-vm/video.sock".to_owned(),
-                "--backend".to_owned(),
-                "vaapi".to_owned(),
-            ],
-            env: Vec::new(),
-            profile: RoleProfileBuilder::new()
-                .with_profile_id("profile-video")
-                .with_uid(1002)
-                .with_gid(1002)
-                .with_seccomp_policy_ref(Some("w1-video"))
-                .with_writable_paths(vec![WritablePath {
-                    path: "/run/d2b-video/corp-vm".to_owned(),
-                    purpose: "test video socket".to_owned(),
-                }])
-                .with_device_binds(vec!["/dev/dri/renderD128".to_owned()])
-                .with_cgroup_placement(CgroupPlacement {
-                    subtree: "d2b.slice/corp-vm/video".to_owned(),
-                    controllers: vec!["cpu".to_owned(), "memory".to_owned()],
-                    delegated: false,
-                })
-                .with_umask(Some(7))
-                .build(),
-            readiness: Vec::new(),
-            plan_ops: Vec::new(),
-            network_interfaces: Vec::new(),
-        });
-        write_json_file(&bundle.processes_path, &processes);
-
-        let second = match try_load_resolver_with_policy(&bundle.bundle_path, &policy) {
-            BundleSlot::Loaded(resolver) => resolver,
-            other => panic!("rewritten bundle should load, got {other:?}"),
-        };
-        let intent = second
-            .find_runner_intent(&video_intent)
-            .expect("per-request reload must see newly written video runner intent");
-        assert_eq!(intent.role, ProcessRole::Video);
-        assert_eq!(intent.umask, Some(7));
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    fn build_invalid_minijail_test_bundle(root: &Path) -> TestBundle {
-        use d2b_core::processes::ProcessesJson;
-
-        let mut bundle = build_test_bundle(root);
-        let mut processes: ProcessesJson =
-            serde_json::from_slice(&fs::read(&bundle.processes_path).expect("read processes.json"))
-                .expect("parse processes.json");
-        let profile = &mut processes.vms[0].nodes[0].profile;
-        profile.uid = 0;
-        profile.gid = 0;
-        write_json_file(&bundle.processes_path, &processes);
-        bundle.resolver = Arc::new(
-            BundleResolver::load_with_policy(
-                &bundle.bundle_path,
-                &d2b_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
-            )
-            .expect("reload invalid bundle"),
-        );
-        bundle
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn set_usbip_allowlist(
         bundle: &mut TestBundle,
         allowlist: Vec<d2b_core::host::VendorProductPair>,
     ) {
-        let mut host: d2b_core::host::HostJson =
-            serde_json::from_slice(&fs::read(&bundle.host_path).expect("read host.json"))
-                .expect("parse host.json");
-        host.environments[0].usbip_busid_locks[0].vendor_product_allowlist = allowlist;
-        write_json_file(&bundle.host_path, &host);
-        bundle.resolver = Arc::new(
-            BundleResolver::load_with_policy(
-                &bundle.bundle_path,
-                &d2b_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
-            )
-            .expect("reload bundle"),
-        );
+        let resolver = Arc::get_mut(&mut bundle.resolver).expect("resolver uniquely owned");
+        resolver.test_set_usbip_allowlist("corp-vm", allowlist);
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -16515,18 +15340,6 @@ mod tests {
             Ok(())
         }
 
-        fn prepare_store_view(
-            &self,
-            intent: &d2b_core::bundle_resolver::ResolvedStoreViewIntent,
-        ) -> Result<crate::live_handlers::StoreViewOutcome, BrokerError> {
-            Ok(crate::live_handlers::StoreViewOutcome {
-                vm: intent.vm.clone(),
-                generation: intent.generation,
-                hardlink_farm_path: intent.hardlink_farm_path.clone(),
-                target_view_path: intent.target_view_path.clone(),
-            })
-        }
-
         fn set_bridge_port_flags(
             &self,
             req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
@@ -16543,22 +15356,6 @@ mod tests {
                     req.vm_id.as_str()
                 ))
                 .expect("fake tap ifname"),
-            })
-        }
-
-        fn setup_mount_namespace(
-            &self,
-            vm_name: &str,
-            role_id: &str,
-            store_view_intent: &d2b_core::bundle_resolver::ResolvedStoreViewIntent,
-        ) -> Result<crate::live_handlers::MountNamespaceOutcome, BrokerError> {
-            let _ = store_view_intent;
-            let mount_root = PathBuf::from(format!("/run/d2b/mountns/{vm_name}/{role_id}"));
-            Ok(crate::live_handlers::MountNamespaceOutcome {
-                vm: vm_name.to_owned(),
-                role_id: role_id.to_owned(),
-                mount_root: mount_root.clone(),
-                mount_view_path: mount_root.join("nix/store"),
             })
         }
 
@@ -16681,70 +15478,8 @@ mod tests {
             })
         }
 
-        fn run_host_install(
-            &self,
-            req: &d2b_contracts_broker::broker_wire::RunHostInstallRequest,
-            _resolver: Option<&BundleResolver>,
-        ) -> Result<d2b_contracts_broker::broker_wire::RunHostInstallResponse, BrokerError>
-        {
-            Ok(d2b_contracts_broker::broker_wire::RunHostInstallResponse {
-                installed: true,
-                enabled: req.enable,
-                started: req.start && !req.no_start,
-                artifacts_written: vec!["/etc/systemd/system/d2bd.service".to_owned()],
-            })
-        }
 
-        fn run_migrate(
-            &self,
-            intent: &d2b_core::bundle_resolver::ResolvedMigrateIntent,
-        ) -> Result<crate::live_handlers::MigrateOutcome, BrokerError> {
-            Ok(crate::live_handlers::MigrateOutcome {
-                migrated_vm_count: intent.vms.len() as u32,
-                notes: intent.notes.clone(),
-            })
-        }
 
-        fn run_activation(
-            &self,
-            intent: &d2b_core::bundle_resolver::ResolvedActivationIntent,
-            store_view_intent: &d2b_core::bundle_resolver::ResolvedStoreViewIntent,
-            phase: d2b_contracts_broker::broker_wire::ActivationPhase,
-            mode: d2b_contracts_broker::broker_wire::ActivationMode,
-        ) -> Result<crate::live_handlers::ActivationOutcome, BrokerError> {
-            Ok(crate::live_handlers::ActivationOutcome {
-                phase,
-                mode,
-                vm: intent.vm.clone(),
-                generation_number: intent.generation_number,
-                summary: "activation complete".to_owned(),
-                prepared_store_view: Some(crate::live_handlers::StoreViewOutcome {
-                    vm: store_view_intent.vm.clone(),
-                    generation: store_view_intent.generation,
-                    hardlink_farm_path: store_view_intent.hardlink_farm_path.clone(),
-                    target_view_path: store_view_intent.target_view_path.clone(),
-                }),
-                guest_switch_script_path: Some(PathBuf::from(format!(
-                    "/nix/store/{}/bin/switch-to-configuration",
-                    store_view_intent
-                        .target_view_path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("alpha-system")
-                ))),
-                activation_script_mode: activation_mode_name(mode).to_owned(),
-                rollback_marker_written: None,
-                current_generation_updated: if phase
-                    == d2b_contracts_broker::broker_wire::ActivationPhase::Prepare
-                {
-                    None
-                } else {
-                    intent
-                        .generation_number
-                        .or(Some(store_view_intent.generation))
-                },
-            })
-        }
 
         fn apply_host_generation_handoff(
             &self,
@@ -16759,52 +15494,9 @@ mod tests {
                 .map_err(|error| BrokerError::LiveHandler(error.to_string()))
         }
 
-        fn run_gc(
-            &self,
-            intent: &d2b_core::bundle_resolver::ResolvedGcIntent,
-            keep_generations: Option<u32>,
-        ) -> Result<crate::live_handlers::GcOutcome, BrokerError> {
-            Ok(crate::live_handlers::GcOutcome {
-                keep_generations,
-                retained_store_path_count: intent.retained_store_paths.len() as u32,
-                summary: "gc complete".to_owned(),
-            })
-        }
 
-        fn run_keys_rotate(
-            &self,
-            intent: &d2b_core::bundle_resolver::ResolvedKeysRotateIntent,
-        ) -> Result<crate::live_handlers::KeysRotateOutcome, BrokerError> {
-            Ok(crate::live_handlers::KeysRotateOutcome {
-                vm: intent.vm.clone(),
-                key_path: intent.key_path.clone(),
-                public_key_fingerprint: "SHA256:test-fingerprint".to_owned(),
-            })
-        }
 
-        fn run_host_key_trust(
-            &self,
-            intent: &d2b_core::bundle_resolver::ResolvedHostKeyTrustIntent,
-        ) -> Result<crate::live_handlers::HostKeyTrustOutcome, BrokerError> {
-            Ok(crate::live_handlers::HostKeyTrustOutcome {
-                vm: intent.vm.clone(),
-                static_ip: intent.static_ip.clone(),
-                known_hosts_path: intent.known_hosts_path.clone(),
-                updated: true,
-            })
-        }
 
-        fn run_rotate_known_host(
-            &self,
-            intent: &d2b_core::bundle_resolver::ResolvedRotateKnownHostIntent,
-        ) -> Result<crate::live_handlers::RotateKnownHostOutcome, BrokerError> {
-            Ok(crate::live_handlers::RotateKnownHostOutcome {
-                vm: intent.vm.clone(),
-                static_ip: intent.static_ip.clone(),
-                known_hosts_path: intent.known_hosts_path.clone(),
-                removed: true,
-            })
-        }
 
         fn usbip_bind(
             &self,
@@ -17181,68 +15873,6 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
-    fn dispatch_run_activation_response_for_intent_uses_native_sequence() {
-        let root = test_audit_dir("run-activation-native");
-        let source_view = root.join("source-view/alpha-system");
-        fs::create_dir_all(source_view.join("bin")).expect("create source view");
-        fs::write(
-            source_view.join("bin/switch-to-configuration"),
-            b"#!/bin/sh\n",
-        )
-        .expect("write switch-to-configuration");
-        let intent = ResolvedActivationIntent {
-            intent_id: "activation:vm:alpha".to_owned(),
-            vm: "alpha".to_owned(),
-            target_generation_path: root.join("declared-generation"),
-            generation_number: Some(7),
-        };
-        let store_view_intent = ResolvedStoreViewIntent {
-            intent_id: "store-view:vm:alpha".to_owned(),
-            vm: "alpha".to_owned(),
-            generation: 7,
-            hardlink_farm_path: root.join("store-view"),
-            target_view_path: root.join("store-view/live/alpha-system"),
-            closure_paths: vec![source_view],
-            db_dump_path: root.join("db.dump"),
-        };
-        let request = RunActivationRequest {
-            bundle_activation_intent_ref: BundleOpId::new("activation:vm:alpha"),
-            mode: ActivationMode::Switch,
-            system_artifact_id: None,
-            phase: ActivationPhase::Prepare,
-            vm: "alpha".to_owned(),
-            tracing_span_id: None,
-        };
-        let exec = FakeReconcileExecutor::new();
-
-        let response = dispatch_run_activation_response_for_intent(
-            &request,
-            &intent,
-            &store_view_intent,
-            &exec,
-        );
-
-        assert!(matches!(
-            response,
-            BrokerResponse::RunActivation(RunActivationResponse {
-                mode: ActivationMode::Switch,
-                ref vm,
-                generation_number: Some(7),
-                guest_switch_script_path: Some(ref path),
-                ..
-            }) if vm == "alpha" && path == "/nix/store/alpha-system/bin/switch-to-configuration"
-        ));
-        let log = exec.take_log();
-        assert_eq!(log.len(), 1);
-        assert!(matches!(
-            &log[0],
-            ReconcileOp::PrepareStoreView { vm, generation, .. }
-                if vm == "alpha" && *generation == 7
-        ));
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
     #[cfg_attr(
         not(test_root),
         ignore = "v1.1.1fu11: requires write access to /var/lib/d2b/runtime/ which only root can do; run with --cfg test_root in a privileged test environment"
@@ -17250,14 +15880,12 @@ mod tests {
     fn dispatch_request_writes_typed_op_audit_records_for_all_live_arms() {
         use d2b_contracts::types::{BundleOpId, RoleId, ScopeId, TracingSpanId, VmId};
         use d2b_contracts_broker::broker_wire::{
-            ActivationMode, BrokerAuditFilter, BrokerCallerRole, BrokerRequest, RunnerAllocation,
+            BrokerAuditFilter, BrokerCallerRole, BrokerRequest, RunnerAllocation,
             RunnerAllocationKind, RunnerRole, RunnerSignal,
         };
         use d2b_core::bundle_resolver::{
-            intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
-            intent_id_installer_host, intent_id_keys_rotate, intent_id_legacy_runner,
-            intent_id_migrate_host, intent_id_nft_host, intent_id_nm_unmanaged_host,
-            intent_id_rotate_known_host, intent_id_route_env, intent_id_sysctl, intent_id_trust,
+            intent_id_hosts_host, intent_id_legacy_runner, intent_id_nft_host,
+            intent_id_nm_unmanaged_host, intent_id_route_env, intent_id_sysctl,
             intent_id_usbip_firewall,
         };
 
@@ -17546,27 +16174,6 @@ mod tests {
             "ApplyNmUnmanaged",
         );
 
-        assert_ack(
-            assert_dispatch(
-                BrokerRequest::PrepareStoreView(
-                    d2b_contracts_broker::broker_wire::PrepareStoreViewRequest {
-                        vm_id: VmId::new("corp-vm"),
-                        tracing_span_id: Some(TracingSpanId::new("span-store-view")),
-                    },
-                ),
-                "PrepareStoreView",
-                OperationFields::PrepareStoreView {
-                    vm: "corp-vm".to_owned(),
-                    generation: 42,
-                    hardlink_farm_path: "/var/lib/d2b/vms/corp-vm/store-view".to_owned(),
-                    view_root: "/var/lib/d2b/vms/corp-vm/store-view/generations/42/corp-vm-system"
-                        .to_owned(),
-                },
-                Some("span-store-view"),
-            ),
-            "PrepareStoreView",
-        );
-
         let set_bridge_port_flags = assert_dispatch(
             BrokerRequest::SetBridgePortFlags(
                 d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
@@ -17597,31 +16204,6 @@ mod tests {
             }
             other => panic!("expected SetBridgePortFlags response, got {other:?}"),
         }
-
-        assert_ack(
-            assert_dispatch(
-                BrokerRequest::SetupMountNamespace(
-                    d2b_contracts_broker::broker_wire::SetupMountNamespaceRequest {
-                        vm_id: VmId::new("corp-vm"),
-                        role_id: RoleId::new("ch-runner"),
-                        tracing_span_id: Some(TracingSpanId::new("span-mount-ns")),
-                    },
-                ),
-                "SetupMountNamespace",
-                OperationFields::SetupMountNamespace {
-                    vm: "corp-vm".to_owned(),
-                    role: "ch-runner".to_owned(),
-                    mount_count: 1,
-                    mount_root: "/run/d2b/mountns/corp-vm/ch-runner".to_owned(),
-                    mount_view_path: "/run/d2b/mountns/corp-vm/ch-runner/nix/store".to_owned(),
-                    source_view_path:
-                        "/var/lib/d2b/vms/corp-vm/store-view/generations/42/corp-vm-system"
-                            .to_owned(),
-                },
-                Some("span-mount-ns"),
-            ),
-            "SetupMountNamespace",
-        );
 
         let open_pidfd = assert_dispatch(
             BrokerRequest::OpenPidfd(d2b_contracts_broker::broker_wire::OpenPidfdRequest {
@@ -17755,168 +16337,6 @@ mod tests {
                 assert_eq!(response.start_time_ticks, 123456);
             }
             other => panic!("expected SpawnRunner response, got {other:?}"),
-        }
-
-        let run_host_install = assert_dispatch(
-            BrokerRequest::RunHostInstall(
-                d2b_contracts_broker::broker_wire::RunHostInstallRequest {
-                    bundle_installer_intent_ref: BundleOpId::new(intent_id_installer_host()),
-                    enable: true,
-                    start: true,
-                    no_start: false,
-                    tracing_span_id: Some(TracingSpanId::new("span-install")),
-                },
-            ),
-            "RunHostInstall",
-            OperationFields::RunHostInstall {
-                bundle_installer_intent_ref: intent_id_installer_host(),
-                enable: true,
-                start: true,
-                no_start: false,
-            },
-            Some("span-install"),
-        );
-        match run_host_install.response {
-            BrokerResponse::RunHostInstall(response) => {
-                assert!(response.installed);
-                assert!(response.enabled);
-                assert!(response.started);
-            }
-            other => panic!("expected RunHostInstall response, got {other:?}"),
-        }
-
-        let run_migrate = assert_dispatch(
-            BrokerRequest::RunMigrate(d2b_contracts_broker::broker_wire::RunMigrateRequest {
-                bundle_migrate_intent_ref: BundleOpId::new(intent_id_migrate_host()),
-                tracing_span_id: Some(TracingSpanId::new("span-migrate")),
-            }),
-            "RunMigrate",
-            OperationFields::RunMigrate {
-                bundle_migrate_intent_ref: intent_id_migrate_host(),
-            },
-            Some("span-migrate"),
-        );
-        match run_migrate.response {
-            BrokerResponse::RunMigrate(response) => assert_eq!(response.migrated_vm_count, 1),
-            other => panic!("expected RunMigrate response, got {other:?}"),
-        }
-
-        let run_activation = assert_dispatch(
-            BrokerRequest::RunActivation(d2b_contracts_broker::broker_wire::RunActivationRequest {
-                bundle_activation_intent_ref: BundleOpId::new(intent_id_activation("corp-vm")),
-                mode: ActivationMode::Switch,
-                system_artifact_id: None,
-                phase: ActivationPhase::MetadataOnly,
-                vm: "corp-vm".to_owned(),
-                tracing_span_id: Some(TracingSpanId::new("span-activation")),
-            }),
-            "RunActivation",
-            OperationFields::RunActivation {
-                bundle_activation_intent_ref: intent_id_activation("corp-vm"),
-                mode: "switch".to_owned(),
-                vm: "corp-vm".to_owned(),
-            },
-            Some("span-activation"),
-        );
-        match run_activation.response {
-            BrokerResponse::RunActivation(response) => {
-                assert_eq!(response.mode, ActivationMode::Switch);
-                assert_eq!(response.vm, "corp-vm");
-                assert_eq!(response.generation_number, Some(42));
-            }
-            other => panic!("expected RunActivation response, got {other:?}"),
-        }
-
-        let run_gc = assert_dispatch(
-            BrokerRequest::RunGc(d2b_contracts_broker::broker_wire::RunGcRequest {
-                bundle_gc_intent_ref: BundleOpId::new(intent_id_gc_host()),
-                keep_generations: Some(3),
-                tracing_span_id: Some(TracingSpanId::new("span-gc")),
-            }),
-            "RunGc",
-            OperationFields::RunGc {
-                bundle_gc_intent_ref: intent_id_gc_host(),
-                keep_generations: Some(3),
-            },
-            Some("span-gc"),
-        );
-        match run_gc.response {
-            BrokerResponse::RunGc(response) => {
-                assert_eq!(response.keep_generations, Some(3));
-                assert_eq!(response.retained_store_path_count, 1);
-            }
-            other => panic!("expected RunGc response, got {other:?}"),
-        }
-
-        let run_keys_rotate = assert_dispatch(
-            BrokerRequest::RunKeysRotate(d2b_contracts_broker::broker_wire::RunKeysRotateRequest {
-                bundle_keys_intent_ref: BundleOpId::new(intent_id_keys_rotate("corp-vm")),
-                vm: "corp-vm".to_owned(),
-                tracing_span_id: Some(TracingSpanId::new("span-keys")),
-            }),
-            "RunKeysRotate",
-            OperationFields::RunKeysRotate {
-                bundle_keys_intent_ref: intent_id_keys_rotate("corp-vm"),
-                vm: "corp-vm".to_owned(),
-            },
-            Some("span-keys"),
-        );
-        match run_keys_rotate.response {
-            BrokerResponse::RunKeysRotate(response) => {
-                assert_eq!(response.vm, "corp-vm");
-                assert_eq!(response.public_key_fingerprint, "SHA256:test-fingerprint");
-            }
-            other => panic!("expected RunKeysRotate response, got {other:?}"),
-        }
-
-        let run_host_key_trust = assert_dispatch(
-            BrokerRequest::RunHostKeyTrust(
-                d2b_contracts_broker::broker_wire::RunHostKeyTrustRequest {
-                    bundle_trust_intent_ref: BundleOpId::new(intent_id_trust("corp-vm")),
-                    vm: "corp-vm".to_owned(),
-                    tracing_span_id: Some(TracingSpanId::new("span-trust")),
-                },
-            ),
-            "RunHostKeyTrust",
-            OperationFields::RunHostKeyTrust {
-                bundle_trust_intent_ref: intent_id_trust("corp-vm"),
-                vm: "corp-vm".to_owned(),
-            },
-            Some("span-trust"),
-        );
-        match run_host_key_trust.response {
-            BrokerResponse::RunHostKeyTrust(response) => {
-                assert_eq!(response.vm, "corp-vm");
-                assert_eq!(response.static_ip, "192.0.2.10");
-                assert!(response.updated);
-            }
-            other => panic!("expected RunHostKeyTrust response, got {other:?}"),
-        }
-
-        let run_rotate_known_host = assert_dispatch(
-            BrokerRequest::RunRotateKnownHost(
-                d2b_contracts_broker::broker_wire::RunRotateKnownHostRequest {
-                    bundle_rotate_known_host_intent_ref: BundleOpId::new(
-                        intent_id_rotate_known_host("corp-vm"),
-                    ),
-                    vm: "corp-vm".to_owned(),
-                    tracing_span_id: Some(TracingSpanId::new("span-rotate-known-host")),
-                },
-            ),
-            "RunRotateKnownHost",
-            OperationFields::RunRotateKnownHost {
-                bundle_rotate_known_host_intent_ref: intent_id_rotate_known_host("corp-vm"),
-                vm: "corp-vm".to_owned(),
-            },
-            Some("span-rotate-known-host"),
-        );
-        match run_rotate_known_host.response {
-            BrokerResponse::RunRotateKnownHost(response) => {
-                assert_eq!(response.vm, "corp-vm");
-                assert_eq!(response.static_ip, "192.0.2.10");
-                assert!(response.removed);
-            }
-            other => panic!("expected RunRotateKnownHost response, got {other:?}"),
         }
 
         assert_ack(
@@ -18140,26 +16560,6 @@ mod tests {
             "SeedDnsmasqLease",
         );
 
-        assert_ack(
-            assert_dispatch(
-                BrokerRequest::BindMountFromHardlinkFarm(
-                    d2b_contracts_broker::broker_wire::BindMountFromHardlinkFarmRequest {
-                        vm_id: VmId::new("corp-vm"),
-                        bundle_store_view_intent_ref: None,
-                        tracing_span_id: Some(TracingSpanId::new("span-bind-mount")),
-                    },
-                ),
-                "BindMountFromHardlinkFarm",
-                OperationFields::BindMountFromHardlinkFarm {
-                    vm_id: "corp-vm".to_owned(),
-                    bundle_store_view_intent_ref: None,
-                    hardlink_farm_path: "/var/lib/d2b/vms/corp-vm/store-view".to_owned(),
-                },
-                Some("span-bind-mount"),
-            ),
-            "BindMountFromHardlinkFarm",
-        );
-
         assert_eq!(
             capture.lock().expect("capture final lock").len(),
             29,
@@ -18168,120 +16568,6 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
     }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn spawn_runner_rejects_invalid_minijail_profile() {
-        use d2b_contracts::types::{BundleOpId, RoleId, TracingSpanId, VmId};
-        use d2b_contracts_broker::broker_wire::{
-            BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
-        };
-        use d2b_core::bundle_resolver::intent_id_legacy_runner;
-
-        let root = test_audit_dir("spawn-runner-invalid-minijail");
-        let bundle = build_invalid_minijail_test_bundle(&root);
-        let config = test_server_config(&root, &bundle.manifest_path);
-        let (log, capture) = AuditLog::open_capturing(
-            &config.audit_dir,
-            Gid::current().as_raw(),
-            true,
-            config.audit_retention_days,
-        )
-        .expect("open capturing audit log");
-        let backend = FakeDispatchBackend::default();
-        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
-        let caller_gid = Gid::current().as_raw();
-        let request =
-            BrokerRequest::SpawnRunner(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
-                execution_ref: None,
-                execution_domain: None,
-                user_ref: None,
-                guest_execution: None,
-                resource_ref: None,
-                resource_uid: None,
-                zone_uid: None,
-                owner_ref: None,
-                owner_uid: None,
-                provider_ref: None,
-                bundle_content_identity: None,
-                provider_identity: None,
-                template_identity: None,
-                generation: None,
-                runtime_scope: None,
-                activation_input: None,
-                launch_args: None,
-                sandbox_plan: None,
-                workload_identity: None,
-                inherited_fd_count: 0,
-                vm_id: VmId::new("corp-vm"),
-                role_id: RoleId::new("ch-runner"),
-                role: RunnerRole::CloudHypervisor,
-                bundle_runner_intent_ref: BundleOpId::new(intent_id_legacy_runner(
-                    "corp-vm",
-                    "ch-runner",
-                )),
-                runtime_allocations: vec![RunnerAllocation {
-                    kind: RunnerAllocationKind::VsockCid,
-                    opaque_ref: "cid:42".to_owned(),
-                }],
-                tracing_span_id: Some(TracingSpanId::new("span-invalid-spawn")),
-                network_tap_context: None,
-            });
-        let expected_request_fields = request_fields_value(&request).expect("request fields");
-        let audit_context = DispatchAuditContext::from_request(&request, 5150, &caller_role)
-            .expect("audit context");
-
-        let error = dispatch_request_with_backend(
-            request,
-            1000,
-            caller_gid,
-            caller_role.clone(),
-            &audit_context,
-            &config,
-            &log,
-            Some(&bundle.resolver),
-            &backend,
-        )
-        .expect_err("invalid minijail profile should be denied");
-        match error {
-            BrokerError::MinijailValidation { reason } => {
-                assert!(reason.contains("uid=0 gid=0"));
-                assert!(reason.contains("profile-ch"));
-            }
-            other => panic!("expected MinijailValidation, got {other:?}"),
-        }
-
-        let records = capture.lock().expect("capture lock");
-        assert_eq!(records.len(), 1);
-        let record = &records[0];
-        assert_eq!(record.operation, "SpawnRunner");
-        assert_eq!(record.decision, "denied-refused");
-        assert_eq!(record.result, "denied");
-        assert_eq!(record.error_kind.as_deref(), Some("minijail-validation"));
-        assert_eq!(record.request_fields, expected_request_fields);
-        assert_eq!(record.peer_pid, 5150);
-        let fields = OperationFields::from_operation_value(
-            "SpawnRunner",
-            record.operation_fields.clone().expect("operation fields"),
-        )
-        .expect("deserialize operation fields");
-        assert_eq!(
-            fields,
-            OperationFields::SpawnRunner {
-                bundle_runner_intent_ref: intent_id_legacy_runner("corp-vm", "ch-runner"),
-                vm_id: "corp-vm".to_owned(),
-                role_id: "ch-runner".to_owned(),
-                role: RunnerRole::CloudHypervisor.as_str().to_owned(),
-                runtime_allocations: vec![RunnerAllocation {
-                    kind: RunnerAllocationKind::VsockCid,
-                    opaque_ref: "cid:42".to_owned(),
-                }],
-            }
-        );
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
     /// Build a `corp-vm` bundle whose resolved store-view intent points at
     /// tempdir-backed closure + farm paths (rooted under `root`, single
     /// filesystem) so a full `StoreSync` dispatch round-trip runs
@@ -18290,8 +16576,8 @@ mod tests {
     /// failure. Returns the bundle plus the per-VM hardlink-farm root.
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn store_sync_dispatch_bundle(root: &Path, host_generation: u32) -> (TestBundle, PathBuf) {
-        use d2b_core::closures::{ClosureGeneration, ClosureMetadata};
-        use d2b_core::manifest_v04::ManifestV04;
+        use d2b_contracts_resource::v3::ZoneId;
+        use d2b_core::bundle_resolver::{ResolvedStoreViewIntent, intent_id_store_view};
 
         let mut bundle = build_test_bundle(root);
 
@@ -18306,47 +16592,64 @@ mod tests {
         let farm_path = state_dir.join("store-view");
         fs::create_dir_all(&farm_path).expect("create per-vm farm root");
 
-        let closure_path = bundle
-            .bundle_path
-            .parent()
-            .expect("bundle dir")
-            .join("closures/corp-vm.json");
-        let closure = ClosureMetadata {
-            schema_version: "v2".to_owned(),
+        // Zone-native store-view: inject the resolved intent directly (the
+        // v3 catalog materialisation is not part of unit fixtures).
+        let zone = ZoneId::parse("work").expect("zone");
+        let intent = ResolvedStoreViewIntent {
+            intent_id: intent_id_store_view(&zone, "corp-vm"),
             vm: "corp-vm".to_owned(),
-            toplevel: toplevel.display().to_string(),
-            closure_paths: vec![toplevel.display().to_string()],
-            db_dump_path: db_dump.display().to_string(),
-            declared_runner: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
-            runner_parity_path: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
-            runner_parity_ok: true,
-            generation: ClosureGeneration {
-                host_generation: Some(u64::from(host_generation)),
-                vm_generation: Some(host_generation.to_string()),
-                source_revision: Some("deadbeef".to_owned()),
-                generated_at: Some("2026-01-01T00:00:00Z".to_owned()),
-            },
+            generation: u64::from(host_generation),
+            hardlink_farm_path: farm_path.clone(),
+            target_view_path: farm_path.join("live/aaaaaaaaaaaaaaaa-corp-vm-system"),
+            closure_paths: vec![toplevel],
+            db_dump_path: db_dump,
         };
-        write_json_file(&closure_path, &closure);
-
-        let mut manifest: ManifestV04 =
-            serde_json::from_slice(&fs::read(&bundle.manifest_path).expect("read manifest"))
-                .expect("parse manifest");
-        manifest
-            .vms
-            .get_mut("corp-vm")
-            .expect("corp-vm manifest entry")
-            .state_dir = state_dir.display().to_string();
-        write_json_file(&bundle.manifest_path, &manifest);
-
-        bundle.resolver = Arc::new(
-            BundleResolver::load_with_policy(
-                &bundle.bundle_path,
-                &d2b_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
-            )
-            .expect("reload store-sync dispatch bundle"),
+        let resolver = Arc::get_mut(&mut bundle.resolver).expect("resolver uniquely owned");
+        resolver.test_inject_store_view_intent(intent);
+        resolver.test_inject_zone_resource_bundle(
+            "zones/work/resource-bundle.json".to_owned(),
+            zone_bundle_with_guest("work", "corp-vm"),
         );
         (bundle, farm_path)
+    }
+
+    /// Build a minimal verified v3 zone resource bundle carrying one Guest
+    /// (`corp-vm`) so zone-native accessors resolve it in the `work` Zone.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn zone_bundle_with_guest(zone: &str, guest: &str) -> Vec<u8> {
+        use std::collections::BTreeMap;
+
+        use d2b_contracts_resource::v3::{
+            CanonicalJsonObject, ResourceName, ResourceTypeName, Timestamp, ZoneId,
+        };
+        use d2b_contracts_zone_session::v3::resource_bundle::{
+            BundleResource, BundleResourceMetadata, ResourceBundle,
+        };
+
+        let zone = ZoneId::parse(zone).expect("zone");
+        let resource = BundleResource::new(
+            ResourceTypeName::parse("Guest").expect("guest type"),
+            BundleResourceMetadata::new(
+                ResourceName::parse(guest).expect("guest name"),
+                zone.clone(),
+                None,
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(br#"{"providerRef":"Provider/runtime-cloud-hypervisor"}"#)
+                .expect("guest spec"),
+        )
+        .expect("guest resource");
+        let bundle = ResourceBundle::new(
+            zone,
+            vec![resource],
+            format!("sha256:{}", "b".repeat(64)),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("1970-01-01T00:00:00.000Z").expect("timestamp"),
+        )
+        .expect("zone resource bundle");
+        serde_json::to_vec(&bundle).expect("serialize zone resource bundle")
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -18355,11 +16658,14 @@ mod tests {
     ) -> d2b_contracts_broker::broker_wire::BrokerRequest {
         use d2b_contracts::types::{BundleClosureRef, TracingSpanId, VmId};
         use d2b_contracts_broker::broker_wire::{BrokerRequest, StoreSyncRequest};
-        use d2b_core::bundle_resolver::intent_id_legacy_store_view;
+        use d2b_core::bundle_resolver::intent_id_store_view;
 
         BrokerRequest::StoreSync(StoreSyncRequest {
             vm_id: VmId::new("corp-vm"),
-            bundle_closure_ref: BundleClosureRef::new(intent_id_legacy_store_view("corp-vm")),
+            bundle_closure_ref: BundleClosureRef::new(intent_id_store_view(
+                &d2b_contracts_resource::v3::ZoneId::parse("work").expect("zone"),
+                "corp-vm",
+            )),
             generation_token,
             tracing_span_id: Some(TracingSpanId::new("span-store-sync")),
         })
@@ -18709,124 +17015,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn store_verify_repair_emits_store_sync_audit_and_export() {
-        use crate::ops::store_sync_audit::SyncStatus;
-        use d2b_contracts::types::{TracingSpanId, VmId};
-        use d2b_contracts_broker::broker_wire::{
-            BrokerCallerRole, BrokerRequest, BrokerResponse, StoreVerifyRequest, StoreVerifyStatus,
-        };
-
-        let root = test_audit_dir("store-verify-repair-audit");
-        let (bundle, farm) = store_sync_dispatch_bundle(&root, 7);
-        let config = test_server_config(&root, &bundle.manifest_path);
-        let (log, capture) = AuditLog::open_capturing(
-            &config.audit_dir,
-            Gid::current().as_raw(),
-            true,
-            config.audit_retention_days,
-        )
-        .expect("open capturing audit log");
-        let backend = FakeDispatchBackend::default();
-        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
-        let caller_gid = Gid::current().as_raw();
-
-        // First publish a clean generation.
-        let sync_request = store_sync_request(7);
-        let sync_context = DispatchAuditContext::from_request(&sync_request, 4242, &caller_role)
-            .expect("sync audit context");
-        dispatch_request_with_backend(
-            sync_request,
-            1000,
-            caller_gid,
-            caller_role.clone(),
-            &sync_context,
-            &config,
-            &log,
-            Some(&bundle.resolver),
-            &backend,
-        )
-        .expect("initial store sync succeeds");
-
-        // Corrupt one existing top-level basename so --repair must run a
-        // StoreSync republish and then an exchange repair.
-        let live = farm.join("live/aaaaaaaaaaaaaaaa-corp-vm-system");
-        fs::remove_dir_all(&live).expect("remove live top-level");
-        fs::create_dir_all(&live).expect("create drifted live top-level");
-        fs::write(live.join("payload"), b"drifted").expect("write drift");
-
-        let before = capture.lock().expect("capture before verify").len();
-        let verify_request = BrokerRequest::StoreVerify(StoreVerifyRequest {
-            vm_id: VmId::new("corp-vm"),
-            repair: true,
-            tracing_span_id: Some(TracingSpanId::new("span-store-verify-repair")),
-        });
-        let verify_context =
-            DispatchAuditContext::from_request(&verify_request, 4243, &caller_role)
-                .expect("verify audit context");
-        let result = dispatch_request_with_backend(
-            verify_request,
-            1000,
-            caller_gid,
-            caller_role,
-            &verify_context,
-            &config,
-            &log,
-            Some(&bundle.resolver),
-            &backend,
-        )
-        .expect("store verify repair succeeds");
-        match result.response {
-            BrokerResponse::StoreVerify(response) => {
-                assert_eq!(response.status, StoreVerifyStatus::Repaired);
-                assert_eq!(response.repaired, 1);
-            }
-            other => panic!("expected StoreVerify response, got {other:?}"),
-        }
-
-        let records = capture.lock().expect("capture after verify");
-        let new_records = &records[before..];
-        assert_eq!(
-            new_records.len(),
-            2,
-            "repair writes StoreSync + StoreVerify records"
-        );
-        assert_eq!(new_records[0].operation, "StoreSync");
-        assert_eq!(new_records[1].operation, "StoreVerify");
-        let sync_fields = match OperationFields::from_operation_value(
-            "StoreSync",
-            new_records[0]
-                .operation_fields
-                .clone()
-                .expect("store sync fields"),
-        )
-        .expect("deserialize repair StoreSync fields")
-        {
-            OperationFields::StoreSync(fields) => fields,
-            other => panic!("expected StoreSync fields, got {other:?}"),
-        };
-        assert_eq!(sync_fields.sync_status, SyncStatus::Ok);
-        assert!(
-            !sync_fields.fast_path,
-            "repair StoreSync is forced non-fast-path"
-        );
-        drop(records);
-
-        let exported = read_store_sync_export(&config);
-        assert!(
-            exported
-                .iter()
-                .any(|(record, _)| record.generation_token == 7
-                    && record.sync_status == SyncStatus::Ok),
-            "repair StoreSync should be represented in StoreSync export"
-        );
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
     fn otel_host_bridge_socket_path_extracts_unix_listen_target() {
         let argv = vec![
             "/run/current-system/sw/bin/socat".to_owned(),
@@ -18994,17 +17182,15 @@ mod tests {
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
         };
-        use d2b_core::bundle_resolver::{BundleVerifyPolicy, intent_id_legacy_runner};
+        use d2b_core::bundle_resolver::intent_id_legacy_runner;
         use d2b_core::minijail_profile::{CgroupPlacement, WritablePath};
-        use d2b_core::processes::{NodeId, ProcessNode, ProcessRole, ProcessesJson};
+        use d2b_core::processes::{NodeId, ProcessNode, ProcessRole};
         use d2b_core::test_support::RoleProfileBuilder;
 
         let root = test_audit_dir("spawn-runner-otel-host-bridge-non-obs-vm");
-        let bundle = build_test_bundle(&root);
-        let mut processes: ProcessesJson =
-            serde_json::from_slice(&fs::read(&bundle.processes_path).expect("read processes.json"))
-                .expect("parse processes.json");
-        processes.vms[0].nodes.push(ProcessNode {
+        let mut bundle = build_test_bundle(&root);
+        let resolver = Arc::get_mut(&mut bundle.resolver).expect("resolver uniquely owned");
+        resolver.processes.vms[0].nodes.push(ProcessNode {
             execution_ref: None,
             execution_domain: None,
             user_ref: None,
@@ -19041,14 +17227,7 @@ mod tests {
             plan_ops: Vec::new(),
                 network_interfaces: Vec::new(),
         });
-        write_json_file(&bundle.processes_path, &processes);
-        let resolver = match try_load_resolver_with_policy(
-            &bundle.bundle_path,
-            &BundleVerifyPolicy::for_tests(),
-        ) {
-            BundleSlot::Loaded(resolver) => resolver,
-            other => panic!("rewritten bundle should load, got {other:?}"),
-        };
+        resolver.test_rebuild_runner_intents();
 
         let config = test_server_config(&root, &bundle.manifest_path);
         let (log, capture) = AuditLog::open_capturing(
@@ -19106,7 +17285,7 @@ mod tests {
             &audit_context,
             &config,
             &log,
-            Some(&resolver),
+            Some(&bundle.resolver),
             &backend,
         )
         .expect_err("otel host bridge intent for non-obs vm must be denied");

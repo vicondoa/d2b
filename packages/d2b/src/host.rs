@@ -10,10 +10,6 @@ use crate::{
     dispatch::{emit_host_error, host_error_envelope, missing_mutation_flag_envelope},
     doctor, host_validate, print_json, print_stdout, resource,
 };
-use d2b_contracts_control::cli_output::{
-    HostCheckFindingV2, HostCheckOutputV2, HostCheckSeverityV2, HostCheckSummaryV2,
-};
-use d2b_core::host_check;
 
 #[derive(Debug, Args, Clone)]
 pub(crate) struct HostArgs {
@@ -27,21 +23,11 @@ pub(crate) enum HostCommand {
     Get(resource::TypedNameArgs),
     List(resource::TypedListArgs),
     Status(resource::TypedStatusArgs),
-    Check(HostCheckArgs),
     Prepare(HostMutationArgs),
     Destroy(HostMutationArgs),
     Doctor(HostDoctorArgs),
-    Install(HostInstallArgs),
     Reconcile(HostReconcileArgs),
     Validate(HostValidateArgs),
-}
-
-#[derive(Debug, Args, Clone)]
-pub(crate) struct HostCheckArgs {
-    #[arg(long)]
-    pub(crate) read_only: bool,
-    #[arg(long)]
-    pub(crate) strict: bool,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -56,20 +42,6 @@ pub(crate) struct HostMutationArgs {
 pub(crate) struct HostDoctorArgs {
     #[arg(long)]
     pub(crate) read_only: bool,
-}
-
-#[derive(Debug, Args, Clone)]
-pub(crate) struct HostInstallArgs {
-    #[arg(long, conflicts_with_all = ["apply", "enable", "start", "no_start"])]
-    pub(crate) dry_run: bool,
-    #[arg(long, conflicts_with = "dry_run")]
-    pub(crate) apply: bool,
-    #[arg(long, requires = "apply", conflicts_with = "dry_run")]
-    pub(crate) enable: bool,
-    #[arg(long, requires = "apply", conflicts_with_all = ["dry_run", "no_start"])]
-    pub(crate) start: bool,
-    #[arg(long, requires = "apply", conflicts_with_all = ["dry_run", "start"])]
-    pub(crate) no_start: bool,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -164,7 +136,6 @@ pub(crate) fn run(
             }
             Ok(0)
         }
-        HostCommand::Check(args) => local_host_check(args, mode),
         HostCommand::Prepare(args) => mutation(context, "prepare", args, mode, deadline),
         HostCommand::Destroy(args) => mutation(context, "destroy", args, mode, deadline),
         HostCommand::Doctor(args) => {
@@ -197,7 +168,6 @@ pub(crate) fn run(
             context.emit(&value, mode)?;
             Ok(0)
         }
-        HostCommand::Install(args) => install(context, args, mode, deadline),
         HostCommand::Validate(args) => validate(args, mode),
         HostCommand::Reconcile(args) => reconcile(context, args, mode, deadline),
     }
@@ -294,38 +264,6 @@ fn mark_unsafe_local_host(value: &mut Value) {
     }
 }
 
-fn local_host_check(args: &HostCheckArgs, mode: OutputMode) -> Result<i32, CliFailure> {
-    if args.strict && !args.read_only {
-        return Err(CliFailure::new(
-            3,
-            "ref-invalid: host check --strict requires --read-only",
-        ));
-    }
-    let context = CliContext::from_env()?;
-    let bundle = context.load_bundle_context()?.ok_or_else(|| {
-        CliFailure::new(
-            1,
-            format!(
-                "{} is required for host check",
-                context.bundle_path.display()
-            ),
-        )
-    })?;
-    let host = bundle
-        .host
-        .as_ref()
-        .ok_or_else(|| CliFailure::new(1, "bundle did not include host.json"))?;
-    let report = host_check::run(host, bundle.closures.values(), args.strict)
-        .map_err(CliFailure::host_check_probe_error)?;
-    let output = map_host_check_report(report);
-    if mode.is_json() {
-        print_json(&output)?;
-    } else {
-        print_stdout(&render_host_check_human(&output));
-    }
-    Ok(i32::from(output.exit_code))
-}
-
 fn mutation(
     context: &ZoneContext,
     operation: &str,
@@ -353,83 +291,6 @@ fn mutation(
         mode,
     )?;
     context.emit(&value, mode)?;
-    Ok(0)
-}
-
-fn install(
-    context: &ZoneContext,
-    args: &HostInstallArgs,
-    mode: OutputMode,
-    deadline: RequestDeadline,
-) -> Result<i32, CliFailure> {
-    if !args.dry_run && !args.apply {
-        return Err(context.failure(
-            "ref-invalid",
-            "host install requires --dry-run or --apply",
-            mode,
-            78,
-        ));
-    }
-
-    if args.apply {
-        let value = context.invoke(
-            "HostInstall",
-            json!({
-                "dryRun": args.dry_run,
-                "apply": args.apply,
-                "enable": args.enable,
-                "start": args.start,
-                "noStart": args.no_start,
-            }),
-            deadline,
-            mode,
-        )?;
-        context.emit(&value, mode)?;
-        return Ok(0);
-    }
-
-    let value = json!({
-        "command": "host install",
-        "mode": "dry-run",
-        "notes": "dry-run preview; --apply routes through the daemon → broker RunHostInstall path.",
-        "planned_steps": [
-            {
-                "step": 1,
-                "what": "place systemd units at /etc/systemd/system/d2bd.service + d2b-broker.socket"
-            },
-            {
-                "step": 2,
-                "what": "write daemon-config.json to /etc/d2b/daemon-config.json with paths matching the daemon's compiled-in defaults"
-            },
-            {
-                "step": 3,
-                "what": "bind /run/d2b/public.sock + /run/d2b/priv.sock with socket ACLs (launcher / admin groups)"
-            },
-            {
-                "step": 4,
-                "what": if args.enable && args.start {
-                    "systemctl enable --now d2bd.service"
-                } else if args.enable {
-                    "systemctl enable d2bd.service"
-                } else if args.no_start {
-                    "do NOT enable; operator starts manually"
-                } else {
-                    "neither --enable nor --start specified: leave service inactive"
-                }
-            },
-            {
-                "step": 5,
-                "what": "smoke: d2b auth status against /run/d2b/public.sock"
-            }
-        ]
-    });
-    if mode.is_json() {
-        context.emit(&value, mode)?;
-    } else {
-        crate::print_stdout(
-            "host install --dry-run: would install d2bd at /etc/systemd/system/ and bind /run/d2b/public.sock (the live --apply path routes through the daemon → broker RunHostInstall path)\n",
-        );
-    }
     Ok(0)
 }
 
@@ -536,97 +397,4 @@ fn validate(args: &HostValidateArgs, mode: OutputMode) -> Result<i32, CliFailure
         print_stdout(&host_validate::render_human(&report));
     }
     Ok(exit_code)
-}
-
-pub(crate) fn map_host_check_report(report: host_check::HostCheckReport) -> HostCheckOutputV2 {
-    HostCheckOutputV2 {
-        mode: "read-only".to_owned(),
-        strict: report.strict,
-        summary: HostCheckSummaryV2 {
-            pass: report.summary.pass,
-            warn: report.summary.warn,
-            fail: report.summary.fail,
-        },
-        exit_code: report.exit_code(),
-        findings: report
-            .findings
-            .into_iter()
-            .map(map_host_check_finding)
-            .collect(),
-    }
-}
-
-fn map_host_check_finding(finding: host_check::HostCheckFinding) -> HostCheckFindingV2 {
-    HostCheckFindingV2 {
-        id: finding.id,
-        severity: map_host_check_severity(finding.severity),
-        message: finding.message,
-        remediation: finding.remediation,
-        vm: finding.vm,
-        detail: finding.detail,
-        details: finding.details,
-    }
-}
-
-fn map_host_check_severity(severity: host_check::HostCheckSeverity) -> HostCheckSeverityV2 {
-    match severity {
-        host_check::HostCheckSeverity::Pass => HostCheckSeverityV2::Pass,
-        host_check::HostCheckSeverity::Warn => HostCheckSeverityV2::Warn,
-        host_check::HostCheckSeverity::Fail => HostCheckSeverityV2::Fail,
-    }
-}
-
-pub(crate) fn render_host_check_human(output: &HostCheckOutputV2) -> String {
-    let mut text = String::new();
-    let _ = std::fmt::Write::write_fmt(
-        &mut text,
-        format_args!(
-            "mode: {}\nstrict: {}\nsummary: pass={} warn={} fail={}\nexit-code: {}\n",
-            output.mode,
-            output.strict,
-            output.summary.pass,
-            output.summary.warn,
-            output.summary.fail,
-            output.exit_code
-        ),
-    );
-    for severity in [
-        HostCheckSeverityV2::Pass,
-        HostCheckSeverityV2::Warn,
-        HostCheckSeverityV2::Fail,
-    ] {
-        let label = match severity {
-            HostCheckSeverityV2::Pass => "PASS",
-            HostCheckSeverityV2::Warn => "WARN",
-            HostCheckSeverityV2::Fail => "FAIL",
-        };
-        let matching = output
-            .findings
-            .iter()
-            .filter(|finding| finding.severity == severity)
-            .collect::<Vec<_>>();
-        if matching.is_empty() {
-            continue;
-        }
-        let _ = std::fmt::Write::write_fmt(&mut text, format_args!("{label}\n"));
-        for finding in matching {
-            if let Some(vm) = &finding.vm {
-                let _ = std::fmt::Write::write_fmt(
-                    &mut text,
-                    format_args!("- [{vm}] {}: {}\n", finding.id, finding.message),
-                );
-            } else {
-                let _ = std::fmt::Write::write_fmt(
-                    &mut text,
-                    format_args!("- {}: {}\n", finding.id, finding.message),
-                );
-            }
-            let _ = std::fmt::Write::write_fmt(
-                &mut text,
-                format_args!("  hint: {}\n", finding.remediation),
-            );
-        }
-        text.push('\n');
-    }
-    text
 }

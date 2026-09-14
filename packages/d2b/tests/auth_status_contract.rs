@@ -132,7 +132,6 @@ fn auth_status_roles_match_schema_and_authz() {
         none_allowed,
         vec![
             "auth status",
-            "host check",
             "list",
             "op inspect",
             "realm inspect",

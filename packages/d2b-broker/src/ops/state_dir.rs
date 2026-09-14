@@ -278,58 +278,11 @@ pub fn live_prepare_state_dir(
 
     // Device TPM state must be identity-bound before any pre-start flush is
     // allowed to run.  The generic state-directory operation is the first
-    // typed effect in the TPM lifecycle, so perform the broker-owned swtpm
-    // hardening here rather than relying on the later SpawnRunner hook.
-    if let Some(legacy) = resolver.resolve_legacy_swtpm_intent(req.vm_id.as_str()) {
-        let marker_dir = legacy
-            .marker
-            .parent()
-            .ok_or_else(|| super::OpError::Refused {
-                operation: "PrepareStateDir",
-                reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
-            })?;
-        let marker_name = legacy
-            .marker
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| super::OpError::Refused {
-                operation: "PrepareStateDir",
-                reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
-            })?
-            .to_owned();
-        let swtpm_dir = legacy.destination;
-        let per_vm_root =
-            swtpm_dir
-                .parent()
-                .map(Path::to_path_buf)
-                .ok_or_else(|| super::OpError::Refused {
-                    operation: "PrepareStateDir",
-                    reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
-                })?;
-        let paths = crate::ops::swtpm_dir::SwtpmDirPaths {
-            vm_id: legacy.vm,
-            swtpm_dir,
-            per_vm_root,
-            runtime_dir: PathBuf::from(format!("/run/d2b/vms/{}", req.vm_id.as_str())),
-            marker_dir: marker_dir.to_path_buf(),
-            marker_name,
-        };
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_millis() as u64)
-            .unwrap_or(0);
-        let config = crate::ops::swtpm_dir::SwtpmHardenConfig {
-            expected_uid: legacy.owner_uid,
-            expected_gid: legacy.owner_gid,
-            marker_owner_uid: 0,
-            marker_owner_gid: 0,
-            now_ms,
-            enforce_root_parents: paths.swtpm_dir.starts_with("/var/lib/d2b"),
-        };
-        crate::ops::swtpm_dir::harden(&paths, &config)
-            .map_err(PrepareStateDirError::SwtpmDirHardening)?;
-    }
-
+    // typed effect in the TPM lifecycle; the v2 broker-owned swtpm legacy
+    // adoption/hardening branch here was removed with the v2 swtpm-migration
+    // resolver surface. Zone-native TPM state (v3 resource bundles) is today
+    // authorized and hardened through the spawn-time swtpm-dir fence in
+    // `swtpm_dir`.
     Ok(PreparedStateDir {
         base_dir: intent.base_dir,
         owner_uid: intent.owner_uid,
@@ -421,20 +374,9 @@ pub(crate) fn resolver_with_swtpm_state_row(guest: &str) -> BundleResolver {
     let bundle = Bundle {
         bundle_version: 11,
         schema_version: "v2".to_owned(),
-        public_manifest_path: "vms.json".to_owned(),
-        host_path: "host.json".to_owned(),
-        processes_path: "processes.json".to_owned(),
         privileges_path: "privileges.json".to_owned(),
         storage_path: Some("storage.json".to_owned()),
-        sync_path: None,
-        allocator_path: None,
-        realm_controllers_path: None,
-        realm_identity_path: None,
         realm_workloads_launcher_v2_path: None,
-        unsafe_local_workloads_path: None,
-        closures: Vec::new(),
-        minijail_profiles: Vec::new(),
-        managed_keys: Default::default(),
         generation: BundleGeneration {
             generator: "test".to_owned(),
             source_revision: None,

@@ -69,10 +69,6 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
         "src/kernel_module_check.rs",
         include_str!("../src/kernel_module_check.rs"),
     ),
-    (
-        "src/known_hosts_refresh.rs",
-        include_str!("../src/known_hosts_refresh.rs"),
-    ),
     ("src/lib.rs", include_str!("../src/lib.rs")),
     ("src/metrics.rs", include_str!("../src/metrics.rs")),
     (

@@ -6,7 +6,7 @@ use std::{
 };
 
 use clap::CommandFactory;
-use d2b_core::{error::Error as CoreError, host_check};
+use d2b_core::error::Error as CoreError;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -54,16 +54,6 @@ impl CliFailure {
             exit_code,
             message: message.into(),
             rendered_stderr: None,
-            admission_recovery: false,
-        }
-    }
-
-    pub(crate) fn host_check_probe_error(error: host_check::ProbeError) -> Self {
-        let operator_error = CoreError::internal_io(error.opaque_reason);
-        Self {
-            exit_code: 1,
-            message: operator_error.message(),
-            rendered_stderr: render_operator_error(&operator_error, Some("host check")),
             admission_recovery: false,
         }
     }

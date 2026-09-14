@@ -691,7 +691,6 @@ pub(crate) fn all_known_subcommands() -> Vec<String> {
         "status",
         "launch",
         "audit",
-        "host check",
         "auth status",
         "op inspect",
         "realm list",
@@ -707,13 +706,9 @@ pub(crate) fn all_known_subcommands() -> Vec<String> {
         "test",
         "rollback",
         "generations",
-        "gc",
         "usb",
         "console",
         "audio",
-        "keys list",
-        "rotate-known-host",
-        "trust",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -730,7 +725,6 @@ pub(crate) fn allowed_subcommands(role: AuthRoleV2) -> BTreeSet<String> {
         AuthRoleV2::None => [
             "list",
             "status",
-            "host check",
             "auth status",
             "op inspect",
             "realm list",
@@ -1009,9 +1003,7 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
     let local_host_command = matches!(
         &cli.command,
         ModernCommand::Host(host::HostArgs {
-            command: host::HostCommand::Check(_)
-                | host::HostCommand::Install(_)
-                | host::HostCommand::Reconcile(_)
+            command: host::HostCommand::Reconcile(_)
                 | host::HostCommand::Validate(_)
                 | host::HostCommand::Doctor(_)
         })

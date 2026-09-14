@@ -520,6 +520,12 @@ mod tests {
     /// Build a resolver from the canonical baseline-vms fixture and
     /// then apply a closure that mutates the manifest VMs (toggle
     /// graphics / tpm / usbip) plus any process DAG additions.
+    ///
+    /// The bundle is the v3 Zone-native shape: `bundle_version` 1,
+    /// `schema_version` "v3", no legacy host/processes/closure paths.
+    /// Zone resource bundles stay empty - `classify_vms` reads the
+    /// resolver's manifest/processes directly, which the constructor
+    /// preserves verbatim.
     fn build_resolver(
         mutate_vms: impl FnOnce(
             &mut std::collections::BTreeMap<String, d2b_core::manifest_v04::VmEntry>,
@@ -531,26 +537,15 @@ mod tests {
             ManifestV04::from_slice(MANIFEST_FIXTURE.as_bytes()).expect("manifest fixture parses");
         mutate_vms(&mut manifest.vms);
         let processes = ProcessesJson {
-            schema_version: "v2".to_owned(),
+            schema_version: "v3".to_owned(),
             vms: process_vms,
         };
         let bundle = Bundle {
-            bundle_version: 4,
-            schema_version: "v2".to_owned(),
-            public_manifest_path: "vms.json".to_owned(),
-            host_path: "host.json".to_owned(),
-            processes_path: "processes.json".to_owned(),
+            bundle_version: 1,
+            schema_version: "v3".to_owned(),
             privileges_path: "privileges.json".to_owned(),
             storage_path: None,
-            sync_path: None,
-            allocator_path: None,
-            realm_controllers_path: None,
-            realm_identity_path: None,
             realm_workloads_launcher_v2_path: None,
-            unsafe_local_workloads_path: None,
-            closures: Vec::new(),
-            minijail_profiles: Vec::new(),
-            managed_keys: Default::default(),
             generation: BundleGeneration {
                 generator: "test".to_owned(),
                 source_revision: None,
@@ -559,7 +554,13 @@ mod tests {
             bundle_hash: None,
             artifact_hashes: None,
         };
-        BundleResolver::from_artifacts(bundle, host, processes, manifest)
+        BundleResolver::from_artifacts_with_zone_resource_bundles(
+            bundle,
+            host,
+            processes,
+            manifest,
+            std::collections::BTreeMap::new(),
+        )
     }
 
     fn loaded(names: &[&str]) -> LoadedModuleSet {

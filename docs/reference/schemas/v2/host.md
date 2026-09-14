@@ -3,7 +3,7 @@
 Schema: [`host.json`](./host.json)
 
 `host.json` is the private host-topology and host-policy artifact. The
-broker consumes it for read-only `host check`, host-prepare planning,
+broker consumes it for host-prepare planning
 and daemon/broker execution.
 
 ## Top-level fields
@@ -13,8 +13,6 @@ and daemon/broker execution.
 - `environments` - per-env network/firewall data.
 - `cloudHypervisorCapabilities` - capability matrix anchored to CH.
 - `fdOwnership` - broker-opened fd ownership table.
-- `runtimeProviders` - local runtime/provider catalog and support matrix.
-- `vmRuntimes` - per-VM runtime/provider rows with provider-neutral topology.
 - `qemuMedia` - optional qemu-media source contract. Physical USB sources
   carry opaque refs and use the root-only enrollment registry; direct
   `image-file` sources carry operator-authored absolute image paths from Nix
@@ -38,9 +36,6 @@ and daemon/broker execution.
   rolls up into the top-level `firewallCoexistencePolicy`.
 - `ipv6Sysctls` records the ordered per-link IPv6-disable writes.
 - `ch` stays optional for older fixtures but is part of the current v2 prose.
-- `runtimeProviders` and `vmRuntimes` are additive v2 fields; older fixtures may
-  omit them, while current Nix emitters include them for daemon lifecycle/status
-  joins.
 - `qemuMedia.sources[].imagePath` is present only for direct image-file
   sources. The path is not a physical USB identity and may appear in this
   private bundle, but the broker still fail-closes on unsafe paths, non-raw
@@ -51,5 +46,5 @@ and daemon/broker execution.
 
 - The schema is `additionalProperties: false` throughout the security-
   sensitive host-prepare objects.
-- `host check --read-only` and host-prepare drift gates are expected to stay
+- host-prepare drift gates are expected to stay
   in lock-step with this document.

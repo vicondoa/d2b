@@ -5,6 +5,8 @@ use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent};
 use d2b_core::host::HostJson;
 use d2b_core::manifest_v04::ManifestV04;
 use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+use std::collections::BTreeMap;
+
 use d2b_core::processes::{
     NodeId, ProcessNode, ProcessRole, ProcessesJson, RoleProfile, RoleUserNamespace, VmProcessDag,
     VmProcessInvariants,
@@ -42,8 +44,6 @@ fn host() -> HostJson {
         },
         "kernelModules": [],
         "fdOwnership": [],
-        "runtimeProviders": [],
-        "vmRuntimes": [],
         "cloudHypervisorCapabilities": [],
         "ifNameMappings": [],
         "qemuMedia": null,
@@ -77,20 +77,12 @@ fn bundle() -> Bundle {
     Bundle {
         bundle_version: 4,
         schema_version: "v2".to_owned(),
-        public_manifest_path: "vms.json".to_owned(),
-        host_path: "host.json".to_owned(),
-        processes_path: "processes.json".to_owned(),
+
         privileges_path: "privileges.json".to_owned(),
         storage_path: None,
-        sync_path: None,
-        allocator_path: None,
-        realm_controllers_path: None,
-        realm_identity_path: None,
+
         realm_workloads_launcher_v2_path: None,
-        unsafe_local_workloads_path: None,
-        closures: Vec::new(),
-        minijail_profiles: Vec::new(),
-        managed_keys: Default::default(),
+
         generation: BundleGeneration {
             generator: "test".to_owned(),
             source_revision: None,
@@ -268,7 +260,8 @@ fn bundle_resolver_runner_intents_match_typed_process_node_helper_for_runner_rol
             },
         }],
     };
-    let resolver = BundleResolver::from_artifacts(bundle(), host(), processes, manifest());
+    let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
+        bundle(), host(), processes, manifest(), BTreeMap::new());
 
     for node in &nodes {
         let expected = ResolvedRunnerIntent::from_process_node(VM, node)
@@ -303,7 +296,8 @@ fn generic_process_template_lookup_does_not_require_resource_name_to_match_role_
             },
         }],
     };
-    let resolver = BundleResolver::from_artifacts(bundle(), host(), processes, manifest());
+    let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
+        bundle(), host(), processes, manifest(), BTreeMap::new());
 
     let resource_name = "audio-resource";
     let intent = resolver

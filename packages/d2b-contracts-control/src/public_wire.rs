@@ -52,8 +52,6 @@ pub enum PublicRequest {
     Status(StatusRequest),
     #[serde(rename = "audit")]
     Audit(AuditRequest),
-    #[serde(rename = "host check")]
-    HostCheck(HostCheckRequest),
     // Mutating-verb wire surface. Each variant carries the dry-run /
     // apply / json flag tuple + per-verb args. The daemon's
     // `dispatch_request` routes each to a per-verb handler that drives
@@ -76,34 +74,16 @@ pub enum PublicRequest {
     Test(ActivationRequest),
     #[serde(rename = "rollback")]
     Rollback(ActivationRequest),
-    #[serde(rename = "gc")]
-    Gc(GcRequest),
-    #[serde(rename = "keys list")]
-    KeysList,
-    #[serde(rename = "keys show")]
-    KeysShow(KeysShowRequest),
-    #[serde(rename = "keys rotate")]
-    KeysRotate(KeysRotateRequest),
-    #[serde(rename = "trust")]
-    Trust(TrustRequest),
-    #[serde(rename = "rotate-known-host")]
-    RotateKnownHost(RotateKnownHostRequest),
     #[serde(rename = "usb attach")]
     UsbipBind(UsbipBindCliRequest),
     #[serde(rename = "usb detach")]
     UsbipUnbind(UsbipUnbindCliRequest),
     #[serde(rename = "usb probe")]
     UsbipProbe,
-    #[serde(rename = "store verify")]
-    StoreVerify(StoreVerifyRequest),
-    #[serde(rename = "migrate")]
-    Migrate(MigrateRequest),
     #[serde(rename = "host prepare")]
     HostPrepare(HostPrepareRequest),
     #[serde(rename = "host destroy")]
     HostDestroy(HostDestroyRequest),
-    #[serde(rename = "host install")]
-    HostInstall(HostInstallRequest),
     /// Dedicated reconcile verb that re-runs the broker-side per-env
     /// nftables / route / sysctl reconcile without starting any VM.
     /// The CLI exposes this as `d2b host reconcile --network --apply`.
@@ -152,16 +132,8 @@ pub enum PublicResponse {
     Status(StatusResponse),
     #[serde(rename = "audit")]
     Audit(AuditResponse),
-    #[serde(rename = "host check")]
-    HostCheck(HostCheckResponse),
-    #[serde(rename = "keys list")]
-    KeysList(KeysListResponse),
-    #[serde(rename = "keys show")]
-    KeysShow(KeysShowResponse),
     #[serde(rename = "usb probe")]
     UsbipProbe(UsbipProbeResponse),
-    #[serde(rename = "store verify")]
-    StoreVerify(StoreVerifyResponse),
     #[serde(rename = "mutating verb")]
     MutatingVerb(MutatingVerbResponse),
     #[serde(rename = "exec")]
@@ -333,15 +305,6 @@ fn default_audit_request_limit() -> u32 {
     256
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostCheckRequest {
-    #[serde(default = "default_true")]
-    pub read_only: bool,
-    #[serde(default)]
-    pub strict: bool,
-}
-
 // ---------------------------------------------------------------
 // Mutating-verb request payloads.
 // ---------------------------------------------------------------
@@ -390,45 +353,6 @@ pub struct ActivationRequest {
     pub flags: MutationFlags,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GcRequest {
-    #[serde(default, flatten)]
-    pub flags: MutationFlags,
-    #[serde(default)]
-    pub keep_generations: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct KeysShowRequest {
-    pub vm: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct KeysRotateRequest {
-    pub vm: String,
-    #[serde(default, flatten)]
-    pub flags: MutationFlags,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TrustRequest {
-    pub vm: String,
-    #[serde(default, flatten)]
-    pub flags: MutationFlags,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RotateKnownHostRequest {
-    pub vm: String,
-    #[serde(default, flatten)]
-    pub flags: MutationFlags,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipBindCliRequest {
@@ -446,16 +370,6 @@ pub struct UsbipUnbindCliRequest {
     #[serde(default, flatten)]
     pub flags: MutationFlags,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StoreVerifyRequest {
-    pub vm: String,
-    #[serde(default)]
-    pub repair: bool,
-}
-
-pub type StoreVerifyResponse = d2b_contracts::store_verify_wire::StoreVerifyResponse;
 
 /// Maximum decoded stdin chunk per `WriteStdin` op and decoded output chunk
 /// per `ReadOutput` op. The base64 envelope of a
@@ -2124,13 +2038,6 @@ pub enum AudioOpResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MigrateRequest {
-    #[serde(default, flatten)]
-    pub flags: MutationFlags,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostPrepareRequest {
     #[serde(default, flatten)]
     pub flags: MutationFlags,
@@ -2141,19 +2048,6 @@ pub struct HostPrepareRequest {
 pub struct HostDestroyRequest {
     #[serde(default, flatten)]
     pub flags: MutationFlags,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostInstallRequest {
-    #[serde(default, flatten)]
-    pub flags: MutationFlags,
-    #[serde(default)]
-    pub enable: bool,
-    #[serde(default)]
-    pub start: bool,
-    #[serde(default)]
-    pub no_start: bool,
 }
 
 /// `host reconcile` request payload. Today the only scope is
@@ -2315,42 +2209,6 @@ pub(crate) fn validate_audit_page(
         (false, false) => Err("incomplete audit page requires nextCursor"),
         _ => Ok(()),
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostCheckResponse {
-    pub exit_code: u8,
-    pub findings: Vec<HostFinding>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct KeyEntry {
-    pub vm: String,
-    pub env: Option<String>,
-    pub managed_key_path: String,
-    pub fingerprint: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub known_hosts_entry: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct KeysListResponse {
-    pub entries: Vec<KeyEntry>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct KeysShowResponse {
-    pub vm: String,
-    pub env: Option<String>,
-    pub managed_key_path: String,
-    pub public_key: String,
-    pub fingerprint: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub known_hosts_entry: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -2823,26 +2681,6 @@ pub struct AuditEntry {
     pub timestamp: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostFinding {
-    pub check: String,
-    pub message: String,
-    pub remediation: String,
-    pub severity: HostFindingSeverity,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum HostFindingSeverity {
-    Pass,
-    Warn,
-    Fail,
-}
-
-fn default_true() -> bool {
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2995,18 +2833,6 @@ mod tests {
                         }
                     }],
                     "complete": true
-                }
-            }),
-            serde_json::json!({
-                "kind": "host check",
-                "payload": {
-                    "exitCode": 0,
-                    "findings": [{
-                        "check": "bridge",
-                        "message": "ok",
-                        "remediation": "none",
-                        "severity": "Pass"
-                    }]
                 }
             }),
         ] {

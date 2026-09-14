@@ -626,7 +626,6 @@ fn normalize_label_value(key: &str, value: &str) -> String {
             "ApplyRoute",
             "ApplySysctl",
             "StoreSync",
-            "StoreVerify",
             "SpawnRunner",
             "SignalRunner",
             "OpenPidfd",

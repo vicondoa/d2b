@@ -11,9 +11,6 @@
 
 use d2b_contracts::audit_wire::validate_audit_page;
 pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry, AuditExportErrorCode};
-pub use d2b_contracts::store_verify_wire::{
-    StoreVerifyRequest, StoreVerifyResponse, StoreVerifyStatus, StoreVerifyUnknownReason,
-};
 use d2b_contracts::types::{
     BundleClosureRef, BundleOpId, MediaRef, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId,
     VmId,
@@ -23,8 +20,8 @@ use d2b_contracts_resource::v3::process::{
     CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec,
 };
 use d2b_contracts_resource::v3::{
-    ActivationRunnerInput, ArtifactId, IfName, ResourceBundleGenerationId, ResourceGeneration,
-    ResourceRef, ResourceUid, execution_policy::ExecutionDomain,
+    ActivationRunnerInput, IfName, ResourceBundleGenerationId, ResourceGeneration, ResourceRef,
+    ResourceUid, execution_policy::ExecutionDomain,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -174,11 +171,8 @@ pub enum BrokerRequest {
     PollChildReaped,
     PrepareRuntimeDir(PrepareDirRequest),
     PrepareStateDir(PrepareDirRequest),
-    /// Adopt a known legacy swtpm state through the broker-owned journal.
-    MigrateLegacySwtpmState(MigrateLegacySwtpmStateRequest),
     ReconcileStorageScope(ReconcileStorageScopeRequest),
     ValidateLockSpec(ValidateLockSpecRequest),
-    PrepareStoreView(PrepareStoreViewRequest),
     /// Typed broker op that hardlink-farms a Guest's resolved closure into
     /// its Zone-qualified store view and atomically swaps the
     /// `current` symlink. Replaces the retired per-VM
@@ -188,35 +182,9 @@ pub enum BrokerRequest {
     /// its trusted bundle copy and derives the collision-free on-disk
     /// `generation_id` itself.
     StoreSync(StoreSyncRequest),
-    /// Operator-facing live-pool verification. The daemon names only the
-    /// VM id; the broker resolves the trusted store-view intent and reads
-    /// host-only `store-view/state` itself. The CLI never reads the
-    /// store-view directly.
-    StoreVerify(StoreVerifyRequest),
     ReadSecretById(SecretByIdRequest),
     RotateSecretById(SecretByIdRequest),
-    /// Live host installer + migrate writer. Drives the per-host
-    /// systemd unit install + `--enable` / `--start` flow (or migrate
-    /// writer for existing NixOS hosts). The broker resolves the
-    /// installer plan from the trusted bundle's `installer:host` intent
-    /// row; the daemon never names raw systemd unit paths or `--enable`
-    /// flags on the wire.
-    RunHostInstall(RunHostInstallRequest),
-    /// Transition an existing systemd-owned VM to daemon-owned without
-    /// touching running VMs. Resolves the migrate plan from the bundle's
-    /// `migrate:host` intent row.
-    RunMigrate(RunMigrateRequest),
-    /// Broker-side mutating verb flips for per-VM activation, host GC,
-    /// framework-managed SSH key rotation, and known_hosts trust
-    /// maintenance.
-    RunActivation(RunActivationRequest),
-    RunGc(RunGcRequest),
-    RunKeysRotate(RunKeysRotateRequest),
-    RunHostKeyTrust(RunHostKeyTrustRequest),
-    RunRotateKnownHost(RunRotateKnownHostRequest),
     SetBridgePortFlags(SetBridgePortFlagsRequest),
-    SetupMountNamespace(SetupMountNamespaceRequest),
-    /// Kill exactly one trusted runner cgroup leaf during intentional
     /// teardown. The broker resolves the leaf from its trusted runner
     /// intent; callers never provide a cgroup path.
     CgroupKill(CgroupKillRequest),
@@ -254,13 +222,6 @@ pub enum BrokerRequest {
     /// Live handler target: `live_seed_dnsmasq_lease`, resolved through
     /// `BundleResolver` from the per-VM dnsmasq lease row.
     SeedDnsmasqLease(SeedDnsmasqLeaseRequest),
-    /// Bind-mount `/var/lib/d2b/vms/<vm>/store-view` from the
-    /// per-VM hardlink farm at `<vm>/store/`. Currently a typed stub
-    /// (`Unimplemented`) until the live handler is wired.
-    ///
-    /// Live handler target: `live_bind_mount_from_hardlink_farm`, resolved
-    /// through `BundleResolver::find_store_view_intent`.
-    BindMountFromHardlinkFarm(BindMountFromHardlinkFarmRequest),
     /// Enforce the per-leaf ownership/mode matrix on
     /// `/var/lib/d2b/vms/<vm>/`. Currently a typed stub
     /// (`Unimplemented`) until the real check is wired.
@@ -432,23 +393,12 @@ impl BrokerRequest {
             Self::PollChildReaped => "PollChildReaped",
             Self::PrepareRuntimeDir(_) => "PrepareRuntimeDir",
             Self::PrepareStateDir(_) => "PrepareStateDir",
-            Self::MigrateLegacySwtpmState(_) => "MigrateLegacySwtpmState",
             Self::ReconcileStorageScope(_) => "ReconcileStorageScope",
             Self::ValidateLockSpec(_) => "ValidateLockSpec",
-            Self::PrepareStoreView(_) => "PrepareStoreView",
             Self::StoreSync(_) => "StoreSync",
-            Self::StoreVerify(_) => "StoreVerify",
             Self::ReadSecretById(_) => "ReadSecretById",
             Self::RotateSecretById(_) => "RotateSecretById",
-            Self::RunHostInstall(_) => "RunHostInstall",
-            Self::RunMigrate(_) => "RunMigrate",
-            Self::RunActivation(_) => "RunActivation",
-            Self::RunGc(_) => "RunGc",
-            Self::RunKeysRotate(_) => "RunKeysRotate",
-            Self::RunHostKeyTrust(_) => "RunHostKeyTrust",
-            Self::RunRotateKnownHost(_) => "RunRotateKnownHost",
             Self::SetBridgePortFlags(_) => "SetBridgePortFlags",
-            Self::SetupMountNamespace(_) => "SetupMountNamespace",
             Self::CgroupKill(_) => "CgroupKill",
             Self::SignalRunner(_) => "SignalRunner",
             Self::DeregisterRunnerPidfd(_) => "DeregisterRunnerPidfd",
@@ -461,7 +411,6 @@ impl BrokerRequest {
             Self::UsbipExplicitBind(_) => "UsbipExplicitBind",
             Self::UsbipExplicitFirewallRule(_) => "UsbipExplicitFirewallRule",
             Self::SeedDnsmasqLease(_) => "SeedDnsmasqLease",
-            Self::BindMountFromHardlinkFarm(_) => "BindMountFromHardlinkFarm",
             Self::OwnershipMatrixCheck(_) => "OwnershipMatrixCheck",
             Self::SshHostKeyPreflight(_) => "SshHostKeyPreflight",
             Self::DiskInit(_) => "DiskInit",
@@ -731,15 +680,6 @@ impl BrokerRequest {
                     request.path_class
                 ),
             ),
-            Self::MigrateLegacySwtpmState(request) => (
-                request.vm_id.to_string(),
-                format!(
-                    "{}:{}:{}",
-                    self.op_name(),
-                    request.vm_id,
-                    request.bundle_legacy_swtpm_intent_ref
-                ),
-            ),
             Self::ReconcileStorageScope(request) => (
                 request.storage_ref.to_string(),
                 format!("{}:{}", self.op_name(), request.storage_ref),
@@ -747,14 +687,6 @@ impl BrokerRequest {
             Self::ValidateLockSpec(request) => (
                 request.lock_ref.to_string(),
                 format!("{}:{}", self.op_name(), request.lock_ref),
-            ),
-            Self::PrepareStoreView(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}", self.op_name(), request.vm_id),
-            ),
-            Self::StoreVerify(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}", self.op_name(), request.vm_id),
             ),
             Self::StoreSync(request) => (
                 request.bundle_closure_ref.to_string(),
@@ -766,20 +698,6 @@ impl BrokerRequest {
                     request.generation_token
                 ),
             ),
-            Self::RunHostInstall(request) => (
-                request.bundle_installer_intent_ref.to_string(),
-                format!(
-                    "{}:{}:{}:{}",
-                    self.op_name(),
-                    request.bundle_installer_intent_ref,
-                    request.enable,
-                    request.start
-                ),
-            ),
-            Self::RunMigrate(request) => (
-                request.bundle_migrate_intent_ref.to_string(),
-                format!("{}:{}", self.op_name(), request.bundle_migrate_intent_ref),
-            ),
             Self::ApplyHostGenerationHandoff(request) => (
                 request.target.to_canonical_string(),
                 format!(
@@ -790,53 +708,7 @@ impl BrokerRequest {
                     request.intent.target_generation
                 ),
             ),
-            Self::RunActivation(request) => (
-                request.vm.clone(),
-                format!(
-                    "{}:{}:{}:{:?}:{:?}",
-                    self.op_name(),
-                    request.bundle_activation_intent_ref,
-                    request.vm,
-                    request.mode,
-                    request.phase
-                ),
-            ),
-            Self::RunGc(request) => (
-                request.bundle_gc_intent_ref.to_string(),
-                format!("{}:{}", self.op_name(), request.bundle_gc_intent_ref),
-            ),
-            Self::RunKeysRotate(request) => (
-                request.vm.clone(),
-                format!(
-                    "{}:{}:{}",
-                    self.op_name(),
-                    request.bundle_keys_intent_ref,
-                    request.vm
-                ),
-            ),
-            Self::RunHostKeyTrust(request) => (
-                request.vm.clone(),
-                format!(
-                    "{}:{}:{}",
-                    self.op_name(),
-                    request.bundle_trust_intent_ref,
-                    request.vm
-                ),
-            ),
-            Self::RunRotateKnownHost(request) => (
-                request.vm.clone(),
-                format!(
-                    "{}:{}:{}",
-                    self.op_name(),
-                    request.bundle_rotate_known_host_intent_ref,
-                    request.vm
-                ),
-            ),
             Self::SetBridgePortFlags(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::SetupMountNamespace(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
             ),
@@ -904,15 +776,6 @@ impl BrokerRequest {
             Self::SeedDnsmasqLease(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.scope_id),
-            ),
-            Self::BindMountFromHardlinkFarm(request) => (
-                request.vm_id.to_string(),
-                format!(
-                    "{}:{}:{:?}",
-                    self.op_name(),
-                    request.vm_id,
-                    request.bundle_store_view_intent_ref
-                ),
             ),
             Self::OwnershipMatrixCheck(request) => (
                 request.vm_id.to_string(),
@@ -1138,168 +1001,6 @@ impl BrokerProfile {
 
 include!("generated/broker_operation_profiles.rs");
 
-/// Broker-side installer driver. The broker resolves the bundle's
-/// `installer:host` intent row (synthesised by
-/// `d2b_core::bundle_resolver` from the `host.json` + Nix-emitted
-/// installer plan), then runs the systemd unit install + `--enable` /
-/// `--start` shellouts per the resolved plan. The daemon never names
-/// the systemd unit path or `--enable` flag on the wire.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunHostInstallRequest {
-    pub bundle_installer_intent_ref: BundleOpId,
-    #[serde(default)]
-    pub enable: bool,
-    #[serde(default)]
-    pub start: bool,
-    #[serde(default)]
-    pub no_start: bool,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunHostInstallResponse {
-    pub installed: bool,
-    pub enabled: bool,
-    pub started: bool,
-    pub artifacts_written: Vec<String>,
-}
-
-/// Broker-side migration driver.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunMigrateRequest {
-    pub bundle_migrate_intent_ref: BundleOpId,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunMigrateResponse {
-    pub migrated_vm_count: u32,
-    pub notes: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum ActivationMode {
-    Switch,
-    Boot,
-    Test,
-    Rollback,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum ActivationPhase {
-    Prepare,
-    Commit,
-    #[default]
-    MetadataOnly,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunActivationRequest {
-    pub bundle_activation_intent_ref: BundleOpId,
-    pub mode: ActivationMode,
-    /// Durable generation artifact selected by the caller.
-    #[serde(default)]
-    pub system_artifact_id: Option<ArtifactId>,
-    #[serde(default)]
-    pub phase: ActivationPhase,
-    pub vm: String,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunActivationResponse {
-    pub mode: ActivationMode,
-    pub vm: String,
-    #[serde(default)]
-    pub generation_number: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub guest_switch_script_path: Option<String>,
-    pub summary: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunGcRequest {
-    pub bundle_gc_intent_ref: BundleOpId,
-    #[serde(default)]
-    pub keep_generations: Option<u32>,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunGcResponse {
-    #[serde(default)]
-    pub keep_generations: Option<u32>,
-    pub retained_store_path_count: u32,
-    pub summary: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunKeysRotateRequest {
-    pub bundle_keys_intent_ref: BundleOpId,
-    pub vm: String,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunKeysRotateResponse {
-    pub vm: String,
-    pub key_path: String,
-    pub public_key_fingerprint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunHostKeyTrustRequest {
-    pub bundle_trust_intent_ref: BundleOpId,
-    pub vm: String,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunHostKeyTrustResponse {
-    pub vm: String,
-    pub static_ip: String,
-    pub known_hosts_path: String,
-    pub updated: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunRotateKnownHostRequest {
-    pub bundle_rotate_known_host_intent_ref: BundleOpId,
-    pub vm: String,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunRotateKnownHostResponse {
-    pub vm: String,
-    pub static_ip: String,
-    pub known_hosts_path: String,
-    pub removed: bool,
-}
-
 /// Daemon ↔ broker handshake request. Carries the daemon's
 /// client_version and the wire feature flags it understands so the
 /// broker can pick a compatible response version + capability set.
@@ -1328,14 +1029,6 @@ pub enum BrokerResponse {
     /// stay shape-compatible across the dispatcher transition.
     Error(BrokerErrorResponse),
     ExportBrokerAudit(ExportBrokerAuditResponse),
-    /// Live host install + migrate writer responses.
-    RunHostInstall(RunHostInstallResponse),
-    RunMigrate(RunMigrateResponse),
-    RunActivation(RunActivationResponse),
-    RunGc(RunGcResponse),
-    RunKeysRotate(RunKeysRotateResponse),
-    RunHostKeyTrust(RunHostKeyTrustResponse),
-    RunRotateKnownHost(RunRotateKnownHostResponse),
     /// Daemon ↔ broker handshake confirmation response. Returned in
     /// reply to a `BrokerRequest::Hello` so the daemon can
     /// capability-negotiate and the broker can audit the connection
@@ -1385,7 +1078,6 @@ pub enum BrokerResponse {
     /// Drain response for `BrokerRequest::PollChildReaped`.
     PollChildReaped(PollChildReapedResponse),
     ReconcileStorageScope(ReconcileStorageScopeResponse),
-    MigrateLegacySwtpmState(MigrateLegacySwtpmStateResponse),
     SetBridgePortFlags(BridgePortFlagsResponse),
     SignalRunner(SignalRunnerResponse),
     DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse),
@@ -1396,8 +1088,6 @@ pub enum BrokerResponse {
     /// populated. Used by the daemon to surface the swap result in audit
     /// + start traces.
     StoreSync(StoreSyncResponse),
-    /// Result of an explicit live-pool verification request.
-    StoreVerify(StoreVerifyResponse),
     ValidateLockSpec(ValidateLockSpecResponse),
 }
 
@@ -2464,68 +2154,6 @@ pub struct PrepareDirRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// Opaque request for one trusted legacy swtpm migration or inventory probe.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MigrateLegacySwtpmStateRequest {
-    pub bundle_legacy_swtpm_intent_ref: BundleOpId,
-    pub vm_id: VmId,
-    /// When true, inspect the broker-owned legacy inventory without mutating
-    /// state. The closed outcome is used by Core to seal the migration
-    /// decision before the Provider reconcile starts.
-    #[serde(default)]
-    pub probe_only: bool,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-/// Closed migration outcome returned by the broker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum LegacySwtpmMigrationOutcome {
-    Migrated,
-    AlreadyMigrated,
-    NotApplicable,
-    Pending,
-    Failed,
-    Ambiguous,
-    /// The broker inventory proves that legacy state exists and adoption is
-    /// required before a new TPM state can be ensured.
-    AdoptionRequired,
-    /// The broker inventory proves that no prior state exists.
-    NeverProvisioned,
-}
-
-impl LegacySwtpmMigrationOutcome {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Migrated => "migrated",
-            Self::AlreadyMigrated => "already-migrated",
-            Self::NotApplicable => "not-applicable",
-            Self::Pending => "pending",
-            Self::Failed => "failed",
-            Self::Ambiguous => "ambiguous",
-            Self::AdoptionRequired => "adoption-required",
-            Self::NeverProvisioned => "never-provisioned",
-        }
-    }
-}
-
-/// Result of one broker-owned legacy swtpm migration attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MigrateLegacySwtpmStateResponse {
-    pub outcome: LegacySwtpmMigrationOutcome,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PrepareStoreViewRequest {
-    pub vm_id: VmId,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
 /// Store-sync request. The broker resolves the closure intent row from
 /// the opaque `bundle_closure_ref`, verifies that it belongs to the
 /// plain `vm_id`, and refuses the op if either identity does not match.
@@ -2584,15 +2212,6 @@ pub struct SetBridgePortFlagsRequest {
     /// Complete admitted Network identity for a Network-owned port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_tap_context: Option<NetworkTapContext>,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SetupMountNamespaceRequest {
-    pub vm_id: VmId,
-    pub role_id: RoleId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -3476,21 +3095,6 @@ pub struct SeedDnsmasqLeaseRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// BindMountFromHardlinkFarm request. The broker resolves the
-/// `store-view` intent for `vm_id` and creates the bind mount from the
-/// per-VM hardlink farm.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BindMountFromHardlinkFarmRequest {
-    pub vm_id: VmId,
-    /// Optional opaque pointer at the `store-view` intent row.
-    /// `None` means "use the canonical per-VM intent".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bundle_store_view_intent_ref: Option<BundleOpId>,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
 /// OwnershipMatrixCheck request. The broker walks the
 /// `/var/lib/d2b/vms/<vm>/` subtree and verifies each leaf against
 /// the ownership matrix.
@@ -3750,72 +3354,6 @@ mod tests {
         });
         let env: BrokerRequestEnvelope = serde_json::from_value(json).unwrap();
         assert!(matches!(env.caller_role, BrokerCallerRole::NotAuthorized));
-    }
-
-    #[test]
-    fn run_activation_request_round_trips() {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "RunActivation",
-            "payload": {
-                "bundleActivationIntentRef": "activation:vm:corp-vm",
-                "mode": "switch",
-                "vm": "corp-vm"
-            }
-        }))
-        .expect("encodes");
-        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
-        match decoded {
-            BrokerRequest::RunActivation(req) => {
-                assert_eq!(
-                    req.bundle_activation_intent_ref.as_str(),
-                    "activation:vm:corp-vm"
-                );
-                assert_eq!(req.mode, ActivationMode::Switch);
-                assert_eq!(req.phase, ActivationPhase::MetadataOnly);
-                assert_eq!(req.vm, "corp-vm");
-            }
-            other => panic!("expected RunActivation, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn run_activation_request_phase_round_trips() {
-        let req = RunActivationRequest {
-            bundle_activation_intent_ref: BundleOpId::new("activation:vm:corp-vm"),
-            mode: ActivationMode::Switch,
-            system_artifact_id: None,
-            phase: ActivationPhase::Prepare,
-            vm: "corp-vm".to_owned(),
-            tracing_span_id: None,
-        };
-        let json = serde_json::to_string(&req).expect("serialize");
-        assert!(json.contains("\"phase\":\"prepare\""));
-        let decoded: RunActivationRequest = serde_json::from_str(&json).expect("decode");
-        assert_eq!(decoded.phase, ActivationPhase::Prepare);
-    }
-
-    #[test]
-    fn run_host_key_wire_variants_round_trip() {
-        let trust = BrokerResponse::RunHostKeyTrust(RunHostKeyTrustResponse {
-            vm: "corp-vm".to_owned(),
-            static_ip: "10.20.0.10".to_owned(),
-            known_hosts_path: "/var/lib/d2b/known_hosts.d2b".to_owned(),
-            updated: true,
-        });
-        let rotate = BrokerResponse::RunRotateKnownHost(RunRotateKnownHostResponse {
-            vm: "corp-vm".to_owned(),
-            static_ip: "10.20.0.10".to_owned(),
-            known_hosts_path: "/var/lib/d2b/known_hosts.d2b".to_owned(),
-            removed: true,
-        });
-        let trust_json = serde_json::to_string(&trust).expect("serialize trust");
-        let rotate_json = serde_json::to_string(&rotate).expect("serialize rotate");
-        let decoded_trust: BrokerResponse =
-            serde_json::from_str(&trust_json).expect("decode trust");
-        let decoded_rotate: BrokerResponse =
-            serde_json::from_str(&rotate_json).expect("decode rotate");
-        assert_eq!(decoded_trust, trust);
-        assert_eq!(decoded_rotate, rotate);
     }
 
     #[test]

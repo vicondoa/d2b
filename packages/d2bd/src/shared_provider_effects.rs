@@ -24,7 +24,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use d2b_contracts::types::{BundleOpId, VmId};
+use d2b_contracts::types::VmId;
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
@@ -1865,32 +1865,7 @@ impl ProductionSharedProviderEffects {
             );
             return Err(SharedProviderEffectError::InvalidResource);
         }
-        let device_ref = key_ref(&request.target).clone();
-        let runtime = self.runtime().inspect_err(|_| {
-            tracing::warn!(
-                device = %device_ref.to_canonical_string(),
-                "TPM device reconcile refused: the Zone resource runtime is not attached",
-            );
-        })?;
         let vm_id = VmId::new(holder.name().as_str());
-        let migration_intent = BundleOpId::new(format!("legacy-swtpm:vm:{}", vm_id.as_str()));
-        let decision = runtime
-            .tpm_device_is_admitted(
-                &request.uid,
-                &device_ref,
-                vm_id.as_str(),
-                &request.operation_id,
-                None,
-            )
-            .await
-            .map_err(|error| {
-                tracing::warn!(
-                    device = %device_ref.to_canonical_string(),
-                    error = %error,
-                    "TPM device admission refused",
-                );
-                SharedProviderEffectError::Unavailable
-            })?;
         let mut controllers = state.tpm_controllers
             .lock()
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
@@ -1906,8 +1881,6 @@ impl ProductionSharedProviderEffects {
         let result = crate::tpm_effect_port::reconcile_device_tpm_controller(
             &self.state,
             vm_id.clone(),
-            migration_intent,
-            decision,
             crate::tpm_effect_port::AdmittedTpmDevice::from_row(
                 request.uid.clone(),
                 key_ref(&request.target).clone(),
@@ -2726,19 +2699,7 @@ impl ProductionSharedProviderEffects {
             .and_then(Value::as_str)
             .and_then(|value| ResourceRef::parse(value).ok())
             .unwrap_or_else(|| ResourceRef::parse(HOST_REF).expect("Host ref"));
-        let runtime = self.runtime()?;
         let vm_id = VmId::new(holder.name().as_str());
-        let migration_intent = BundleOpId::new(format!("legacy-swtpm:vm:{}", vm_id.as_str()));
-        let decision = runtime
-            .tpm_device_is_admitted(
-                &request.uid,
-                &key_ref(&request.target),
-                vm_id.as_str(),
-                &request.operation_id,
-                None,
-            )
-            .await
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let mut controllers = state.tpm_controllers
             .lock()
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
@@ -2748,8 +2709,6 @@ impl ProductionSharedProviderEffects {
         let result = crate::tpm_effect_port::finalize_device_tpm_controller(
             &self.state,
             vm_id.clone(),
-            migration_intent,
-            decision,
             crate::tpm_effect_port::AdmittedTpmDevice::from_row(
                 request.uid.clone(),
                 key_ref(&request.target).clone(),
