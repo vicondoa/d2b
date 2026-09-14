@@ -2236,8 +2236,8 @@ fn read_pidfd_process_id(pidfd: &OwnedFd) -> Result<Option<i32>, ProcessEffectEr
 ///
 /// `None` means the pid carries no observable start time: the process is
 /// absent (never existed here, or already reaped) or is a zombie (`Z`/`X`).
-/// A dying child is therefore indistinguishable from an absent one by design —
-/// both are *gone*, never a start-time *drift* — and callers must classify
+/// A dying child is therefore indistinguishable from an absent one by design -
+/// both are *gone*, never a start-time *drift* - and callers must classify
 /// it as such (`launch_adoption_error`).
 fn read_proc_start_time(pid: i32) -> Result<Option<u64>, ProcessEffectError> {
     let content = match fs::read_to_string(format!("/proc/{pid}/stat")) {

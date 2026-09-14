@@ -4681,7 +4681,7 @@ fn load_zone_resource_bundles(
 
 /// Semantic Guest setup descriptors resolved from the artifact catalog: raw
 /// descriptors, provenance strings, VMM runner intents plus their Zone UIDs,
-/// and store-view intents — see [`load_guest_setup_descriptors`].
+/// and store-view intents - see [`load_guest_setup_descriptors`].
 type LoadedGuestSetupDescriptors = (
     BTreeMap<(String, String), Vec<u8>>,
     BTreeMap<(String, String), String>,

@@ -1,11 +1,11 @@
-//! `deadcode-check` — repeatable workspace dead-code/visibility/unused-dependency gate.
+//! `deadcode-check` - repeatable workspace dead-code/visibility/unused-dependency gate.
 //!
 //! Runs three independent scans, each in-process style with `std::process::Command`:
 //!
-//! 1. `cargo hawk check` — dead / overbroad public API (`pub` → `pub(crate)`).
-//! 2. `cargo shear` — unused `Cargo.toml` dependencies (edition-2024 aware).
+//! 1. `cargo hawk check` - dead / overbroad public API (`pub` → `pub(crate)`).
+//! 2. `cargo shear` - unused `Cargo.toml` dependencies (edition-2024 aware).
 //! 3. `cargo check --workspace --all-targets` with `RUSTFLAGS="-A unused -D dead_code"`
-//!    — isolates the rustc `dead_code` lint to a hard error.
+//!    - isolates the rustc `dead_code` lint to a hard error.
 //!
 //! Every finding must be fixed by restructuring code (delete / reduce visibility /
 //! real use / per-entry shear config), never by `#![allow]` or a tool-wide switch.
