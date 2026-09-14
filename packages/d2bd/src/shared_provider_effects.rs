@@ -2961,6 +2961,13 @@ impl d2b_provider_device::DeviceDriverEffects for ProductionSharedProviderEffect
             DeviceComponent::Gpu => self.finalize_gpu_row(request, state).await,
         }
     }
+
+    /// The TPM controller creates the device's state Volume through the child
+    /// surface, so the plane's anchor cache has to be re-read or that Volume
+    /// resolves as `volume-anchor` and the Device never leaves reconcile.
+    async fn refresh_volume_anchors(&self) {
+        self.refresh_volume_anchors().await;
+    }
 }
 
 #[cfg(test)]
