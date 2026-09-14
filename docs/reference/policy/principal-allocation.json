@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "range": {
+    "end": 999,
+    "start": 900
+  },
+  "principals": {
+    "d2b-zonert": {
+      "gid": 2373244,
+      "uid": 2373244
+    },
+    "d2bd": {
+      "gid": 997,
+      "uid": 997
+    }
+  }
+}

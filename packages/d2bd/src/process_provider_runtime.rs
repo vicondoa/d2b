@@ -26,22 +26,27 @@ use d2b_core::{
     bundle_resolver::BundleResolver,
     processes::{ProcessNode, ProcessRole},
 };
+use d2b_provider_process::{
+    DeviceWorkerLaunch, ExecutionMode, LaunchRow, ProviderAdoption, ProviderLiveness,
+    ServingWorkerLaunch, ServingWorkerRoot, execution_target_allowed, resolve_launch_identity,
+};
 use d2b_process_conformance::{
     AdoptionCandidate, AdoptionOutcome, CompiledDigests, ConfigurationDigest,
     GuestExecutionBinding, IdentityBinding, LaunchIdentity, LaunchTicket, OperationBinding,
     ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessProvider,
-    ProcessStatusReport, ReadinessExpectation, SandboxCompiler, StopClass, execution_commitment,
+    ReadinessExpectation, SandboxCompiler, StopClass, execution_commitment,
     runtime_scope_commitment,
 };
 use d2b_provider_supervisor::{
     BrokerProcessBackend, BrokerSystemdEffectOwner, BundleBackedLaunchResolver, ProviderSupervisor,
     SystemdProcessBackend,
 };
-use d2b_provider_system_minijail::{MinijailProcessProvider, launch::PlatformGate};
-use d2b_provider_system_systemd::SystemdProcessProvider;
+use d2b_provider_process_minijail::{MinijailProcessProvider, launch::PlatformGate};
+use d2b_provider_process_systemd::SystemdProcessProvider;
 use d2b_provider_toolkit::CredentialDeliveryKeyHandoff;
 use d2b_session::AuthenticatedSessionRouteBinding;
 use d2b_session_unix::{PeerCredentials, SeqpacketSocket, prearmed_seqpacket_pair};
+use d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness;
 use d2bd_runtime::target_runtime::{ControllerProcessResource, DaemonMode};
 use d2bd_runtime::vm_start_support::{
     is_durable_wayland_process_node, is_guest_owned_process_node,
@@ -49,7 +54,6 @@ use d2bd_runtime::vm_start_support::{
 use sha2::{Digest, Sha256};
 
 use crate::provider_effects::FixedEffectAdapter;
-use crate::process_resource_runtime::{LaunchRow, resolve_launch_identity};
 
 /// The fixed process Provider names wired by the daemon.
 pub const FIXED_PROCESS_PROVIDER_NAMES: [&str; 2] = ["system-minijail", "system-systemd"];
@@ -393,138 +397,6 @@ fn identity_changed_error(mismatches: Vec<String>) -> String {
     format!("provider-process-identity-changed:{}", mismatches.join(","))
 }
 
-/// Where one serving worker's served view root comes from.
-///
-/// A local-path Volume's root is derived from the trusted storage path row
-/// its source policy names; a `nix-closure` Volume's bytes live in the
-/// broker-managed per-Guest store-view hardlink farm instead, which the
-/// bundle names through the Guest's store-view intent (`store-view/live`,
-/// the `ro-store` share's preserved redirect). A source kind neither of
-/// those names keeps no root at all: the ticket refuses rather than serving
-/// an unnamed subtree.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ServingWorkerRoot {
-    /// Trusted storage path row id (`path:<policy>`) for a local-path source.
-    StoragePath(String),
-    /// The broker-managed store-view farm of the ticket's target Guest.
-    StoreViewFarm,
-}
-
-/// Binding-declared launch inputs for one binding-owned serving worker.
-///
-/// The Process controller composes the worker's arguments from the owning
-/// VolumeBinding and the Volume it serves (KD13: the binding controller
-/// declares what to serve through its resources; the Process controller owns
-/// the launch). Nothing here names an executable.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ServingWorkerLaunch {
-    /// Volume whose view the worker serves.
-    pub(crate) volume_ref: ResourceRef,
-    /// Named view served to the target Guest.
-    pub(crate) view: BoundedToken,
-    /// Attachment execution target (the ticket's guest target ref).
-    pub(crate) guest_ref: ResourceRef,
-    /// Trusted root the served view is anchored at, when the source kind has
-    /// one this daemon may derive.
-    pub(crate) root: Option<ServingWorkerRoot>,
-    /// View-relative path within the Volume root.
-    pub(crate) view_path: String,
-    /// Attachment access declared by the binding.
-    pub(crate) access: AttachmentAccess,
-    /// Resolved worker thread pool (attachment tuning or the declared default).
-    pub(crate) thread_pool_size: u32,
-    /// Whether POSIX ACLs are served.
-    pub(crate) posix_acl: bool,
-    /// Whether extended attributes are served.
-    pub(crate) xattr: bool,
-    /// Page-cache mode.
-    pub(crate) cache: AttachmentCache,
-    /// Optional resolved socket group name.
-    pub(crate) socket_group: Option<String>,
-}
-
-/// Typed launch parameters for one Device-owned worker row.
-///
-/// The Device Providers declare their worker rows path-free (`Process/swtpm-<device>`,
-/// `Process/gpu-<device>`, ...), and the Process spec is argv-free by
-/// contract, so the host inputs the device argv generators need are derived
-/// by the Process controller and travel to the provider composition as these
-/// typed parameters - never as argv on the row or the spec (U17 gap
-/// closure).
-///
-/// The executable is carried only so the owning Provider's own argv
-/// generator validates it: the trusted template pins the binary and the
-/// broker composes `argv[0]`, so the composed argument list starts after it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DeviceWorkerLaunch {
-    /// `Process/swtpm-<device>` (`swtpm-socket`).
-    Swtpm(Box<SwtpmWorkerParams>),
-    /// `EphemeralProcess/swtpm-flush-<device>` (`swtpm-init-flush`).
-    SwtpmFlush(Box<SwtpmFlushParams>),
-    /// `Process/gpu-<device>` (`gpu-worker` / `gpu-render-node`).
-    Gpu(Box<GpuWorkerParams>),
-    /// `Process/video-<device>` (`video-worker`).
-    Video(Box<VideoWorkerParams>),
-}
-
-/// Long-lived `swtpm socket` inputs: the per-Device state directory, the two
-/// sockets swtpm binds, and the socket owner ids it names.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SwtpmWorkerParams {
-    /// Trusted `swtpm` binary the declared template pins.
-    pub(crate) binary_path: PathBuf,
-    /// VM the Device belongs to (the socket root and the process title).
-    pub(crate) vm_name: String,
-    /// State directory the controller-owned state Volume is backed by.
-    pub(crate) state_dir: PathBuf,
-    /// `--ctrl` socket (daemon-only; the guest VMM never connects to it).
-    pub(crate) ctrl_socket_path: PathBuf,
-    /// `--server` socket the guest VMM connects to.
-    pub(crate) server_socket_path: PathBuf,
-    /// The identity the worker holds in the namespace its posture installs:
-    /// in-namespace `0` under the ADR 0021 single-entry mapping (the host
-    /// principal is unmapped there, so naming it makes swtpm's socket chown
-    /// fail with `EINVAL`), the host principal for a posture without one.
-    pub(crate) uid: u32,
-    pub(crate) gid: u32,
-    /// `--log level=<N>`; the Device Provider's own bounded default.
-    pub(crate) log_level: u8,
-}
-
-/// Pre-start flush inputs: `swtpm_ioctl -i --unix <ctrl>`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SwtpmFlushParams {
-    /// Trusted `swtpm-ioctl` binary the declared template pins.
-    pub(crate) ioctl_binary_path: PathBuf,
-    pub(crate) vm_name: String,
-    /// The same `--ctrl` socket the long-lived worker binds.
-    pub(crate) ctrl_socket_path: PathBuf,
-}
-
-/// `crosvm device gpu` inputs: the private sidecar socket, the host Wayland
-/// socket the sidecar renders into, and the Device's declared context shape.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GpuWorkerParams {
-    pub(crate) binary_path: PathBuf,
-    pub(crate) vm_name: String,
-    /// `--socket` value the guest VMM's `--gpu socket=` argument names.
-    pub(crate) socket_path: PathBuf,
-    /// `--wayland-sock` value.
-    pub(crate) wayland_sock: PathBuf,
-    /// `--params` payload, from the owning Device's declared settings.
-    pub(crate) params: d2b_provider_device_gpu::GpuParams,
-}
-
-/// `crosvm device video-decoder` inputs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct VideoWorkerParams {
-    pub(crate) binary_path: PathBuf,
-    pub(crate) vm_name: String,
-    /// `--socket-path` value the guest VMM's `--vhost-user-media socket=`
-    /// argument names.
-    pub(crate) socket_path: PathBuf,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct ProcessResourceContext<'a> {
     pub(crate) zone: ZoneId,
@@ -705,25 +577,6 @@ impl<'a> ProcessResourceContext<'a> {
 pub struct ProviderLaunch {
     /// Opaque identity established by the effect adapter.
     pub identity: ProcessIdentityDigest,
-}
-
-/// Result of a Provider-backed adoption attempt.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProviderAdoption {
-    /// No process matching the trusted ticket is running.
-    Absent,
-    /// The exact process was adopted.
-    Adopted(ProcessStatusReport),
-    /// A static Provider controller was found without its exact bootstrap
-    /// endpoint retained by this daemon.
-    ControllerBootstrapMissing,
-    /// A uniquely identified stale process is available for exact replacement.
-    Stale {
-        /// Opaque effect-owner evidence for the exact stale process.
-        candidate: AdoptionCandidate,
-    },
-    /// A candidate was present but identity was ambiguous and quarantined.
-    Quarantined(ProcessStatusReport),
 }
 
 const MAX_CONTROLLER_BOOTSTRAP_ENDPOINTS: usize = 256;
@@ -938,18 +791,14 @@ impl ControllerBootstrapMarker {
     }
 }
 
-/// Provider-backed liveness result used by the daemon readiness loop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderLiveness {
-    /// The exact process is still present.
-    Alive,
-    /// The exact process is absent.
-    Exited,
-    /// Identity could not be established safely.
-    Unknown,
-}
-
 /// Readiness-loop adapter for one Provider-managed process node.
+///
+/// The probe observes the node through the Provider's authenticated read-only
+/// path, which is async, so it has a seat for each readiness wait: the async
+/// wait awaits [`Self::probe_async`] and never drives a runtime from inside
+/// the caller's, while the synchronous wait drives [`Self::probe`] on the
+/// process-wide runtime [`crate::block_on_future`] falls back to (one per
+/// process, not one per poll).
 pub struct ProviderLivenessProbe {
     providers: Arc<ProductionProcessProviders>,
     vm: String,
@@ -969,21 +818,26 @@ impl ProviderLivenessProbe {
             node: node.clone(),
         }
     }
+
+    fn classify(liveness: Result<ProviderLiveness, String>) -> RunnerLiveness {
+        match liveness {
+            Ok(ProviderLiveness::Alive) => RunnerLiveness::Alive,
+            Ok(ProviderLiveness::Exited) => RunnerLiveness::Exited(None),
+            Ok(ProviderLiveness::Unknown) | Err(_) => RunnerLiveness::Unknown,
+        }
+    }
 }
 
+#[async_trait::async_trait]
 impl d2bd_runtime::supervisor::readiness_liveness::LivenessProbe for ProviderLivenessProbe {
-    fn probe(&self) -> d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness {
-        match crate::block_on_future(self.providers.probe_node(&self.vm, &self.node)) {
-            Ok(ProviderLiveness::Alive) => {
-                d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness::Alive
-            }
-            Ok(ProviderLiveness::Exited) => {
-                d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness::Exited(None)
-            }
-            Ok(ProviderLiveness::Unknown) | Err(_) => {
-                d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness::Unknown
-            }
-        }
+    fn probe(&self) -> RunnerLiveness {
+        Self::classify(crate::block_on_future(
+            self.providers.probe_node(&self.vm, &self.node),
+        ))
+    }
+
+    async fn probe_async(&self) -> RunnerLiveness {
+        Self::classify(self.providers.probe_node(&self.vm, &self.node).await)
     }
 }
 
@@ -1156,7 +1010,7 @@ impl ProductionProcessProviders {
         self.bundle
             .guest_setup_descriptor_bytes(zone.as_str(), guest_ref.name().as_str())
             .and_then(|bytes| {
-                d2b_provider_runtime_cloud_hypervisor::GuestSetupDescriptor::from_canonical_bytes(
+                d2b_provider_guest_cloud_hypervisor::GuestSetupDescriptor::from_canonical_bytes(
                     bytes,
                 )
                 .ok()
@@ -1997,7 +1851,7 @@ impl ProductionProcessProviders {
         if !mismatches.is_empty() {
             return Err(identity_changed_error(mismatches));
         }
-        if !execution_target_allowed(self.mode, &managed.execution_ref) {
+        if !execution_target_allowed(execution_mode(self.mode), &managed.execution_ref) {
             return Err(GUEST_EXECUTION_UNAVAILABLE.to_owned());
         }
         self.forget_controller_bootstrap_for_context(
@@ -3579,10 +3433,15 @@ fn configuration_digest(label: &str, value: &str) -> ConfigurationDigest {
     ConfigurationDigest::from_bytes(hasher.finalize().into())
 }
 
-pub(crate) fn execution_target_allowed(mode: DaemonMode, execution_ref: &ResourceRef) -> bool {
+/// Map the daemon's own mode onto the Process family's execution domain.
+///
+/// The family declares the Host/Guest vocabulary it admits and never reads
+/// the daemon's mode; this is the seat where the daemon's mode crosses into
+/// that vocabulary.
+pub(crate) const fn execution_mode(mode: DaemonMode) -> ExecutionMode {
     match mode {
-        DaemonMode::Host => execution_ref.resource_type().as_str() == "Host",
-        DaemonMode::Guest => execution_ref.resource_type().as_str() == "Guest",
+        DaemonMode::Host => ExecutionMode::Host,
+        DaemonMode::Guest => ExecutionMode::Guest,
     }
 }
 
@@ -3598,7 +3457,7 @@ fn validate_resource_execution_target(
     if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
         return Err("provider-ticket:invalid-execution-ref".to_owned());
     }
-    if !execution_target_allowed(mode, execution_ref) {
+    if !execution_target_allowed(execution_mode(mode), execution_ref) {
         return Err(match mode {
             DaemonMode::Host => GUEST_EXECUTION_UNAVAILABLE,
             DaemonMode::Guest => "provider-ticket:host-execution-denied",
@@ -3805,12 +3664,19 @@ fn device_worker_launch_args(
                 "gpu-worker-socket",
             )?;
             device_worker_path(&params.wayland_sock, None, "gpu-worker-wayland-sock")?;
+            // The typed parameters travel as the canonical JSON of the
+            // Provider's own `GpuParams` (the family crate cannot depend on
+            // the realizer provider crate); a payload that no longer decodes
+            // is a refusal, never a launch with silently dropped settings.
+            let gpu_params =
+                serde_json::from_value::<d2b_provider_device_gpu::GpuParams>(params.params.clone())
+                    .map_err(|_| "provider-ticket:device-worker-gpu-params-invalid".to_owned())?;
             d2b_provider_device_gpu::generate_gpu_argv(&d2b_provider_device_gpu::GpuArgvInput {
                 crosvm_binary_path: params.binary_path.to_string_lossy().into_owned(),
                 vm_name: params.vm_name.clone(),
                 socket_path: params.socket_path.to_string_lossy().into_owned(),
                 wayland_sock: params.wayland_sock.to_string_lossy().into_owned(),
-                params: params.params.clone(),
+                params: gpu_params,
                 extra_args: Vec::new(),
             })
             .map_err(|_| "provider-ticket:device-worker-argv-invalid:gpu".to_owned())?
@@ -4449,6 +4315,7 @@ fn stable_token(value: &str) -> String {
 mod tests {
     use super::*;
     use std::os::fd::AsRawFd;
+    use d2b_provider_process::{GpuWorkerParams, SwtpmFlushParams, SwtpmWorkerParams, VideoWorkerParams};
     use d2b_contracts_provider::v3::{
         ArtifactDigest, BinaryRef, ComponentDescriptor, ComponentExecution,
         ComponentTargetCapability, ComponentType, ControllerInstanceScope, ControllerTargetKind,
@@ -4672,12 +4539,13 @@ mod tests {
             vm_name: "corp-vm".to_owned(),
             socket_path: PathBuf::from("vms/corp-vm/gpu.sock"),
             wayland_sock: PathBuf::from("/run/user/1000/wayland-0"),
-            params: d2b_provider_device_gpu::GpuParams {
+            params: serde_json::to_value(d2b_provider_device_gpu::GpuParams {
                 context_types: vec![d2b_provider_device_gpu::GpuContextType::Virgl],
                 displays: vec![d2b_provider_device_gpu::GpuDisplayConfig { hidden: true }],
                 egl: true,
                 vulkan: true,
-            },
+            })
+            .expect("the declared settings serialize"),
         }));
         assert_eq!(
             device_worker_launch_args(std::path::Path::new("/run/d2b"), &gpu)
@@ -4696,7 +4564,7 @@ mod tests {
             vm_name: "corp-vm".to_owned(),
             socket_path: PathBuf::from("/run/d2b/vms/corp-vm/gpu.sock"),
             wayland_sock: PathBuf::from("/run/user/1000/wayland-0"),
-            params: d2b_provider_device_gpu::GpuParams {
+            params: serde_json::to_value(d2b_provider_device_gpu::GpuParams {
                 context_types: vec![
                     d2b_provider_device_gpu::GpuContextType::Virgl,
                     d2b_provider_device_gpu::GpuContextType::Virgl2,
@@ -4705,7 +4573,8 @@ mod tests {
                 displays: vec![d2b_provider_device_gpu::GpuDisplayConfig { hidden: true }],
                 egl: true,
                 vulkan: true,
-            },
+            })
+            .expect("the declared settings serialize"),
         }));
         assert_eq!(
             device_worker_launch_args(std::path::Path::new("/run/d2b"), &gpu)
@@ -4790,6 +4659,52 @@ mod tests {
             true,
         )
         .unwrap()
+    }
+
+    /// The declared GPU settings cross the family/realizer boundary as
+    /// canonical JSON, so the wire shape is pinned against a hand-written
+    /// payload rather than one produced by the same type the consumer
+    /// decodes: a payload the realizer's shape accepts renders the declared
+    /// argv, and one it refuses fails closed instead of defaulting.
+    #[test]
+    fn device_worker_launch_args_pin_the_gpu_settings_wire_shape() {
+        let gpu = DeviceWorkerLaunch::Gpu(Box::new(GpuWorkerParams {
+            binary_path: PathBuf::from("/nix/store/crosvm/bin/crosvm"),
+            vm_name: "corp-vm".to_owned(),
+            socket_path: PathBuf::from("/run/d2b/vms/corp-vm/gpu.sock"),
+            wayland_sock: PathBuf::from("/run/user/1000/wayland-0"),
+            params: serde_json::from_str(
+                r#"{"context-types":["virgl"],"displays":[{"hidden":true}],"egl":false,"vulkan":true}"#,
+            )
+            .expect("the hand-written payload is the declared wire shape"),
+        }));
+        assert_eq!(
+            device_worker_launch_args(std::path::Path::new("/run/d2b"), &gpu)
+                .expect("the pinned payload renders"),
+            vec![
+                "device",
+                "gpu",
+                "--socket",
+                "/run/d2b/vms/corp-vm/gpu.sock",
+                "--wayland-sock",
+                "/run/user/1000/wayland-0",
+                "--params",
+                "{\"context-types\":\"virgl\",\"displays\":[{\"hidden\":true}],\"egl\":false,\"vulkan\":true}",
+            ]
+        );
+
+        let malformed = DeviceWorkerLaunch::Gpu(Box::new(GpuWorkerParams {
+            binary_path: PathBuf::from("/nix/store/crosvm/bin/crosvm"),
+            vm_name: "corp-vm".to_owned(),
+            socket_path: PathBuf::from("/run/d2b/vms/corp-vm/gpu.sock"),
+            wayland_sock: PathBuf::from("/run/user/1000/wayland-0"),
+            params: serde_json::json!({ "contextTypes": ["virgl"] }),
+        }));
+        assert_eq!(
+            device_worker_launch_args(std::path::Path::new("/run/d2b"), &malformed)
+                .expect_err("a payload the declared shape refuses fails closed"),
+            "provider-ticket:device-worker-gpu-params-invalid"
+        );
     }
 
     #[test]

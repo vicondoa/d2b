@@ -35,11 +35,7 @@ pub enum NiriIpcError {
 #[serde(rename_all = "PascalCase")]
 pub enum NiriRequest {
     FocusedWindow,
-    #[expect(dead_code, reason = "reserved Niri protocol request")]
-    Windows,
     Workspaces,
-    #[expect(dead_code, reason = "reserved Niri protocol request")]
-    Outputs,
     EventStream,
 }
 

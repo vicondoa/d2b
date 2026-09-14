@@ -59,12 +59,6 @@ let
         d2b.componentSession = {
           enable = true;
           guestConfigPath = null;
-          shell = {
-            enable = false;
-            defaultName = "default";
-            maxSessions = 8;
-            maxAttached = 1;
-          };
         };
       })
     ];

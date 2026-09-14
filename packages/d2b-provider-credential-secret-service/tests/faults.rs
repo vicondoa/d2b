@@ -24,7 +24,6 @@ use common::{Admission, ProviderHarness, request, setup};
 fn locked_and_unavailable_map_to_provider_unavailable() {
     for failure in [
         SecretServicePortError::Locked,
-        SecretServicePortError::Missing,
         SecretServicePortError::Unavailable,
     ] {
         let (provider, port) = setup(64);

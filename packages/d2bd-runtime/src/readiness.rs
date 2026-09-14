@@ -7,6 +7,7 @@ use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use d2b_core::processes::{ProcessNode, ReadinessPredicate};
@@ -125,23 +126,15 @@ pub fn command_ready(command: &[String]) -> Result<bool, String> {
         .map_err(|_| "command-readiness-exec-failed".to_owned())
 }
 
+/// Interval between readiness polls (both seats).
+const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 pub fn wait_for_readiness(
     node: &ProcessNode,
     readiness: &[ReadinessPredicate],
     timeout: Duration,
     liveness: Option<&dyn LivenessProbe>,
 ) -> Result<(), String> {
-    fn terminal_liveness_error(
-        node: &ProcessNode,
-        liveness: Option<&dyn LivenessProbe>,
-    ) -> Option<String> {
-        match liveness?.probe() {
-            RunnerLiveness::Exited(_) => Some(format!("runner-exited:{}", node.id.0)),
-            RunnerLiveness::Reused => Some(format!("runner-reused:{}", node.id.0)),
-            RunnerLiveness::Alive | RunnerLiveness::Unknown => None,
-        }
-    }
-
     if readiness.is_empty() {
         return Ok(());
     }
@@ -166,7 +159,87 @@ pub fn wait_for_readiness(
         if Instant::now() >= deadline {
             return Err(format!("readiness-timeout:{}", node.id.0));
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(READINESS_POLL_INTERVAL);
+    }
+}
+
+/// Classify the liveness probe's observation as a terminal wait error.
+fn terminal_liveness_error(
+    node: &ProcessNode,
+    liveness: Option<&dyn LivenessProbe>,
+) -> Option<String> {
+    terminal_liveness(node, liveness?.probe())
+}
+
+/// The async seat of [`terminal_liveness_error`].
+async fn terminal_liveness_error_async(
+    node: &ProcessNode,
+    liveness: Option<&dyn LivenessProbe>,
+) -> Option<String> {
+    let probe = liveness?;
+    terminal_liveness(node, probe.probe_async().await)
+}
+
+fn terminal_liveness(node: &ProcessNode, liveness: RunnerLiveness) -> Option<String> {
+    match liveness {
+        RunnerLiveness::Exited(_) => Some(format!("runner-exited:{}", node.id.0)),
+        RunnerLiveness::Reused => Some(format!("runner-reused:{}", node.id.0)),
+        RunnerLiveness::Alive | RunnerLiveness::Unknown => None,
+    }
+}
+
+/// Await readiness without parking an async worker on the poll loop.
+///
+/// This is the seat the async callers take; [`wait_for_readiness`] stays for
+/// the synchronous ones. It differs from the synchronous seat in exactly the
+/// two places that would otherwise block an async worker:
+///
+/// - the interval between polls is awaited, not slept through;
+/// - the liveness probe is awaited through [`LivenessProbe::probe_async`],
+///   which is the seat a probe that resolves a resource row implements (the
+///   synchronous seat drives a runtime from inside the caller's, which is
+///   both work per poll and a panic on a single-threaded runtime).
+///
+/// The predicates themselves stay synchronous - a filesystem read, a socket
+/// connect, a subprocess each - so they run on the blocking pool, which
+/// bounds how many such polls a process can hold instead of parking the
+/// caller's worker on a subprocess.
+pub async fn wait_for_readiness_async(
+    node: &ProcessNode,
+    readiness: &[ReadinessPredicate],
+    timeout: Duration,
+    liveness: Option<&dyn LivenessProbe>,
+) -> Result<(), String> {
+    if readiness.is_empty() {
+        return Ok(());
+    }
+    let deadline = Instant::now() + timeout;
+    let predicates: Arc<[ReadinessPredicate]> = Arc::from(readiness.to_vec());
+    loop {
+        if let Some(error) = terminal_liveness_error_async(node, liveness).await {
+            return Err(error);
+        }
+        let probes = Arc::clone(&predicates);
+        let all_ready = tokio::task::spawn_blocking(move || -> Result<bool, String> {
+            for predicate in probes.iter() {
+                if !readiness_predicate_ready(predicate)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })
+        .await
+        .map_err(|_| format!("readiness-probe-join-failed:{}", node.id.0))??;
+        if all_ready {
+            if let Some(error) = terminal_liveness_error_async(node, liveness).await {
+                return Err(error);
+            }
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("readiness-timeout:{}", node.id.0));
+        }
+        tokio::time::sleep(READINESS_POLL_INTERVAL).await;
     }
 }
 
@@ -504,3 +577,93 @@ mod wait_for_one_shot_exit_tests {
     }
 }
 
+
+/// The async readiness seat: the wait must await the probe's async seat and
+/// run its synchronous predicates off the async worker.
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod async_readiness_tests {
+    use super::*;
+    use d2b_core::processes::{NodeId, ProcessNode, ProcessRole};
+    use std::os::unix::net::UnixListener;
+
+    /// A probe whose two seats disagree, so the seat the wait used shows up
+    /// in the outcome.
+    struct SeatProbe;
+
+    #[async_trait::async_trait]
+    impl LivenessProbe for SeatProbe {
+        fn probe(&self) -> RunnerLiveness {
+            RunnerLiveness::Exited(None)
+        }
+
+        async fn probe_async(&self) -> RunnerLiveness {
+            RunnerLiveness::Alive
+        }
+    }
+
+    fn node(id: &str) -> ProcessNode {
+        ProcessNode {
+            id: NodeId(id.to_owned()),
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
+            role: ProcessRole::StoreVirtiofsPreflight,
+            unit: None,
+            binary_path: None,
+            argv: vec![],
+            env: vec![],
+            plan_ops: vec![],
+            network_interfaces: vec![],
+            profile: d2b_core::test_support::RoleProfileBuilder::new().build(),
+            readiness: vec![],
+        }
+    }
+
+    fn ready_socket(name: &str) -> (std::path::PathBuf, UnixListener) {
+        let path = std::env::temp_dir().join(format!("d2b-{name}-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).expect("bind unix listener");
+        (path, listener)
+    }
+
+    /// A ready predicate plus a probe whose synchronous seat reports the
+    /// runner exited: reading the synchronous seat turns this into a
+    /// `runner-exited` error, so an `Ok` here means the wait awaited the
+    /// probe's async seat.
+    #[tokio::test]
+    async fn the_async_wait_awaits_the_async_probe_seat() {
+        let (path, _listener) = ready_socket("async-ready-seat");
+        let predicates = [ReadinessPredicate::UnixSocketExists(
+            path.to_string_lossy().into_owned(),
+        )];
+        wait_for_readiness_async(
+            &node("swtpm"),
+            &predicates,
+            Duration::from_secs(5),
+            Some(&SeatProbe),
+        )
+        .await
+        .expect("the async probe seat reports the runner alive");
+    }
+
+    /// A wait that never converges reports the readiness timeout, naming the
+    /// node - not the probe's or the blocking pool's failure.
+    #[tokio::test]
+    async fn the_async_wait_times_out_named() {
+        let path = std::env::temp_dir().join(format!("d2b-absent-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let predicates = [ReadinessPredicate::UnixSocketExists(
+            path.to_string_lossy().into_owned(),
+        )];
+        let error = wait_for_readiness_async(
+            &node("swtpm"),
+            &predicates,
+            Duration::from_millis(0),
+            None,
+        )
+        .await
+        .expect_err("the socket never appears");
+        assert_eq!(error, "readiness-timeout:swtpm");
+    }
+}

@@ -28,9 +28,9 @@ use sha2::{Digest, Sha256};
 
 use crate::ServerState;
 use crate::audio_dispatch::{DaemonAudioMediator, audio_capability_for_vm};
+use d2b_provider_audio_binding::AUDIO_BINDING_TYPE;
+use d2b_provider_audio_service::AUDIO_SERVICE_TYPE;
 
-pub(crate) const AUDIO_SERVICE_TYPE: &str = "audio.d2bus.org.AudioService";
-pub(crate) const AUDIO_BINDING_TYPE: &str = "audio.d2bus.org.AudioBinding";
 const GUEST_TYPE: &str = "Guest";
 
 /// Stable errors for the daemon-owned audio resource path.

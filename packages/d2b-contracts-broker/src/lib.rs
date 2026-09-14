@@ -4,6 +4,10 @@ pub mod broker_wire;
 pub mod host_generation;
 
 pub use broker_wire::BrokerRequest;
+pub use broker_wire::{
+    FORWARD_SOCKET_ENV, ForwardOperationOutcome, ForwardOperationRequest,
+    ForwardOperationResponse,
+};
 pub use d2b_contracts::privileges_w3::W3BrokerOperation;
 
 use schemars::JsonSchema;
@@ -29,7 +33,6 @@ impl BrokerCapabilities {
         operations.extend(
             [
                 "Hello",
-                "ValidateBundle",
                 "ExportBrokerAudit",
                 "CreateOrReconcileUsersGroups",
                 "SetupMountNamespace",
@@ -41,8 +44,6 @@ impl BrokerCapabilities {
                 "UsbipBind",
                 "UsbipUnbind",
                 "UsbipProxyReconcile",
-                "PauseBroker",
-                "ResumeBroker",
             ]
             .into_iter()
             .map(str::to_owned),

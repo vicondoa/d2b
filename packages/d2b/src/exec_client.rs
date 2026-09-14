@@ -1158,6 +1158,20 @@ impl TerminalHostIo for CapturingHostIo {
 /// events enqueued since the last poll.
 pub struct InstalledSignals {
     pending: Arc<Mutex<VecDeque<ExecSignal>>>,
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl InstalledSignals {
+    /// Wait until at least one signal event is queued.
+    ///
+    /// The future borrows nothing, so an async loop can hold it in a
+    /// `select!` branch while another statement drains the queue, and a signal
+    /// that arrives between a drain and this await is delivered (the notify
+    /// stores a permit when no waiter is parked).
+    pub fn waiter(&self) -> impl Future<Output = ()> + use<> {
+        let notify = Arc::clone(&self.notify);
+        async move { notify.notified().await }
+    }
 }
 
 impl TerminalSignalSource for InstalledSignals {
@@ -1194,6 +1208,8 @@ pub fn install_signals() -> io::Result<InstalledSignals> {
 
     let pending = Arc::new(Mutex::new(VecDeque::new()));
     let pending_thread = Arc::clone(&pending);
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let notify_thread = Arc::clone(&notify);
     let wait_set = set;
     std::thread::Builder::new()
         .name("d2b-exec-sig".to_owned())
@@ -1214,13 +1230,14 @@ pub fn install_signals() -> io::Result<InstalledSignals> {
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
                             .push_back(mapped);
+                        notify_thread.notify_one();
                     }
                     Err(_) => continue,
                 }
             }
         })?;
 
-    Ok(InstalledSignals { pending })
+    Ok(InstalledSignals { pending, notify })
 }
 
 fn nix_errno_to_io(errno: nix::errno::Errno) -> io::Error {

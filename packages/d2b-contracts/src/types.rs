@@ -159,12 +159,10 @@ pub fn validate_usb_bus_id(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Path classifier for [`PrepareStateDir`] / [`PrepareRuntimeDir`].
+/// Path classifier for the `PrepareStateDir` / `PrepareRuntimeDir` broker
+/// requests declared in `d2b-contracts-broker`'s `broker_wire` module.
 /// The broker derives the concrete path from the bundle anchored by
 /// `vm_id` + `path_class`; the daemon never passes a raw path.
-///
-/// [`PrepareStateDir`]: crate::broker_wire::BrokerRequest::PrepareStateDir
-/// [`PrepareRuntimeDir`]: crate::broker_wire::BrokerRequest::PrepareRuntimeDir
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]

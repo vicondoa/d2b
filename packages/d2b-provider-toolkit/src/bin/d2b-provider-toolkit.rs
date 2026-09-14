@@ -7,7 +7,7 @@ use std::{
 };
 
 use d2b_contracts_provider::v3::ProviderManifest;
-use d2b_provider_toolkit::manifest::{self, VerificationError};
+use d2b_provider_toolkit::declaration::manifest::{self, VerificationError};
 
 fn main() -> ExitCode {
     match run() {

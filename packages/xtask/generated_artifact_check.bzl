@@ -8,17 +8,20 @@ GENERATED_ARTIFACT_COMMANDS = [
     "gen-zone-schemas",
     "gen-zone-nix-options",
     "gen-resource-schemas",
+    "gen-layer-catalogs",
     "gen-error-codes",
     "gen-provider-packaging",
+    "gen-nix-inventories",
     "gen-semantic-service-schemas",
     "gen-cli-shell-artifacts",
     "gen-resource-proto",
     "gen-resource-ttrpc",
     "gen-daemon-api",
+    "gen-broker-operations",
     "gen-package-policy-inputs",
 ]
 
-def generated_artifact_check(name, command, data):
+def generated_artifact_check(name, command, data, env_inherit = [], tags = []):
     sh_test(
         name = name,
         srcs = ["//:tests/tools/generated-artifact-check.sh"],
@@ -34,6 +37,11 @@ def generated_artifact_check(name, command, data):
             "D2B_PYTHON_RUNFILE": "$(rootpath @python3//:bin/python3)",
             "D2B_XTASK_RUNFILE": "$(rootpath :xtask)",
         },
+        # A generator that shells out (for example to `cargo`) needs the
+        # invoking environment: the sandbox supplies neither the host PATH nor
+        # the tool homes the caller has warmed.
+        env_inherit = env_inherit,
+        tags = tags,
         visibility = ["//visibility:public"],
     )
 

@@ -1,0 +1,119 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+d2b_provider_device_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+rust_library(
+    name = "d2b_provider_device",
+    srcs = d2b_provider_device_srcs,
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-core-controller:d2b_core_controller",
+        "//packages/d2b-provider-device-gpu:d2b_provider_device_gpu",
+        "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key",
+        "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm",
+        "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_provider_device_test_support",
+    srcs = d2b_provider_device_srcs,
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_provider_device",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-core-controller:d2b_core_controller_test_support",
+        "//packages/d2b-provider-device-gpu:d2b_provider_device_gpu",
+        "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key_test_support",
+        "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm_test_support",
+        "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip_test_support",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_provider_device_unit_test",
+    crate = ":d2b_provider_device",
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "device_family",
+    srcs = ["tests/device_family.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-device-gpu:d2b_provider_device_gpu",
+        "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key",
+        "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm",
+        "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
+        ":d2b_provider_device",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "device_family_integration",
+    srcs = ["integration/device_family.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        ":d2b_provider_device",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_doc_test(
+    name = "d2b_provider_device_doc_test",
+    crate = "//packages/d2b-provider-device:d2b_provider_device",
+)
+
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "integration/**/*",
+            "nix/**/*",
+            "README.md",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+    visibility = ["//visibility:public"],
+)

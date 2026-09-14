@@ -3,13 +3,38 @@ name = "d2b-sk-frontend"
 version = "0.0.0-bootstrap"
 edition = "2024"
 publish = false
-license.workspace = true
-description = "d2b guest-side virtual FIDO/security-key UHID frontend"
+license = "Apache-2.0"
 
-[lints]
-workspace = true
+
+
+[lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
+
+[features]
+default = []
 
 [dependencies]
+async-trait = "0.1"
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
+d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
+d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
+d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap" }
 libc = "0.2"
-tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time", "fs"] }
-tokio-vsock = "0.7.2"
+tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tokio-vsock = "0.7"
+
+# U33: this crate does not inherit `[workspace.lints]` (it carries its own lint
+# posture), but `clippy.toml` at the workspace root arms
+# `clippy::disallowed_methods` for every crate clippy checks - the lint is
+# warn-by-default and the blocking-API list is what makes it fire, so the
+# workspace lint table is not what turns it on. Without the levels below the
+# workspace's pre-existing blocking calls would fail this crate's build under
+# the repo's `-D warnings`. TEMPORARY: the `disallowed_methods` allowance goes
+# away together with the workspace-level one in the root manifest - see the
+# removal condition there; `await_holding_lock` is already a live denial.
+[lints.clippy]
+disallowed_methods = "allow"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"

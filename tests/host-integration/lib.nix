@@ -65,17 +65,40 @@ let
 
   mkRuntimeCloudHypervisorArtifact = pkgs:
     let
+      # The controller arrives through the Bazel-staged bundle that
+      # `make test-host-integration` hands to the evaluation
+      # (`D2B_CH_CONTROLLER_BUNDLE`). The flake's own package overlay exposes
+      # `d2b-cloud-hypervisor-controller` only inside `testSelf`, and this
+      # helper is reached with the plain `self`, so resolving it through
+      # `self.packages` failed every check that builds this artifact.
+      stagedControllerBundle = builtins.getEnv "D2B_CH_CONTROLLER_BUNDLE";
+      # The staged bundle holds the Bazel-built binary, which still points at
+      # the build environment's interpreter. It has to go through the same
+      # fixup the flake's own package applies - patched interpreter, resolved
+      # runtime libraries - or the broker cannot start it inside the VM
+      # ("Could not start dynamically linked executable").
       controller =
-        self.packages.${pkgs.stdenv.hostPlatform.system}.d2b-cloud-hypervisor-controller;
+        if stagedControllerBundle != "" then
+          (import ../../nix/test-support/bazel-host-tools.nix {
+            inherit pkgs;
+            rawBundle = null;
+            rawCloudHypervisorController = builtins.path {
+              path = /. + stagedControllerBundle;
+              name = "d2b-staged-cloud-hypervisor-controller";
+            };
+          }).cloudHypervisorControllerPackage
+        else
+          self.packages.${pkgs.stdenv.hostPlatform.system}.d2b-cloud-hypervisor-controller;
+      controllerBinary = "${controller}/bin/d2b-cloud-hypervisor-controller";
       signer = pkgs.python3.withPackages
         (pythonPackages: [ pythonPackages.cryptography ]);
-      manifest = ../../packages/d2b-provider-runtime-cloud-hypervisor/provider-manifest.json;
-      schema = ../../packages/d2b-provider-runtime-cloud-hypervisor/root-config.schema.json;
+      manifest = ../../packages/d2b-provider-guest-cloud-hypervisor/provider-manifest.json;
+      schema = ../../packages/d2b-provider-guest-cloud-hypervisor/root-config.schema.json;
       package = pkgs.runCommand "d2b-u20-runtime-cloud-hypervisor" {
         nativeBuildInputs = [ pkgs.coreutils signer ];
       } ''
         ${signer}/bin/python3 - "${manifest}" \
-          "${controller}/bin/d2b-cloud-hypervisor-controller" "$out" <<'PY'
+          "${controllerBinary}" "$out" <<'PY'
         import hashlib
         import json
         import pathlib
@@ -157,7 +180,7 @@ let
       runtime = lib.head manifestData.runtimeArtifacts;
       catalog = {
         providerName = manifestData.trust.publisher;
-        packageName = "d2b-provider-runtime-cloud-hypervisor";
+        packageName = "d2b-provider-guest-cloud-hypervisor";
         version = "0.0.0";
         systems = [ pkgs.stdenv.hostPlatform.system ];
         platform = pkgs.stdenv.hostPlatform.system;

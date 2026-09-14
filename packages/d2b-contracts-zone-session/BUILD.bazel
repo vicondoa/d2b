@@ -26,20 +26,6 @@ rust_test(
 )
 
 rust_test(
-    name = "generation_bundle",
-    srcs = ["tests/generation_bundle.rs"],
-    compile_data = ["Cargo.toml"],
-    data = ["//bazel/checks/fixtures:fixture_smoke"],
-    env = {"D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)"},
-    deps = [
-        ":d2b_contracts_zone_session",
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-    visibility = ["//visibility:public"],
-)
-
-rust_test(
     name = "d2b_contracts_zone_session_test",
     crate = ":d2b_contracts_zone_session",
     compile_data = ["Cargo.toml"],

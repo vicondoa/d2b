@@ -26,7 +26,7 @@ use d2b_contracts_resource::v3::ResourceRef;
 use std::{collections::BTreeSet, future::Future, future::ready};
 
 use tracing::{debug, warn};
-use d2b_contracts_resource::v3::execution_policy::{BudgetSpec, ExecutionDomain};
+use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
 use d2b_contracts_resource::v3::host::{HOST_RESOURCE_TYPE, HostSpec, IsolationPosture};
 use d2b_contracts_resource::v3::resource_status::ResourcePhase;
 use serde::Serialize;
@@ -376,29 +376,6 @@ impl HostReconciler {
         })
     }
 
-    /// Reconcile a Host and emit its redacted ResourceReconciled record.
-    pub fn reconcile_with_audit(
-        &self,
-        host_ref: &ResourceRef,
-        provider_ref: &ResourceRef,
-        spec: &HostSpec,
-    ) -> Result<(HostStatusReport, crate::ResourceReconciledAudit), SystemCoreError> {
-        let status = self.reconcile(host_ref, provider_ref, spec)?;
-        let outcome = match status.phase {
-            ResourcePhase::Ready => crate::ReconcileOutcome::Converged,
-            ResourcePhase::Degraded => crate::ReconcileOutcome::Degraded,
-            _ => crate::ReconcileOutcome::Failed,
-        };
-        Ok((
-            status,
-            crate::ResourceReconciledAudit::host(
-                host_ref.name().as_str(),
-                outcome,
-                "host-reconciled",
-            ),
-        ))
-    }
-
     /// Reject a submitted status that carries a reconciler-owned field.
     ///
     /// This is the enforcement half of "operators cannot suppress or
@@ -559,62 +536,5 @@ impl HostReconciler {
             required_capabilities,
             requires_minijail,
         )
-    }
-
-    /// Reject an aggregate reservation that exceeds a Host budget.
-    pub fn check_budget(
-        &self,
-        host_budget: &BudgetSpec,
-        aggregate: &BudgetReservation,
-    ) -> Result<(), SystemCoreError> {
-        if aggregate.exceeds(host_budget) {
-            warn!(
-                provider = crate::PROVIDER_NAME,
-                "host budget overcommit rejected"
-            );
-            Err(SystemCoreError::BudgetOvercommit)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-/// A bounded aggregate reservation computed from non-terminal child rows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct BudgetReservation {
-    /// Reserved millicpus.
-    pub cpu_milli: u64,
-    /// Reserved memory bytes.
-    pub memory_bytes: u64,
-    /// Reserved process IDs.
-    pub pids: u32,
-    /// Reserved file descriptors.
-    pub fds: u32,
-    /// Reserved threads.
-    pub threads: u32,
-}
-
-impl BudgetReservation {
-    /// Whether this aggregate exceeds any explicitly configured Host limit.
-    pub fn exceeds(self, budget: &BudgetSpec) -> bool {
-        budget
-            .cpu()
-            .and_then(|cpu| cpu.limit)
-            .is_some_and(|limit| limit.get() < self.cpu_milli)
-            || budget
-                .memory()
-                .and_then(|memory| memory.limit.as_ref())
-                .is_some_and(|limit| limit.as_bytes() < self.memory_bytes)
-            || budget
-                .pids()
-                .and_then(|pids| pids.limit)
-                .is_some_and(|limit| limit < self.pids)
-            || budget
-                .fds()
-                .and_then(|fds| fds.limit)
-                .is_some_and(|limit| limit < self.fds)
-            || budget
-                .thread_limit()
-                .is_some_and(|limit| limit < self.threads)
     }
 }

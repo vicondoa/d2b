@@ -1,0 +1,21 @@
+[package]
+name = "d2b-provider-shell-pool"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-provider-shell-terminal = { path = "../d2b-provider-shell-terminal", version = "0.0.0-bootstrap" }
+d2b-provider-wayland-policy = { path = "../d2b-provider-wayland-policy", version = "0.0.0-bootstrap" }
+d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
+d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
+serde_json.workspace = true
+
+[dev-dependencies]
+async-trait = "0.1"
+serde_json.workspace = true

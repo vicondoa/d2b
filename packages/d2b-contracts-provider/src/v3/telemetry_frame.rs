@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn redaction_preserves_semantic_tokens_and_is_idempotent() {
-        let raw = br#"{"signal":"trace","value":{"event":"accepted","outcome":"ok","service":"store","transport":"unix","profile":"NN","kind":"single","direction":"local","record_class":"process-effect","operation":"scan","op":"vmStart","path":"/secret/path"}}"#;
+        let raw = br#"{"signal":"trace","value":{"event":"accepted","outcome":"ok","service":"store","transport":"unix","profile":"NN","kind":"single","direction":"local","record_class":"process-effect","operation":"scan","op":"SpawnRunner","path":"/secret/path"}}"#;
         let first = redact_frame(raw).unwrap();
         let second = redact_frame(&first).unwrap();
         assert_eq!(first, second);
@@ -514,7 +514,7 @@ mod tests {
             "\"direction\":\"local\"",
             "\"record_class\":\"process-effect\"",
             "\"operation\":\"scan\"",
-            "\"op\":\"vmStart\"",
+            "\"op\":\"SpawnRunner\"",
         ] {
             assert!(
                 rendered.contains(semantic),

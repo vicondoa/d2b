@@ -26,31 +26,36 @@ members = [
     "packages/d2b-provider-clipboard-wayland",
     "packages/d2b-provider-display-wayland",
     "packages/d2b-provider-notification-desktop",
-    "packages/d2b-provider-runtime-azure-container-apps",
-    "packages/d2b-provider-runtime-azure-virtual-machine",
-    "packages/d2b-provider-runtime-cloud-hypervisor",
-    "packages/d2b-provider-runtime-qemu-media",
+    "packages/d2b-provider-guest",
+    "packages/d2b-provider-guest-azure-container-apps",
+    "packages/d2b-provider-guest-azure-virtual-machine",
+    "packages/d2b-provider-guest-cloud-hypervisor",
+    "packages/d2b-provider-guest-qemu-media",
     "packages/d2b-provider-shell-terminal",
     "packages/d2b-provider-transport-azure-relay",
     "packages/d2b-provider-transport-unix",
     "packages/d2b-provider-transport-vsock",
     "packages/d2b-process-conformance",
     "packages/d2b-provider-system-core",
-    "packages/d2b-provider-system-systemd",
-    "packages/d2b-provider-system-minijail",
+    "packages/d2b-provider-process-systemd",
+    "packages/d2b-provider-process-minijail",
     "packages/d2b-provider-volume-local",
     "packages/d2b-provider-volume-virtiofs",
     "packages/d2b-provider-supervisor",
     "packages/d2b-provider-credential-secret-service",
     "packages/d2b-provider-credential-entra",
     "packages/d2b-provider-credential-managed-identity",
+    "packages/d2b-provider-credential",
     "packages/d2b-provider-network-local",
+    "packages/d2b-provider-device",
     "packages/d2b-provider-device-gpu",
     "packages/d2b-provider-device-security-key",
     "packages/d2b-provider-device-tpm",
     "packages/d2b-provider-device-usbip",
     "packages/d2b-provider-observability-otel",
-    "packages/d2b-process",
+    "packages/d2b-provider-process",
+    "packages/d2b-provider-host",
+    "packages/d2b-provider-user",
     "packages/d2b-session",
     "packages/d2b-session-unix",
     "packages/d2b-controller-toolkit",
@@ -58,12 +63,35 @@ members = [
     "packages/d2b-provider-test-controller",
     "packages/d2b-resource-api",
     "packages/d2b-resource-runtime",
+    "packages/d2b-resource-types",
     "packages/d2b",
     "packages/d2bd-runtime",
     "packages/d2bd",
     "packages/xtask",
     "packages/d2b-broker",
-    "packages/d2b-guest-shell-runner",
+    "packages/d2b-provider-endpoint",
+    "packages/d2b-provider-telemetry-service",
+    "packages/d2b-provider-telemetry-binding",
+    "packages/d2b-provider-volume",
+    "packages/d2b-provider-volume-binding",
+    "packages/d2b-provider-wayland-policy",
+    "packages/d2b-provider-wayland-session",
+    "packages/d2b-provider-audio-service",
+    "packages/d2b-provider-audio-binding",
+    "packages/d2b-provider-shell-pool",
+    "packages/d2b-provider-shell-session",
+    "packages/d2b-provider-zone",
+    "packages/d2b-provider-zone-link",
+    "packages/d2b-provider-provider",
+    "packages/d2b-provider-role",
+    "packages/d2b-provider-role-binding",
+    "packages/d2b-provider-quota",
+    "packages/d2b-provider-emergency-policy",
+    "packages/d2b-provider-resource-export",
+    "packages/d2b-provider-resource-import",
+    "packages/d2b-provider-command",
+    "packages/d2b-provider-operation",
+    "packages/d2b-provider-seccomp-profile",
 ]
 
 [workspace.package]
@@ -92,7 +120,63 @@ debug = 2
 debug = 2
 
 [workspace.lints.clippy]
-all = "warn"
+# `priority = -1` keeps the group below the individual lints declared below it;
+# clippy's `lint_groups_priority` (deny by default) fails the build otherwise.
+all = { level = "warn", priority = -1 }
+# U33: the mechanical half of the async-purity rule. `clippy.toml` at the
+# workspace root holds the deny list of blocking APIs - mutex and read-write
+# lock acquisition, condition-variable waits, blocking channel receives,
+# thread sleep, blocking filesystem and subprocess calls, and blocking socket
+# connect/accept/read/write including the nix socket entry points this tree
+# uses - each entry naming a reason and a replacement that already exists in
+# this workspace. The lint levels live here.
+#
+# `await_holding_refcell_ref` and `await_holding_lock` are live denials, not
+# temporary. No interior-mutability borrow is held across a suspension point
+# anywhere in the workspace today, and the three lock-across-await sites the
+# census found are fixed: `d2bd/src/resource_runtime.rs`'s shutdown takes the
+# registrar out of its shared slot before the per-session revoke awaits, and
+# `d2b-bus/src/session_seam_tests.rs:1613` and `:1628` scope their guards so no
+# `std::sync` guard is in scope at a suspension point. The lint is only the
+# mechanical half of the rule, though: a synchronous lock acquired lexically
+# inside an `async fn` still parks the executor worker while another thread
+# holds it, and `await_holding_lock` cannot see that because no guard crosses
+# the suspension point. Catching it needs a source-level policy check (a
+# lexical scan for `std::sync` lock acquisition inside `async fn` bodies that
+# fails closed); it is not landed here.
+await_holding_refcell_ref = "deny"
+await_holding_lock = "deny"
+# TEMPORARY (U33 backlog). `disallowed_methods` stays allowed at the workspace
+# level, not because the rule is optional but because the async-purity
+# conversions are still landing. The census at 040896e9f, counted per call
+# site across every target and deduplicated across the lib/test duplication
+# that `--all-targets` produces (4948 distinct sites: 2196 production, 2752
+# test), found 4945 `disallowed_methods` sites, led by `std::sync::Mutex::lock`
+# (1594) and the filesystem calls; the broker (1227), the daemon (860), the
+# daemon runtime (470) and xtask (458) carry the most. Denying it at the table
+# now would fail `make check-clippy` on that whole backlog, so the level stays
+# `allow` and the gate is built to fail only for the denied lints above - never
+# for this backlog, and never for the pre-existing `clippy::all` warning
+# corpus (833 diagnostics at the same commit) that `.cargo/config.toml`'s
+# `-D warnings` would otherwise promote. The census command below is how the
+# backlog stays visible meanwhile.
+#
+# The six members that do not inherit this table (`d2b-audit`, `d2b-broker`,
+# `d2b-host-activation-helper`, `d2b-resource-compiler`, `d2b-sk-frontend`,
+# `d2b-telemetry`) carry the same levels locally, because `clippy.toml` alone
+# arms the lint at its default warn level in every crate clippy checks - the
+# workspace table is not what turns it on.
+#
+# Removal condition: flip the line below to `deny` once the census is free of
+# production hits, or every remaining hit carries an inline
+# `#[allow(..., reason = "...")]` recorded on the crate policy check's tracked
+# exception list. Re-run the census with:
+#   cargo clippy --workspace --all-targets --message-format=json -- \
+#     -W warnings -W clippy::disallowed_methods -W clippy::await_holding_lock \
+#     -W clippy::await_holding_refcell_ref
+# `-W warnings` neutralises the config's `-D warnings` so an unrelated
+# pre-existing warning cannot abort a crate's lint pass and hide its hits.
+disallowed_methods = "allow"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -128,14 +212,6 @@ schemars = { version = "0.8", features = ["derive"] }
 # wire contract for routes/nft is fully encoded in d2b-contracts here,
 # so scope agents have everything they need to pull these crates in.
 rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "mount", "thread", "pty", "termios", "stdio"] }
-# W3 s2: declared in workspace.dependencies so future scope work (and
-# the eventual production netlink backend in d2b-broker) can
-# opt into rtnetlink via `{ workspace = true }`. Not yet consumed by
-# any workspace member, so the resolved Cargo.lock is unchanged. The
-# trait-based netlink backend in `d2b_host::netlink` lets the L1c
-# canary matrix exercise every fail-closed path through a fake
-# backend without `CAP_NET_ADMIN`.
-rtnetlink = "0.14"
 # W3 s3: sha2 lands here so d2b-host's nft drift-detection digest
 # is byte-stable across builds and consumers. The nftnl native binding
 # is intentionally NOT pulled in - see

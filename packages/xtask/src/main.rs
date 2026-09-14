@@ -36,8 +36,11 @@ use schemars::schema::RootSchema;
 mod bazel_evidence;
 mod changelog;
 mod delivery;
+mod gen_broker_operations;
+mod gen_layer_catalogs;
 mod gen_resource_schemas;
 mod inventory;
+mod nix_inventories;
 mod production_closure;
 mod provider_crate_policy;
 mod provider_packaging;
@@ -111,10 +114,37 @@ fn main() -> std::process::ExitCode {
         [command] if command == "gen-resource-schemas" => run_task("gen-resource-schemas", || {
             gen_resource_schemas::generate(repo_root()?)
         }),
+        [command, rest @ ..] if command == "gen-layer-catalogs" => {
+            let result = repo_root()
+                .map_err(|error| error.to_string())
+                .and_then(|root| gen_layer_catalogs::run_cli(root, rest));
+            match result {
+                Ok(paths) => {
+                    for path in paths {
+                        println!("{}", path.display());
+                    }
+                    std::process::ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("gen-layer-catalogs failed: {error}");
+                    std::process::ExitCode::FAILURE
+                }
+            }
+        }
         [command] if command == "gen-error-codes" => run_task("gen-error-codes", gen_error_codes),
         [command] if command == "gen-provider-packaging" => {
             run_task("gen-provider-packaging", || {
                 provider_packaging::gen_provider_packaging(repo_root()?)
+            })
+        }
+        [command] if command == "gen-broker-operations" => {
+            run_task("gen-broker-operations", || {
+                gen_broker_operations::gen_broker_operations(repo_root()?)
+            })
+        }
+        [command] if command == "gen-nix-inventories" => {
+            run_task("gen-nix-inventories", || {
+                nix_inventories::gen_nix_inventories(repo_root()?)
             })
         }
         [command] if command == "gen-semantic-service-schemas" => {
@@ -166,25 +196,53 @@ fn main() -> std::process::ExitCode {
                 }
             }
         }
-        [command] if command == "check-provider-crate-layout" => run_provider_crate_layout(),
+        [command, rest @ ..] if command == "check-provider-crate-layout" => {
+            run_provider_crate_layout(rest)
+        }
         [command] if command == "check-provider-layout" => run_provider_layout(),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-layer-catalogs [--check|--write]|gen-error-codes|gen-provider-packaging|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout [--fix]|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
             );
             std::process::ExitCode::FAILURE
         }
     }
 }
 
-fn run_provider_crate_layout() -> std::process::ExitCode {
+fn run_provider_crate_layout(args: &[String]) -> std::process::ExitCode {
+    let fix = match args {
+        [] => false,
+        [flag] if flag == "--fix" => true,
+        _ => {
+            eprintln!("usage: cargo xtask check-provider-crate-layout [--fix]");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
     let result = repo_root()
         .map_err(|error| error.to_string())
-        .and_then(provider_crate_policy::check);
+        .and_then(|root| {
+            if fix {
+                provider_crate_policy::fix(root)
+            } else {
+                provider_crate_policy::check(root).map(|()| Vec::new())
+            }
+        });
     match result {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(paths) => {
+            for path in paths {
+                println!("{}", path.display());
+            }
+            std::process::ExitCode::SUCCESS
+        }
         Err(error) => {
-            eprintln!("check-provider-crate-layout failed: {error}");
+            eprintln!(
+                "{} failed: {error}",
+                if fix {
+                    "check-provider-crate-layout --fix"
+                } else {
+                    "check-provider-crate-layout"
+                }
+            );
             std::process::ExitCode::FAILURE
         }
     }

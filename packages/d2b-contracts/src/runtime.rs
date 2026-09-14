@@ -17,6 +17,42 @@ impl RuntimeOperationCapabilities {
         self == &Self::default()
     }
 
+    pub fn local_nixos() -> Self {
+        Self {
+            display: RuntimeDisplayCapabilities {
+                display: true,
+                graphics: true,
+                video: true,
+                wayland_proxy: true,
+            },
+            guest: RuntimeGuestCapabilities {
+                config_sync: true,
+                exec: true,
+                in_guest_observability: true,
+                keys: true,
+                shell: true,
+                ssh: true,
+            },
+            lifecycle: RuntimeLifecycleCapabilities {
+                host_prepare: true,
+                restart: true,
+                start: true,
+                stop: true,
+                switch: true,
+            },
+            media: RuntimeMediaCapabilities {
+                qemu_media: false,
+                removable_media: false,
+                usb_hotplug: true,
+            },
+            storage: RuntimeStorageCapabilities {
+                store_sync: true,
+                virtiofs: true,
+                volumes: true,
+            },
+        }
+    }
+
     pub fn local_qemu_media() -> Self {
         Self {
             display: RuntimeDisplayCapabilities {

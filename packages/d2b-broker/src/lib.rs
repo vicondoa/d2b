@@ -36,7 +36,10 @@
 // asserts the production binary compiles clean.
 
 pub mod audit;
+pub mod catalog;
+pub mod envelope;
 pub mod fd_passing;
+pub mod forwarding;
 // Live broker request handlers (pidfd_open + clone3-based spawn +
 // reconcile-executor calls). Pure-shaped: take their inputs directly so
 // the dispatch layer is the only mixer of wire decoding + bundle

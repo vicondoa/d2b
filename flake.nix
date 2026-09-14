@@ -88,38 +88,67 @@
           cp -r ${./packages/d2b-core-controller} $out/packages/d2b-core-controller
           cp -r ${./packages/d2b-host} $out/packages/d2b-host
           cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
-          cp -r ${./packages/d2b-process} $out/packages/d2b-process
+          cp -r ${./packages/d2b-provider-process} $out/packages/d2b-provider-process
           cp -r ${./packages/d2b-process-conformance} $out/packages/d2b-process-conformance
           cp -r ${./packages/d2b-provider} $out/packages/d2b-provider
           cp -r ${./packages/d2b-provider-activation-nixos} $out/packages/d2b-provider-activation-nixos
+          cp -r ${./packages/d2b-provider-audio-binding} $out/packages/d2b-provider-audio-binding
           cp -r ${./packages/d2b-provider-audio-pipewire} $out/packages/d2b-provider-audio-pipewire
+          cp -r ${./packages/d2b-provider-audio-service} $out/packages/d2b-provider-audio-service
           cp -r ${./packages/d2b-provider-clipboard-wayland} $out/packages/d2b-provider-clipboard-wayland
+          cp -r ${./packages/d2b-provider-command} $out/packages/d2b-provider-command
           cp -r ${./packages/d2b-provider-config-nixos} $out/packages/d2b-provider-config-nixos
+          cp -r ${./packages/d2b-provider-credential} $out/packages/d2b-provider-credential
           cp -r ${./packages/d2b-provider-credential-entra} $out/packages/d2b-provider-credential-entra
           cp -r ${./packages/d2b-provider-credential-managed-identity} $out/packages/d2b-provider-credential-managed-identity
           cp -r ${./packages/d2b-provider-credential-secret-service} $out/packages/d2b-provider-credential-secret-service
+          cp -r ${./packages/d2b-provider-device} $out/packages/d2b-provider-device
           cp -r ${./packages/d2b-provider-device-gpu} $out/packages/d2b-provider-device-gpu
           cp -r ${./packages/d2b-provider-device-security-key} $out/packages/d2b-provider-device-security-key
           cp -r ${./packages/d2b-provider-device-tpm} $out/packages/d2b-provider-device-tpm
           cp -r ${./packages/d2b-provider-device-usbip} $out/packages/d2b-provider-device-usbip
           cp -r ${./packages/d2b-provider-display-wayland} $out/packages/d2b-provider-display-wayland
+          cp -r ${./packages/d2b-provider-emergency-policy} $out/packages/d2b-provider-emergency-policy
+          cp -r ${./packages/d2b-provider-endpoint} $out/packages/d2b-provider-endpoint
+          cp -r ${./packages/d2b-provider-guest} $out/packages/d2b-provider-guest
+          cp -r ${./packages/d2b-provider-host} $out/packages/d2b-provider-host
           cp -r ${./packages/d2b-provider-network-local} $out/packages/d2b-provider-network-local
           cp -r ${./packages/d2b-provider-notification-desktop} $out/packages/d2b-provider-notification-desktop
           cp -r ${./packages/d2b-provider-observability-otel} $out/packages/d2b-provider-observability-otel
-          cp -r ${./packages/d2b-provider-runtime-azure-container-apps} $out/packages/d2b-provider-runtime-azure-container-apps
-          cp -r ${./packages/d2b-provider-runtime-azure-virtual-machine} $out/packages/d2b-provider-runtime-azure-virtual-machine
-          cp -r ${./packages/d2b-provider-runtime-cloud-hypervisor} $out/packages/d2b-provider-runtime-cloud-hypervisor
-          cp -r ${./packages/d2b-provider-runtime-qemu-media} $out/packages/d2b-provider-runtime-qemu-media
+          cp -r ${./packages/d2b-provider-operation} $out/packages/d2b-provider-operation
+          cp -r ${./packages/d2b-provider-guest-azure-container-apps} $out/packages/d2b-provider-guest-azure-container-apps
+          cp -r ${./packages/d2b-provider-guest-azure-virtual-machine} $out/packages/d2b-provider-guest-azure-virtual-machine
+          cp -r ${./packages/d2b-provider-guest-cloud-hypervisor} $out/packages/d2b-provider-guest-cloud-hypervisor
+          cp -r ${./packages/d2b-provider-guest-qemu-media} $out/packages/d2b-provider-guest-qemu-media
           cp -r ${./packages/d2b-provider-shell-terminal} $out/packages/d2b-provider-shell-terminal
           cp -r ${./packages/d2b-provider-supervisor} $out/packages/d2b-provider-supervisor
           cp -r ${./packages/d2b-provider-system-core} $out/packages/d2b-provider-system-core
-          cp -r ${./packages/d2b-provider-system-minijail} $out/packages/d2b-provider-system-minijail
-          cp -r ${./packages/d2b-provider-system-systemd} $out/packages/d2b-provider-system-systemd
+          cp -r ${./packages/d2b-provider-telemetry-binding} $out/packages/d2b-provider-telemetry-binding
+          cp -r ${./packages/d2b-provider-telemetry-service} $out/packages/d2b-provider-telemetry-service
+          cp -r ${./packages/d2b-provider-process-minijail} $out/packages/d2b-provider-process-minijail
+          cp -r ${./packages/d2b-provider-process-systemd} $out/packages/d2b-provider-process-systemd
+          cp -r ${./packages/d2b-provider-provider} $out/packages/d2b-provider-provider
+          cp -r ${./packages/d2b-provider-quota} $out/packages/d2b-provider-quota
+          cp -r ${./packages/d2b-provider-resource-export} $out/packages/d2b-provider-resource-export
+          cp -r ${./packages/d2b-provider-resource-import} $out/packages/d2b-provider-resource-import
+          cp -r ${./packages/d2b-provider-role} $out/packages/d2b-provider-role
+          cp -r ${./packages/d2b-provider-role-binding} $out/packages/d2b-provider-role-binding
+          cp -r ${./packages/d2b-provider-seccomp-profile} $out/packages/d2b-provider-seccomp-profile
+          cp -r ${./packages/d2b-provider-shell-pool} $out/packages/d2b-provider-shell-pool
+          cp -r ${./packages/d2b-provider-shell-session} $out/packages/d2b-provider-shell-session
           cp -r ${./packages/d2b-provider-toolkit} $out/packages/d2b-provider-toolkit
           cp -r ${./packages/d2b-provider-transport-azure-relay} $out/packages/d2b-provider-transport-azure-relay
+          cp -r ${./packages/d2b-provider-user} $out/packages/d2b-provider-user
+          cp -r ${./packages/d2b-provider-volume} $out/packages/d2b-provider-volume
+          cp -r ${./packages/d2b-provider-volume-binding} $out/packages/d2b-provider-volume-binding
           cp -r ${./packages/d2b-provider-volume-local} $out/packages/d2b-provider-volume-local
           cp -r ${./packages/d2b-provider-volume-virtiofs} $out/packages/d2b-provider-volume-virtiofs
+          cp -r ${./packages/d2b-provider-wayland-policy} $out/packages/d2b-provider-wayland-policy
+          cp -r ${./packages/d2b-provider-wayland-session} $out/packages/d2b-provider-wayland-session
+          cp -r ${./packages/d2b-provider-zone} $out/packages/d2b-provider-zone
+          cp -r ${./packages/d2b-provider-zone-link} $out/packages/d2b-provider-zone-link
           cp -r ${./packages/d2b-resource-api} $out/packages/d2b-resource-api
+          cp -r ${./packages/d2b-resource-types} $out/packages/d2b-resource-types
           cp -r ${./packages/d2b-resource-runtime} $out/packages/d2b-resource-runtime
           cp -r ${./packages/d2b-session} $out/packages/d2b-session
           cp -r ${./packages/d2b-session-unix} $out/packages/d2b-session-unix
@@ -128,6 +157,9 @@
           cp -r ${./packages/d2bd} $out/packages/d2bd
           cp -r ${./packages/d2bd-runtime} $out/packages/d2bd-runtime
           mkdir -p $out/docs/reference/schemas/v3/providers
+          mkdir -p $out/docs/reference/policy
+          cp ${./docs/reference/policy/principal-allocation.json} \
+            $out/docs/reference/policy/principal-allocation.json
           cp ${./docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
             $out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
           cp ${./docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json} \
@@ -356,51 +388,6 @@
               fi
             '';
           };
-        guestShellRunnerStatic =
-          pkgs.pkgsStatic.rustPlatform.buildRustPackage {
-            pname = "d2b-guest-shell-runner-static";
-            version = "0.0.0-bootstrap";
-            src = rustPackagesSrc;
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-              outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-            };
-            sourceRoot = "d2b-rust-src";
-            cargoBuildFlags = [
-              "--package" "d2b-guest-shell-runner"
-              "--features" "real-libshpool"
-            ];
-            doCheck = false;
-            RUSTC_WRAPPER = "";
-            SCCACHE_DIR = "";
-            nativeBuildInputs = [
-              pkgs.pkgsStatic.binutils
-              pkgs.pkgsStatic.rustPlatform.bindgenHook
-            ];
-            postInstall = ''
-              readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
-              bin="$out/bin/d2b-guest-shell-runner"
-              test -x "$bin"
-              "$readelf" -h "$bin" >/dev/null
-              "$readelf" -l "$bin" > "$TMPDIR/d2b-guest-shell-runner.program-headers"
-              if grep -q 'Requesting program interpreter' "$TMPDIR/d2b-guest-shell-runner.program-headers"; then
-                echo "d2b-guest-shell-runner: unexpected ELF interpreter" >&2
-                cat "$TMPDIR/d2b-guest-shell-runner.program-headers" >&2
-                exit 1
-              fi
-              if "$readelf" -d "$bin" > "$TMPDIR/d2b-guest-shell-runner.dynamic" 2> "$TMPDIR/d2b-guest-shell-runner.dynamic.err"; then
-                if grep -q '(NEEDED)' "$TMPDIR/d2b-guest-shell-runner.dynamic"; then
-                  echo "d2b-guest-shell-runner: unexpected dynamic dependency" >&2
-                  cat "$TMPDIR/d2b-guest-shell-runner.dynamic" >&2
-                  exit 1
-                fi
-              elif ! grep -qi 'no dynamic section' "$TMPDIR/d2b-guest-shell-runner.dynamic.err"; then
-                echo "d2b-guest-shell-runner: readelf -d failed unexpectedly" >&2
-                cat "$TMPDIR/d2b-guest-shell-runner.dynamic.err" >&2
-                exit 1
-              fi
-            '';
-          };
         providerArtifact = import ./nix/provider-artifact.nix {
           inherit pkgs;
         };
@@ -432,7 +419,7 @@
           pname = "d2b-cloud-hypervisor-controller";
           cargoBuildFlags = [
             "--package"
-            "d2b-provider-runtime-cloud-hypervisor"
+            "d2b-provider-guest-cloud-hypervisor"
             "--bin"
             "d2b-cloud-hypervisor-controller"
           ];
@@ -443,12 +430,12 @@
           artifactId = "runtime-cloud-hypervisor";
           binary = cloudHypervisorController;
           binaryRef = "d2b-cloud-hypervisor-controller";
-          manifest = ./packages/d2b-provider-runtime-cloud-hypervisor/provider-manifest.json;
-          signature = ./packages/d2b-provider-runtime-cloud-hypervisor/provider-manifest.json.sig;
-          configSchema = ./packages/d2b-provider-runtime-cloud-hypervisor/root-config.schema.json;
-          publicKey = ./packages/d2b-provider-runtime-cloud-hypervisor/publisher-public-key.pem;
+          manifest = ./packages/d2b-provider-guest-cloud-hypervisor/provider-manifest.json;
+          signature = ./packages/d2b-provider-guest-cloud-hypervisor/provider-manifest.json.sig;
+          configSchema = ./packages/d2b-provider-guest-cloud-hypervisor/root-config.schema.json;
+          publicKey = ./packages/d2b-provider-guest-cloud-hypervisor/publisher-public-key.pem;
           providerName = "runtime-cloud-hypervisor";
-          packageName = "d2b-provider-runtime-cloud-hypervisor";
+          packageName = "d2b-provider-guest-cloud-hypervisor";
           signatureId = "default";
         };
       in {
@@ -467,7 +454,6 @@
           guestStaticPackage "d2b-broker" "d2b-broker";
         d2b-sk-frontend-static =
           guestStaticPackage "d2b-sk-frontend" "d2b-sk-frontend";
-        d2b-guest-shell-runner-static = guestShellRunnerStatic;
         d2b-clipd = rustWorkspace {
           pname = "d2b-provider-clipboard-wayland";
           cargoBuildFlags = [
@@ -488,17 +474,6 @@
           ];
           doCheck = false;
           meta.mainProgram = "d2b-wayland-proxy";
-        };
-        d2b-sk-waybar-helper = rustWorkspace {
-          pname = "d2b-provider-notification-desktop";
-          cargoBuildFlags = [
-            "--package"
-            "d2b-provider-notification-desktop"
-            "--bin"
-            "d2b-sk-waybar-helper"
-          ];
-          doCheck = false;
-          meta.mainProgram = "d2b-sk-waybar-helper";
         };
         d2b-unsafe-local-helper = rustWorkspace {
           pname = "d2b-unsafe-local-helper";
@@ -523,7 +498,7 @@
           meta.mainProgram = "d2b-resource-compiler";
         };
         d2b-provider-test-controller = providerTestController;
-        d2b-provider-runtime-cloud-hypervisor =
+        d2b-provider-guest-cloud-hypervisor =
           cloudHypervisorArtifact.package;
         provider-matrix = providerMatrix;
 
@@ -1382,20 +1357,6 @@
             echo ok > "$out"
           '';
 
-        guest-shell-runner-static-dependency-policy =
-          pkgs.runCommand "d2b-guest-shell-runner-static-dependency-policy" { } ''
-            lock=${./Cargo.lock}
-            if grep -E 'name = "(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2)"' "$lock"; then
-              echo "guest shell runner lock contains a forbidden dynamic/PAM/systemd dependency" >&2
-              exit 1
-            fi
-            if ! grep -A6 'name = "motd"' "$lock" | grep -F 'version = "0.2.2"' >/dev/null; then
-              echo "guest shell runner lock must pin the expected PAM-free motd dependency posture" >&2
-              exit 1
-            fi
-            echo ok > "$out"
-          '';
-
         harness-ubuntu-skeleton = (import ./harness/ubuntu/default.nix) {
           pkgs = nixpkgsFor.${system};
         };
@@ -1426,7 +1387,7 @@
         buildProviderArtifact = args: self.lib.mkProviderArtifact args;
         providerRuntimeCloudHypervisor = system:
           let
-            package = self.packages.${system}.d2b-provider-runtime-cloud-hypervisor;
+            package = self.packages.${system}.d2b-provider-guest-cloud-hypervisor;
             metadata = package.passthru.providerArtifact;
           in {
             inherit package;
@@ -1451,8 +1412,6 @@
             guestTools = {
               broker = self.packages.${system}.d2b-broker-guest-static;
               d2bd = self.packages.${system}.d2bd-guest-static;
-              d2b-guest-shell-runner-static =
-                self.packages.${system}.d2b-guest-shell-runner-static;
             };
             evaluator = (import ./nixos-modules/vm-evaluator.nix {
               inputs = guestInputs;

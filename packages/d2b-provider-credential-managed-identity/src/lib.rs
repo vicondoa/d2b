@@ -37,18 +37,10 @@ use d2b_provider_toolkit::{
 };
 
 pub use agent::ManagedIdentityAgent;
-pub use audit::{
-    ManagedIdentityAuditError, ManagedIdentityAuditOperation, ManagedIdentityAuditOutcome,
-    ManagedIdentityAuditRecord,
-};
 pub use controller::{
     AgentProcessSpec, ManagedIdentityController, ManagedIdentityRoute,
     ManagedIdentityStatusProjection, ManagedIdentityTeardownPlan, PROVIDER_KIND,
     PROVIDER_REVOKE_FINALIZER,
-};
-pub use telemetry::{
-    ManagedIdentityTelemetryFrame, ManagedIdentityTelemetryOperation,
-    ManagedIdentityTelemetryOutcome, TelemetryField, TelemetryFrameError,
 };
 
 /// Canonical Provider reference.

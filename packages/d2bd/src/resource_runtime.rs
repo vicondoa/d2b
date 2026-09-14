@@ -19,13 +19,11 @@ use std::{
 use std::sync::atomic::AtomicUsize;
 
 use crate::audio_resource_runtime::{AudioBindingRuntimeStatus, AudioResourceRuntime};
-use crate::credential_driver::{
-    AgentReadyFuture, CredentialDependencyFacts, CredentialDriverEffects,
-    ProductionCredentialDriverEffects,
+use crate::credential_effects::{
+    AgentReadyFuture, ProductionCredentialDriverEffects,
 };
 use crate::credential_resource_runtime::{
-    CredentialSession, CredentialSessionRegistry, ComponentCredentialSession,
-    is_credential_provider_ref,
+    CredentialSessionRegistry, ComponentCredentialSession,
 };
 use async_trait::async_trait;
 use d2b_bus::{
@@ -67,10 +65,14 @@ use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupStage,
 };
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;
-use d2b_core_controller::zone_status::{
+use d2b_provider_zone::zone_status::{
     SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
 };
 use d2b_provider_clipboard_wayland::Policy as ClipboardPolicy;
+use d2b_provider_credential::{
+    CredentialDependencyFacts, CredentialDriverEffects, CredentialSession,
+    is_credential_provider_ref,
+};
 use d2b_provider_display_wayland::WaylandSessionSpec;
 use d2b_provider_network_local::{
     ExternalNicAdmissionError, ExternalNicClaim, admit_external_nic_claims,
@@ -87,7 +89,7 @@ use d2b_provider_toolkit::{
     PROVIDER_DELIVERY_KEY_STREAM_CREDIT, PROVIDER_DELIVERY_KEY_STREAM_ID, PROVIDER_READY_MARKER,
     PROVIDER_READY_STREAM_CREDIT, PROVIDER_READY_STREAM_ID, ProviderSessionMetadata,
 };
-use d2b_provider_runtime_cloud_hypervisor::{
+use d2b_provider_guest_cloud_hypervisor::{
     AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph, ChildRole,
     CloudHypervisorConfig, CloudHypervisorController, CloudHypervisorResourceApiError,
     CloudHypervisorResourceRequest, CloudHypervisorResourceResponse, FencedChild,
@@ -153,7 +155,27 @@ pub use volume_effect_adapter::{
     AnchoredVolumeEffectAdapter, FdRootResolver, ResolvedVolumeRoot, VolumeRootResolver,
 };
 pub(crate) use interaction_effects::ProductionInteractionDriverEffects;
-use crate::interaction_driver::{INTERACTION_PROVIDER_REFS, INTERACTION_TYPES};
+
+/// The interaction family's ResourceTypes, as each type's own crate declares
+/// them.
+const INTERACTION_TYPES: [&str; 6] = [
+    d2b_provider_wayland_policy::WAYLAND_POLICY_TYPE,
+    d2b_provider_wayland_session::WAYLAND_SESSION_TYPE,
+    d2b_provider_audio_service::AUDIO_SERVICE_TYPE,
+    d2b_provider_audio_binding::AUDIO_BINDING_TYPE,
+    d2b_provider_shell_pool::SHELL_POOL_TYPE,
+    d2b_provider_shell_session::SHELL_SESSION_TYPE,
+];
+
+/// The Providers whose committed rows select the interaction family, as the
+/// provider crates declare them.
+const INTERACTION_PROVIDER_REFS: [&str; 5] = [
+    d2b_provider_wayland_policy::WAYLAND_POLICY_PROVIDER_REF,
+    d2b_provider_audio_service::AUDIO_SERVICE_PROVIDER_REF,
+    d2b_provider_clipboard_wayland::PROVIDER_REF,
+    d2b_provider_notification_desktop::PROVIDER_REF,
+    d2b_provider_shell_pool::SHELL_POOL_PROVIDER_REF,
+];
 
 /// Bounded attempts when a policy-input change races the authorization
 /// policy projection refresh. The projection compiles the committed policy
@@ -164,7 +186,7 @@ const POLICY_REFRESH_RETRY_BACKOFF: std::time::Duration = std::time::Duration::f
 
 fn trusted_provider_resource_types() -> Result<Vec<ResourceTypeName>, ResourceRuntimeError> {
     let mut resource_types = BTreeSet::new();
-    for resource_type in crate::interaction_driver::INTERACTION_TYPES
+    for resource_type in INTERACTION_TYPES
         .iter()
         .copied()
         .filter(|resource_type| resource_type.contains(".d2bus.org."))
@@ -232,6 +254,34 @@ async fn bridge_manager_rows(
         .collect()
 }
 
+/// Every manager row of one named Zone, rendered through the same projection
+/// the manager-backed API serves.
+///
+/// The reserved system Zone - the durable authority's home, where the
+/// foundation seed commits the system vocabulary - is read this way: a plane's
+/// own reads select its own Zone, so a row homed in the system Zone would
+/// otherwise never be read back.
+async fn bridge_zone_rows(
+    plane: &dyn ControllerPlaneView,
+    zone: &str,
+) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
+    let views = plane.all_rows_in_zone(zone).await.map_err(|error| {
+        tracing::warn!(
+            zone,
+            error = %error,
+            "manager reader bridge: Zone row list failed",
+        );
+        ResourceRuntimeError::StoreReadFailed
+    })?;
+    views
+        .iter()
+        .map(|view| {
+            d2b_resource_api::manager_backend::manager_row_stored(view)
+                .map_err(|_| ResourceRuntimeError::StoreReadFailed)
+        })
+        .collect()
+}
+
 /// One row read from its authority (the manager).
 ///
 /// - the manager holds the row: it is returned;
@@ -239,30 +289,65 @@ async fn bridge_manager_rows(
 ///   answer, never a store `ResourceNotFound` for a row the store does not
 ///   own;
 /// - the manager RPC fails: an error the caller retries - never absence.
-async fn bridge_manager_row(
+///
+/// The system-homed types are homed in the reserved system Zone, so the read
+/// falls back to that Zone when the plane's own Zone does not hold the row.
+/// A row homed in any other Zone stays out of reach: no reader inherits a
+/// second Zone's rows by accident.
+pub(crate) async fn bridge_manager_row(
     plane: &dyn ControllerPlaneView,
     target: &ResourceRef,
 ) -> Result<Option<StoredResource>, ResourceRuntimeError> {
-    Ok(bridge_manager_rows(plane, target.resource_type().as_str())
+    let resource_type = target.resource_type().as_str();
+    if let Some(row) = bridge_manager_rows(plane, resource_type)
+        .await?
+        .into_iter()
+        .find(|row| row.resource_ref == *target)
+    {
+        return Ok(Some(row));
+    }
+    if !crate::foundation_seed::SYSTEM_HOMED_TYPES.contains(&resource_type) {
+        return Ok(None);
+    }
+    Ok(bridge_zone_rows(plane, crate::foundation_seed::SYSTEM_ZONE)
         .await?
         .into_iter()
         .find(|row| row.resource_ref == *target))
 }
 
 /// The committed policy inputs for one Zone: the manager-served rows of the
-/// closed policy type set (U12 bridge).
+/// closed policy type set (U12 bridge), plus the system vocabulary the
+/// foundation seed homes in the reserved system Zone.
 ///
 /// Role/RoleBinding/Zone/Provider and the subject rows are manager rows, so
 /// without them a RoleBinding whose Role row moved returns
 /// `AuthorizationUnavailable` and its subjects are dropped - i.e. the Zone's
 /// committed policy would empty out. A miss stays the loud, fail-closed
 /// compile failure it is today.
-async fn committed_policy_resources(
+///
+/// The seed commits the system vocabulary - the built-in roles, their
+/// self-bindings, and the system Zone row itself - under the reserved Zone
+/// name rather than under the plane's own, so a read that selected the
+/// plane's Zone alone would leave the whole committed authority chain
+/// unresolvable. The projection is read-only: a zone-local plane refuses to
+/// write these rows, and a row the plane holds in its own Zone wins over the
+/// system copy.
+pub(crate) async fn committed_policy_resources(
     plane: &dyn ControllerPlaneView,
 ) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
     let mut resources = Vec::new();
     for resource_type in d2bd_runtime::resource_runtime_support::COMMITTED_POLICY_RESOURCE_TYPES {
         resources.extend(bridge_manager_rows(plane, resource_type).await?);
+    }
+    for row in bridge_zone_rows(plane, crate::foundation_seed::SYSTEM_ZONE).await? {
+        if d2bd_runtime::resource_runtime_support::COMMITTED_POLICY_RESOURCE_TYPES
+            .contains(&row.resource_ref.resource_type().as_str())
+            && !resources
+                .iter()
+                .any(|held| held.resource_ref == row.resource_ref)
+        {
+            resources.push(row);
+        }
     }
     Ok(resources)
 }
@@ -1220,7 +1305,7 @@ struct CloudHypervisorResourceSession {
     /// converted Guest's status is actor-local (R11), so there is no durable
     /// row to write; the effect call that drove this session takes it from
     /// here and publishes it as the row's status projection.
-    status_sink: Option<crate::guest_driver::GuestStatusSink>,
+    status_sink: Option<d2b_provider_guest::GuestStatusSink>,
     /// U17 child bridge: the session's converted children live in the
     /// manager, so their commits (and the reads of them) route through the
     /// published plane; `None` keeps every read on the durable store path.
@@ -1407,7 +1492,7 @@ fn guest_controller_finalizer_present<'a>(
 ) -> bool {
     origin == StoredRowOrigin::Manager
         || authored.into_iter().any(|finalizer| {
-            finalizer == d2b_provider_runtime_cloud_hypervisor::GUEST_CONTROLLER_FINALIZER
+            finalizer == d2b_provider_guest_cloud_hypervisor::GUEST_CONTROLLER_FINALIZER
         })
 }
 
@@ -1800,7 +1885,7 @@ impl CloudHypervisorResourceSession {
         let client = session.resource_service_client();
         let mut request = wire::ListRequest::new();
         request.meta = MessageField::some(public_request_meta(operation));
-        request.resource_types = d2b_provider_runtime_cloud_hypervisor::GUEST_SEED_RESOURCE_TYPES
+        request.resource_types = d2b_provider_guest_cloud_hypervisor::GUEST_SEED_RESOURCE_TYPES
             .iter()
             .map(|resource_type| (*resource_type).to_owned())
             .collect();
@@ -2145,7 +2230,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                         .get_stored(resource_ref, "cloud-hypervisor-binding-dependency")
                         .await
                         .map(|binding| {
-                            crate::binding_child_resource_runtime::binding_readiness_current(
+                            d2b_provider_volume_binding::binding_readiness_current(
                                 &binding,
                             )
                         })
@@ -2209,7 +2294,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                                 .await
                                 .map_err(child_mutation_failure)?;
                             committed.push(
-                                d2b_provider_runtime_cloud_hypervisor::CommittedChild::new(
+                                d2b_provider_guest_cloud_hypervisor::CommittedChild::new(
                                     stored.resource_ref,
                                     batch.owner_ref().clone(),
                                     stored.zone,
@@ -2299,7 +2384,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                         .await
                         .map_err(child_mutation_failure)?;
                     return Ok(CloudHypervisorResourceResponse::Updated(
-                        d2b_provider_runtime_cloud_hypervisor::CommittedChild::new(
+                        d2b_provider_guest_cloud_hypervisor::CommittedChild::new(
                             stored.resource_ref,
                             update.target().clone(),
                             stored.zone,
@@ -2434,14 +2519,14 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                     Ok(resource) => {
                         if resource.uid != process_uid || resource.revision != process_revision {
                             return Ok(CloudHypervisorResourceResponse::ProcessAdoption(
-                                d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Quarantined,
+                                d2b_provider_guest_cloud_hypervisor::ProcessAdoptionStatus::Quarantined,
                             ));
                         }
                         let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
                             .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
                         if envelope.metadata().owner_ref() != Some(&guest_ref) {
                             return Ok(CloudHypervisorResourceResponse::ProcessAdoption(
-                                d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Quarantined,
+                                d2b_provider_guest_cloud_hypervisor::ProcessAdoptionStatus::Quarantined,
                             ));
                         }
                         let owner = self
@@ -2449,7 +2534,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                             .await?;
                         if owner.uid != guest_uid {
                             return Ok(CloudHypervisorResourceResponse::ProcessAdoption(
-                                d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Quarantined,
+                                d2b_provider_guest_cloud_hypervisor::ProcessAdoptionStatus::Quarantined,
                             ));
                         }
                         let spec = serde_json::from_slice::<ProcessSpec>(
@@ -2493,19 +2578,19 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                                 CloudHypervisorResourceApiError::Transport
                             })?;
                         match liveness {
-                            crate::process_provider_runtime::ProviderLiveness::Alive => {
-                                d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current
+                            d2b_provider_process::ProviderLiveness::Alive => {
+                                d2b_provider_guest_cloud_hypervisor::ProcessAdoptionStatus::Current
                             }
-                            crate::process_provider_runtime::ProviderLiveness::Exited => {
-                                d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Absent
+                            d2b_provider_process::ProviderLiveness::Exited => {
+                                d2b_provider_guest_cloud_hypervisor::ProcessAdoptionStatus::Absent
                             }
-                            crate::process_provider_runtime::ProviderLiveness::Unknown => {
-                                d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Unavailable
+                            d2b_provider_process::ProviderLiveness::Unknown => {
+                                d2b_provider_guest_cloud_hypervisor::ProcessAdoptionStatus::Unavailable
                             }
                         }
                     }
                     Err(CloudHypervisorResourceApiError::NotFound) => {
-                        d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Absent
+                        d2b_provider_guest_cloud_hypervisor::ProcessAdoptionStatus::Absent
                     }
                     Err(error) => {
                         tracing::debug!(
@@ -2513,7 +2598,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                             guest = %guest_ref.to_canonical_string(),
                             "adoption probe failed; status unavailable",
                         );
-                        d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Unavailable
+                        d2b_provider_guest_cloud_hypervisor::ProcessAdoptionStatus::Unavailable
                     }
                 };
                 Ok(CloudHypervisorResourceResponse::ProcessAdoption(status))
@@ -2592,7 +2677,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 let direct_children = children
                     .iter()
                     .filter_map(|child| {
-                        let role = d2b_provider_runtime_cloud_hypervisor::child_role_for_ref(
+                        let role = d2b_provider_guest_cloud_hypervisor::child_role_for_ref(
                             child.resource_ref(),
                         )?;
                         let (deletion_requested, finalizers_pending, uid, revision) = all_children
@@ -2878,7 +2963,7 @@ fn ch_resource_body(
 
 fn merge_cloud_hypervisor_child_spec(
     current: &Value,
-    body: &d2b_provider_runtime_cloud_hypervisor::ChildCreateBody,
+    body: &d2b_provider_guest_cloud_hypervisor::ChildCreateBody,
     desired_lifecycle: Option<DesiredLifecycle>,
 ) -> Result<Value, CloudHypervisorResourceApiError> {
     let body =
@@ -3640,7 +3725,7 @@ impl ZoneResourceRuntime {
 
     /// Revoke assignments bound to one exact controller session.
     pub fn revoke_controller_assignments(&self, binding: &ControllerSessionBinding) {
-        if !d2b_provider_runtime_cloud_hypervisor::is_provider_ref(binding.provider_ref()) {
+        if !d2b_provider_guest_cloud_hypervisor::is_provider_ref(binding.provider_ref()) {
             return;
         }
         self.assignments
@@ -4410,10 +4495,12 @@ impl ZoneResourceRuntime {
         committed_policy_resources(plane.as_ref()).await
     }
 
-    /// The production Core-driver effects port (U12): this zone's live
+    /// The production Provider-driver effects port: this zone's live
     /// controller-session coordinator, the same seam the G5 reader bridge
-    /// uses. The plane wires it into its Core resource driver factory.
-    pub(crate) fn core_driver_effects(&self) -> Arc<dyn crate::core_driver::CoreDriverEffects> {
+    /// uses. The plane wires it into the Provider type's driver factory.
+    pub(crate) fn provider_driver_effects(
+        &self,
+    ) -> Arc<dyn d2b_provider_provider::ProviderDriverEffects> {
         self.controller_session_coordinator()
     }
 
@@ -4959,7 +5046,7 @@ impl ZoneResourceRuntime {
         &self,
         state: Arc<crate::ServerState>,
         guest_ref: &ResourceRef,
-        status_sink: Option<crate::guest_driver::GuestStatusSink>,
+        status_sink: Option<d2b_provider_guest::GuestStatusSink>,
     ) -> Result<CloudHypervisorReconcileOutcome, ResourceRuntimeError> {
         self.reconcile_cloud_hypervisor_guests_inner(state, Some(guest_ref), status_sink)
             .await
@@ -4969,7 +5056,7 @@ impl ZoneResourceRuntime {
         &self,
         state: Arc<crate::ServerState>,
         selected_guest: Option<&ResourceRef>,
-        status_sink: Option<crate::guest_driver::GuestStatusSink>,
+        status_sink: Option<d2b_provider_guest::GuestStatusSink>,
     ) -> Result<CloudHypervisorReconcileOutcome, ResourceRuntimeError> {
         if !self.readiness.resource_api_ready {
             return Ok(CloudHypervisorReconcileOutcome::Pending);
@@ -5087,14 +5174,18 @@ impl ZoneResourceRuntime {
                     .cloned(),
                 None => None,
             };
+            // The load runs on the bounded loader worker so this reconcile,
+            // which every pass runs as a daemon async task, never parks a
+            // runtime worker on the bundle reads and hash verification.
+            let bundle_resolver = crate::load_bundle_resolver_on_worker(&state).await;
             let session_vmm_ready = match (
                 guest_session_target.as_ref(),
                 guest_session.as_ref(),
-                crate::load_bundle_resolver(&state),
+                bundle_resolver.as_ref(),
             ) {
                 (Some(target), Some(_), Ok(resolver)) => {
                     crate::resolve_component_session_endpoint_for_guest(
-                        &state, &resolver, self, target,
+                        &state, resolver, self, target,
                     )
                     .await
                     .is_ok()
@@ -5483,10 +5574,15 @@ impl ZoneResourceRuntime {
             tracing::warn!("Cloud Hypervisor setup Volume ownership validation failed");
             return Err(ResourceRuntimeError::CapabilityUnavailable);
         }
-        let resolver = crate::load_bundle_resolver(state).map_err(|_| {
-            tracing::warn!("Cloud Hypervisor setup Volume bundle reload failed");
-            ResourceRuntimeError::ProviderPathUnavailable
-        })?;
+        // The reload runs on the bounded loader worker so this reconcile,
+        // which every pass runs as a daemon async task, never parks a
+        // runtime worker on the bundle reads and hash verification.
+        let resolver = crate::load_bundle_resolver_on_worker(state)
+            .await
+            .map_err(|_| {
+                tracing::warn!("Cloud Hypervisor setup Volume bundle reload failed");
+                ResourceRuntimeError::ProviderPathUnavailable
+            })?;
         let intent = resolver
             .find_store_view_intent_for_zone(&self.zone, guest_ref.name().as_str())
             .ok_or_else(|| {
@@ -5553,7 +5649,7 @@ impl ZoneResourceRuntime {
         let provider = self
             .committed_resource_stored(provider_ref, "cloud-hypervisor-controller-deployment")
             .await?;
-        let manifest = d2b_provider_runtime_cloud_hypervisor::provider_manifest()
+        let manifest = d2b_provider_guest_cloud_hypervisor::provider_manifest()
             .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
         let controller_generation = self
             .committed_policy_snapshot()
@@ -5588,7 +5684,7 @@ impl ZoneResourceRuntime {
     ) -> Result<Arc<CloudHypervisorResourceClient>, ResourceRuntimeError> {
         if let Ok(sessions) = self.controller_sessions.lock()
             && let Some(session) = sessions.values().find(|session| {
-                d2b_provider_runtime_cloud_hypervisor::is_provider_ref(
+                d2b_provider_guest_cloud_hypervisor::is_provider_ref(
                     session.context.provider_owner_ref(),
                 ) && !session.service_task.is_finished()
             })
@@ -5908,13 +6004,13 @@ impl ZoneResourceRuntime {
         .with_owner_ref(Some(guest_ref.clone()))
         .with_guest_descriptor_digest(descriptor_digest.as_ref());
         match providers.probe_resource(context, &spec).await {
-            Ok(crate::process_provider_runtime::ProviderLiveness::Alive) => {
+            Ok(d2b_provider_process::ProviderLiveness::Alive) => {
                 Ok(crate::provider_effects::GuestLifecycleState::Started)
             }
-            Ok(crate::process_provider_runtime::ProviderLiveness::Exited) => {
+            Ok(d2b_provider_process::ProviderLiveness::Exited) => {
                 Ok(crate::provider_effects::GuestLifecycleState::Stopped)
             }
-            Ok(crate::process_provider_runtime::ProviderLiveness::Unknown) => {
+            Ok(d2b_provider_process::ProviderLiveness::Unknown) => {
                 tracing::debug!(
                     guest = %guest_ref.to_canonical_string(),
                     "Cloud Hypervisor lifecycle probe returned unknown liveness",
@@ -5944,7 +6040,7 @@ impl ZoneResourceRuntime {
             if envelope
                 .spec()
                 .provider_ref()
-                .is_some_and(d2b_provider_runtime_cloud_hypervisor::is_provider_ref)
+                .is_some_and(d2b_provider_guest_cloud_hypervisor::is_provider_ref)
             {
                 guests.push(resource.resource_ref);
             }
@@ -5970,7 +6066,7 @@ impl ZoneResourceRuntime {
                 continue;
             }
             let Some(spec) =
-                crate::binding_child_resource_runtime::parsed_binding_spec(binding)
+                d2b_provider_volume_binding::parsed_binding_spec(binding)
             else {
                 tracing::debug!(
                     binding = %binding.resource_ref.to_canonical_string(),
@@ -6074,7 +6170,7 @@ impl ZoneResourceRuntime {
             .spec()
             .provider_ref()
             .cloned()
-            .filter(|reference| d2b_provider_runtime_cloud_hypervisor::is_provider_ref(reference))
+            .filter(|reference| d2b_provider_guest_cloud_hypervisor::is_provider_ref(reference))
             .ok_or(ResourceRuntimeError::CapabilityUnavailable)?;
         let provider = self
             .committed_resource_stored(&provider_ref, "cloud-hypervisor-guest-inputs")
@@ -6495,7 +6591,7 @@ impl ControllerSessionCoordinator {
     }
 
     fn revoke_controller_assignments(&self, binding: &ControllerSessionBinding) {
-        if d2b_provider_runtime_cloud_hypervisor::is_provider_ref(binding.provider_ref()) {
+        if d2b_provider_guest_cloud_hypervisor::is_provider_ref(binding.provider_ref()) {
             self.assignments
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -7330,17 +7426,17 @@ impl ControllerSessionCoordinator {
         context: &crate::process_provider_runtime::ControllerBootstrapContext,
         binding: &ControllerSessionBinding,
     ) -> Result<(), ControllerAssignmentRefreshError> {
-        if !d2b_provider_runtime_cloud_hypervisor::is_provider_ref(context.provider_owner_ref()) {
+        if !d2b_provider_guest_cloud_hypervisor::is_provider_ref(context.provider_owner_ref()) {
             return Ok(());
         }
         let manifest =
-            d2b_provider_runtime_cloud_hypervisor::provider_manifest().map_err(|_| {
+            d2b_provider_guest_cloud_hypervisor::provider_manifest().map_err(|_| {
                 ControllerAssignmentRefreshError::Failed(
                     ResourceRuntimeError::AuthenticationUnavailable,
                 )
             })?;
         let role_ref =
-            ResourceRef::parse(d2b_provider_runtime_cloud_hypervisor::CONTROLLER_ROLE_REF)
+            ResourceRef::parse(d2b_provider_guest_cloud_hypervisor::CONTROLLER_ROLE_REF)
                 .map_err(|_| {
                     ControllerAssignmentRefreshError::Failed(
                         ResourceRuntimeError::AuthenticationUnavailable,
@@ -8832,6 +8928,12 @@ impl ZoneResourceRuntime {
     /// Load and validate the committed Device record before a security-key
     /// provider constructs its one-use admission. Request fields select a
     /// candidate only; the returned values all originate from the manager row.
+    ///
+    /// Retained with the security-key effect port the composition audit keeps:
+    /// the legacy Device-Reconcile dispatch that was this admission's only
+    /// caller is deleted, and the v3 family path that owns the same trusted
+    /// resolution is rebuilt by the security-key migration.
+    #[allow(dead_code)]
     pub(crate) async fn security_key_device_is_admitted(
         &self,
         request: SecurityKeyDeviceAdmissionRequest<'_>,
@@ -8990,9 +9092,19 @@ impl ZoneResourceRuntime {
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
             .into_inner()
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        // Take the registrar out of its shared slot for the whole teardown:
+        // each session's `revoke_in_place` is an await, so no `std::sync`
+        // guard may be held across it (`clippy::await_holding_lock`). The
+        // value goes back before the drops below, so the tail's
+        // `Arc::try_unwrap` keeps its meaning: it fails exactly when another
+        // owner still shares this runtime's slot.
+        let mut session_registrar = registrar
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .take();
         for (_, mut session) in sessions {
             session.cancel_backend_lease();
-            if d2b_provider_runtime_cloud_hypervisor::is_provider_ref(
+            if d2b_provider_guest_cloud_hypervisor::is_provider_ref(
                 session.binding.provider_ref(),
             ) {
                 assignments
@@ -9011,12 +9123,15 @@ impl ZoneResourceRuntime {
             session.service_task.abort();
             let _ = session.service_task.await;
             let mut ingress = session.ingress;
-            let mut registrar = registrar
-                .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
-            if let Some(registrar) = registrar.as_mut() {
+            if let Some(registrar) = session_registrar.as_mut() {
                 let _ = registrar.revoke_in_place(&mut ingress).await;
             }
+        }
+        if let Some(session_registrar) = session_registrar {
+            *registrar
+                .lock()
+                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
+                Some(session_registrar);
         }
         drop(process_status_client);
         drop(
@@ -9050,10 +9165,7 @@ fn contains_u9_provider_ref(value: &Value) -> bool {
 }
 
 fn is_u9_resource_type(resource_type: &ResourceTypeName) -> bool {
-    let resource_type = resource_type.as_str();
-    resource_type.starts_with("display-wayland.")
-        || resource_type.starts_with("audio.d2bus.org.")
-        || resource_type.starts_with("shell-terminal.d2bus.org.")
+    INTERACTION_TYPES.contains(&resource_type.as_str())
 }
 
 /// Whether the manager holds any row of the interaction family (U9): a
@@ -9806,8 +9918,8 @@ fn controller_session_binding(
         _ => return Err(ResourceRuntimeError::AuthenticationUnavailable),
     };
     let controller_role =
-        if d2b_provider_runtime_cloud_hypervisor::is_provider_ref(context.provider_owner_ref()) {
-            ResourceRef::parse(d2b_provider_runtime_cloud_hypervisor::CONTROLLER_ROLE_REF)
+        if d2b_provider_guest_cloud_hypervisor::is_provider_ref(context.provider_owner_ref()) {
+            ResourceRef::parse(d2b_provider_guest_cloud_hypervisor::CONTROLLER_ROLE_REF)
                 .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
         } else {
             context.process_ref().clone()
@@ -9941,10 +10053,10 @@ fn controller_plane_resource_matches(
         && process.execution().execution_ref() == context.execution_ref()
 }
 
-/// U12: the same live controller-session evidence, exposed under the v3 Core
-/// driver's effects trait, so the plane's `Provider` observation and drain
-/// read the authoritative session (never a durable status copy).
-impl crate::core_driver::CoreDriverEffects for ControllerSessionCoordinator {
+/// The same live controller-session evidence, exposed under the Provider
+/// type's effects trait, so the plane's `Provider` observation and drain read
+/// the authoritative session (never a durable status copy).
+impl d2b_provider_provider::ProviderDriverEffects for ControllerSessionCoordinator {
     fn controller_session_evidence(
         &self,
         process_ref: &ResourceRef,
@@ -11763,8 +11875,8 @@ mod tests {
             },
             "status": {}
         });
-        let body = d2b_provider_runtime_cloud_hypervisor::ChildCreateBody::Process(
-            d2b_provider_runtime_cloud_hypervisor::ProcessCreateBody::new(
+        let body = d2b_provider_guest_cloud_hypervisor::ChildCreateBody::Process(
+            d2b_provider_guest_cloud_hypervisor::ProcessCreateBody::new(
                 ResourceRef::parse("Host/host-system").unwrap(),
             )
             .unwrap(),
@@ -11971,7 +12083,7 @@ mod tests {
         let first = ControllerSessionBinding::new(
             ResourceRef::parse("Process/controller-first").unwrap(),
             ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
-            ResourceRef::parse(d2b_provider_runtime_cloud_hypervisor::CONTROLLER_ROLE_REF).unwrap(),
+            ResourceRef::parse(d2b_provider_guest_cloud_hypervisor::CONTROLLER_ROLE_REF).unwrap(),
             target.clone(),
             ResourceGeneration::new(2).unwrap(),
             ControllerGeneration::new(3).unwrap(),
@@ -11981,7 +12093,7 @@ mod tests {
         let second = ControllerSessionBinding::new(
             ResourceRef::parse("Process/controller-second").unwrap(),
             ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
-            ResourceRef::parse(d2b_provider_runtime_cloud_hypervisor::CONTROLLER_ROLE_REF).unwrap(),
+            ResourceRef::parse(d2b_provider_guest_cloud_hypervisor::CONTROLLER_ROLE_REF).unwrap(),
             target,
             ResourceGeneration::new(2).unwrap(),
             ControllerGeneration::new(3).unwrap(),
@@ -12224,7 +12336,7 @@ mod tests {
         ));
         assert!(guest_controller_finalizer_present(
             StoredRowOrigin::Durable,
-            [d2b_provider_runtime_cloud_hypervisor::GUEST_CONTROLLER_FINALIZER].into_iter(),
+            [d2b_provider_guest_cloud_hypervisor::GUEST_CONTROLLER_FINALIZER].into_iter(),
         ));
     }
 

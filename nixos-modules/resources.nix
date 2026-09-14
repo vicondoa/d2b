@@ -3,28 +3,7 @@
 let
   inherit (lib) mkOption types;
 
-  standardResourceTypes = [
-    "Zone"
-    "ZoneLink"
-    "Provider"
-    "Role"
-    "RoleBinding"
-    "Quota"
-    "EmergencyPolicy"
-    "Host"
-    "Guest"
-    "Process"
-    "EphemeralProcess"
-    "Volume"
-    "VolumeBinding"
-    "Network"
-    "Device"
-    "User"
-    "Credential"
-    "Endpoint"
-    "ResourceExport"
-    "ResourceImport"
-  ];
+  standardResourceTypes = import ./generated/resource-types.nix;
 
   qualifiedResourceTypePattern =
     "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}$";

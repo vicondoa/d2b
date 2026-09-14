@@ -26,8 +26,15 @@ const UUID_V4_PATTERN: &str =
 const SHA256_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
 const RESOURCE_TYPE_QUALIFIER: &str = ".d2bus.org.";
 
+/// The reserved Zone name the foundation seed homes the system vocabulary in.
+///
+/// The durable authority's home: the foundation plane commits the system rows
+/// into its own store under this name, and every Zone plane reads them
+/// read-only alongside its own rows. A Zone-local plane never writes here.
+pub const SYSTEM_ZONE_NAME: &str = "system";
+
 /// The complete standard ResourceType catalog.
-pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
+pub const STANDARD_RESOURCE_TYPES: [&str; 23] = [
     "Zone",
     "ZoneLink",
     "Provider",
@@ -48,11 +55,16 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
     "Endpoint",
     "ResourceExport",
     "ResourceImport",
+    // The controller family's policy types: unqualified, always-committed
+    // vocabulary whose rows the foundation seed writes.
+    "Command",
+    "Operation",
+    "SeccompProfile",
 ];
 
 /// The resource types the v3 resource runtime owns end to end (R35/F1
 /// exclusive per-type partition): served only by the per-zone manager plane.
-pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 33] = [
+pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 36] = [
     "Process",
     // U12: the one-shot Process family member, served by the same Process
     // driver factory.
@@ -91,6 +103,11 @@ pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 33] = [
     "EmergencyPolicy",
     "ResourceExport",
     "ResourceImport",
+    // The controller family's policy types: declared with their drivers, and
+    // materialized by the committed policy rows the seed writes.
+    "Command",
+    "Operation",
+    "SeccompProfile",
 ];
 
 /// The storage plane that owns one resource type (R35/F1: an exclusive
@@ -596,6 +613,20 @@ impl ResourceUid {
             });
         }
         Ok(Self(value))
+    }
+
+    /// Render one durable 16-byte store identity as its canonical UUIDv4
+    /// spelling, forcing the version and variant bits every manager row
+    /// carries.
+    pub fn from_bytes(bytes: &[u8; 16]) -> Result<Self, IdentityError> {
+        let mut bytes = *bytes;
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        Self::parse(format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        ))
     }
 
     /// Borrow the canonical UUID string.

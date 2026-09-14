@@ -11,14 +11,14 @@ use d2b_contracts::{
     workload_identity::{WorkloadIdentity, WorkloadTarget},
 };
 use d2b_contracts_control::{
-    public_wire::{GraphicalLaunchPosture, ShellName, WorkloadAvailability, WorkloadPublicSummary},
-    unsafe_local_wire::{HelperShellPolicy, RealmAccentColor},
+    public_wire::{GraphicalLaunchPosture, WorkloadAvailability, WorkloadPublicSummary},
+    unsafe_local_wire::RealmAccentColor,
 };
 use d2b_core::{
     bundle_resolver::BundleResolver,
     configured_argv::ConfiguredArgv,
     unsafe_local_workloads::{
-        UnsafeLocalLauncherItem, UnsafeLocalShellPolicy, UnsafeLocalWorkloadsJson,
+        UnsafeLocalLauncherItem, UnsafeLocalWorkloadsJson,
     },
 };
 
@@ -32,6 +32,13 @@ pub enum WorkloadRoute {
     CapabilityUnavailable { provider: WorkloadProviderKind },
 }
 
+/// Why a shell target could not be resolved to a catalog entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellTargetError {
+    TargetNotFound,
+    AliasConflict,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CatalogError {
     ArtifactsUnavailable,
@@ -40,7 +47,6 @@ pub enum CatalogError {
     ItemNotFound,
     ConfiguredItemMissing,
     ConfiguredItemMismatch,
-    ShellCapabilityUnavailable,
     AliasConflict,
     OperationConflict,
     OperationInProgress,
@@ -54,10 +60,7 @@ pub fn map_catalog_error(error: CatalogError) -> TypedError {
         CatalogError::LauncherDisabled => WorkloadLaunchErrorKind::LauncherDisabled,
         CatalogError::ArtifactsUnavailable
         | CatalogError::ConfiguredItemMissing
-        | CatalogError::ConfiguredItemMismatch
-        | CatalogError::ShellCapabilityUnavailable => {
-            WorkloadLaunchErrorKind::ConfiguredItemMismatch
-        }
+        | CatalogError::ConfiguredItemMismatch => WorkloadLaunchErrorKind::ConfiguredItemMismatch,
         CatalogError::OperationConflict => WorkloadLaunchErrorKind::OperationConflict,
         CatalogError::OperationInProgress => WorkloadLaunchErrorKind::QueueFull,
     };
@@ -255,11 +258,18 @@ pub struct ResolvedExec {
     pub realm_accent_color: RealmAccentColor,
 }
 
+/// How a shell target is served. The deleted unsafe-local shell route is not
+/// representable here; such a target resolves to an unavailable capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellRoute {
+    LocalVm { vm: String },
+    CapabilityUnavailable { provider: WorkloadProviderKind },
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedShell {
     pub identity: Option<WorkloadIdentity>,
-    pub route: WorkloadRoute,
-    pub policy: Option<HelperShellPolicy>,
+    pub route: ShellRoute,
 }
 
 #[derive(Debug, Clone)]
@@ -446,64 +456,41 @@ impl WorkloadCatalog {
         })
     }
 
-    pub fn resolve_shell(
-        &self,
-        private: Option<&UnsafeLocalWorkloadsJson>,
-        target: &str,
-    ) -> Result<ResolvedShell, CatalogError> {
+    pub fn resolve_shell(&self, target: &str) -> Result<ResolvedShell, ShellTargetError> {
         let Some(entry) = self.resolve_shell_entry(target)? else {
             return Ok(ResolvedShell {
                 identity: None,
-                route: WorkloadRoute::LocalVm {
+                route: ShellRoute::LocalVm {
                     vm: target.to_owned(),
                 },
-                policy: None,
             });
         };
 
-        match &entry.route {
-            WorkloadRoute::LocalVm { .. } | WorkloadRoute::CapabilityUnavailable { .. } => {
-                Ok(ResolvedShell {
-                    identity: Some(entry.metadata.identity.clone()),
-                    route: entry.route.clone(),
-                    policy: None,
-                })
-            }
-            WorkloadRoute::UnsafeLocal => {
-                let private = private.ok_or(CatalogError::ArtifactsUnavailable)?;
-                let configured = private
-                    .workloads
-                    .iter()
-                    .find(|workload| {
-                        workload.identity.canonical_target
-                            == entry.metadata.identity.canonical_target
-                    })
-                    .ok_or(CatalogError::ConfiguredItemMissing)?;
-                if configured.identity != entry.metadata.identity {
-                    return Err(CatalogError::ConfiguredItemMismatch);
+        Ok(ResolvedShell {
+            identity: Some(entry.metadata.identity.clone()),
+            route: match &entry.route {
+                WorkloadRoute::LocalVm { vm } => ShellRoute::LocalVm { vm: vm.clone() },
+                WorkloadRoute::CapabilityUnavailable { provider } => {
+                    ShellRoute::CapabilityUnavailable {
+                        provider: *provider,
+                    }
                 }
-                validate_shell_item_parity(entry, configured.items.as_slice())?;
-                let policy = configured
-                    .shell
-                    .as_ref()
-                    .ok_or(CatalogError::ShellCapabilityUnavailable)
-                    .and_then(helper_shell_policy)?;
-                Ok(ResolvedShell {
-                    identity: Some(entry.metadata.identity.clone()),
-                    route: WorkloadRoute::UnsafeLocal,
-                    policy: Some(policy),
-                })
-            }
-        }
+                // The unsafe-local shell route is deleted; a workload that only
+                // declared it fails closed as an unavailable provider capability.
+                WorkloadRoute::UnsafeLocal => ShellRoute::CapabilityUnavailable {
+                    provider: WorkloadProviderKind::UnsafeLocal,
+                },
+            },
+        })
     }
 
-    fn resolve_shell_entry(&self, target: &str) -> Result<Option<&CatalogEntry>, CatalogError> {
+    fn resolve_shell_entry(&self, target: &str) -> Result<Option<&CatalogEntry>, ShellTargetError> {
         if target.ends_with(".d2b") {
             return self
                 .entries
                 .get(target)
                 .map(Some)
-                .ok_or(CatalogError::TargetNotFound);
+                .ok_or(ShellTargetError::TargetNotFound);
         }
 
         if self.known_local_vms.contains(target) {
@@ -519,7 +506,7 @@ impl WorkloadCatalog {
             return Ok(Some(*entry));
         }
         if legacy.len() > 1 {
-            return Err(CatalogError::AliasConflict);
+            return Err(ShellTargetError::AliasConflict);
         }
 
         let aliases = self
@@ -530,56 +517,9 @@ impl WorkloadCatalog {
         match aliases.as_slice() {
             [] => Ok(None),
             [entry] => Ok(Some(*entry)),
-            _ => Err(CatalogError::AliasConflict),
+            _ => Err(ShellTargetError::AliasConflict),
         }
     }
-}
-
-fn helper_shell_policy(policy: &UnsafeLocalShellPolicy) -> Result<HelperShellPolicy, CatalogError> {
-    let policy = HelperShellPolicy {
-        default_name: ShellName::new(policy.default_name.clone())
-            .map_err(|_| CatalogError::ConfiguredItemMismatch)?,
-        max_sessions: policy.max_sessions,
-    };
-    policy
-        .validate_bounds()
-        .map_err(|_| CatalogError::ConfiguredItemMismatch)?;
-    Ok(policy)
-}
-
-fn validate_shell_item_parity(
-    entry: &CatalogEntry,
-    private_items: &[UnsafeLocalLauncherItem],
-) -> Result<(), CatalogError> {
-    let public_shells = entry
-        .metadata
-        .items
-        .iter()
-        .filter(|item| item.kind == LauncherItemKind::Shell)
-        .collect::<Vec<_>>();
-    let private_shells = private_items
-        .iter()
-        .filter_map(|item| match item {
-            UnsafeLocalLauncherItem::Shell(shell) => Some(shell),
-            UnsafeLocalLauncherItem::Exec(_) => None,
-        })
-        .collect::<Vec<_>>();
-    if public_shells.is_empty() || private_shells.is_empty() {
-        return Err(CatalogError::ShellCapabilityUnavailable);
-    }
-    if public_shells.len() != private_shells.len()
-        || public_shells.iter().any(|public| {
-            public.graphical
-                || !private_shells.iter().any(|private| {
-                    private.id == public.id
-                        && private.name == public.name
-                        && private.icon == public.icon
-                })
-        })
-    {
-        return Err(CatalogError::ConfiguredItemMismatch);
-    }
-    Ok(())
 }
 
 fn route_for_provider(
@@ -635,7 +575,7 @@ mod tests {
         contract_id::ContractId,
         unsafe_local_workloads::{
             LocalVmConfiguredWorkload, UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION, UnsafeLocalExecItem,
-            UnsafeLocalShellItem, UnsafeLocalShellPolicy, UnsafeLocalWorkload,
+            UnsafeLocalWorkload,
             UnsafeLocalWorkloadsJson,
         },
     };
@@ -799,26 +739,6 @@ mod tests {
             entry.metadata.identity.workload_id.as_str(),
         );
         entry
-    }
-
-    fn shell_private(entry: &CatalogEntry) -> UnsafeLocalWorkloadsJson {
-        UnsafeLocalWorkloadsJson {
-            schema_version: UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION.to_owned(),
-            workloads: vec![UnsafeLocalWorkload {
-                identity: entry.metadata.identity.clone(),
-                default_item_id: Some(ProtocolToken::parse("terminal").unwrap()),
-                items: vec![UnsafeLocalLauncherItem::Shell(UnsafeLocalShellItem {
-                    id: ProtocolToken::parse("terminal").unwrap(),
-                    name: "Terminal".to_owned(),
-                    icon: LauncherIcon::default(),
-                })],
-                shell: Some(UnsafeLocalShellPolicy {
-                    default_name: "primary".to_owned(),
-                    max_sessions: 4,
-                }),
-            }],
-            local_vm_workloads: Vec::new(),
-        }
     }
 
     #[test]
@@ -1046,14 +966,13 @@ mod tests {
         let canonical = legacy.metadata.identity.canonical_target.to_canonical();
         let catalog = WorkloadCatalog::from_test_entries([legacy.clone()]);
         for target in [canonical.as_str(), "corp-vm", "browser"] {
-            let resolved = catalog.resolve_shell(None, target).unwrap();
+            let resolved = catalog.resolve_shell(target).unwrap();
             assert_eq!(
                 resolved.route,
-                WorkloadRoute::LocalVm {
+                ShellRoute::LocalVm {
                     vm: "corp-vm".to_owned()
                 }
             );
-            assert!(resolved.policy.is_none());
         }
 
         let mut first_class = shell_entry(WorkloadProviderKind::LocalVm, "host");
@@ -1070,53 +989,53 @@ mod tests {
             .to_canonical();
         let catalog = WorkloadCatalog::from_test_entries([first_class]);
         assert_eq!(
-            catalog.resolve_shell(None, &canonical).unwrap().route,
-            WorkloadRoute::LocalVm {
+            catalog.resolve_shell(&canonical).unwrap().route,
+            ShellRoute::LocalVm {
                 vm: "browser".to_owned()
             }
         );
 
         assert_eq!(
             WorkloadCatalog::from_test_entries([])
-                .resolve_shell(None, "legacy-vm")
+                .resolve_shell("legacy-vm")
                 .unwrap()
                 .route,
-            WorkloadRoute::LocalVm {
+            ShellRoute::LocalVm {
                 vm: "legacy-vm".to_owned()
             }
         );
     }
 
     #[test]
-    fn resolve_shell_keeps_unsafe_local_distinct_and_uses_private_policy() {
+    fn resolve_shell_fails_closed_for_the_deleted_unsafe_local_route() {
         let entry = shell_entry(WorkloadProviderKind::UnsafeLocal, "host");
-        let private = shell_private(&entry);
         let canonical = entry.metadata.identity.canonical_target.to_canonical();
         let catalog = WorkloadCatalog::from_test_entries([entry]);
         for target in [canonical.as_str(), "browser"] {
-            let resolved = catalog.resolve_shell(Some(&private), target).unwrap();
-            assert_eq!(resolved.route, WorkloadRoute::UnsafeLocal);
-            let policy = resolved.policy.expect("trusted helper policy");
-            assert_eq!(policy.default_name.as_str(), "primary");
-            assert_eq!(policy.max_sessions, 4);
+            let resolved = catalog.resolve_shell(target).unwrap();
+            assert_eq!(
+                resolved.route,
+                ShellRoute::CapabilityUnavailable {
+                    provider: WorkloadProviderKind::UnsafeLocal
+                }
+            );
+            assert!(resolved.identity.is_some());
         }
     }
 
     #[test]
     fn known_bare_vm_name_precedes_unsafe_local_short_alias() {
         let entry = shell_entry(WorkloadProviderKind::UnsafeLocal, "host");
-        let private = shell_private(&entry);
         let mut catalog = WorkloadCatalog::from_test_entries([entry]);
         catalog.known_local_vms.insert("browser".to_owned());
-        let resolved = catalog.resolve_shell(Some(&private), "browser").unwrap();
+        let resolved = catalog.resolve_shell("browser").unwrap();
         assert_eq!(
             resolved.route,
-            WorkloadRoute::LocalVm {
+            ShellRoute::LocalVm {
                 vm: "browser".to_owned()
             }
         );
         assert!(resolved.identity.is_none());
-        assert!(resolved.policy.is_none());
     }
 
     #[test]
@@ -1132,8 +1051,8 @@ mod tests {
             .to_canonical();
         let catalog = WorkloadCatalog::from_test_entries([unsupported]);
         assert_eq!(
-            catalog.resolve_shell(None, &canonical).unwrap().route,
-            WorkloadRoute::CapabilityUnavailable {
+            catalog.resolve_shell(&canonical).unwrap().route,
+            ShellRoute::CapabilityUnavailable {
                 provider: WorkloadProviderKind::QemuMedia
             }
         );
@@ -1142,50 +1061,12 @@ mod tests {
         let second = shell_entry(WorkloadProviderKind::UnsafeLocal, "personal");
         let catalog = WorkloadCatalog::from_test_entries([first, second]);
         assert_eq!(
-            catalog.resolve_shell(None, "browser").unwrap_err(),
-            CatalogError::AliasConflict
+            catalog.resolve_shell("browser").unwrap_err(),
+            ShellTargetError::AliasConflict
         );
         assert_eq!(
-            catalog.resolve_shell(None, "missing.host.d2b").unwrap_err(),
-            CatalogError::TargetNotFound
-        );
-    }
-
-    #[test]
-    fn resolve_shell_rejects_private_policy_and_item_drift() {
-        let entry = shell_entry(WorkloadProviderKind::UnsafeLocal, "host");
-        let target = entry.metadata.identity.canonical_target.to_canonical();
-        let catalog = WorkloadCatalog::from_test_entries([entry.clone()]);
-
-        let mut missing_policy = shell_private(&entry);
-        missing_policy.workloads[0].shell = None;
-        assert_eq!(
-            catalog
-                .resolve_shell(Some(&missing_policy), &target)
-                .unwrap_err(),
-            CatalogError::ShellCapabilityUnavailable
-        );
-
-        let mut item_drift = shell_private(&entry);
-        let UnsafeLocalLauncherItem::Shell(item) = &mut item_drift.workloads[0].items[0] else {
-            unreachable!()
-        };
-        item.name = "Tampered".to_owned();
-        assert_eq!(
-            catalog
-                .resolve_shell(Some(&item_drift), &target)
-                .unwrap_err(),
-            CatalogError::ConfiguredItemMismatch
-        );
-
-        let mut identity_drift = shell_private(&entry);
-        identity_drift.workloads[0].identity.provider_id =
-            Some(ContractId::parse("tampered").unwrap());
-        assert_eq!(
-            catalog
-                .resolve_shell(Some(&identity_drift), &target)
-                .unwrap_err(),
-            CatalogError::ConfiguredItemMismatch
+            catalog.resolve_shell("missing.host.d2b").unwrap_err(),
+            ShellTargetError::TargetNotFound
         );
     }
 }

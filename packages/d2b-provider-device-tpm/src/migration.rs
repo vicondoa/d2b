@@ -16,18 +16,3 @@ pub enum LegacyMigrationOutcome {
     /// Source, destination, marker, or owner evidence was ambiguous.
     Ambiguous,
 }
-
-impl LegacyMigrationOutcome {
-    /// Whether the outcome permits the first state Volume ensure.
-    pub const fn permits_ensure(self) -> bool {
-        matches!(
-            self,
-            Self::Migrated | Self::AlreadyMigrated | Self::NotApplicable
-        )
-    }
-
-    /// Whether the outcome is terminal without permitting ensure.
-    pub const fn is_terminal_failure(self) -> bool {
-        matches!(self, Self::Failed | Self::Ambiguous)
-    }
-}

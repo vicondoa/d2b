@@ -114,7 +114,7 @@ fn run_create(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let execution_ref = parse_resource_ref(&args.execution_ref, None)?;
-    if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
+    if !crate::generated::surface_catalog::is_execution_target(execution_ref.resource_type().as_str()) {
         return Err(context.failure(
             "ref-invalid",
             "exec executionRef must name a Host or Guest",
@@ -281,7 +281,7 @@ fn list(
         .map(|value| parse_resource_ref(value, None))
         .transpose()?;
     if let Some(execution_ref) = &execution_ref
-        && !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest")
+        && !crate::generated::surface_catalog::is_execution_target(execution_ref.resource_type().as_str())
     {
         return Err(context.failure(
             "ref-invalid",
@@ -398,7 +398,7 @@ fn validate_env(values: &[String]) -> Result<(), CliFailure> {
 }
 
 fn warn_unsafe_local(resource_ref: &d2b_contracts_resource::v3::ResourceRef, mode: OutputMode) {
-    if resource_ref.resource_type().as_str() == "Host" && !mode.is_json() {
+    if crate::generated::surface_catalog::is_no_isolation_target(resource_ref.resource_type().as_str()) && !mode.is_json() {
         crate::print_stderr(
             "warning: no isolation boundary - this process runs as your host user\n",
         );
@@ -409,7 +409,7 @@ fn with_unsafe_posture(
     mut value: Value,
     resource_ref: &d2b_contracts_resource::v3::ResourceRef,
 ) -> Value {
-    if resource_ref.resource_type().as_str() == "Host"
+    if crate::generated::surface_catalog::is_no_isolation_target(resource_ref.resource_type().as_str())
         && let Value::Object(object) = &mut value
     {
         object.insert(

@@ -45,7 +45,7 @@ use d2b_provider_network_local::{
         ReconcileProgress,
     },
 };
-use d2b_provider_runtime_cloud_hypervisor::{
+use d2b_provider_guest_cloud_hypervisor::{
     AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph,
     BootstrapHandoff, CloudHypervisorConfig, CloudHypervisorController,
     CloudHypervisorReconcileOutcome, CloudHypervisorResourceApiError,
@@ -829,7 +829,7 @@ impl GuestSetupDescriptorVerifier for AcceptingCloudDescriptorVerifier {
     }
 }
 
-fn cloud_descriptor() -> d2b_provider_runtime_cloud_hypervisor::VerifiedGuestSetupDescriptor {
+fn cloud_descriptor() -> d2b_provider_guest_cloud_hypervisor::VerifiedGuestSetupDescriptor {
     GuestSetupDescriptor::new(
         ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
         ResourceGeneration::new(3).unwrap(),
@@ -1106,9 +1106,9 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                     .lock()
                     .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
                 let snapshot = if ready {
-                    d2b_provider_runtime_cloud_hypervisor::GuestDependencySnapshot::ready(graph)
+                    d2b_provider_guest_cloud_hypervisor::GuestDependencySnapshot::ready(graph)
                 } else {
-                    d2b_provider_runtime_cloud_hypervisor::GuestDependencySnapshot::new(
+                    d2b_provider_guest_cloud_hypervisor::GuestDependencySnapshot::new(
                         graph
                             .devices
                             .iter()
@@ -1274,7 +1274,7 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
             }
             CloudHypervisorResourceRequest::ObserveProcessAdoption { .. } => {
                 Ok(CloudHypervisorResourceResponse::ProcessAdoption(
-                    d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current,
+                    d2b_provider_guest_cloud_hypervisor::ProcessAdoptionStatus::Current,
                 ))
             }
             CloudHypervisorResourceRequest::AssessUpdate { .. } => {

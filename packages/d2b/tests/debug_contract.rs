@@ -89,8 +89,9 @@ fn an_unreachable_zone_refuses_without_rendering_a_report() {
 
 #[test]
 fn an_explicit_zone_that_disagrees_with_the_positional_zone_is_refused() {
-    // R22 and AE9: the disagreement is refused before any connection, so this
-    // holds even with no daemon at all. Both flag positions parse.
+    // A positional zone that disagrees with the explicit zone is refused
+    // before any connection, so this holds even with no daemon at all. Both
+    // flag positions parse.
     let socket = socket_path("mismatch");
     for args in [
         ["--zone", "dev", "debug", "prod"],

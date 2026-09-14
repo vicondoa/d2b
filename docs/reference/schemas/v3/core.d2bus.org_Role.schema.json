@@ -52,6 +52,148 @@
     "spec": {
       "additionalProperties": false,
       "properties": {
+        "commandRefs": {
+          "items": {
+            "pattern": "^Command/[a-z][a-z0-9-]{0,62}$",
+            "type": "string",
+            "x-d2b-allowed-ref-types": [
+              "Command"
+            ],
+            "x-d2b-reference-kind": "ResourceRef",
+            "x-d2b-reference-scope": "same-zone"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "operationRefs": {
+          "items": {
+            "pattern": "^Operation/[a-z][a-z0-9-]{0,62}$",
+            "type": "string",
+            "x-d2b-allowed-ref-types": [
+              "Operation"
+            ],
+            "x-d2b-reference-kind": "ResourceRef",
+            "x-d2b-reference-scope": "same-zone"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "posture": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "capabilities": {
+                  "items": {
+                    "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                    "type": "string"
+                  },
+                  "maxItems": 64,
+                  "type": "array"
+                },
+                "mounts": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "path": {
+                        "maxLength": 255,
+                        "pattern": "^/[^\\u0000]*$",
+                        "type": "string"
+                      },
+                      "writable": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "writable"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 64,
+                  "type": "array"
+                },
+                "namespaces": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cgroup": {
+                      "type": "boolean"
+                    },
+                    "ipc": {
+                      "type": "boolean"
+                    },
+                    "mount": {
+                      "type": "boolean"
+                    },
+                    "net": {
+                      "type": "boolean"
+                    },
+                    "pid": {
+                      "type": "boolean"
+                    },
+                    "time": {
+                      "type": "boolean"
+                    },
+                    "uts": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "mount",
+                    "pid",
+                    "net",
+                    "uts",
+                    "ipc",
+                    "cgroup",
+                    "time"
+                  ],
+                  "type": "object"
+                },
+                "principalRef": {
+                  "pattern": "^Principal/[a-z][a-z0-9-]{0,62}$",
+                  "type": "string"
+                },
+                "seccompRef": {
+                  "pattern": "^SeccompProfile/[a-z][a-z0-9-]{0,62}$",
+                  "type": "string",
+                  "x-d2b-allowed-ref-types": [
+                    "SeccompProfile"
+                  ],
+                  "x-d2b-reference-kind": "ResourceRef",
+                  "x-d2b-reference-scope": "same-zone"
+                },
+                "umask": {
+                  "anyOf": [
+                    {
+                      "maximum": 511,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "userNs": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "seccompRef",
+                "principalRef",
+                "capabilities",
+                "namespaces",
+                "mounts",
+                "umask",
+                "userNs"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "providerRef": {
           "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
           "type": "string",

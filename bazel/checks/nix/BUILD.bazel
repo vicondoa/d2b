@@ -64,11 +64,30 @@ _SURFACES = {
             "packages/d2b-provider-network-local/nix/net.nix",
         ],
     },
+    "host-contract": {
+        "cases": ["host-contract-digest"],
+        "package": "packages/d2b-broker",
+        "files": [
+            "docs/reference/policy/principal-allocation.json",
+            "nixos-modules/generated/resource-inventories.nix",
+            "nixos-modules/generated/resource-types.nix",
+            "nixos-modules/resources-bundle.nix",
+            "nixos-modules/resources.nix",
+            "packages/d2b-broker/src/ops/state-posture-contract.json",
+        ],
+        "modules": [
+            "nixos-modules/host-contract.nix",
+            "nixos-modules/options-zones.nix",
+        ],
+    },
     "zone-control": {
         "cases": ["bundle-artifacts-compiler", "zone-control", "zone-link"],
         "package": "packages/d2b-provider-volume-local",
         "files": [
             "nixos-modules/generated/provider-catalog-shape.nix",
+            "nixos-modules/generated/provider-projections.nix",
+            "nixos-modules/generated/resource-inventories.nix",
+            "nixos-modules/generated/resource-types.nix",
             "nixos-modules/generated/zone-spec-canonical.nix",
             "nixos-modules/resources-bundle.nix",
             "nixos-modules/resources.nix",
@@ -91,7 +110,7 @@ _SURFACES = {
     },
     "zone-only": {
         "cases": ["zone-only"],
-        "package": "packages/d2b-provider-runtime-qemu-media",
+        "package": "packages/d2b-provider-guest-qemu-media",
         "modules": [
             "nixos-modules/options.nix",
             "nixos-modules/options-site.nix",
@@ -99,7 +118,7 @@ _SURFACES = {
             "nixos-modules/options-host.nix",
             "nixos-modules/options-daemon.nix",
             "nixos-modules/options-observability.nix",
-            "packages/d2b-provider-runtime-qemu-media/nix/default.nix",
+            "packages/d2b-provider-guest-qemu-media/nix/default.nix",
         ],
     },
     "provider-catalog": {
@@ -292,12 +311,12 @@ nix_surface_test(
     surface = "provider-runtime-qemu-media",
     spec = {
         "cases": [],
-        "modules": ["packages/d2b-provider-runtime-qemu-media/nix/default.nix"],
-        "expression": "//packages/d2b-provider-runtime-qemu-media:nix/tests/default.nix",
+        "modules": ["packages/d2b-provider-guest-qemu-media/nix/default.nix"],
+        "expression": "//packages/d2b-provider-guest-qemu-media:nix/tests/default.nix",
         "files": [
-            "packages/d2b-provider-runtime-qemu-media/nix/projection.nix",
+            "packages/d2b-provider-guest-qemu-media/nix/projection.nix",
         ],
-        "package": "packages/d2b-provider-runtime-qemu-media",
+        "package": "packages/d2b-provider-guest-qemu-media",
         "raw_cases": True,
     },
 )
@@ -308,15 +327,18 @@ nix_surface_test(
     spec = {
         "cases": [],
         "modules": [],
-        "expression": "//packages/d2b-provider-runtime-cloud-hypervisor:nix/tests/default.nix",
+        "expression": "//packages/d2b-provider-guest-cloud-hypervisor:nix/tests/default.nix",
         "files": [
-            "packages/d2b-provider-runtime-cloud-hypervisor/nix/default.nix",
+            "packages/d2b-provider-guest-cloud-hypervisor/nix/default.nix",
             "nixos-modules/bundle-zones.nix",
+            "nixos-modules/generated/provider-projections.nix",
+            "nixos-modules/generated/resource-inventories.nix",
+            "nixos-modules/generated/resource-types.nix",
             "nixos-modules/generated/zone-spec-canonical.nix",
             "nixos-modules/resources-bundle.nix",
             "nixos-modules/resources-zones-processes.nix",
         ],
-        "package": "packages/d2b-provider-runtime-cloud-hypervisor",
+        "package": "packages/d2b-provider-guest-cloud-hypervisor",
         "raw_cases": True,
     },
 )
@@ -327,11 +349,11 @@ nix_surface_test(
     spec = {
         "cases": [],
         "modules": [],
-        "expression": "//packages/d2b-provider-runtime-azure-container-apps:nix/tests/default.nix",
+        "expression": "//packages/d2b-provider-guest-azure-container-apps:nix/tests/default.nix",
         "files": [
-            "packages/d2b-provider-runtime-azure-container-apps/nix/default.nix",
+            "packages/d2b-provider-guest-azure-container-apps/nix/default.nix",
         ],
-        "package": "packages/d2b-provider-runtime-azure-container-apps",
+        "package": "packages/d2b-provider-guest-azure-container-apps",
         "raw_cases": True,
     },
 )
@@ -342,11 +364,11 @@ nix_surface_test(
     spec = {
         "cases": [],
         "modules": [],
-        "expression": "//packages/d2b-provider-runtime-azure-virtual-machine:nix/tests/default.nix",
+        "expression": "//packages/d2b-provider-guest-azure-virtual-machine:nix/tests/default.nix",
         "files": [
-            "packages/d2b-provider-runtime-azure-virtual-machine/nix/default.nix",
+            "packages/d2b-provider-guest-azure-virtual-machine/nix/default.nix",
         ],
-        "package": "packages/d2b-provider-runtime-azure-virtual-machine",
+        "package": "packages/d2b-provider-guest-azure-virtual-machine",
         "raw_cases": True,
     },
 )
@@ -374,7 +396,6 @@ nix_surface_test(
         "modules": [],
         "expression": "//packages/d2b-provider-observability-otel:nix/tests/default.nix",
         "files": [
-            "packages/d2b-provider-observability-otel/nix/default.nix",
             "packages/d2b-provider-observability-otel/nix/projection.nix",
         ],
         "package": "packages/d2b-provider-observability-otel",

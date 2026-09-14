@@ -737,7 +737,7 @@ impl DisplayController {
     /// Construct a controller with a bounded dynamic principal pool.
     pub fn new(pool_size: usize) -> Self {
         Self {
-            principal_pool: PrincipalPool::new(std::iter::empty::<String>(), pool_size)
+            principal_pool: PrincipalPool::new(pool_size)
                 .expect("display principal pool size is validated by the signed descriptor"),
             principals: BTreeMap::new(),
             active_policies: BTreeMap::new(),

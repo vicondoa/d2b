@@ -20,7 +20,7 @@ use d2b_contracts_resource::v3::{ActivationRunnerInput, execution_policy::Execut
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_core::bundle_resolver::{BundleResolver, intent_id_legacy_runner};
 use d2b_core::processes::ProcessRole;
-use d2b_process::{
+use d2b_provider_process::{
     BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity, ProcessEffectBackend,
     ProcessEffectError, ProcessIdentityDigest, ProcessLaunchRequest, ProcessRequest,
     ProcessStopClass, WaitReapOwner,
@@ -133,6 +133,29 @@ impl BrokerLaunchIntent {
     fn wire_runtime_scope(&self) -> Option<[u8; 32]> {
         self.typed_identity.then(|| self.runtime_scope).flatten()
     }
+}
+
+/// Emit one generic Process broker request with the typed-identity projection
+/// every such request carries.
+///
+/// The accessors above stay the single source of the projection, so presence
+/// and absence of the nine fields on the wire are unchanged.
+macro_rules! typed_identity_request {
+    ($request:ident { $($fields:tt)* }, $intent:expr $(,)?) => {{
+        let wire_intent = &$intent;
+        $request {
+            $($fields)*
+            resource_ref: wire_intent.wire_resource_ref(),
+            resource_uid: wire_intent.wire_resource_uid(),
+            zone_uid: wire_intent.wire_zone_uid(),
+            owner_ref: wire_intent.wire_owner_ref(),
+            provider_ref: wire_intent.wire_provider_ref(),
+            provider_identity: wire_intent.wire_provider_identity(),
+            template_identity: wire_intent.wire_template_identity(),
+            generation: wire_intent.wire_generation(),
+            runtime_scope: wire_intent.wire_runtime_scope(),
+        }
+    }};
 }
 
 /// Candidate discovered independently of the adapter's in-memory handle table.
@@ -369,23 +392,17 @@ impl BrokerLaunchResolver for BundleBackedLaunchResolver {
         let frame = broker_round_trip(
             &observation.socket_path,
             observation.io_timeout,
-            BrokerRequest::ObserveRunner(ObserveRunnerRequest {
-                vm_id: intent.vm_id.clone(),
-                role_id: intent.role_id.clone(),
-                role: intent.role,
-                bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
-                resource_ref: intent.wire_resource_ref(),
-                resource_uid: intent.wire_resource_uid(),
-                zone_uid: intent.wire_zone_uid(),
-                owner_ref: intent.wire_owner_ref(),
-                provider_ref: intent.wire_provider_ref(),
-                provider_identity: intent.wire_provider_identity(),
-                template_identity: intent.wire_template_identity(),
-                generation: intent.wire_generation(),
-                runtime_scope: intent.wire_runtime_scope(),
-                guest_execution: intent.guest_execution.clone(),
-                tracing_span_id: None,
-            }),
+            BrokerRequest::ObserveRunner(typed_identity_request!(
+                ObserveRunnerRequest {
+                    vm_id: intent.vm_id.clone(),
+                    role_id: intent.role_id.clone(),
+                    role: intent.role,
+                    bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
+                    guest_execution: intent.guest_execution.clone(),
+                    tracing_span_id: None,
+                },
+                intent,
+            )),
             observation.caller_role.clone(),
         )?;
         let BrokerResponse::ObserveRunner(response) = frame.response else {
@@ -861,28 +878,6 @@ pub struct BrokerProcessBackend<R: BrokerLaunchResolver> {
 }
 
 impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
-    /// Build a backend using the production broker socket path.
-    pub fn new(resolver: R) -> Self {
-        Self::with_socket_profile_and_role(
-            resolver,
-            d2b_contracts::BROKER_SOCKET_PATH,
-            Duration::from_secs(10),
-            BrokerProfile::Host,
-            BrokerCallerRole::NotAuthorized,
-        )
-    }
-
-    /// Build a backend with an explicit socket path and I/O timeout.
-    pub fn with_socket(resolver: R, socket_path: impl Into<PathBuf>, io_timeout: Duration) -> Self {
-        Self::with_socket_profile_and_role(
-            resolver,
-            socket_path,
-            io_timeout,
-            BrokerProfile::Host,
-            BrokerCallerRole::NotAuthorized,
-        )
-    }
-
     /// Build a backend bound to one fixed broker profile and caller identity.
     pub fn with_socket_profile_and_role(
         resolver: R,
@@ -1043,35 +1038,29 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             return Err(ProcessEffectError::UnsupportedProvider);
         };
         let frame = self.request_with_fds(
-            BrokerRequest::SpawnRunner(SpawnRunnerRequest {
-                execution_ref: Some(intent.execution_ref.clone()),
-                execution_domain: Some(intent.domain),
-                user_ref: intent.user_ref.clone(),
-                vm_id: intent.vm_id.clone(),
-                role_id: intent.role_id.clone(),
-                zone_uid: intent.wire_zone_uid(),
-                owner_ref: intent.wire_owner_ref(),
-                owner_uid: intent.owner_uid.clone(),
-                provider_ref: intent.wire_provider_ref(),
-                resource_ref: intent.wire_resource_ref(),
-                resource_uid: intent.wire_resource_uid(),
-                bundle_content_identity: Some(intent.bundle_content_identity.clone()),
-                provider_identity: intent.wire_provider_identity(),
-                template_identity: intent.wire_template_identity(),
-                generation: intent.wire_generation(),
-                runtime_scope: intent.wire_runtime_scope(),
-                sandbox_plan: intent.sandbox_plan.clone(),
-                activation_input: intent.activation_input.clone(),
-                guest_execution: intent.guest_execution.clone(),
-                launch_args,
-                role: intent.role,
-                bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
-                runtime_allocations: Vec::new(),
-                tracing_span_id: None,
-                workload_identity: None,
-                inherited_fd_count,
-                network_tap_context: None,
-            }),
+            BrokerRequest::SpawnRunner(typed_identity_request!(
+                SpawnRunnerRequest {
+                    execution_ref: Some(intent.execution_ref.clone()),
+                    execution_domain: Some(intent.domain),
+                    user_ref: intent.user_ref.clone(),
+                    vm_id: intent.vm_id.clone(),
+                    role_id: intent.role_id.clone(),
+                    owner_uid: intent.owner_uid.clone(),
+                    bundle_content_identity: Some(intent.bundle_content_identity.clone()),
+                    sandbox_plan: intent.sandbox_plan.clone(),
+                    activation_input: intent.activation_input.clone(),
+                    guest_execution: intent.guest_execution.clone(),
+                    launch_args,
+                    role: intent.role,
+                    bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
+                    runtime_allocations: Vec::new(),
+                    tracing_span_id: None,
+                    workload_identity: None,
+                    inherited_fd_count,
+                    network_tap_context: None,
+                },
+                intent,
+            )),
             &inherited_fds,
         )?;
         let BrokerResponse::SpawnRunner(ref response) = frame.response else {
@@ -1166,24 +1155,18 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         observation: BackendObservation,
     ) -> Result<Self::Handle, ProcessEffectError> {
         let observed = self.take_observation(&observation.identity())?;
-        let frame = self.request(BrokerRequest::OpenPidfd(OpenPidfdRequest {
-            vm_id: observed.intent.vm_id.clone(),
-            role_id: observed.intent.role_id.clone(),
-            bundle_runner_intent_ref: Some(observed.intent.bundle_runner_intent_ref.clone()),
-            resource_ref: observed.intent.wire_resource_ref(),
-            resource_uid: observed.intent.wire_resource_uid(),
-            zone_uid: observed.intent.wire_zone_uid(),
-            owner_ref: observed.intent.wire_owner_ref(),
-            provider_ref: observed.intent.wire_provider_ref(),
-            provider_identity: observed.intent.wire_provider_identity(),
-            template_identity: observed.intent.wire_template_identity(),
-            generation: observed.intent.wire_generation(),
-            runtime_scope: observed.intent.wire_runtime_scope(),
-            guest_execution: observed.intent.guest_execution.clone(),
-            pid: observed.pid,
-            expected_start_time_ticks: observed.start_time_ticks,
-            tracing_span_id: None,
-        }))?;
+        let frame = self.request(BrokerRequest::OpenPidfd(typed_identity_request!(
+            OpenPidfdRequest {
+                vm_id: observed.intent.vm_id.clone(),
+                role_id: observed.intent.role_id.clone(),
+                bundle_runner_intent_ref: Some(observed.intent.bundle_runner_intent_ref.clone()),
+                guest_execution: observed.intent.guest_execution.clone(),
+                pid: observed.pid,
+                expected_start_time_ticks: observed.start_time_ticks,
+                tracing_span_id: None,
+            },
+            observed.intent,
+        )))?;
         let BrokerResponse::OpenPidfd(ref response) = frame.response else {
             return Err(response_error(
                 &frame.response,
@@ -1255,24 +1238,18 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             ProcessStopClass::Drain => RunnerSignal::Term,
             ProcessStopClass::Terminate => RunnerSignal::Kill,
         };
-        let frame = self.request(BrokerRequest::SignalRunner(SignalRunnerRequest {
-            vm_id: handle.observed.intent.vm_id.clone(),
-            role_id: handle.observed.intent.role_id.clone(),
-            resource_ref: handle.observed.intent.wire_resource_ref(),
-            resource_uid: handle.observed.intent.wire_resource_uid(),
-            zone_uid: handle.observed.intent.wire_zone_uid(),
-            owner_ref: handle.observed.intent.wire_owner_ref(),
-            provider_ref: handle.observed.intent.wire_provider_ref(),
-            provider_identity: handle.observed.intent.wire_provider_identity(),
-            template_identity: handle.observed.intent.wire_template_identity(),
-            generation: handle.observed.intent.wire_generation(),
-            runtime_scope: handle.observed.intent.wire_runtime_scope(),
-            guest_execution: handle.observed.intent.guest_execution.clone(),
-            signal,
-            pid: Some(handle.observed.pid),
-            expected_start_time_ticks: Some(handle.observed.start_time_ticks),
-            tracing_span_id: None,
-        }))?;
+        let frame = self.request(BrokerRequest::SignalRunner(typed_identity_request!(
+            SignalRunnerRequest {
+                vm_id: handle.observed.intent.vm_id.clone(),
+                role_id: handle.observed.intent.role_id.clone(),
+                guest_execution: handle.observed.intent.guest_execution.clone(),
+                signal,
+                pid: Some(handle.observed.pid),
+                expected_start_time_ticks: Some(handle.observed.start_time_ticks),
+                tracing_span_id: None,
+            },
+            handle.observed.intent,
+        )))?;
         match frame.response {
             BrokerResponse::SignalRunner(response)
                 if response.signaled
@@ -1293,23 +1270,17 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         if class == ProcessStopClass::Terminate {
             wait_pidfd_exit(&handle.pidfd, self.io_timeout)?;
             let frame = self.request(BrokerRequest::DeregisterRunnerPidfd(
-                DeregisterRunnerPidfdRequest {
-                    vm_id: handle.observed.intent.vm_id.clone(),
-                    role_id: handle.observed.intent.role_id.clone(),
-                    pid: Some(handle.observed.pid),
-                    expected_start_time_ticks: Some(handle.observed.start_time_ticks),
-                    resource_ref: handle.observed.intent.wire_resource_ref(),
-                    resource_uid: handle.observed.intent.wire_resource_uid(),
-                    zone_uid: handle.observed.intent.wire_zone_uid(),
-                    owner_ref: handle.observed.intent.wire_owner_ref(),
-                    provider_ref: handle.observed.intent.wire_provider_ref(),
-                    provider_identity: handle.observed.intent.wire_provider_identity(),
-                    template_identity: handle.observed.intent.wire_template_identity(),
-                    generation: handle.observed.intent.wire_generation(),
-                    runtime_scope: handle.observed.intent.wire_runtime_scope(),
-                    guest_execution: handle.observed.intent.guest_execution.clone(),
-                    tracing_span_id: None,
-                },
+                typed_identity_request!(
+                    DeregisterRunnerPidfdRequest {
+                        vm_id: handle.observed.intent.vm_id.clone(),
+                        role_id: handle.observed.intent.role_id.clone(),
+                        pid: Some(handle.observed.pid),
+                        expected_start_time_ticks: Some(handle.observed.start_time_ticks),
+                        guest_execution: handle.observed.intent.guest_execution.clone(),
+                        tracing_span_id: None,
+                    },
+                    handle.observed.intent,
+                ),
             ))?;
             match frame.response {
                 BrokerResponse::DeregisterRunnerPidfd(response)
@@ -1331,23 +1302,17 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
 
     fn finalize(&self, handle: &Self::Handle) -> Result<(), ProcessEffectError> {
         let frame = self.request(BrokerRequest::DeregisterRunnerPidfd(
-            DeregisterRunnerPidfdRequest {
-                vm_id: handle.observed.intent.vm_id.clone(),
-                role_id: handle.observed.intent.role_id.clone(),
-                pid: Some(handle.observed.pid),
-                expected_start_time_ticks: Some(handle.observed.start_time_ticks),
-                resource_ref: handle.observed.intent.wire_resource_ref(),
-                resource_uid: handle.observed.intent.wire_resource_uid(),
-                zone_uid: handle.observed.intent.wire_zone_uid(),
-                owner_ref: handle.observed.intent.wire_owner_ref(),
-                provider_ref: handle.observed.intent.wire_provider_ref(),
-                provider_identity: handle.observed.intent.wire_provider_identity(),
-                template_identity: handle.observed.intent.wire_template_identity(),
-                generation: handle.observed.intent.wire_generation(),
-                runtime_scope: handle.observed.intent.wire_runtime_scope(),
-                guest_execution: handle.observed.intent.guest_execution.clone(),
-                tracing_span_id: None,
-            },
+            typed_identity_request!(
+                DeregisterRunnerPidfdRequest {
+                    vm_id: handle.observed.intent.vm_id.clone(),
+                    role_id: handle.observed.intent.role_id.clone(),
+                    pid: Some(handle.observed.pid),
+                    expected_start_time_ticks: Some(handle.observed.start_time_ticks),
+                    guest_execution: handle.observed.intent.guest_execution.clone(),
+                    tracing_span_id: None,
+                },
+                handle.observed.intent,
+            ),
         ))?;
         match frame.response {
             BrokerResponse::DeregisterRunnerPidfd(response)
@@ -1463,7 +1428,7 @@ enum BrokerOperation<'a> {
 /// [`read_proc_start_time`] yields `None` for both: there is no observed
 /// identity to compare, and nothing to adopt. Reporting that as an identity
 /// ambiguity would quarantine a launch that never produced a running process
-/// (`d2bd::process_driver` classifies every `identity` / `ambiguous` provider
+/// (`d2b-provider-process` classifies every `identity` / `ambiguous` provider
 /// code as terminal), so the definite outcome is reported instead: the child
 /// vanished, which the conformance port projects as the `pidfd-unavailable`
 /// conformance code and the daemon reads as a retryable launch effect.
@@ -1650,8 +1615,13 @@ mod tests {
 
     #[test]
     fn pending_broker_observations_are_bounded_and_consumed() {
-        let backend =
-            BrokerProcessBackend::with_socket(Resolver, "/unused", Duration::from_millis(1));
+        let backend = BrokerProcessBackend::with_socket_profile_and_role(
+            Resolver,
+            "/unused",
+            Duration::from_millis(1),
+            BrokerProfile::Host,
+            BrokerCallerRole::NotAuthorized,
+        );
         for seed in 0..=MAX_PENDING_OBSERVATIONS {
             backend
                 .record(observed(u16::try_from(seed).unwrap()))
@@ -1673,12 +1643,14 @@ mod tests {
     fn executable_mismatch_remains_observable_as_incomplete_identity() {
         let mut process = observed(1);
         process.executable_verified = false;
-        let backend = BrokerProcessBackend::with_socket(
+        let backend = BrokerProcessBackend::with_socket_profile_and_role(
             ObservingResolver {
                 observed: process.clone(),
             },
             "/unused",
             Duration::from_millis(1),
+            BrokerProfile::Host,
+            BrokerCallerRole::NotAuthorized,
         );
         let request = ProcessRequest::new(
             d2b_process_conformance::testing::fixtures::ticket_builder()
@@ -1742,7 +1714,7 @@ mod tests {
     /// and stays refused (`adoption-ambiguous`), while a child that is already
     /// gone (exited before adoption: absent or zombie, `None`) is the definite
     /// launch failure - it must never be reported as an ambiguous identity,
-    /// which `d2bd::process_driver` would classify as terminal and quarantine.
+    /// which `d2b-provider-process` would classify as terminal and quarantine.
     #[test]
     fn launch_fence_separates_start_time_drift_from_a_gone_process() {
         assert_eq!(launch_adoption_error(1234, Some(77), 77), None);

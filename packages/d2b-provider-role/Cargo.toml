@@ -1,0 +1,14 @@
+[package]
+name = "d2b-provider-role"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

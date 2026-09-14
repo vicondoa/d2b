@@ -26,7 +26,6 @@ const PROTECTED_CODEOWNERS_RULES: &[&str] = &[
     "/Cargo.lock @vicondoa",
     "/packages/Cargo.guest.lock @vicondoa",
     "/packages/d2b-broker/Cargo.toml @vicondoa",
-    "/packages/d2b-guest-shell-runner/Cargo.toml @vicondoa",
     "/packages/policy-inputs/** @vicondoa",
     "/packages/policy-inputs/advisory-policy.json @vicondoa",
     "/packages/xtask/Cargo.toml @vicondoa",
@@ -302,7 +301,7 @@ fn checked_in_contexts_are_nonempty_and_structurally_valid() {
     let paths = closure_paths();
     assert_eq!(
         paths.len(),
-        14,
+        12,
         "expected both systems and all production contexts"
     );
     for path in paths {

@@ -52,6 +52,17 @@
     "spec": {
       "additionalProperties": false,
       "properties": {
+        "executionRefs": {
+          "items": {
+            "pattern": "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$",
+            "type": "string",
+            "x-d2b-allowed-ref-types": [],
+            "x-d2b-reference-kind": "ResourceRef",
+            "x-d2b-reference-scope": "same-zone"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
         "externalPrincipalSelector": {
           "anyOf": [
             {
@@ -70,6 +81,32 @@
           ],
           "x-d2b-reference-kind": "ResourceRef",
           "x-d2b-reference-scope": "same-zone"
+        },
+        "relayAuthority": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "core-generated",
+                "durable-local-admin"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceRefs": {
+          "items": {
+            "pattern": "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$",
+            "type": "string",
+            "x-d2b-allowed-ref-types": [],
+            "x-d2b-reference-kind": "ResourceRef",
+            "x-d2b-reference-scope": "same-zone"
+          },
+          "maxItems": 64,
+          "type": "array"
         },
         "roleRef": {
           "pattern": "^Role/[a-z][a-z0-9-]{0,62}$",
@@ -115,6 +152,14 @@
           },
           "required": [],
           "type": "object"
+        },
+        "zoneRefs": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9-]{0,62}$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "type": "array"
         }
       },
       "required": [

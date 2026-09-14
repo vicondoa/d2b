@@ -9,9 +9,7 @@
 
 mod adapter;
 mod broker;
-mod metrics;
 mod systemd;
-mod tracing;
 
 pub use adapter::{DEFAULT_BLOCKING_LIMIT, ProviderSupervisor};
 pub use broker::{
@@ -20,5 +18,5 @@ pub use broker::{
 };
 pub use systemd::{
     BrokerSystemdEffectOwner, BrokerSystemdPidfdHandle, SystemdEffectLaunch, SystemdEffectOwner,
-    SystemdIdentityContext, SystemdInvocationIdentity, SystemdProcessBackend,
+    SystemdInvocationIdentity, SystemdProcessBackend,
 };

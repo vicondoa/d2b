@@ -2011,11 +2011,7 @@ fn bazel_facade_owns_public_make_composition() {
         "check must compose the canonical Layer-1 suite"
     );
     let rust = test_suite_labels(&facade, "test-rust");
-    for component in [
-        ":test-rust-main",
-        ":test-rust-broker",
-        ":test-rust-guest-shell-runner",
-    ] {
+    for component in [":test-rust-main", ":test-rust-broker"] {
         assert!(
             rust.iter().any(|label| label == component),
             "test-rust must include {component}"
@@ -2037,9 +2033,8 @@ fn bazel_facade_owns_public_make_composition() {
     assert!(
         package_suites
             .iter()
-            .all(|label| !label.starts_with("//packages/d2b-priv-broker:")
-                && !label.starts_with("//packages/d2b-guest-shell-runner:")),
-        "test-rust-main must exclude broker and guest package suites"
+            .all(|label| !label.starts_with("//packages/d2b-priv-broker:")),
+        "test-rust-main must exclude broker package suites"
     );
     assert_eq!(
         test_suite_labels(&facade, "test-flake-x86"),
@@ -2056,10 +2051,6 @@ fn bazel_facade_owns_public_make_composition() {
         ("test-rust-leaf-schema", "test-rust-schema"),
         ("test-rust-leaf-fixture-contracts", "test-fixture-contracts"),
         ("test-rust-leaf-broker", "test-rust-broker"),
-        (
-            "test-rust-leaf-guest-shell-runner",
-            "test-rust-guest-shell-runner",
-        ),
         ("test-rust-leaf-supply-chain", "test-rust-supply-chain"),
     ] {
         assert_eq!(

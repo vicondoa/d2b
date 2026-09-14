@@ -1,5 +1,5 @@
 //! The v3 Provider model surface: descriptors, registry, session identity,
-//! and forwarding admission.
+//! and lifecycle admission.
 //!
 //! This crate is the Zone-side Provider registry. It holds one registry
 //! generation per Zone, admits authenticated calls against it, drains and
@@ -17,8 +17,7 @@
 //! here carries a numeric UID or GID, a device node, a store path, a socket
 //! path, or any host path; a Provider is named only by its Zone path and its
 //! `Provider/<name>` reference. No type here carries authority: an
-//! [`InFlightPermit`] is a concurrency slot, and forwarding admissions are
-//! runtime-issued route evidence, not transferable capabilities.
+//! [`InFlightPermit`] is a concurrency slot, not a transferable capability.
 //!
 //! It also does not name the Provider trait-object catalog. Rather than
 //! inventing a universal RPC or proxy surface, [`ProviderRegistry`] is
@@ -31,13 +30,10 @@ pub mod agent;
 mod context;
 mod descriptor;
 mod error;
-mod forwarding;
 mod identity;
-mod installation;
 mod operation_ledger;
 mod registry;
 mod session;
-pub mod share_adapter;
 
 pub mod instance;
 
@@ -52,18 +48,10 @@ pub use descriptor::{
     MAX_DEVICE_REPAIR_WINDOW_MS, MAX_REPAIR_WINDOW_MS, ProviderDescriptor, RepairPolicy,
 };
 pub use error::{ProviderRuntimeError, RegistryBuildError};
-pub use forwarding::{
-    ForwardTarget, ForwardedCall, ProviderForwardRequest, ZoneRouteFailClosedReason,
-    admit_provider_forward,
-};
 pub use identity::{
     MAX_PROVIDER_CAPABILITIES, MAX_PROVIDER_REGISTRY_ENTRIES, PROVIDER_RESOURCE_TYPE,
     PROVIDER_SCHEMA_VERSION, ProviderCapabilitySet, ProviderClass, ProviderImplementationId,
     ProviderMethodName,
-};
-pub use installation::{
-    InstalledProvider, ProviderReadiness, RequiredProviderApi, TargetInstallProfile,
-    admit_installation, admit_installation_for_target,
 };
 pub use operation_ledger::{
     MAX_OPERATION_LEDGER_ROWS, OperationLedger, OperationLedgerAdmission, OperationLedgerError,
@@ -75,7 +63,3 @@ pub use registry::{
     RegistryDrainPolicy, RegistryLifecycle, RegistryLimits, RegistryShutdownReport,
 };
 pub use session::SessionIdentity;
-pub use share_adapter::{
-    ExportAdapter, ImportAdapter, ShareAdapter, ShareAdapterError, admit_binding_target,
-    admit_export, admit_factory_pair, admit_import, projection_protocol_version, service_type,
-};

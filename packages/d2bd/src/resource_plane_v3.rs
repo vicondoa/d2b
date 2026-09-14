@@ -28,7 +28,7 @@
 //! its handover.
 
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
@@ -46,6 +46,27 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_contracts_zone_session::v3::resource_bundle::{BundleResource, ResourceBundle};
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedStoreViewIntent, intent_id_store_view};
+use d2b_provider_activation_nixos::{
+    ActivationDriverArgs, ActivationDriverEffects, activation_descriptor,
+};
+use d2b_provider_endpoint::{
+    EndpointDriverArgs, EndpointDriverEffects, GuestControlProducer, endpoint_descriptor,
+};
+use d2b_provider_guest::{GuestDriverArgs, GuestDriverEffects, guest_descriptor};
+use d2b_provider_host::host_descriptor;
+use d2b_provider_user::user_descriptor;
+use d2b_provider_process::{
+    GuestOwnerIdentitySource, ProcessDriverArgs, ProcessDriverEffects, decode_metadata_owner_ref,
+    process_family_descriptors,
+};
+use d2b_provider_telemetry_binding::telemetry_binding_descriptor;
+use d2b_provider_telemetry_service::telemetry_service_descriptor;
+use d2b_provider_volume::{
+    VolumeDriverArgs, VolumeDriverEffects, volume_descriptor,
+};
+use d2b_provider_volume_binding::{
+    BindingDriverArgs, BindingDriverEffects, binding_descriptor,
+};
 use d2b_provider_volume_local::{VolumeLocalController, VolumeLocalProfile};
 use d2b_provider_volume_virtiofs::{MAX_SOCKET_PATH_BYTES, SocketIdentity, StoredBinding};
 use d2b_resource_api::manager_backend::nix_bundle_subject;
@@ -54,10 +75,9 @@ use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::manager::{
-    AllowAll, DesiredResource, ResourceManager, ResourceManagerArgs, ResourceManagerClient,
+    DesiredResource, ResourceManager, ResourceManagerArgs, ResourceManagerClient,
     ResourceManagerMsg, ResourceSelector,
 };
-use d2b_resource_runtime::provider::ProviderDirectory;
 use d2b_resource_runtime::spec_store::{SpecSelector, SpecStore, StoredDesiredResource};
 use d2b_resource_runtime::GuestTargetControl;
 use d2b_resource_runtime::target::{TargetDirectory, TargetRef, TargetResolver};
@@ -67,48 +87,73 @@ use d2bd_runtime::target_runtime::DaemonMode;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
 use sha2::{Digest, Sha256};
 
-use crate::activation_driver::{
-    ActivationDriverArgs, ActivationDriverEffects, ActivationDriverFactory,
-    ProductionActivationDriverEffects, activation_spec_decoder,
+use crate::activation_effects::ProductionActivationDriverEffects;
+use crate::binding_effects::ProductionBindingDriverEffects;
+use d2b_provider_credential::{
+    CredentialDriverArgs, CredentialDriverEffects, credential_descriptor,
 };
-use crate::binding_driver::{
-    BindingDriverArgs, BindingDriverEffects, BindingDriverFactory, ProductionBindingDriverEffects,
-    binding_spec_decoder,
+use crate::endpoint_effects::{
+    AsyncSocketEffect, ProductionEndpointDriverEffects, device_worker_purpose,
+    guest_control_producer, guest_control_purpose,
 };
-use crate::credential_driver::{
-    CredentialDriverArgs, CredentialDriverEffects, CredentialDriverFactory, credential_spec_decoder,
+use crate::process_effects::ProductionProcessDriverEffects;
+use crate::volume_effects::ProductionVolumeDriverEffects;
+use crate::provider_lifecycle::{
+    ProviderRuntime, ProviderSet, ProviderStartupError, family_declaration,
 };
-use crate::endpoint_driver::{AsyncSocketEffect, EndpointDriverArgs, EndpointDriverFactory, endpoint_spec_decoder};
-use crate::process_driver::{
-    GuestOwnerIdentitySource, ProcessDriverArgs, ProcessDriverEffects, ProcessDriverFactory,
-    ProductionProcessDriverEffects, process_spec_decoder,
-};
-use crate::semantic_binding_resource_runtime::{
-    TELEMETRY_BINDING_TYPE, TELEMETRY_SERVICE_TYPE, TelemetryDriverFactory,
-    telemetry_spec_decoder,
-};
-use crate::volume_driver::{
-    ProductionVolumeDriverEffects, VolumeDriverArgs, VolumeDriverEffects, volume_spec_decoder,
-};
-use crate::shared_provider_driver::{
-    SharedProviderDriverArgs, SharedProviderDriverEffects, SharedProviderDriverFactory,
-    shared_provider_spec_decoder,
-};
-use crate::guest_driver::{
-    GuestDriverArgs, GuestDriverEffects, GuestDriverFactory, guest_spec_decoder,
-};
+use d2b_provider_device::{DeviceDriverArgs, device_descriptor};
+use d2b_provider_device_security_key::{SecurityKeyDriverArgs, security_key_descriptors};
+use d2b_provider_device_usbip::{UsbipDriverArgs, usbip_descriptors};
+use d2b_provider_network_local::{NetworkDriverArgs, network_descriptor};
 use crate::guest_effects::ProductionGuestDriverEffects;
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
-use crate::system_core_driver::{SystemCoreDriverFactory, system_core_spec_decoder};
-use crate::core_driver::{CoreDriverEffects, CoreResourceDriverFactory, CORE_RESOURCE_TYPES, core_spec_decoder};
-use crate::interaction_driver::{
-    InteractionDriverArgs, InteractionDriverEffects, InteractionDriverFactory,
-    interaction_spec_decoder,
+use crate::system_core_effects::{ProductionHostDriverEffects, ProductionUserDriverEffects};
+use d2b_provider_command::command_descriptor;
+use d2b_provider_emergency_policy::emergency_policy_descriptor;
+use d2b_provider_operation::operation_descriptor;
+use d2b_provider_provider::{
+    ProviderDriverArgs, ProviderDriverEffects, provider_descriptor,
+};
+use d2b_provider_quota::quota_descriptor;
+use d2b_provider_resource_export::resource_export_descriptor;
+use d2b_provider_resource_import::resource_import_descriptor;
+use d2b_provider_role::role_descriptor;
+use d2b_provider_role_binding::role_binding_descriptor;
+use d2b_provider_seccomp_profile::seccomp_profile_descriptor;
+use d2b_provider_zone::zone_descriptor;
+use d2b_provider_zone_link::zone_link_descriptor;
+use crate::interaction_child_sources::{
+    ProductionAudioBindingChildSource, ProductionDisplayChildSource,
 };
 use crate::resource_runtime::ProductionInteractionDriverEffects;
+use d2b_provider_audio_binding::{
+    AudioBinding, audio_binding_descriptor,
+};
+use d2b_provider_audio_service::{AudioService, audio_service_descriptor};
+use d2b_provider_shell_pool::{ShellPool, shell_pool_descriptor};
+use d2b_provider_shell_session::{ShellSession, shell_session_descriptor};
+use d2b_provider_wayland_policy::{
+    InteractionDriverArgs, InteractionDriverEffects, WaylandPolicy, wayland_policy_descriptor,
+};
+use d2b_provider_wayland_session::{WaylandSession, wayland_session_descriptor};
 
-/// Frozen purpose of the binding-owned virtiofsd socket (old `VIRTIOFSD_PURPOSE`
-/// in `endpoint_driver.rs`).
+/// The construction arguments every interaction driver of this plane shares.
+///
+/// Construction is infallible by contract: the zone was validated at plane
+/// construction and the effect port is the daemon's production adapter.
+fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
+    inputs: &ConstructionInputs,
+    behavior: T,
+) -> InteractionDriverArgs<T> {
+    InteractionDriverArgs {
+        zone: inputs.zone.as_str().to_owned(),
+        controller_generation: inputs.authority.controller_generation,
+        effects: Arc::clone(&inputs.interaction_effects),
+        behavior,
+    }
+}
+
+/// Frozen purpose of the binding-owned virtiofsd socket.
 const VIRTIOFSD_PURPOSE: &str = "virtiofsd";
 
 /// Preserved reconcile backoff for the plane's resource actors (R13).
@@ -370,7 +415,7 @@ impl PlaneResourceRegistry {
 
 /// The committed-`Provider` identity view the production Process effects
 /// consult (KTD7), published by [`PlaneResourceRegistry`].
-impl crate::process_driver::CommittedProviderIdentitySource for PlaneResourceRegistry {
+impl d2b_provider_process::CommittedProviderIdentitySource for PlaneResourceRegistry {
     fn committed_provider_identity(
         &self,
         provider_ref: &ResourceRef,
@@ -470,14 +515,6 @@ fn nix_closure_volume_anchor(
     }
 }
 
-pub(crate) fn decode_metadata_owner_ref(metadata: &[u8]) -> Option<ResourceRef> {
-    let value: serde_json::Value = serde_json::from_slice(metadata).ok()?;
-    value
-        .get("ownerRef")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|owner| ResourceRef::parse(owner).ok())
-}
-
 fn decode_volume_spec(spec_bytes: &[u8]) -> Option<VolumeSpec> {
     let spec = serde_json::from_slice::<d2b_contracts_resource::v3::ResourceSpec>(spec_bytes).ok()?;
     serde_json::from_slice::<VolumeSpec>(&spec.base().to_canonical_bytes()).ok()
@@ -504,14 +541,11 @@ pub(crate) fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
 /// pre-open seed (running before this store exists) cannot know. Rows this
 /// store does not hold keep their seeded identity - the ingest is about to
 /// create them exactly as seeded.
-fn corrected_committed_provider_identities(
+async fn corrected_committed_provider_identities(
     store: &Arc<SpecStore>,
     zone: &ZoneId,
     seeded: &BTreeMap<ResourceRef, (ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)>,
 ) -> BTreeMap<ResourceRef, (ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)> {
-    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-        return seeded.clone();
-    };
     let mut corrected = seeded.clone();
     for provider_ref in seeded.keys() {
         let key = ResourceKey::new(
@@ -519,7 +553,7 @@ fn corrected_committed_provider_identities(
             provider_ref.resource_type().as_str(),
             provider_ref.name().as_str(),
         );
-        let row = tokio::task::block_in_place(|| runtime.block_on(store.get(key)));
+        let row = store.get(key).await;
         if let Ok(row) = row
             && let Ok(uid) = resource_uid(&row.uid)
             && let Ok(generation) =
@@ -734,19 +768,19 @@ impl GuestControlEndpointProbe {
     /// row is the evidence row), `guest-control` by the Guest (the evidence
     /// row is the guest's deterministic VMM child).
     async fn present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
-        let Some(producer) = crate::endpoint_driver::guest_control_producer(purpose) else {
+        let Some(producer) = guest_control_producer(purpose) else {
             return false;
         };
         if producer_ref.resource_type().as_str() != producer.resource_type() {
             return false;
         }
         let vmm_ref = match producer {
-            crate::endpoint_driver::GuestControlProducer::VmmProcess => producer_ref.clone(),
-            crate::endpoint_driver::GuestControlProducer::Guest => {
+            GuestControlProducer::VmmProcess => producer_ref.clone(),
+            GuestControlProducer::Guest => {
                 let Ok(vmm_ref) =
-                    d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
+                    d2b_provider_guest_cloud_hypervisor::deterministic_child_ref(
                         producer_ref,
-                        d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess,
+                        d2b_provider_guest_cloud_hypervisor::ChildRole::VmmProcess,
                     )
                 else {
                     return false;
@@ -804,9 +838,7 @@ impl DeviceWorkerEndpointProbe {
     /// Whether the producer worker row reports `Ready` at its current
     /// generation.
     async fn present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
-        if !crate::endpoint_driver::device_worker_purpose(purpose)
-            || producer_ref.resource_type().as_str() != "Process"
-        {
+        if !device_worker_purpose(purpose) || producer_ref.resource_type().as_str() != "Process" {
             return false;
         }
         let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
@@ -848,10 +880,8 @@ struct EndpointEnsureEffect {
 #[async_trait::async_trait]
 impl AsyncSocketEffect for EndpointEnsureEffect {
     async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
-        if crate::endpoint_driver::guest_control_purpose(purpose)
-            || crate::endpoint_driver::device_worker_purpose(purpose)
-        {
-            let probe = if crate::endpoint_driver::guest_control_purpose(purpose) {
+        if guest_control_purpose(purpose) || device_worker_purpose(purpose) {
+            let probe = if guest_control_purpose(purpose) {
                 EndpointEvidence::Control(&self.control)
             } else {
                 EndpointEvidence::DeviceWorker(&self.device_worker)
@@ -899,9 +929,7 @@ struct EndpointRemoveEffect {
 #[async_trait::async_trait]
 impl AsyncSocketEffect for EndpointRemoveEffect {
     async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
-        if crate::endpoint_driver::guest_control_purpose(purpose)
-            || crate::endpoint_driver::device_worker_purpose(purpose)
-        {
+        if guest_control_purpose(purpose) || device_worker_purpose(purpose) {
             return Ok(());
         }
         self.socket.run(producer_ref, purpose).await
@@ -1355,16 +1383,30 @@ pub struct ConstructionInputs {
     /// controller-session coordinator (the same seam the G5 reader bridge
     /// uses); the default fails closed, exactly as the old handler did for a
     /// controller row without session evidence.
-    pub core_effects: Arc<dyn CoreDriverEffects>,
+    pub provider_effects: Arc<dyn ProviderDriverEffects>,
     pub process_effects: Arc<dyn ProcessDriverEffects>,
     pub volume_effects: Arc<dyn VolumeDriverEffects>,
     pub binding_effects: Arc<dyn BindingDriverEffects>,
-    pub endpoint_effects: Arc<dyn crate::endpoint_driver::EndpointDriverEffects>,
+    pub endpoint_effects: Arc<dyn EndpointDriverEffects>,
     pub activation_effects: Arc<dyn ActivationDriverEffects>,
     pub credential_effects: Arc<dyn CredentialDriverEffects>,
-    pub shared_provider_effects: Arc<dyn SharedProviderDriverEffects>,
+    pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
     pub guest_effects: Arc<dyn GuestDriverEffects>,
     pub interaction_effects: Arc<dyn InteractionDriverEffects>,
+    /// The committed policy rows this plane seeds before its manager spawns.
+    ///
+    /// The composition sets this for the foundation plane - the durable
+    /// authority's home - and leaves it clear for every zone-local plane, so
+    /// a system-homed row can never be written outside the seed.
+    pub foundation: Option<FoundationInputs>,
+}
+
+/// The declarations one foundation plane seeds before its manager spawns.
+pub struct FoundationInputs {
+    /// The declared policy rows.
+    pub declarations: crate::foundation_seed::FoundationDeclarations,
+    /// The committed principal allocation the postures resolve through.
+    pub allocation: crate::principal_allocation::PrincipalAllocation,
 }
 
 /// Production construction for one zone under `open_resource_plane`: reuse
@@ -1442,7 +1484,7 @@ impl ConstructionInputs {
             },
             committed_provider_identities,
             registry: Arc::clone(&registry),
-            core_effects: Arc::new(crate::core_driver::FailClosedCoreDriverEffects),
+            provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
             process_effects: Arc::new(
                 ProductionProcessDriverEffects::new(process_providers)
                     .with_committed_provider_identities(registry_source)
@@ -1511,15 +1553,15 @@ impl ConstructionInputs {
                     zone.clone(),
                 ));
                 let ensure_device_worker = Arc::clone(&device_worker);
-                Arc::new(crate::endpoint_driver::ProductionEndpointDriverEffects::new(
+                Arc::new(ProductionEndpointDriverEffects::new(
                     Arc::new(move |producer_ref: &ResourceRef, purpose: &str| {
                         let present = Arc::clone(&present);
                         let control = Arc::clone(&control);
                         let device_worker = Arc::clone(&device_worker);
                         Box::pin(async move {
-                            if crate::endpoint_driver::guest_control_purpose(purpose) {
+                            if guest_control_purpose(purpose) {
                                 control.present(producer_ref, purpose).await
-                            } else if crate::endpoint_driver::device_worker_purpose(purpose) {
+                            } else if device_worker_purpose(purpose) {
                                 device_worker.present(producer_ref, purpose).await
                             } else {
                                 present.present(producer_ref, purpose).await
@@ -1542,11 +1584,13 @@ impl ConstructionInputs {
             },
             activation_effects: Arc::new(ProductionActivationDriverEffects::new(Arc::clone(state))),
             credential_effects,
-            shared_provider_effects: Arc::new(ProductionSharedProviderEffects::new(
-                Arc::clone(state),
-                zone.clone(),
-                controller_generation,
-            )),
+            shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects::production(
+                Arc::new(ProductionSharedProviderEffects::new(
+                    Arc::clone(state),
+                    zone.clone(),
+                    controller_generation,
+                )),
+            ),
             guest_effects: Arc::new(ProductionGuestDriverEffects::new(
                 Arc::clone(state),
                 zone.clone(),
@@ -1556,6 +1600,7 @@ impl ConstructionInputs {
                 Arc::clone(state),
                 zone.clone(),
             )),
+            foundation: None,
         })
     }
 }
@@ -1621,6 +1666,40 @@ impl SpecDecoder for PassthroughDecoder {
     }
 }
 
+/// Compare the registry's registered types against the generated
+/// converted-type catalog (R4) and fail startup when either side names a type
+/// the other does not.
+///
+/// The catalog is the authority on which types the manager plane serves, so
+/// the comparison is exact: a cataloged type with no registered driver is a
+/// driver that never arrived (the presence obligation for a mask without
+/// RUNTIME), and a registered type the catalog does not list is a driver
+/// serving a type outside the plane's partition. Both sides are named, sorted.
+fn check_registry_catalog(
+    registered: Vec<ResourceTypeName>,
+    catalog: &[&str],
+) -> Result<(), PlaneError> {
+    let registered = registered
+        .into_iter()
+        .map(|type_name| type_name.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let listed = catalog.iter().copied().collect::<BTreeSet<_>>();
+    let missing = listed
+        .iter()
+        .filter(|entry| !registered.contains(**entry))
+        .map(|entry| (*entry).to_owned())
+        .collect::<Vec<_>>();
+    let unexpected = registered
+        .iter()
+        .filter(|entry| !listed.contains(&entry.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() && unexpected.is_empty() {
+        return Ok(());
+    }
+    Err(PlaneError::RegistryCatalogMismatch { missing, unexpected })
+}
+
 // ---------------------------------------------------------------------------
 // ResourcePlaneV3: the per-zone new plane (U9)
 // ---------------------------------------------------------------------------
@@ -1630,10 +1709,29 @@ impl SpecDecoder for PassthroughDecoder {
 pub enum PlaneError {
     #[error("spec store open failed: {0}")]
     SpecStore(#[from] d2b_resource_runtime::spec_store::SpecStoreError),
+    #[error("foundation seed failed: {0}")]
+    FoundationSeed(String),
     #[error("provider registration failed: {0}")]
     ProviderRegistration(
         #[from] d2b_resource_runtime::provider::ProviderDirectoryError,
     ),
+    /// A provider did not start through the base. The failure names the
+    /// provider and the declared row it refused.
+    #[error("provider startup refused: {0}")]
+    ProviderStartup(#[from] crate::provider_lifecycle::ProviderStartupError),
+    /// The registry and the generated converted-type catalog disagree (R4).
+    /// Both sides are named: the catalog types with no registered driver, and
+    /// the registered types the catalog does not list.
+    #[error(
+        "driver registry does not match the converted-type catalog: \
+         in-catalog-but-not-registered {missing:?}, registered-but-not-in-catalog {unexpected:?}"
+    )]
+    RegistryCatalogMismatch {
+        /// Catalog types no driver is registered for.
+        missing: Vec<String>,
+        /// Registered types the catalog does not list.
+        unexpected: Vec<String>,
+    },
     #[error("manager spawn failed: {0}")]
     ManagerSpawn(String),
     #[error("manager rpc failed: {0}")]
@@ -1678,6 +1776,10 @@ pub struct ResourcePlaneV3 {
     targets: Arc<TargetDirectory>,
     registry: Arc<PlaneResourceRegistry>,
     client: ResourceManagerClient,
+    /// The providers this zone started, in the order they started. The plane
+    /// keeps them so it can report the order it ran and drain them in the
+    /// mirror of it.
+    providers: Arc<ProviderRuntime>,
     readiness: Arc<NewPlaneReadinessState>,
 }
 
@@ -1698,142 +1800,291 @@ impl ResourcePlaneV3 {
         spec_store_dir.join("spec-store.sqlite3")
     }
 
-    fn build_providers(inputs: &ConstructionInputs) -> Result<ProviderDirectory, PlaneError> {
-        let mut providers = ProviderDirectory::new();
-        providers.register(Arc::new(ProcessDriverFactory::new(ProcessDriverArgs {
-            zone: inputs.zone.clone(),
-            effects: Arc::clone(&inputs.process_effects),
-            zone_uid: inputs.authority.zone_uid.clone(),
-            policy_revision: inputs.authority.policy_revision,
-            provider_assignment_generation: inputs.authority.provider_assignment_generation,
-            controller_generation: inputs.authority.controller_generation,
-            guest_execution: inputs.authority.guest_execution.clone(),
-            mode: inputs.authority.mode,
-        })))?;
-        providers.register(Arc::new(crate::volume_driver::VolumeDriverFactory::new(
-            VolumeDriverArgs {
+    /// The providers one zone starts, in the committed startup order.
+    ///
+    /// Each family states its declaration and the drivers it serves; the base
+    /// realizes the declared plane facts and then runs the family's own
+    /// attach, which registers the drivers it declared. The order of the
+    /// groups below is the order the registry has been assembled in since the
+    /// family moves landed.
+    fn provider_set(inputs: &ConstructionInputs) -> ProviderSet {
+        // The Process family starts through its driver declarations: one
+        // descriptor per member type, both over the family's shared decoder
+        // and factory. The family's verbs, execution domains, exportability,
+        // and reads travel on the descriptor.
+        let mut set = ProviderSet::new(inputs.zone.clone(), inputs.spec_store_dir.clone()).with(
+            family_declaration("process"),
+            Vec::from(process_family_descriptors(ProcessDriverArgs {
+                zone: inputs.zone.clone(),
+                effects: Arc::clone(&inputs.process_effects),
+                zone_uid: inputs.authority.zone_uid.clone(),
+                policy_revision: inputs.authority.policy_revision,
+                provider_assignment_generation: inputs.authority.provider_assignment_generation,
+                controller_generation: inputs.authority.controller_generation,
+                guest_execution: inputs.authority.guest_execution.clone(),
+                mode: crate::process_provider_runtime::execution_mode(inputs.authority.mode),
+            })),
+        );
+        // The Volume family states its own declaration; the Binding family
+        // states its own. The registry serves each type's decoder and factory
+        // from its driver declaration, and the declaration carries the
+        // family's verbs, execution domains, exportability, reads, and the
+        // children it may create.
+        set = set.with(
+            d2b_provider_volume::volume_provider_declaration(),
+            vec![volume_descriptor(VolumeDriverArgs {
                 zone: inputs.zone.as_str().to_owned(),
                 effects: Arc::clone(&inputs.volume_effects),
-            },
-        )))?;
-        providers.register(Arc::new(BindingDriverFactory::new(BindingDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            effects: Arc::clone(&inputs.binding_effects),
-            vcpu_count: inputs.authority.vcpu_count,
-        })))?;
-        providers.register(Arc::new(EndpointDriverFactory::new(EndpointDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            effects: Arc::clone(&inputs.endpoint_effects),
-        })))?;
-        providers.register(Arc::new(CredentialDriverFactory::new(CredentialDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            controller_generation: inputs.authority.controller_generation,
-            effects: Arc::clone(&inputs.credential_effects),
-        })))?;
-        providers.register(Arc::new(ActivationDriverFactory::new(ActivationDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            effects: Arc::clone(&inputs.activation_effects),
-            verifier: Arc::new(d2b_provider_activation_nixos::FailClosedActivationVerifier),
-        })))?;
-        providers.register(Arc::new(TelemetryDriverFactory::new()))?;
-        providers.register(Arc::new(SharedProviderDriverFactory::new(
-            SharedProviderDriverArgs {
+            })],
+        );
+        set = set.with(
+            family_declaration("volume-binding"),
+            vec![binding_descriptor(BindingDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                effects: Arc::clone(&inputs.binding_effects),
+                vcpu_count: inputs.authority.vcpu_count,
+            })],
+        );
+        // The Endpoint type starts through its driver declaration: the
+        // registry serves the type's decoder and factory from it, and the
+        // declaration carries the family's verbs, execution domains,
+        // exportability, and reads.
+        set = set.with(
+            family_declaration("endpoint"),
+            vec![endpoint_descriptor(EndpointDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                effects: Arc::clone(&inputs.endpoint_effects),
+            })],
+        );
+        // The Credential type starts through its driver declaration: the
+        // registry serves the type's decoder and factory from it, and the
+        // declaration carries the family's verbs, execution domains,
+        // exportability, reads, and the one declared agent Process child.
+        set = set.with(
+            family_declaration("credential"),
+            vec![credential_descriptor(CredentialDriverArgs {
                 zone: inputs.zone.as_str().to_owned(),
                 controller_generation: inputs.authority.controller_generation,
-                effects: Arc::clone(&inputs.shared_provider_effects),
-            },
-        )))?;
-        providers.register(Arc::new(GuestDriverFactory::new(GuestDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            controller_generation: inputs.authority.controller_generation,
-            effects: Arc::clone(&inputs.guest_effects),
-        })))?;
-        providers.register(Arc::new(SystemCoreDriverFactory::new()))?;
-        providers.register(Arc::new(CoreResourceDriverFactory::with_effects(
-            Arc::clone(&inputs.core_effects),
-        )))?;
-        providers.register(Arc::new(InteractionDriverFactory::new(InteractionDriverArgs {
-            zone: inputs.zone.as_str().to_owned(),
-            controller_generation: inputs.authority.controller_generation,
-            effects: Arc::clone(&inputs.interaction_effects),
-        })))?;
-        Ok(providers)
+                effects: Arc::clone(&inputs.credential_effects),
+            })],
+        );
+        // The NixosGeneration type starts through its driver declaration: the
+        // registry serves the type's decoder and factory from it, and the
+        // declaration carries the family's verbs, execution domains,
+        // exportability, reads, and its one declared child creation.
+        set = set.with(
+            family_declaration("activation-nixos"),
+            vec![activation_descriptor(ActivationDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                effects: Arc::clone(&inputs.activation_effects),
+                verifier: Arc::new(d2b_provider_activation_nixos::FailClosedActivationVerifier),
+            })],
+        );
+        // The telemetry pair starts through its driver declarations: one per
+        // type, each carrying that type's decoder, factory, verbs, execution
+        // domains, exportability, reads, and (for the Binding) the
+        // provider-declared child creations.
+        set = set.with(
+            family_declaration("telemetry-service"),
+            vec![telemetry_service_descriptor()],
+        );
+        set = set.with(
+            family_declaration("telemetry-binding"),
+            vec![telemetry_binding_descriptor()],
+        );
+        // The Network family starts through its own declaration, the two USB
+        // types through the USB family's, the two security-key types through
+        // the security-key family's, and the Device type (four hardware
+        // Providers) through the Device family's. Each declaration carries its
+        // decoder, so the registry serves it for the type.
+        set = set.with(
+            family_declaration("network-local"),
+            vec![network_descriptor(NetworkDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                effects: Arc::clone(&inputs.shared_provider_effects.network),
+            })],
+        );
+        set = set.with(
+            family_declaration("device-usbip"),
+            Vec::from(usbip_descriptors(UsbipDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                effects: Arc::clone(&inputs.shared_provider_effects.usbip),
+            })),
+        );
+        set = set.with(
+            family_declaration("device-security-key"),
+            Vec::from(security_key_descriptors(SecurityKeyDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                effects: Arc::clone(&inputs.shared_provider_effects.security_key),
+            })),
+        );
+        set = set.with(
+            family_declaration("device"),
+            vec![device_descriptor(DeviceDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                effects: Arc::clone(&inputs.shared_provider_effects.device),
+            })],
+        );
+        // The Guest type starts through its driver declaration: the registry
+        // serves the type's decoder and factory from it, and the declaration
+        // carries the family's verbs, execution domains, exportability, reads,
+        // and the children its runtime Providers create.
+        set = set.with(
+            family_declaration("guest"),
+            vec![guest_descriptor(GuestDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                effects: Arc::clone(&inputs.guest_effects),
+            })],
+        );
+        // The Host and User bootstrap types start through their driver
+        // declarations: the registry serves each type's decoder and factory
+        // from its declaration, and the declarations carry the types' verbs,
+        // execution domains, exportability, and reads.
+        set = set.with(
+            family_declaration("host"),
+            vec![host_descriptor(Arc::new(ProductionHostDriverEffects))],
+        );
+        set = set.with(
+            family_declaration("user"),
+            vec![user_descriptor(Arc::new(ProductionUserDriverEffects))],
+        );
+        // The controller family starts through its per-type declarations:
+        // each crate serves exactly one type, and the registry resolves that
+        // type's decoder, factory, verbs, execution domains, exportability,
+        // and reads from the declaration.
+        set = set.with(family_declaration("zone"), vec![zone_descriptor()]);
+        set = set.with(
+            family_declaration("zone-link"),
+            vec![zone_link_descriptor()],
+        );
+        set = set.with(
+            family_declaration("provider"),
+            vec![provider_descriptor(ProviderDriverArgs {
+                effects: Arc::clone(&inputs.provider_effects),
+            })],
+        );
+        set = set.with(family_declaration("role"), vec![role_descriptor()]);
+        set = set.with(
+            family_declaration("role-binding"),
+            vec![role_binding_descriptor()],
+        );
+        set = set.with(family_declaration("quota"), vec![quota_descriptor()]);
+        set = set.with(
+            family_declaration("emergency-policy"),
+            vec![emergency_policy_descriptor()],
+        );
+        set = set.with(
+            family_declaration("resource-export"),
+            vec![resource_export_descriptor()],
+        );
+        set = set.with(
+            family_declaration("resource-import"),
+            vec![resource_import_descriptor()],
+        );
+        // The policy types are declared with their drivers; their rows commit
+        // with the committed policy rows, and the presence obligation is what
+        // keeps a plane from opening without their drivers.
+        set = set.with(family_declaration("command"), vec![command_descriptor()]);
+        set = set.with(
+            family_declaration("operation"),
+            vec![operation_descriptor()],
+        );
+        set = set.with(
+            family_declaration("seccomp-profile"),
+            vec![seccomp_profile_descriptor()],
+        );
+        // The six interaction types start through their driver declarations:
+        // the registry serves each type's decoder and factory from its own
+        // crate's descriptor, and no daemon table names them.
+        set = set.with(
+            family_declaration("wayland-policy"),
+            vec![wayland_policy_descriptor(interaction_driver_args(
+                inputs,
+                WaylandPolicy,
+            ))],
+        );
+        set = set.with(
+            family_declaration("wayland-session"),
+            vec![wayland_session_descriptor(interaction_driver_args(
+                inputs,
+                WaylandSession::new(Arc::new(ProductionDisplayChildSource)),
+            ))],
+        );
+        set = set.with(
+            family_declaration("audio-service"),
+            vec![audio_service_descriptor(interaction_driver_args(
+                inputs,
+                AudioService,
+            ))],
+        );
+        set = set.with(
+            family_declaration("audio-binding"),
+            vec![audio_binding_descriptor(interaction_driver_args(
+                inputs,
+                AudioBinding::new(Arc::new(ProductionAudioBindingChildSource)),
+            ))],
+        );
+        set = set.with(
+            family_declaration("shell-pool"),
+            vec![shell_pool_descriptor(interaction_driver_args(
+                inputs,
+                ShellPool,
+            ))],
+        );
+        set.with(
+            family_declaration("shell-session"),
+            vec![shell_session_descriptor(interaction_driver_args(
+                inputs,
+                ShellSession,
+            ))],
+        )
     }
 
-    fn decoders() -> HashMap<ResourceTypeName, Arc<dyn SpecDecoder>> {
-        let mut decoders = HashMap::new();
-        decoders.insert(ResourceTypeName::new("Process"), process_spec_decoder());
-        // U12: the one-shot Process family member shares the Process driver's
-        // type-agnostic envelope decoder.
-        decoders.insert(
-            ResourceTypeName::new("EphemeralProcess"),
-            process_spec_decoder(),
-        );
-        decoders.insert(ResourceTypeName::new("Volume"), volume_spec_decoder());
-        decoders.insert(ResourceTypeName::new("VolumeBinding"), binding_spec_decoder());
-        decoders.insert(ResourceTypeName::new("Endpoint"), endpoint_spec_decoder());
-        decoders.insert(
-            ResourceTypeName::new(crate::activation_driver::ACTIVATION_TYPE_NAME),
-            activation_spec_decoder(),
-        );
-        decoders.insert(
-            ResourceTypeName::new(TELEMETRY_SERVICE_TYPE),
-            telemetry_spec_decoder(),
-        );
-        decoders.insert(
-            ResourceTypeName::new(TELEMETRY_BINDING_TYPE),
-            telemetry_spec_decoder(),
-        );
-        decoders.insert(
-            ResourceTypeName::new("Credential"),
-            credential_spec_decoder(),
-        );
-        for resource_type in crate::shared_provider_driver::SHARED_PROVIDER_TYPES {
-            decoders.insert(
-                ResourceTypeName::new(resource_type),
-                shared_provider_spec_decoder(),
-            );
-        }
-        // U12: the four runtime-Provider Guests.
-        for resource_type in [crate::guest_driver::GUEST_TYPE_NAME] {
-            decoders.insert(ResourceTypeName::new(resource_type), guest_spec_decoder());
-        }
-        decoders.insert(
-            ResourceTypeName::new("Host"),
-            system_core_spec_decoder(),
-        );
-        decoders.insert(
-            ResourceTypeName::new("User"),
-            system_core_spec_decoder(),
-        );
-        for resource_type in crate::interaction_driver::INTERACTION_TYPES {
-            decoders.insert(
-                ResourceTypeName::new(resource_type),
-                interaction_spec_decoder(),
-            );
-        }
-        // U12: the nine fixed Core controller-family types (the core spec
-        // decoder is the JSON-object envelope every core row stores).
-        for resource_type in CORE_RESOURCE_TYPES {
-            decoders.insert(ResourceTypeName::new(resource_type), core_spec_decoder());
-        }
-        decoders
+    /// Start the zone's providers through the toolkit base.
+    ///
+    /// The base's attach sequence is async work, so the constructor awaits it
+    /// like any other caller instead of driving it from a blocking section: a
+    /// blocking section parks the worker that is running the plane's own
+    /// start, and on a single-threaded runtime there is no other worker to
+    /// park. A refusal names the provider and the declared row it refused.
+    async fn start_providers(inputs: &ConstructionInputs) -> Result<ProviderRuntime, PlaneError> {
+        let set = Self::provider_set(inputs);
+        set.start().await.map_err(PlaneError::ProviderStartup)
     }
 
     /// Open the store, register the converted-type factories, and
     /// spawn the manager. Initial-load completion is a separate step so the
     /// readiness checklist is observable stage by stage; [`Self::open`]
     /// composes both.
-    pub fn prepare(inputs: ConstructionInputs) -> Result<Self, PlaneError> {
+    ///
+    /// Every stage here is async work the constructor awaits; the only
+    /// synchronous work left is the store's own half (a directory create and
+    /// SQLite's open + migration, neither of which has an async form), which
+    /// runs on the blocking pool so it is bounded by that pool rather than by
+    /// the worker this call would otherwise park.
+    pub async fn prepare(inputs: ConstructionInputs) -> Result<Self, PlaneError> {
         let readiness = Arc::new(NewPlaneReadinessState::new());
         // Stage 1: durable spec store.
         let store_path = Self::spec_store_path(&inputs.spec_store_dir);
-        if let Some(parent) = store_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| {
-                PlaneError::Authority(format!("spec store dir create failed: {error}"))
-            })?;
-        }
-        let store = Arc::new(SpecStore::open(store_path.clone())?);
+        let store = Arc::new(
+            tokio::task::spawn_blocking(move || {
+                if let Some(parent) = store_path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| {
+                        PlaneError::Authority(format!("spec store dir create failed: {error}"))
+                    })?;
+                }
+                SpecStore::open(store_path.clone()).map_err(PlaneError::from)
+            })
+            .await
+            .map_err(|error| {
+                PlaneError::Authority(format!("spec store open join failed: {error}"))
+            })??,
+        );
         // The registry caches store-derived rows for the production effects;
         // the store is the authority its socket-target lookups load from on
         // a miss (the manager mints derived children after `open`).
@@ -1849,15 +2100,58 @@ impl ResourcePlaneV3 {
             &store,
             &inputs.zone,
             &inputs.committed_provider_identities,
-        );
+        )
+        .await;
         for (provider_ref, (uid, generation)) in &committed_provider_identities {
             inputs
                 .registry
                 .register_committed_provider_identity(provider_ref, uid.clone(), *generation);
         }
         readiness.set_spec_store_ready(true);
-        // Stage 2: provider directory with production effects wired.
-        let providers = Self::build_providers(&inputs)?;
+        // Stage 2: start the zone's providers through the toolkit base. Each
+        // provider states its declaration and drivers; the base realizes the
+        // declared plane facts and runs the provider's own attach, which
+        // registers the drivers it declared. The registry closes for late
+        // required registration at plane open (R4), and the registered set is
+        // cross-checked against the generated converted-type catalog before
+        // the manager spawns.
+        let mut provider_runtime = Self::start_providers(&inputs).await?;
+        let mut providers = provider_runtime.take_directory();
+        tracing::debug!(
+            zone = %inputs.zone.as_str(),
+            providers = provider_runtime.startup_order().len(),
+            claimed_roots = provider_runtime.claimed_roots().len(),
+            deployed_adapters = provider_runtime.deployed_adapters().len(),
+            published_services = provider_runtime.published_services().len(),
+            "the zone's providers started through the base"
+        );
+        // The foundation plane commits its declared policy rows - the system
+        // zone itself, the postures, roles, commands, self-bindings, the
+        // materialized spawn operations, and the operator bindings - before
+        // its manager spawns, so every seeded row's actor starts from a
+        // committed row (F1). The manager's pre_start loads them.
+        if let Some(foundation) = &inputs.foundation {
+            let seed = crate::foundation_seed::FoundationSeed::new(
+                foundation.declarations.clone(),
+                foundation.allocation.clone(),
+            );
+            let report = seed
+                .run(&store, &providers)
+                .await
+                .map_err(|error| PlaneError::FoundationSeed(error.to_string()))?;
+            tracing::info!(
+                zone = %inputs.zone.as_str(),
+                committed = report.committed.len(),
+                materialized = report.materialized.len(),
+                unchanged = report.unchanged,
+                "foundation seed committed the policy rows"
+            );
+        }
+        providers.mark_plane_open();
+        check_registry_catalog(
+            providers.registered_types(),
+            &d2b_contracts::identity::V3_CONVERTED_RESOURCE_TYPES,
+        )?;
         readiness.set_providers_registered(true);
         // Stage 3: per-zone manager spawn (KTD5), with the target layer
         // wired (U13): the directory is owned here, the composition registers
@@ -1867,27 +2161,28 @@ impl ResourcePlaneV3 {
         let targets = Arc::new(TargetDirectory::new());
         let host_target = TargetRef::host(CORE_HOST_TARGET_NAME)
             .map_err(|error| PlaneError::Target(error.to_string()))?;
+        // Every registered driver's declaration carries its type's decoder,
+        // so the registry is the authority: the plane wires no decoder table
+        // of its own.
+        let decoders = providers.decoders();
         let args = ResourceManagerArgs {
             zone: inputs.zone.as_str().to_owned(),
             store: Arc::clone(&store),
             providers,
             hub: Arc::clone(&hub),
-            admission: Arc::new(AllowAll),
-            decoders: Self::decoders(),
+            admission: Arc::new(crate::foundation_seed::SystemZoneWriteFence::new(
+                inputs.foundation.is_some(),
+            )),
+            decoders,
             default_decoder: Arc::new(PassthroughDecoder),
             targets: Arc::clone(&targets),
             host_target,
             target_resolver: Arc::new(DeclaredExecutionRef),
             backoff: PLANE_BACKOFF,
         };
-        let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|_| PlaneError::ManagerSpawn("resource plane requires a tokio runtime".into()))?;
-        let (actor, _join) = tokio::task::block_in_place(|| {
-            runtime.block_on(async {
-                ractor::Actor::spawn(None, ResourceManager::new(), args).await
-            })
-        })
-        .map_err(|error| PlaneError::ManagerSpawn(error.to_string()))?;
+        let (actor, _join) = ractor::Actor::spawn(None, ResourceManager::new(), args)
+            .await
+            .map_err(|error| PlaneError::ManagerSpawn(error.to_string()))?;
         readiness.set_manager_started(true);
         readiness.set_spec_store_ready(true);
         Ok(Self {
@@ -1898,6 +2193,7 @@ impl ResourcePlaneV3 {
             targets,
             registry: inputs.registry,
             client: ResourceManagerClient::new(actor),
+            providers: Arc::new(provider_runtime),
             readiness,
         })
     }
@@ -1928,9 +2224,32 @@ impl ResourcePlaneV3 {
 
     /// One-shot assembly (production path): prepare + initial load.
     pub async fn open(inputs: ConstructionInputs) -> Result<Self, PlaneError> {
-        let plane = Self::prepare(inputs)?;
+        let plane = Self::prepare(inputs).await?;
         plane.complete_initial_load().await?;
         Ok(plane)
+    }
+
+    /// The providers this zone started, in the order they started.
+    pub(crate) fn providers(&self) -> &ProviderRuntime {
+        &self.providers
+    }
+
+    /// The providers this zone started, behind a shared handle.
+    ///
+    /// The forwarding rendezvous holds this handle so a forwarded call
+    /// resolves against the providers that are actually started, not against
+    /// a copy taken when the plane opened.
+    pub(crate) fn provider_runtime(&self) -> Arc<ProviderRuntime> {
+        Arc::clone(&self.providers)
+    }
+
+    /// Drain the zone's providers in the reverse of the order they started.
+    ///
+    /// The daemon runs this once on shutdown, after the interaction
+    /// providers have finalized, so a provider gives back the plane facts it
+    /// claimed before the process that owns them goes away.
+    pub(crate) async fn drain_providers(&self) -> Result<(), ProviderStartupError> {
+        self.providers.drain().await
     }
 
     /// The plane's public surface: the U9 readiness checklist and the
@@ -2249,7 +2568,7 @@ impl ResourcePlaneV3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::activation_driver::{ActivationDriverEffects, HostHandoffResult};
+    use d2b_provider_activation_nixos::HostHandoffResult;
     use d2b_contracts_broker::host_generation::HostGenerationHandoffIntent;
     use d2b_contracts_resource::v3::ResourceName;
     use d2b_contracts_zone_session::v3::resource_bundle::BundleResourceMetadata;
@@ -2309,7 +2628,7 @@ mod tests {
     impl ProcessDriverEffects for FakeProcessEffects {
         async fn launch(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
@@ -2320,23 +2639,23 @@ mod tests {
 
         async fn adopt(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
-            Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
+        ) -> Result<d2b_provider_process::ProviderAdoption, String> {
+            Ok(d2b_provider_process::ProviderAdoption::Absent)
         }
 
         async fn probe(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
-            Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
+        ) -> Result<d2b_provider_process::ProviderLiveness, String> {
+            Ok(d2b_provider_process::ProviderLiveness::Alive)
         }
 
         async fn launch_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
@@ -2347,23 +2666,23 @@ mod tests {
 
         async fn adopt_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
-            Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
+        ) -> Result<d2b_provider_process::ProviderAdoption, String> {
+            Ok(d2b_provider_process::ProviderAdoption::Absent)
         }
 
         async fn probe_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
-            Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
+        ) -> Result<d2b_provider_process::ProviderLiveness, String> {
+            Ok(d2b_provider_process::ProviderLiveness::Alive)
         }
 
         async fn stop_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -2373,7 +2692,7 @@ mod tests {
 
         async fn stop(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -2389,7 +2708,7 @@ mod tests {
             Ok(())
         }
 
-        async fn finalize(&self, _identity: &crate::process_driver::ProcessResourceIdentity) -> Result<(), String> {
+        async fn finalize(&self, _identity: &d2b_provider_process::ProcessResourceIdentity) -> Result<(), String> {
             Ok(())
         }
 
@@ -2441,8 +2760,24 @@ mod tests {
 
     struct FakeEndpointEffects;
 
+    impl d2b_provider_endpoint::EndpointPurposeVocabulary for FakeEndpointEffects {
+        fn guest_control_producer(
+            &self,
+            purpose: &str,
+        ) -> Option<d2b_provider_endpoint::GuestControlProducer> {
+            crate::endpoint_effects::guest_control_producer(purpose)
+        }
+
+        fn device_worker_endpoint_class(
+            &self,
+            purpose: &str,
+        ) -> Option<d2b_contracts_resource::v3::endpoint::EndpointClass> {
+            crate::endpoint_effects::device_worker_endpoint_class(purpose)
+        }
+    }
+
     #[async_trait::async_trait]
-    impl crate::endpoint_driver::EndpointDriverEffects for FakeEndpointEffects {
+    impl d2b_provider_endpoint::EndpointDriverEffects for FakeEndpointEffects {
         async fn socket_present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
             true
         }
@@ -2477,14 +2812,14 @@ mod tests {
             &self,
             _provider_ref: &ResourceRef,
             _execution_ref: &ResourceRef,
-        ) -> Option<crate::credential_driver::CredentialDependencyFacts> {
+        ) -> Option<d2b_provider_credential::CredentialDependencyFacts> {
             None
         }
 
         async fn lease_facts(
             &self,
             _credential_ref: &ResourceRef,
-        ) -> Option<crate::credential_driver::CredentialLeaseFacts> {
+        ) -> Option<d2b_provider_credential::CredentialLeaseFacts> {
             None
         }
 
@@ -2495,7 +2830,7 @@ mod tests {
         fn session(
             &self,
             _provider_ref: &ResourceRef,
-        ) -> Option<Arc<dyn crate::credential_resource_runtime::CredentialSession>> {
+        ) -> Option<Arc<dyn d2b_provider_credential::CredentialSession>> {
             None
         }
     }
@@ -2506,104 +2841,134 @@ mod tests {
     impl InteractionDriverEffects for FakeInteractionEffects {
         async fn reconcile(
             &self,
-            _kind: crate::interaction_driver::InteractionKind,
-            _request: &crate::interaction_driver::InteractionEffectRequest<'_>,
+            _kind: d2b_provider_wayland_policy::InteractionKind,
+            _request: &d2b_provider_wayland_policy::InteractionEffectRequest<'_>,
         ) -> Result<
-            crate::interaction_driver::InteractionEffectOutcome,
-            crate::interaction_driver::InteractionEffectError,
+            d2b_provider_wayland_policy::InteractionEffectOutcome,
+            d2b_provider_wayland_policy::InteractionEffectError,
         > {
-            Ok(crate::interaction_driver::InteractionEffectOutcome::phase(
-                crate::interaction_driver::InteractionEffectPhase::Pending,
+            Ok(d2b_provider_wayland_policy::InteractionEffectOutcome::phase(
+                d2b_provider_wayland_policy::InteractionEffectPhase::Pending,
             ))
         }
 
         async fn finalize(
             &self,
-            _kind: crate::interaction_driver::InteractionKind,
-            _request: &crate::interaction_driver::InteractionEffectRequest<'_>,
+            _kind: d2b_provider_wayland_policy::InteractionKind,
+            _request: &d2b_provider_wayland_policy::InteractionEffectRequest<'_>,
         ) -> Result<
-            crate::interaction_driver::InteractionFinalize,
-            crate::interaction_driver::InteractionEffectError,
+            d2b_provider_wayland_policy::InteractionFinalize,
+            d2b_provider_wayland_policy::InteractionEffectError,
         > {
-            Ok(crate::interaction_driver::InteractionFinalize::Complete)
+            Ok(d2b_provider_wayland_policy::InteractionFinalize::Complete)
         }
     }
 
     struct FakeSharedProviderEffects;
 
+    fn fake_outcome() -> d2b_provider_toolkit::SharedProviderEffectOutcome {
+        d2b_provider_toolkit::SharedProviderEffectOutcome::phase(
+            d2b_provider_toolkit::SharedProviderEffectPhase::Pending,
+        )
+    }
+
     #[async_trait::async_trait]
-    impl crate::shared_provider_driver::SharedProviderDriverEffects for FakeSharedProviderEffects {
+    impl d2b_provider_network_local::NetworkDriverEffects for FakeSharedProviderEffects {
         async fn reconcile_network(
             &self,
-            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
         ) -> Result<
-            crate::shared_provider_driver::SharedProviderEffectOutcome,
-            crate::shared_provider_driver::SharedProviderEffectError,
+            d2b_provider_toolkit::SharedProviderEffectOutcome,
+            d2b_provider_toolkit::SharedProviderEffectError,
         > {
-            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
-                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
-            ))
-        }
-
-        async fn reconcile_tpm(
-            &self,
-            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            crate::shared_provider_driver::SharedProviderEffectOutcome,
-            crate::shared_provider_driver::SharedProviderEffectError,
-        > {
-            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
-                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
-            ))
-        }
-
-        async fn reconcile_usbip(
-            &self,
-            _component: crate::shared_provider_driver::UsbipComponent,
-            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            crate::shared_provider_driver::SharedProviderEffectOutcome,
-            crate::shared_provider_driver::SharedProviderEffectError,
-        > {
-            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
-                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
-            ))
-        }
-
-        async fn reconcile_security_key(
-            &self,
-            _component: crate::shared_provider_driver::SecurityKeyComponent,
-            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            crate::shared_provider_driver::SharedProviderEffectOutcome,
-            crate::shared_provider_driver::SharedProviderEffectError,
-        > {
-            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
-                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
-            ))
-        }
-
-        async fn reconcile_gpu(
-            &self,
-            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            crate::shared_provider_driver::SharedProviderEffectOutcome,
-            crate::shared_provider_driver::SharedProviderEffectError,
-        > {
-            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
-                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
-            ))
+            Ok(fake_outcome())
         }
 
         async fn finalize(
             &self,
-            _kind: crate::shared_provider_driver::SharedProviderKind,
-            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
         ) -> Result<
-            crate::shared_provider_driver::SharedProviderFinalize,
-            crate::shared_provider_driver::SharedProviderEffectError,
+            d2b_provider_toolkit::SharedProviderFinalize,
+            d2b_provider_toolkit::SharedProviderEffectError,
         > {
-            Ok(crate::shared_provider_driver::SharedProviderFinalize::Complete)
+            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl d2b_provider_device_usbip::UsbipDriverEffects for FakeSharedProviderEffects {
+        async fn reconcile_usbip(
+            &self,
+            _component: d2b_provider_device_usbip::UsbipComponent,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            d2b_provider_toolkit::SharedProviderEffectOutcome,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(fake_outcome())
+        }
+
+        async fn finalize(
+            &self,
+            _component: d2b_provider_device_usbip::UsbipComponent,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            d2b_provider_toolkit::SharedProviderFinalize,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl d2b_provider_device_security_key::SecurityKeyDriverEffects for FakeSharedProviderEffects {
+        async fn reconcile_security_key(
+            &self,
+            _component: d2b_provider_device_security_key::SecurityKeyComponent,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            d2b_provider_toolkit::SharedProviderEffectOutcome,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(fake_outcome())
+        }
+
+        async fn finalize(
+            &self,
+            _component: d2b_provider_device_security_key::SecurityKeyComponent,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            d2b_provider_toolkit::SharedProviderFinalize,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl d2b_provider_device::DeviceDriverEffects for FakeSharedProviderEffects {
+        async fn reconcile_device(
+            &self,
+            _component: d2b_provider_device::DeviceComponent,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
+            _state: &d2b_provider_device::DeviceResourceState,
+        ) -> Result<
+            d2b_provider_toolkit::SharedProviderEffectOutcome,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(fake_outcome())
+        }
+
+        async fn finalize_device(
+            &self,
+            _component: d2b_provider_device::DeviceComponent,
+            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
+            _state: &d2b_provider_device::DeviceResourceState,
+        ) -> Result<
+            d2b_provider_toolkit::SharedProviderFinalize,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
         }
     }
 
@@ -2612,29 +2977,29 @@ mod tests {
     struct FakeGuestEffects;
 
     #[async_trait::async_trait]
-    impl crate::guest_driver::GuestDriverEffects for FakeGuestEffects {
+    impl d2b_provider_guest::GuestDriverEffects for FakeGuestEffects {
         async fn reconcile(
             &self,
-            _kind: crate::guest_driver::GuestKind,
-            _request: &crate::guest_driver::GuestEffectRequest<'_>,
+            _kind: d2b_provider_guest::GuestKind,
+            _request: &d2b_provider_guest::GuestEffectRequest<'_>,
         ) -> Result<
-            crate::guest_driver::GuestEffectOutcome,
-            crate::guest_driver::GuestEffectError,
+            d2b_provider_guest::GuestEffectOutcome,
+            d2b_provider_guest::GuestEffectError,
         > {
-            Ok(crate::guest_driver::GuestEffectOutcome::phase(
-                crate::guest_driver::GuestEffectPhase::Pending,
+            Ok(d2b_provider_guest::GuestEffectOutcome::phase(
+                d2b_provider_guest::GuestEffectPhase::Pending,
             ))
         }
 
         async fn finalize(
             &self,
-            _kind: crate::guest_driver::GuestKind,
-            _request: &crate::guest_driver::GuestEffectRequest<'_>,
+            _kind: d2b_provider_guest::GuestKind,
+            _request: &d2b_provider_guest::GuestEffectRequest<'_>,
         ) -> Result<
-            crate::guest_driver::GuestFinalizeStage,
-            crate::guest_driver::GuestEffectError,
+            d2b_provider_guest::GuestFinalizeStage,
+            d2b_provider_guest::GuestEffectError,
         > {
-            Ok(crate::guest_driver::GuestFinalizeStage::Complete)
+            Ok(d2b_provider_guest::GuestFinalizeStage::Complete)
         }
     }
 
@@ -2661,21 +3026,132 @@ mod tests {
                 },
                 committed_provider_identities: BTreeMap::new(),
                 registry: Arc::new(PlaneResourceRegistry::new()),
-                core_effects: Arc::new(crate::core_driver::FailClosedCoreDriverEffects),
+                provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
                 process_effects: Arc::new(FakeProcessEffects::new()),
                 volume_effects: Arc::new(FakeVolumeEffects),
                 binding_effects: Arc::new(FakeBindingEffects),
                 endpoint_effects: Arc::new(FakeEndpointEffects),
                 activation_effects: Arc::new(FakeActivationEffects),
                 credential_effects: Arc::new(FakeCredentialEffects),
-                shared_provider_effects: Arc::new(FakeSharedProviderEffects),
+                shared_provider_effects: {
+                    let effects = Arc::new(FakeSharedProviderEffects);
+                    crate::shared_provider_effects::SharedProviderEffects {
+                        network: effects.clone(),
+                        usbip: effects.clone(),
+                        security_key: effects.clone(),
+                        device: effects,
+                    }
+                },
                 guest_effects: Arc::new(FakeGuestEffects),
                 interaction_effects: Arc::new(FakeInteractionEffects),
+                foundation: None,
             },
             readiness,
         )
     }
 
+
+    /// The providers the plane starts register exactly the converted-type
+    /// authority list: no listed type is missing a driver, no driver serves a
+    /// type outside the list, and every provider drains through the base in
+    /// the reverse of the order it started.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn started_providers_cover_the_converted_type_authority() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let mut runtime = ResourcePlaneV3::start_providers(&inputs).await.expect("providers");
+        let providers = runtime.take_directory();
+        check_registry_catalog(
+            providers.registered_types(),
+            &d2b_contracts::identity::V3_CONVERTED_RESOURCE_TYPES,
+        )
+        .expect("the assembled registry covers the converted-type authority list");
+        runtime.drain().await.expect("the providers drain");
+    }
+
+    /// The committed startup order is the order the registry has been
+    /// assembled in since the family moves landed; drain is its mirror.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn providers_start_in_the_committed_order_and_drain_in_reverse() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let runtime = ResourcePlaneV3::start_providers(&inputs).await.expect("providers");
+        assert_eq!(
+            runtime.startup_order(),
+            [
+                "process",
+                "volume",
+                "volume-binding",
+                "endpoint",
+                "credential",
+                "activation-nixos",
+                "telemetry-service",
+                "telemetry-binding",
+                "network-local",
+                "device-usbip",
+                "device-security-key",
+                "device",
+                "guest",
+                "host",
+                "user",
+                "zone",
+                "zone-link",
+                "provider",
+                "role",
+                "role-binding",
+                "quota",
+                "emergency-policy",
+                "resource-export",
+                "resource-import",
+                "command",
+                "operation",
+                "seccomp-profile",
+                "wayland-policy",
+                "wayland-session",
+                "audio-service",
+                "audio-binding",
+                "shell-pool",
+                "shell-session",
+            ]
+        );
+        runtime.drain().await.expect("the providers drain");
+        let mut reversed = runtime.startup_order().to_vec();
+        reversed.reverse();
+        assert_eq!(runtime.drain_order(), reversed);
+    }
+
+    /// A plane's providers drain in the mirror of their startup order, and
+    /// the plane reports the same sequence it ran.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_plane_drains_its_providers() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let plane = ResourcePlaneV3::prepare(inputs).await.expect("plane prepare");
+        let mut reversed = plane.providers().startup_order().to_vec();
+        reversed.reverse();
+        plane
+            .drain_providers()
+            .await
+            .expect("the providers drain through the base");
+        assert_eq!(plane.providers().drain_order(), reversed);
+        plane.shutdown().await;
+    }
+
+    /// The startup cross-check fails when the registry and the catalog
+    /// disagree, naming both sides: the catalog type with no registered
+    /// driver and the registered type the catalog does not list.
+    #[test]
+    fn registry_catalog_mismatch_names_both_sides() {
+        let registered = vec![
+            ResourceTypeName::new("Process"),
+            ResourceTypeName::new("Endpoint"),
+        ];
+        let error = check_registry_catalog(registered, &["Process", "Volume"]).unwrap_err();
+        match error {
+            PlaneError::RegistryCatalogMismatch { missing, unexpected } => {
+                assert_eq!(missing, vec!["Volume".to_owned()]);
+                assert_eq!(unexpected, vec!["Endpoint".to_owned()]);
+            }
+            other => panic!("wrong failure: {other}"),
+        }
+    }
 
     /// KTD7: the committed Provider identities the composition resolves are
     /// published into the registry the production Process effects consult
@@ -2694,7 +3170,7 @@ mod tests {
         )]);
         let registry = Arc::clone(&inputs.registry);
         let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
-        let source = &*registry as &dyn crate::process_driver::CommittedProviderIdentitySource;
+        let source = &*registry as &dyn d2b_provider_process::CommittedProviderIdentitySource;
         assert_eq!(
             source.committed_provider_identity(
                 &ResourceRef::parse("Provider/network-local").expect("provider ref")
@@ -2715,7 +3191,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn assembly_constructs_and_readiness_follows_the_checklist() {
         let (_dir, inputs, readiness) = test_inputs();
-        let plane = ResourcePlaneV3::prepare(inputs).expect("plane prepare");
+        let plane = ResourcePlaneV3::prepare(inputs).await.expect("plane prepare");
         // Before the initial load completes, the gate stays closed.
         let snapshot = plane.readiness();
         assert!(snapshot.spec_store_ready);
@@ -2739,7 +3215,7 @@ mod tests {
         let (_dir, inputs, _readiness) = test_inputs();
         let zone_token = inputs.zone_token.clone();
         let registry = Arc::clone(&inputs.registry);
-        let plane = ResourcePlaneV3::prepare(inputs).expect("plane prepare");
+        let plane = ResourcePlaneV3::prepare(inputs).await.expect("plane prepare");
 
         let volume_ref = ResourceRef::parse("Volume/state").unwrap();
         let execution_ref = ResourceRef::parse("Guest/acceptance-guest").unwrap();
@@ -3154,7 +3630,7 @@ mod tests {
     impl ProcessDriverEffects for AdoptingProcessEffects {
         async fn launch(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
@@ -3164,29 +3640,29 @@ mod tests {
 
         async fn adopt(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
+        ) -> Result<d2b_provider_process::ProviderAdoption, String> {
             if self.launched.load(std::sync::atomic::Ordering::SeqCst) {
-                Ok(crate::process_provider_runtime::ProviderAdoption::Adopted(
+                Ok(d2b_provider_process::ProviderAdoption::Adopted(
                     adopted_report(),
                 ))
             } else {
-                Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
+                Ok(d2b_provider_process::ProviderAdoption::Absent)
             }
         }
 
         async fn probe(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
-            Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
+        ) -> Result<d2b_provider_process::ProviderLiveness, String> {
+            Ok(d2b_provider_process::ProviderLiveness::Alive)
         }
 
         async fn launch_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
@@ -3196,23 +3672,23 @@ mod tests {
 
         async fn adopt_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
-            Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
+        ) -> Result<d2b_provider_process::ProviderAdoption, String> {
+            Ok(d2b_provider_process::ProviderAdoption::Absent)
         }
 
         async fn probe_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
-            Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
+        ) -> Result<d2b_provider_process::ProviderLiveness, String> {
+            Ok(d2b_provider_process::ProviderLiveness::Alive)
         }
 
         async fn stop_ephemeral(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -3222,7 +3698,7 @@ mod tests {
 
         async fn stop(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -3240,7 +3716,7 @@ mod tests {
 
         async fn finalize(
             &self,
-            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -3400,5 +3876,361 @@ mod tests {
             },
         }))
         .expect("child envelope")
+    }
+    /// A system-homed policy row as a caller would submit it.
+    fn command_desired(zone: &str, name: &str) -> DesiredResource {
+        let spec = d2b_contracts_resource::v3::canonical_json_bytes(&serde_json::json!({
+            "exec": "/usr/lib/d2b/libexec/virtiofsd",
+            "argv": ["--socket-path", "{socketPath}"],
+            "params": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "socketPath": { "type": "string" } }
+            },
+            "roleRef": "Role/worker",
+            "intent": { "grammar": "<zone>/<name>", "mint": "per-bundle-entry" }
+        }))
+        .expect("canonical command spec");
+        let metadata = serde_json::to_vec(&serde_json::json!({
+            "annotations": {},
+            "labels": {},
+            "ownerRef": null
+        }))
+        .expect("metadata");
+        DesiredResource {
+            key: ResourceKey::new(zone, "Command", name),
+            spec,
+            metadata,
+            provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Api,
+        }
+    }
+
+    fn api_subject(principal: &str) -> d2b_resource_runtime::manager::MutationSubject {
+        d2b_resource_runtime::manager::MutationSubject {
+            principal: principal.to_owned(),
+            origin: d2b_resource_runtime::spec_store::ResourceProvenance::Api,
+        }
+    }
+
+    /// A zone-local plane is not the foundation plane: a system-homed row is
+    /// refused terminally, naming the type and the caller.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_zone_local_plane_refuses_a_system_homed_row() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
+
+        let error = plane
+            .client()
+            .apply(api_subject("User/alice"), command_desired("test", "worker"))
+            .await
+            .expect_err("a system-homed write is refused");
+        assert!(
+            matches!(
+                &error,
+                d2b_resource_runtime::error::ResourceError::AdmissionDenied {
+                    type_name,
+                    principal,
+                    ..
+                } if type_name == "Command" && principal == "User/alice"
+            ),
+            "unexpected refusal: {error:?}"
+        );
+        assert!(
+            error.to_string().contains("wrong plane"),
+            "the refusal keeps the named shape: {error}"
+        );
+        // The refused row never reached the durable store.
+        assert!(plane.store().list(SpecSelector::default()).await.expect("list")
+            .iter()
+            .all(|row| row.key.type_name != "Command"));
+    }
+
+    /// The foundation plane commits the seeded policy rows before its manager
+    /// starts, and admits the writes only it may make.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_foundation_plane_commits_the_seed_and_admits_the_system_rows() {
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        inputs.foundation = Some(FoundationInputs {
+            declarations: crate::foundation_seed::core_declarations(),
+            allocation: crate::principal_allocation::PrincipalAllocation::committed()
+                .expect("committed allocation"),
+        });
+        let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
+
+        let rows = plane
+            .store()
+            .list(SpecSelector::default())
+            .await
+            .expect("list rows");
+        let refs: Vec<String> = rows
+            .iter()
+            .map(|row| format!("{}/{}", row.key.type_name, row.key.name))
+            .collect();
+        assert!(refs.contains(&"Zone/system".to_owned()), "refs: {refs:?}");
+        assert!(
+            refs.contains(&"Role/operation-publisher".to_owned()),
+            "refs: {refs:?}"
+        );
+        assert!(
+            refs.iter().any(|reference| reference.starts_with("RoleBinding/")),
+            "refs: {refs:?}"
+        );
+        // The system-homed write is admitted on this plane.
+        plane
+            .client()
+            .apply(api_subject("User/alice"), command_desired("system", "worker"))
+            .await
+            .expect("the foundation plane admits the write");
+    }
+
+    /// The one declared spawn command, under the seed's publisher role.
+    fn seeded_command(name: &str) -> crate::foundation_seed::SeedCommand {
+        let spec = d2b_contracts_resource::v3::canonical_json_bytes(&serde_json::json!({
+            "exec": "/usr/lib/d2b/libexec/virtiofsd",
+            "argv": ["--socket-path", "{socketPath}"],
+            "params": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "socketPath": { "type": "string" } }
+            },
+            "roleRef": "Role/operation-publisher",
+            "intent": { "grammar": "<zone>/<name>", "mint": "per-bundle-entry" }
+        }))
+        .expect("canonical command spec");
+        crate::foundation_seed::SeedCommand {
+            name: name.to_owned(),
+            spec: serde_json::from_slice(&spec).expect("command spec"),
+        }
+    }
+
+    /// The seed's own vocabulary, plus one declared command so the controller
+    /// materializes an `Operation` row to resolve.
+    fn seeded_declarations(command: &str) -> crate::foundation_seed::FoundationDeclarations {
+        let mut declarations = crate::foundation_seed::core_declarations();
+        let command = seeded_command(command);
+        declarations.roles[0].spec = serde_json::from_value(serde_json::json!({
+            "rules": [{
+                "resourceTypes": ["Operation"],
+                "verbs": ["create"],
+                "subresources": [],
+                "resourceNames": [],
+                "zones": [],
+                "executionRefs": [],
+                "sessionVerbs": []
+            }],
+            "commandRefs": [format!("Command/{}", command.name)],
+        }))
+        .expect("publisher role scoped to the declared command");
+        declarations.commands = vec![command];
+        declarations
+    }
+
+    /// The `Provider` row the seeded self-binding's subject resolves through.
+    ///
+    /// The seed homes its rows in the reserved system Zone and publishes the
+    /// provider identity without a row, so the plane's own Zone carries the
+    /// subject row: the two-Zone shape the policy read path must span. The
+    /// row is committed before the plane opens so the manager indexes it.
+    async fn seed_provider_row(inputs: &ConstructionInputs, provider_ref: &ResourceRef) -> ResourceUid {
+        let key = ResourceKey::new("test", "Provider", provider_ref.name().as_str());
+        let uid = d2b_resource_runtime::manager::deterministic_uid(&key);
+        let store =
+            SpecStore::open(ResourcePlaneV3::spec_store_path(&inputs.spec_store_dir)).expect("store");
+        store
+            .ensure(StoredDesiredResource {
+                uid,
+                key,
+                generation: 1,
+                owner_uid: None,
+                provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+                deleting: false,
+                spec: b"{}".to_vec(),
+                metadata: br#"{"annotations":{},"labels":{},"ownerRef":null}"#.to_vec(),
+                created_at: 0,
+            })
+            .await
+            .expect("provider row committed");
+        drop(store);
+        d2b_provider_process::resource_uid_from_bytes(&uid).expect("UUIDv4-shaped provider uid")
+    }
+
+    /// The committed controller subject: the provider the seed self-bound.
+    fn controller_subject(
+        provider_ref: &ResourceRef,
+        provider_uid: ResourceUid,
+        zone: &ZoneId,
+    ) -> d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext {
+        use d2b_contracts_resource::v3::SchemaFingerprint;
+        use d2b_contracts_resource::v3::identity::{
+            AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality,
+            ReconnectGeneration, ServiceName, SessionBinding, SessionPurpose, TranscriptHash,
+            TransportBinding,
+        };
+
+        AuthenticatedSubjectContext::new(
+            provider_ref.clone(),
+            provider_uid,
+            ResourceRef::parse(&format!("Zone/{}", zone.as_str())).expect("zone ref"),
+            EvidenceClass::UnixPeer,
+            SessionPurpose::parse("resource-api").expect("purpose"),
+            ServiceName::parse("d2b.resource.v3").expect("service"),
+            SessionBinding::new(
+                SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64)))
+                    .expect("schema fingerprint"),
+                TransportBinding::new(
+                    Locality::Local,
+                    BindingDigest::parse(format!("sha256:{}", "2".repeat(64)))
+                        .expect("binding digest"),
+                ),
+                ReconnectGeneration::new(1).expect("reconnect generation"),
+                TranscriptHash::from_bytes([3; 32]),
+            ),
+        )
+    }
+
+    /// The whole committed authority chain resolves through the read path.
+    ///
+    /// The seed commits the built-in role, the provider self-binding, the
+    /// declared command, and the operation it materializes into the reserved
+    /// system Zone. A read that selected the plane's own Zone alone would see
+    /// none of them, so this pins that the committed policy compile and the
+    /// row reads reach the system Zone - and that the grant the chain exists
+    /// for (the controller creating its operations) is installed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_seeded_system_vocabulary_resolves_through_the_policy_read_path() {
+        use d2b_resource_api::authz::{
+            ApiCatalog, ApiMethod, AuthorizationRequest, AuthorizationTarget, NativeAuthorizer,
+            ResourceVerb,
+        };
+
+        let command = "virtiofsd-worker";
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        // The readers resolve the Zone the seed homes its rows under: two
+        // declarations of the reserved name would put the commit and the read
+        // back out of agreement.
+        assert_eq!(
+            crate::foundation_seed::SYSTEM_ZONE,
+            d2b_contracts::identity::SYSTEM_ZONE_NAME,
+            "the seed homes its rows in the Zone the readers select",
+        );
+        let declarations = seeded_declarations(command);
+        let provider_ref = declarations
+            .providers
+            .first()
+            .expect("the seed declares the process provider")
+            .provider_ref
+            .clone();
+        let provider_uid = seed_provider_row(&inputs, &provider_ref).await;
+        inputs.foundation = Some(FoundationInputs {
+            declarations,
+            allocation: crate::principal_allocation::PrincipalAllocation::committed()
+                .expect("committed allocation"),
+        });
+        let zone = inputs.zone.clone();
+        let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
+        let view = crate::resource_runtime::plane_controller_bridge::ManagerControllerPlaneView::new(
+            plane.client().clone(),
+            zone.clone(),
+        );
+
+        // Every row of the chain is read back, homed in the reserved Zone.
+        let resources = crate::resource_runtime::committed_policy_resources(&view)
+            .await
+            .expect("committed policy read");
+        let homed = |reference: &str| {
+            resources
+                .iter()
+                .find(|row| row.resource_ref.to_canonical_string() == reference)
+                .map(|row| row.zone.as_str().to_owned())
+        };
+        // Every policy row of the chain is read back, homed in the system Zone.
+        let chain = [
+            "Role/operation-publisher".to_owned(),
+            "RoleBinding/system-minijail-self-operation-publisher".to_owned(),
+            format!("Zone/{}", crate::foundation_seed::SYSTEM_ZONE),
+        ];
+        for reference in &chain {
+            assert_eq!(
+                homed(reference).as_deref(),
+                Some(crate::foundation_seed::SYSTEM_ZONE),
+                "the policy read resolves {reference}: {:?}",
+                resources
+                    .iter()
+                    .map(|row| row.resource_ref.to_canonical_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        // The declared command and the operation it materialized are read back
+        // by reference, the shape an invocation resolves them in.
+        let declared = [
+            format!("Command/{command}"),
+            format!("Operation/process-run-{command}"),
+        ];
+        for reference in &declared {
+            let target = ResourceRef::parse(reference).expect("resource reference");
+            let row = crate::resource_runtime::bridge_manager_row(&view, &target)
+                .await
+                .expect("row read")
+                .unwrap_or_else(|| panic!("the read path resolves {reference}"));
+            assert_eq!(row.zone.as_str(), crate::foundation_seed::SYSTEM_ZONE);
+        }
+        // The self-binding's subject resolves through the same read, so the
+        // binding is not dropped as unresolved.
+        let fingerprints =
+            d2bd_runtime::resource_runtime_support::committed_policy_subject_fingerprints(
+                &resources,
+            )
+            .expect("subject fingerprints");
+        assert!(
+            fingerprints.contains_key(&(
+                ResourceRef::parse("RoleBinding/system-minijail-self-operation-publisher")
+                    .expect("binding ref"),
+                provider_ref.clone(),
+            )),
+            "the seeded binding resolved its subject, fingerprints: {}",
+            fingerprints.len(),
+        );
+
+        // The compiled policy installs the grant the chain exists for: the
+        // self-bound provider creates the operation its command materialized.
+        let snapshot = d2bd_runtime::resource_runtime_support::initial_policy_snapshot()
+            .expect("bootstrap snapshot");
+        let (policy, state) =
+            d2bd_runtime::resource_runtime_support::compile_committed_policy_with_subjects(
+                &zone,
+                snapshot,
+                ZoneRevision::new(snapshot.policy_revision),
+                &[],
+                &resources,
+                std::iter::empty(),
+            )
+            .expect("committed policy compiles");
+        let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy))
+            .expect("authorizer over the compiled policy");
+        let grant = authorizer.authorize(
+            &controller_subject(&provider_ref, provider_uid, &zone),
+            &AuthorizationRequest {
+                method: ApiMethod::Create,
+                zone: zone.clone(),
+                targets: vec![AuthorizationTarget {
+                    resource_type: d2b_contracts_resource::v3::ResourceTypeName::parse(
+                        "Operation".to_owned(),
+                    )
+                    .expect("operation type"),
+                    resource_name: Some(
+                        ResourceName::parse(format!("process-run-{command}"))
+                            .expect("operation name"),
+                    ),
+                    verb: ResourceVerb::Create,
+                    subresource: None,
+                    execution_ref: None,
+                }],
+            },
+            &state,
+        );
+        assert!(
+            grant.is_ok(),
+            "the seeded self-binding grants the controller its operation: {grant:?}"
+        );
     }
 }

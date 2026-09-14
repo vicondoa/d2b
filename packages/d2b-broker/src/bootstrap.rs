@@ -1,18 +1,5 @@
-use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-
-pub mod manifest {
-    use std::path::Path;
-
-    pub fn validate_bundle(path: &Path) -> Result<(), String> {
-        if path.exists() {
-            Ok(())
-        } else {
-            Err(format!("bundle path does not exist: {}", path.display()))
-        }
-    }
-}
 
 pub mod wire {
     use super::*;
@@ -35,9 +22,6 @@ pub mod wire {
             #[serde(default)]
             supported_features: Vec<String>,
         },
-        ValidateBundle {
-            path: PathBuf,
-        },
         ExportBrokerAudit {
             #[serde(default)]
             since: Option<String>,
@@ -57,10 +41,6 @@ pub mod wire {
             opaque_target_id: Option<String>,
         },
         ApplySysctl {
-            #[serde(default)]
-            opaque_target_id: Option<String>,
-        },
-        BindUnixSocket {
             #[serde(default)]
             opaque_target_id: Option<String>,
         },
@@ -116,10 +96,6 @@ pub mod wire {
             #[serde(default)]
             opaque_target_id: Option<String>,
         },
-        PauseBroker {
-            #[serde(default)]
-            opaque_target_id: Option<String>,
-        },
         PrepareRuntimeDir {
             #[serde(default)]
             opaque_target_id: Option<String>,
@@ -143,19 +119,11 @@ pub mod wire {
             #[serde(default)]
             opaque_target_id: Option<String>,
         },
-        ResumeBroker {
-            #[serde(default)]
-            opaque_target_id: Option<String>,
-        },
         RotateSecretById {
             #[serde(default)]
             opaque_target_id: Option<String>,
         },
         SetBridgePortFlags {
-            #[serde(default)]
-            opaque_target_id: Option<String>,
-        },
-        SetSocketAcl {
             #[serde(default)]
             opaque_target_id: Option<String>,
         },
@@ -224,9 +192,6 @@ pub mod wire {
             selected_version: String,
             capabilities: Vec<String>,
         },
-        ValidateBundleOk {
-            valid: bool,
-        },
         ExportBrokerAuditOk {
             lines: Vec<String>,
         },
@@ -246,13 +211,11 @@ pub mod wire {
         pub fn op_name(&self) -> &'static str {
             match self {
                 Self::Hello { .. } => "Hello",
-                Self::ValidateBundle { .. } => "ValidateBundle",
                 Self::ExportBrokerAudit { .. } => "ExportBrokerAudit",
                 Self::ApplyNftables { .. } => "ApplyNftables",
                 Self::ApplyNmUnmanaged { .. } => "ApplyNmUnmanaged",
                 Self::ApplyRoute { .. } => "ApplyRoute",
                 Self::ApplySysctl { .. } => "ApplySysctl",
-                Self::BindUnixSocket { .. } => "BindUnixSocket",
                 Self::CreateOrReconcileUsersGroups { .. } => "CreateOrReconcileUsersGroups",
                 Self::CreatePersistentTap { .. } => "CreatePersistentTap",
                 Self::CreateTapFd { .. } => "CreateTapFd",
@@ -266,16 +229,13 @@ pub mod wire {
                 Self::OpenKvm { .. } => "OpenKvm",
                 Self::OpenPidfd { .. } => "OpenPidfd",
                 Self::OpenVhostNet { .. } => "OpenVhostNet",
-                Self::PauseBroker { .. } => "PauseBroker",
                 Self::PrepareRuntimeDir { .. } => "PrepareRuntimeDir",
                 Self::PrepareStateDir { .. } => "PrepareStateDir",
                 Self::PrepareStoreView { .. } => "PrepareStoreView",
                 Self::StoreSync { .. } => "StoreSync",
                 Self::ReadSecretById { .. } => "ReadSecretById",
-                Self::ResumeBroker { .. } => "ResumeBroker",
                 Self::RotateSecretById { .. } => "RotateSecretById",
                 Self::SetBridgePortFlags { .. } => "SetBridgePortFlags",
-                Self::SetSocketAcl { .. } => "SetSocketAcl",
                 Self::SetupMountNamespace { .. } => "SetupMountNamespace",
                 Self::SpawnRunner { .. } => "SpawnRunner",
                 Self::UpdateHostsFile { .. } => "UpdateHostsFile",
@@ -291,7 +251,6 @@ pub mod wire {
         pub fn opaque_target_id(&self) -> &'static str {
             match self {
                 Self::Hello { .. } => "daemon-handshake",
-                Self::ValidateBundle { .. } => "bundle",
                 Self::ExportBrokerAudit { .. } => "audit-log",
                 _ => "operation",
             }
@@ -321,9 +280,6 @@ pub mod wire {
                 opaque_target_id: None,
             },
             "ApplySysctl" => BrokerRequest::ApplySysctl {
-                opaque_target_id: None,
-            },
-            "BindUnixSocket" => BrokerRequest::BindUnixSocket {
                 opaque_target_id: None,
             },
             "CreateOrReconcileUsersGroups" => BrokerRequest::CreateOrReconcileUsersGroups {
@@ -365,9 +321,6 @@ pub mod wire {
             "OpenVhostNet" => BrokerRequest::OpenVhostNet {
                 opaque_target_id: None,
             },
-            "PauseBroker" => BrokerRequest::PauseBroker {
-                opaque_target_id: None,
-            },
             "PrepareRuntimeDir" => BrokerRequest::PrepareRuntimeDir {
                 opaque_target_id: None,
             },
@@ -383,16 +336,10 @@ pub mod wire {
             "ReadSecretById" => BrokerRequest::ReadSecretById {
                 opaque_target_id: None,
             },
-            "ResumeBroker" => BrokerRequest::ResumeBroker {
-                opaque_target_id: None,
-            },
             "RotateSecretById" => BrokerRequest::RotateSecretById {
                 opaque_target_id: None,
             },
             "SetBridgePortFlags" => BrokerRequest::SetBridgePortFlags {
-                opaque_target_id: None,
-            },
-            "SetSocketAcl" => BrokerRequest::SetSocketAcl {
                 opaque_target_id: None,
             },
             "SetupMountNamespace" => BrokerRequest::SetupMountNamespace {
@@ -484,8 +431,4 @@ impl wire::CallerRole {
             wire::CallerRole::NotAuthorized => "d2b-not-authorized",
         }
     }
-}
-
-pub fn ensure_bundle_path(path: &Path) -> Result<(), String> {
-    manifest::validate_bundle(path)
 }

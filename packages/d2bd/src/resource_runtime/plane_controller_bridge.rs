@@ -76,6 +76,18 @@ pub(crate) trait ControllerPlaneView: Send + Sync + 'static {
     async fn all_rows(&self) -> Result<Vec<ResourceView>, ResourceError> {
         Ok(Vec::new())
     }
+
+    /// Every manager row of one named Zone.
+    ///
+    /// The reserved system Zone - the durable authority's home, where the
+    /// foundation seed commits the system vocabulary - is read this way: a
+    /// plane's own reads select its own Zone, so the system rows would
+    /// otherwise be committed to a row set no plane reads back. The read is
+    /// read-only, and the default is empty for a fixture that serves one
+    /// Zone; an RPC failure is never reported as absence.
+    async fn all_rows_in_zone(&self, _zone: &str) -> Result<Vec<ResourceView>, ResourceError> {
+        Ok(Vec::new())
+    }
 }
 
 /// Production seam over one zone's manager client (the plane's published
@@ -124,6 +136,16 @@ impl ControllerPlaneView for ManagerControllerPlaneView {
         self.client
             .list(ResourceSelector {
                 zone: Some(self.zone.as_str().to_owned()),
+                type_name: None,
+                owner: None,
+            })
+            .await
+    }
+
+    async fn all_rows_in_zone(&self, zone: &str) -> Result<Vec<ResourceView>, ResourceError> {
+        self.client
+            .list(ResourceSelector {
+                zone: Some(zone.to_owned()),
                 type_name: None,
                 owner: None,
             })
@@ -181,6 +203,15 @@ impl ControllerPlaneView for PublishedPlaneControllerView {
         };
         ManagerControllerPlaneView::new(plane.client().clone(), self.zone.clone())
             .all_rows()
+            .await
+    }
+
+    async fn all_rows_in_zone(&self, zone: &str) -> Result<Vec<ResourceView>, ResourceError> {
+        let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
+            return Ok(Vec::new());
+        };
+        ManagerControllerPlaneView::new(plane.client().clone(), self.zone.clone())
+            .all_rows_in_zone(zone)
             .await
     }
 }
@@ -745,7 +776,7 @@ mod tests {
     /// with no actor and the guest's readiness gate never converges.
     #[test]
     fn cloud_hypervisor_guest_children_reach_their_drivers_through_the_manager() {
-        use d2b_provider_runtime_cloud_hypervisor::ChildRole;
+        use d2b_provider_guest_cloud_hypervisor::ChildRole;
 
         let guest = ResourceRef::parse("Guest/acceptance-guest").expect("guest ref");
         for role in [
@@ -755,7 +786,7 @@ mod tests {
             ChildRole::SystemVolume,
         ] {
             let child =
-                d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(&guest, role)
+                d2b_provider_guest_cloud_hypervisor::deterministic_child_ref(&guest, role)
                     .expect("deterministic Cloud Hypervisor child");
             assert_eq!(
                 child_mutation_route(&child),
@@ -862,6 +893,27 @@ mod tests {
         );
     }
 
+    /// The Endpoint family's committed purpose vocabulary: the purposes the
+    /// declaring provider crates commit, read through the daemon's own
+    /// derivation.
+    struct CommittedEndpointPurposes;
+
+    impl d2b_provider_endpoint::EndpointPurposeVocabulary for CommittedEndpointPurposes {
+        fn guest_control_producer(
+            &self,
+            purpose: &str,
+        ) -> Option<d2b_provider_endpoint::GuestControlProducer> {
+            crate::endpoint_effects::guest_control_producer(purpose)
+        }
+
+        fn device_worker_endpoint_class(
+            &self,
+            purpose: &str,
+        ) -> Option<d2b_contracts_resource::v3::endpoint::EndpointClass> {
+            crate::endpoint_effects::device_worker_endpoint_class(purpose)
+        }
+    }
+
     /// One Cloud Hypervisor controller Endpoint child envelope as
     /// `materialize_child_payload` renders it for a Guest's control endpoint:
     /// the authored create body plus the provider's materialized defaults.
@@ -936,8 +988,8 @@ mod tests {
             &ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("provider")
         );
         assert_eq!(
-            crate::endpoint_driver::endpoint_realization(&spec),
-            Some(crate::endpoint_driver::EndpointRealization::GuestControl),
+            d2b_provider_endpoint::endpoint_realization(&spec, &CommittedEndpointPurposes),
+            Some(d2b_provider_endpoint::EndpointRealization::GuestControl),
             "the committed row must be the shape the Endpoint driver realizes"
         );
     }
@@ -1019,8 +1071,8 @@ mod tests {
             d2b_contracts_resource::v3::endpoint::EndpointLocality::HostLocal
         );
         assert_eq!(
-            crate::endpoint_driver::endpoint_realization(&spec),
-            Some(crate::endpoint_driver::EndpointRealization::GuestControl),
+            d2b_provider_endpoint::endpoint_realization(&spec, &CommittedEndpointPurposes),
+            Some(d2b_provider_endpoint::EndpointRealization::GuestControl),
             "the committed ch-api row must be the shape the Endpoint driver realizes"
         );
     }

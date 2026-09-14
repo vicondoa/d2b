@@ -17,14 +17,18 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::sys::{owned_fd_from_raw, path_safe, peer_credentials};
+// The accepted descriptor is wrapped where it is accepted (the reactor's
+// listener), so the bootstrap build - which serves the same listener - has no
+// direct user of the raw-fd helper.
+#[cfg(not(feature = "layer1-bootstrap"))]
+use crate::sys::owned_fd_from_raw;
+use crate::sys::{path_safe, peer_credentials};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use hmac::{Hmac, Mac};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nix::libc;
 #[cfg(not(feature = "layer1-bootstrap"))]
-use nix::sys::socket::{AddressFamily, SockType, socketpair};
-use nix::sys::socket::{SockFlag, accept4};
+use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nix::unistd::dup;
 use serde_json::Value;
@@ -42,16 +46,14 @@ use crate::ops::audit_op::{
     BrokerAuditRecordClass, OpAuditRecord, OperationFields, UsbAuditDeviceIdentity,
     UsbSerialCorrelation, UsbSerialCorrelationKeyRotationAudit,
 };
-#[cfg(feature = "layer1-bootstrap")]
-use crate::protocol::{bind_seqpacket, connect_seqpacket, recv_json_frame, send_json_frame};
 #[cfg(not(feature = "layer1-bootstrap"))]
+use crate::protocol::{AsyncSeqpacket, AsyncSeqpacketListener, bind_seqpacket};
+#[cfg(feature = "layer1-bootstrap")]
 use crate::protocol::{
-    bind_seqpacket, recv_json_frame_with_fds, send_json_frame, send_json_frame_with_fds,
+    AsyncSeqpacket, AsyncSeqpacketListener, bind_seqpacket, connect_seqpacket, recv_json_frame,
+    send_json_frame,
 };
 
-#[cfg(feature = "layer1-bootstrap")]
-#[allow(unused_imports)]
-use crate::bootstrap::manifest as manifest_api;
 #[cfg(feature = "layer1-bootstrap")]
 use crate::bootstrap::wire::{BrokerRequest, BrokerResponse, CallerRole, RequestEnvelope};
 #[cfg(feature = "layer1-bootstrap")]
@@ -98,7 +100,6 @@ const DEFAULT_GUEST_STATE_DIR: &str = "/var/lib/d2b/guest-broker";
 const DEFAULT_ACTIVATION_HELPER_PATH: &str = "/run/current-system/sw/bin/d2b-activation-helper";
 const CAPABILITIES: &[&str] = &[
     "Hello",
-    "ValidateBundle",
     "ExportBrokerAudit",
     "ConsumeLifecycleLease",
     "MigrateLegacySwtpmState",
@@ -139,6 +140,16 @@ pub struct ServerConfig {
     /// `/var/lib/d2b/observability/store-sync`; override via
     /// `--store-sync-export-dir`.
     pub store_sync_export_dir: PathBuf,
+    /// The process that serves the declared handlers of family-owned
+    /// operations.
+    ///
+    /// The broker links no provider crate, so a committed family row's
+    /// handler runs in the declaring crate's process: the dispatch step
+    /// dials this socket and crosses the validated invocation to whoever
+    /// answers there. `None` means no peer is configured, and every
+    /// forwarded operation is then refused fail-closed. Resolved from
+    /// `--forward-socket`, else `D2B_BROKER_FORWARD_SOCKET`.
+    pub forward_socket_path: Option<PathBuf>,
     pub test_mode: bool,
 }
 
@@ -205,8 +216,6 @@ enum BrokerError {
     },
     AuditRequiresAdmin,
     HostShutdownRestricted,
-    #[cfg_attr(not(feature = "layer1-bootstrap"), allow(dead_code))]
-    ValidateBundle(String),
     /// Broker started without a loadable bundle at
     /// `ServerConfig.bundle_path`; bundle-dependent real-wire ops cannot
     /// resolve their `BundleOpId` refs and refuse fail-closed.
@@ -336,6 +345,7 @@ enum BrokerError {
         operation: &'static str,
         reason: &'static str,
     },
+    /// A generic envelope invocation the committed rows do not admit.
     IpcRateLimited,
 }
 
@@ -420,6 +430,7 @@ where
         BrokerProfile::Guest => PathBuf::from("/var/lib/d2b/guest-audit/store-sync"),
     };
     let mut authority_id = profile.as_str().to_owned();
+    let mut forward_socket_override: Option<PathBuf> = None;
     let mut d2bd_uid = None;
     let mut d2bd_gid = None;
     let mut test_mode = false;
@@ -467,6 +478,11 @@ where
                 index += 1;
                 store_sync_export_dir =
                     PathBuf::from(expect_arg(&rest, index, "--store-sync-export-dir")?);
+            }
+            "--forward-socket" => {
+                index += 1;
+                forward_socket_override =
+                    Some(PathBuf::from(expect_arg(&rest, index, "--forward-socket")?));
             }
             "--authority-id" => {
                 index += 1;
@@ -553,6 +569,14 @@ where
         d2bd_uid: d2bd_uid.unwrap_or(fallback_uid),
         d2bd_gid: d2bd_gid.unwrap_or(fallback_gid),
         store_sync_export_dir,
+        // The declaring process that serves family handlers: the flag wins,
+        // otherwise the environment names it, otherwise no peer is wired and
+        // every forwarded operation refuses fail-closed.
+        forward_socket_path: forward_socket_override.or_else(|| {
+            env::var(crate::forwarding::FORWARD_SOCKET_ENV)
+                .ok()
+                .map(PathBuf::from)
+        }),
         test_mode,
     };
     Ok(match profile {
@@ -706,6 +730,145 @@ fn sd_notify_ready() {
     }
 }
 
+/// Reactor worker threads: the accept loop, the frame I/O, the reap loop, and
+/// the background retries. No request body runs here, so the count is small
+/// and fixed rather than a cap on how much work is in flight.
+const SERVER_WORKER_THREADS: usize = 4;
+
+/// Connections the broker admits before the accept loop waits for one to
+/// finish. The listen backlog holds the dials this process has not admitted.
+const MAX_INFLIGHT_CONNECTIONS: usize = 64;
+
+/// Jobs one dispatch worker queues before its callers wait.
+const DISPATCH_QUEUE_PER_WORKER: usize = 1;
+
+/// Worker threads behind the dispatch pool, at least one more than one so two
+/// requests never queue behind one another.
+const MIN_DISPATCH_WORKERS: usize = 2;
+/// Upper bound on the dispatch pool: a stalled peer or a slow subprocess must
+/// not grow the broker's thread count with its callers.
+const MAX_DISPATCH_WORKERS: usize = 16;
+
+/// One job on the dispatch pool.
+type DispatchJob = Box<dyn FnOnce() + Send + 'static>;
+
+/// The bounded pool the broker runs a request's synchronous kernel path on.
+///
+/// The broker's request body has no async form: it reloads the trusted bundle
+/// from disk, spawns and signals children, walks the filesystem under
+/// `openat2`, and appends to the audit log. Running it on a reactor worker
+/// would stall every other connection's frame I/O, and running it on a thread
+/// per call would let a caller pick the broker's thread count. So it runs
+/// here: a fixed set of worker threads, one bounded queue each, and an async
+/// caller that waits for its own job's reply. A full queue is backpressure on
+/// the connection task, not a blocked thread.
+pub(crate) struct DispatchPool {
+    queues: Vec<tokio::sync::mpsc::Sender<DispatchJob>>,
+    next: std::sync::atomic::AtomicUsize,
+}
+
+impl DispatchPool {
+    fn new(workers: usize) -> Arc<Self> {
+        let mut queues = Vec::with_capacity(workers);
+        for index in 0..workers {
+            let (queue, mut jobs) =
+                tokio::sync::mpsc::channel::<DispatchJob>(DISPATCH_QUEUE_PER_WORKER);
+            queues.push(queue);
+            std::thread::Builder::new()
+                .name(format!("d2b-broker-dispatch-{index}"))
+                .spawn(move || {
+                    while let Some(job) = jobs.blocking_recv() {
+                        // A panicking handler must cost its own connection,
+                        // not the worker: the pool keeps its workers, and the
+                        // waiting caller sees the reply channel close.
+                        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_err() {
+                            tracing::error!(
+                                "broker request body panicked; the connection is closed and \
+                                 the broker keeps serving"
+                            );
+                        }
+                    }
+                })
+                .expect("spawn broker dispatch worker");
+        }
+        Arc::new(Self {
+            queues,
+            next: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    /// Run one job on a pool worker and hand back its result.
+    pub(crate) async fn run<T: Send + 'static>(
+        &self,
+        job: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, DispatchPoolClosed> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        let job: DispatchJob = Box::new(move || {
+            let _ = reply.send(job());
+        });
+        let index =
+            self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % self.queues.len();
+        self.queues[index]
+            .send(job)
+            .await
+            .map_err(|_| DispatchPoolClosed)?;
+        answer.await.map_err(|_| DispatchPoolClosed)
+    }
+}
+
+impl Drop for DispatchPool {
+    /// Closing every queue ends its worker's loop once the queue drains; a job
+    /// already running finishes on the thread that owns it.
+    fn drop(&mut self) {
+        self.queues.clear();
+    }
+}
+
+/// The dispatch pool is gone: the broker is shutting down, so a request in
+/// flight is answered by nothing.
+#[derive(Debug)]
+pub(crate) struct DispatchPoolClosed;
+
+/// How many dispatch workers this process runs.
+///
+/// Derived from the machine so a wide host does not serialize behind four
+/// workers, clamped so a narrow host still runs two requests at once and
+/// neither extreme turns the pool into an unbounded thread source.
+fn dispatch_workers() -> usize {
+    std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get())
+        .unwrap_or(MIN_DISPATCH_WORKERS)
+        .clamp(MIN_DISPATCH_WORKERS, MAX_DISPATCH_WORKERS)
+}
+
+/// The broker's serving state: one accepted connection is handled against it.
+struct Server {
+    config: Arc<ServerConfig>,
+    audit_log: Arc<AuditLog>,
+    dispatches: Arc<DispatchPool>,
+    ipc_rate_limiter: Arc<Mutex<IpcRateLimiter>>,
+}
+
+/// The process-lifetime handles background work reaches the broker's runtime
+/// through.
+///
+/// A background step that outlives the request that scheduled it - the
+/// obs-vsock ACL refresh above all - runs as a task on this reactor with an
+/// async deadline, and any blocking attempt inside it goes to this pool
+/// rather than to a thread of its own.
+pub(crate) struct BrokerBackground {
+    pub(crate) runtime: tokio::runtime::Handle,
+    pub(crate) dispatches: Arc<DispatchPool>,
+}
+
+static BROKER_BACKGROUND: std::sync::OnceLock<BrokerBackground> = std::sync::OnceLock::new();
+
+/// The running broker's background handles, absent until `run_server` starts
+/// the reactor.
+pub(crate) fn broker_background() -> Option<&'static BrokerBackground> {
+    BROKER_BACKGROUND.get()
+}
+
 fn run_server(config: ServerConfig) -> Result<(), RunError> {
     let listener = match adopt_listen_fd() {
         Some(Ok(fd)) => {
@@ -745,74 +908,50 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
         }
     };
 
-    let audit_log = AuditLog::open(
+    let audit_log = Arc::new(AuditLog::open(
         &config.audit_dir,
         config.d2bd_gid,
         config.test_mode,
         config.audit_retention_days,
-    )?;
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    let audit_log = Arc::new(audit_log);
+    )?);
 
     // Signal systemd that the broker is ready to accept connections.
     // Called after the listener is established and the audit log is open,
     // before entering the accept loop.  No-op when NOTIFY_SOCKET is absent.
     sd_notify_ready();
 
-    // Load the bundle resolver from the configured `bundle_path` for
-    // each accepted request. The broker is socket-activated but can
-    // remain alive across `nixos-rebuild switch`; treating the bundle
-    // as process-lifetime immutable made already-running brokers
-    // dispatch stale runner intents after a switch. Per-request reload
-    // keeps broker authority aligned with the current on-disk bundle
-    // while preserving fail-closed tamper handling.
+    // One reactor serves every accepted connection, the SIGCHLD reap loop,
+    // and the background retries. Nothing on it blocks: a request's
+    // synchronous body runs on the dispatch pool, so the reactor stays free
+    // to accept and to move frames.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(SERVER_WORKER_THREADS)
+        .thread_name("d2b-broker")
+        .enable_all()
+        .build()
+        .map_err(RunError::Io)?;
+    let dispatches = DispatchPool::new(dispatch_workers());
+    // Background work reaches the same reactor and the same bounded pool the
+    // request path uses, so a retry is a task here rather than a thread.
+    let _ = BROKER_BACKGROUND.set(BrokerBackground {
+        runtime: runtime.handle().clone(),
+        dispatches: Arc::clone(&dispatches),
+    });
 
-    // Start background SIGCHLD reap loop. The runtime handle must stay
-    // alive for the broker's lifetime.
+    // Start background SIGCHLD reap loop on the shared reactor.
     #[cfg(not(feature = "layer1-bootstrap"))]
-    let _sigchld_reaper_rt = start_sigchld_reaper(Arc::clone(&audit_log));
-    let ipc_rate_limiter = Arc::new(Mutex::new(IpcRateLimiter::new(
-        DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND,
-    )));
+    start_sigchld_reaper(&runtime, Arc::clone(&audit_log));
 
-    loop {
-        let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
-            .map_err(|err| io::Error::from_raw_os_error(err as i32));
-        let connection = match accepted {
-            Ok(fd) => owned_fd_from_raw(fd),
-            Err(err) => {
-                warn!(error = %err, "broker accept failed");
-                return Err(RunError::Io(err));
-            }
-        };
-        #[cfg(not(feature = "layer1-bootstrap"))]
-        let (resolver, bundle_tamper) = {
-            match try_load_resolver(&config.bundle_path) {
-                BundleSlot::Loaded(r) => (Some(r.clone()), None),
-                BundleSlot::Unavailable => (None, None),
-                BundleSlot::Tampered { path, reason } => {
-                    (None, Some((path.clone(), reason.clone())))
-                }
-            }
-        };
-        #[cfg(feature = "layer1-bootstrap")]
-        let resolver: Option<()> = None;
-        #[cfg(not(feature = "layer1-bootstrap"))]
-        let audit_log_ref: &AuditLog = audit_log.as_ref();
-        #[cfg(feature = "layer1-bootstrap")]
-        let audit_log_ref: &AuditLog = &audit_log;
-        if let Err(err) = handle_connection(
-            connection,
-            &config,
-            audit_log_ref,
-            resolver.as_ref(),
-            #[cfg(not(feature = "layer1-bootstrap"))]
-            bundle_tamper,
-            &ipc_rate_limiter,
-        ) {
-            warn!(error = ?err, "broker request failed");
-        }
-    }
+    let server = Arc::new(Server {
+        config: Arc::new(config),
+        audit_log,
+        dispatches,
+        ipc_rate_limiter: Arc::new(Mutex::new(IpcRateLimiter::new(
+            DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND,
+        ))),
+    });
+
+    runtime.block_on(serve(server, listener))
 }
 
 /// Outcome of a bundle load attempt at broker startup.
@@ -896,43 +1035,178 @@ fn peer_matches_instance(config: &ServerConfig, peer_uid: u32, peer_gid: u32) ->
         || (config.profile == BrokerProfile::Host && peer_uid == 0)
 }
 
-fn handle_connection(
-    fd: OwnedFd,
-    config: &ServerConfig,
-    audit_log: &AuditLog,
-    #[cfg(not(feature = "layer1-bootstrap"))] resolver: Option<&Arc<BundleResolver>>,
-    #[cfg(feature = "layer1-bootstrap")] _resolver: Option<&()>,
-    #[cfg(not(feature = "layer1-bootstrap"))] bundle_tamper: Option<(String, String)>,
-    ipc_rate_limiter: &Arc<Mutex<IpcRateLimiter>>,
-) -> io::Result<()> {
-    let (peer_uid, peer_gid, peer_pid) = peer_credentials(fd.as_raw_fd())?;
-    if !peer_matches_instance(config, peer_uid, peer_gid) {
-        let _ = write_refusal_audit_bounded(
-            audit_log,
-            AuditWriteClass::Unprivileged,
-            "PeerAuthentication",
-            peer_uid,
-            peer_gid,
-            "peer-refused-before-decode",
-            "broker-instance",
-            "closed",
-        );
-        // Do not decode or synchronously drain an untrusted frame. Closing
-        // the accepted socket is the fail-closed response and avoids letting
-        // an unauthenticated peer hold a broker worker while it trickles
-        // request bytes.
+/// Accept and serve connections until the listener itself fails.
+///
+/// One accepted connection becomes one task, so the accept path never runs a
+/// request inline and a caller that connects and then stalls holds a waiting
+/// task rather than the broker. The in-flight count is capped: past the
+/// ceiling the loop stops accepting, and the listen backlog - not this
+/// process - holds the dials it cannot serve yet.
+async fn serve(server: Arc<Server>, listener: OwnedFd) -> Result<(), RunError> {
+    let listener = AsyncSeqpacketListener::from_owned(listener).map_err(RunError::Io)?;
+    let gate = Arc::new(tokio::sync::Semaphore::new(MAX_INFLIGHT_CONNECTIONS));
+    loop {
+        // Owned, because the permit travels into the connection's task.
+        let permit = match Arc::clone(&gate).acquire_owned().await {
+            Ok(permit) => permit,
+            // The gate is owned here and never closed.
+            Err(_) => {
+                return Err(RunError::Protocol(
+                    "broker connection gate closed".to_owned(),
+                ));
+            }
+        };
+        let connection = match listener.accept().await {
+            Ok(connection) => connection,
+            Err(err) => {
+                warn!(error = %err, "broker accept failed");
+                return Err(RunError::Io(err));
+            }
+        };
+        let server = Arc::clone(&server);
+        tokio::spawn(async move {
+            let _permit = permit;
+            if let Err(err) = handle_connection(connection, &server).await {
+                warn!(error = ?err, "broker request failed");
+            }
+        });
+    }
+}
+
+/// Serve one accepted connection.
+///
+/// The order the synchronous server used is preserved: the peer is
+/// authenticated before a single frame byte is decoded, and a peer this
+/// instance does not admit is closed without reading its bytes. What changed
+/// is where each wait happens - the frame read and write wait in async time,
+/// and the request's own kernel work runs on the dispatch pool.
+async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::Result<()> {
+    let (peer_uid, peer_gid, peer_pid) = peer_credentials(connection.as_raw_fd())?;
+    if !peer_matches_instance(&server.config, peer_uid, peer_gid) {
+        // Do not decode or drain an unauthenticated peer's frame: closing the
+        // accepted socket is the fail-closed response. The append is one of
+        // the writes with no async form, so it runs on the dispatch pool.
+        let audit_log = Arc::clone(&server.audit_log);
+        let _ = server
+            .dispatches
+            .run(move || {
+                write_refusal_audit_bounded(
+                    &audit_log,
+                    AuditWriteClass::Unprivileged,
+                    "PeerAuthentication",
+                    peer_uid,
+                    peer_gid,
+                    "peer-refused-before-decode",
+                    "broker-instance",
+                    "closed",
+                )
+            })
+            .await;
         return Ok(());
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
-    let (envelope, request_fds) = match recv_json_frame_with_fds::<RequestEnvelope>(fd.as_raw_fd())?
-    {
-        Some(envelope) => envelope,
-        None => return Ok(()),
-    };
+    let frame = connection
+        .recv_json_frame_with_fds::<RequestEnvelope>()
+        .await?;
     #[cfg(feature = "layer1-bootstrap")]
-    let envelope = match recv_json_frame::<RequestEnvelope>(fd.as_raw_fd())? {
-        Some(envelope) => envelope,
-        None => return Ok(()),
+    let frame = connection
+        .recv_json_frame::<RequestEnvelope>()
+        .await
+        .map(|frame| frame.map(|envelope| (envelope, Vec::new())))?;
+    let Some((envelope, request_fds)) = frame else {
+        return Ok(());
+    };
+
+    let config = Arc::clone(&server.config);
+    let audit_log = Arc::clone(&server.audit_log);
+    let ipc_rate_limiter = Arc::clone(&server.ipc_rate_limiter);
+    let outcome = server
+        .dispatches
+        .run(move || {
+            answer_request(
+                envelope,
+                request_fds,
+                peer_uid,
+                peer_gid,
+                peer_pid,
+                &config,
+                &audit_log,
+                &ipc_rate_limiter,
+            )
+        })
+        .await
+        // A pool that is gone answered nothing: the caller is closed rather
+        // than read a frame that was never produced.
+        .map_err(|_| io::Error::other("broker dispatch pool is not running"))??;
+
+    match outcome {
+        RequestOutcome::Reply(response, fds) => {
+            #[cfg(not(feature = "layer1-bootstrap"))]
+            {
+                if fds.is_empty() {
+                    connection.send_json_frame(&response).await
+                } else {
+                    let raw_fds: Vec<i32> = fds.iter().map(AsRawFd::as_raw_fd).collect();
+                    connection
+                        .send_json_frame_with_fds(&response, &raw_fds)
+                        .await?;
+                    // Drop ownership: the SCM_RIGHTS send duplicated the fd
+                    // into the receiver's table; the broker's copy is the
+                    // OwnedFd in `fds` and will close on scope exit, which is
+                    // the intended lifecycle.
+                    drop(fds);
+                    Ok(())
+                }
+            }
+            #[cfg(feature = "layer1-bootstrap")]
+            {
+                let _ = fds; // layer1-bootstrap dispatch never returns fds
+                connection.send_json_frame(&response).await
+            }
+        }
+        RequestOutcome::Silence => Ok(()),
+    }
+}
+
+/// What the synchronous half of one request decided the caller is owed.
+enum RequestOutcome {
+    /// Write this response frame back to the caller.
+    Reply(BrokerResponse, Vec<OwnedFd>),
+    /// Close without a frame: the caller is owed no response at all.
+    Silence,
+}
+
+/// The synchronous half of one request: everything between the decoded frame
+/// and the response.
+///
+/// These are the steps with no async form - the per-request bundle reload,
+/// the handlers' subprocess and filesystem work, the audit append - so they
+/// run on the dispatch pool, whose workers bound the work and whose queue
+/// bounds the waiters, rather than on a reactor worker or a thread per call.
+fn answer_request(
+    envelope: RequestEnvelope,
+    request_fds: Vec<OwnedFd>,
+    peer_uid: u32,
+    peer_gid: u32,
+    peer_pid: i32,
+    config: &ServerConfig,
+    audit_log: &AuditLog,
+    ipc_rate_limiter: &Arc<Mutex<IpcRateLimiter>>,
+) -> io::Result<RequestOutcome> {
+    #[cfg(feature = "layer1-bootstrap")]
+    let _ = &request_fds; // the bootstrap wire carries no request descriptors
+    // Load the bundle resolver from the configured `bundle_path` for every
+    // request. The broker is socket-activated but can remain alive across
+    // `nixos-rebuild switch`; treating the bundle as process-lifetime
+    // immutable made already-running brokers dispatch stale runner intents
+    // after a switch. Per-request reload keeps broker authority aligned with
+    // the current on-disk bundle while preserving fail-closed tamper
+    // handling.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    let (resolver, bundle_tamper) = match try_load_resolver(&config.bundle_path) {
+        BundleSlot::Loaded(resolver) => (Some(resolver), None),
+        BundleSlot::Unavailable => (None, None),
+        BundleSlot::Tampered { path, reason } => (None, Some((path, reason))),
     };
     let request = envelope.request;
     let effective_uid = if config.test_mode {
@@ -958,14 +1232,12 @@ fn handle_connection(
             opaque_target_id,
             "closed",
         );
-        send_json_frame(fd.as_raw_fd(), &error.into_response())?;
-        return Ok(());
+        return Ok(RequestOutcome::Reply(error.into_response(), Vec::new()));
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
     if config.profile == BrokerProfile::Guest {
         if let Err(error) = validate_guest_process_binding(&request) {
-            send_json_frame(fd.as_raw_fd(), &error.into_response())?;
-            return Ok(());
+            return Ok(RequestOutcome::Reply(error.into_response(), Vec::new()));
         }
     }
     let (rate_role, rate_operation) = if effective_uid == config.d2bd_uid {
@@ -1000,9 +1272,12 @@ fn handle_connection(
             tracing::error!(error = ?error, "broker rate-limit audit failed");
         }
         if effective_uid == config.d2bd_uid {
-            send_json_frame(fd.as_raw_fd(), &BrokerError::IpcRateLimited.into_response())?;
+            return Ok(RequestOutcome::Reply(
+                BrokerError::IpcRateLimited.into_response(),
+                Vec::new(),
+            ));
         }
-        return Ok(());
+        return Ok(RequestOutcome::Silence);
     }
     if effective_uid != config.d2bd_uid {
         if let Err(error) = write_refusal_audit_bounded(
@@ -1017,11 +1292,10 @@ fn handle_connection(
         ) {
             tracing::error!(error = ?error, "broker peer-refusal audit failed");
         }
-        send_json_frame(
-            fd.as_raw_fd(),
-            &BrokerError::PeerCredentialRefused { operation }.into_response(),
-        )?;
-        return Ok(());
+        return Ok(RequestOutcome::Reply(
+            BrokerError::PeerCredentialRefused { operation }.into_response(),
+            Vec::new(),
+        ));
     }
 
     if let Err(error) = validate_broker_request(&request) {
@@ -1044,7 +1318,7 @@ fn handle_connection(
             peer_gid,
             &envelope.caller_role,
             &audit_context,
-            resolver.map(std::sync::Arc::as_ref),
+            resolver.as_deref(),
             operation,
             opaque_target_id,
         ) {
@@ -1062,8 +1336,7 @@ fn handle_connection(
         ) {
             tracing::error!(error = ?audit_error, "broker validation error audit failed");
         }
-        send_json_frame(fd.as_raw_fd(), &error.into_response())?;
-        return Ok(());
+        return Ok(RequestOutcome::Reply(error.into_response(), Vec::new()));
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
     let audit_join = envelope.audit_join.as_ref();
@@ -1088,7 +1361,7 @@ fn handle_connection(
             &audit_context,
             config,
             audit_log,
-            resolver,
+            resolver.as_ref(),
             request_fds,
         )
     };
@@ -1114,7 +1387,7 @@ fn handle_connection(
                 peer_gid,
                 &envelope.caller_role,
                 &audit_context,
-                resolver.map(std::sync::Arc::as_ref),
+                resolver.as_deref(),
                 operation,
                 opaque_target_id,
             ) {
@@ -1136,28 +1409,8 @@ fn handle_connection(
         }
     };
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    {
-        if fds.is_empty() {
-            send_json_frame(fd.as_raw_fd(), &response)?;
-        } else {
-            let raw_fds: Vec<i32> = fds.iter().map(|f| f.as_raw_fd()).collect();
-            send_json_frame_with_fds(fd.as_raw_fd(), &response, &raw_fds)?;
-            // Drop ownership: the SCM_RIGHTS send duplicated the fd
-            // into the receiver's table; the broker's copy is the
-            // OwnedFd in `fds` and will close on scope exit, which is
-            // the intended lifecycle.
-            drop(fds);
-        }
-    }
-    #[cfg(feature = "layer1-bootstrap")]
-    {
-        let _ = fds; // layer1-bootstrap dispatch never returns fds
-        send_json_frame(fd.as_raw_fd(), &response)?;
-    }
-    Ok(())
+    Ok(RequestOutcome::Reply(response, fds))
 }
-
 fn write_refusal_audit_bounded(
     audit_log: &AuditLog,
     audit_class: AuditWriteClass,
@@ -2140,9 +2393,6 @@ fn dispatch_request(
                 .map_err(|err| BrokerError::Protocol(err.to_string()))?;
             Ok(hello_ok_response(_config.profile))
         }
-        BrokerRequest::ValidateBundle { path } => {
-            handle_validate_bundle(&path, caller_uid, caller_gid, audit_log)
-        }
         BrokerRequest::ExportBrokerAudit { since, filter } => handle_export_broker_audit(
             since.as_deref(),
             filter.as_deref(),
@@ -2166,10 +2416,6 @@ fn dispatch_request(
         BrokerRequest::ApplySysctl { .. } => Err(BrokerError::Unimplemented {
             operation: "ApplySysctl",
             target_wave: "W3",
-        }),
-        BrokerRequest::BindUnixSocket { .. } => Err(BrokerError::Unimplemented {
-            operation: "BindUnixSocket",
-            target_wave: "W5",
         }),
         BrokerRequest::CreateOrReconcileUsersGroups { .. } => Err(BrokerError::Unimplemented {
             operation: "CreateOrReconcileUsersGroups",
@@ -2223,10 +2469,6 @@ fn dispatch_request(
             operation: "OpenVhostNet",
             target_wave: "W3",
         }),
-        BrokerRequest::PauseBroker { .. } => Err(BrokerError::Unimplemented {
-            operation: "PauseBroker",
-            target_wave: "W4",
-        }),
         BrokerRequest::PrepareRuntimeDir { .. } => Err(BrokerError::Unimplemented {
             operation: "PrepareRuntimeDir",
             target_wave: "W3",
@@ -2247,10 +2489,6 @@ fn dispatch_request(
             operation: "ReadSecretById",
             target_wave: "W8",
         }),
-        BrokerRequest::ResumeBroker { .. } => Err(BrokerError::Unimplemented {
-            operation: "ResumeBroker",
-            target_wave: "W4",
-        }),
         BrokerRequest::RotateSecretById { .. } => Err(BrokerError::Unimplemented {
             operation: "RotateSecretById",
             target_wave: "W8",
@@ -2258,10 +2496,6 @@ fn dispatch_request(
         BrokerRequest::SetBridgePortFlags { .. } => Err(BrokerError::Unimplemented {
             operation: "SetBridgePortFlags",
             target_wave: "W3",
-        }),
-        BrokerRequest::SetSocketAcl { .. } => Err(BrokerError::Unimplemented {
-            operation: "SetSocketAcl",
-            target_wave: "W5",
         }),
         BrokerRequest::SetupMountNamespace { .. } => Err(BrokerError::Unimplemented {
             operation: "SetupMountNamespace",
@@ -2384,10 +2618,7 @@ enum LaunchPosture {
 impl LaunchPosture {
     /// Resolve the posture ONCE, from the trusted intent, at the point the
     /// dispatch arm resolves that intent.
-    fn resolve(
-        role: RunnerRole,
-        intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
-    ) -> Self {
+    fn resolve(role: RunnerRole, intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent) -> Self {
         match (role, intent_is_serving_worker_template(intent)) {
             (RunnerRole::ProviderController, true) => Self::ServingWorker,
             (RunnerRole::ProviderController, false) => Self::ControllerEscrow,
@@ -2595,7 +2826,9 @@ fn dispatch_request_with_request_fds(
     let backend = LiveDispatchBackend {
         daemon_uid: config.d2bd_uid,
         daemon_gid: config.d2bd_gid,
+        profile: config.profile,
         state_dir: config.state_dir.clone(),
+        forward_socket_path: config.forward_socket_path.clone(),
         // The tree the broker's own private socket lives in: the bound every
         // Device-owned worker's per-Guest socket directory is derived under.
         runtime_root: config
@@ -2710,73 +2943,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(hello_ok_response(config.profile)))
-        }
-        RealBrokerRequest::ValidateBundle => {
-            // The broker validates the server-configured bundle path.
-            // The daemon never names a bundle path on the wire (security:
-            // prevents path-traversal + symlink-confusion).
-            // ServerConfig.bundle_path defaults to
-            // `/var/lib/d2b/current-bundle/manifest.json` and is
-            // operator-overridable via the `--bundle-path` flag (or the
-            // NixOS module's `d2b.site.bundle.currentManifest`
-            // option once that lands).
-            manifest_api::validate_bundle(&config.bundle_path)
-                .map_err(BrokerError::ValidateBundle)?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "ValidateBundle",
-                "bundle",
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                "bundle",
-                "broker",
-                None,
-                OperationFields::ValidateBundle {},
-            )?;
-            Ok(DispatchResult::no_fds(validate_bundle_ok_response()))
-        }
-        RealBrokerRequest::ResourceActivationAudit(req) => {
-            let op_fields = OperationFields::ResourceActivationAudit {};
-            if !caller_role_is_admin(&caller_role) {
-                write_decision_op_record!(
-                    audit_log,
-                    bundle_metadata,
-                    "ResourceActivationAudit",
-                    req.audit_join.operation_identity.as_str(),
-                    caller_uid,
-                    caller_gid,
-                    &caller_role,
-                    "resource-bundle",
-                    req.audit_join.zone_id.as_str(),
-                    None,
-                    "denied-refused",
-                    Some("audit-requires-admin"),
-                    op_fields,
-                )?;
-                return Err(BrokerError::AuditRequiresAdmin);
-            }
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "ResourceActivationAudit",
-                req.audit_join.operation_identity.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                "resource-bundle",
-                req.audit_join.zone_id.as_str(),
-                None,
-                op_fields,
-            )?;
-            Ok(DispatchResult::no_fds(
-                BrokerResponse::ResourceActivationAudit(
-                    d2b_contracts_broker::broker_wire::ResourceActivationAuditResponse {
-                        recorded: true,
-                    },
-                ),
-            ))
         }
         RealBrokerRequest::ExportBrokerAudit(req) => {
             // Real wire filter is a typed BrokerAuditFilter struct;
@@ -4671,14 +4837,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             })?;
             Ok(DispatchResult::no_fds(ack_response("DeletePersistentTap")))
         }
-        RealBrokerRequest::BindUnixSocket(_) => Err(BrokerError::Unimplemented {
-            operation: "BindUnixSocket",
-            target_wave: "W5",
-        }),
-        RealBrokerRequest::CreateOrReconcileUsersGroups(_) => Err(BrokerError::Unimplemented {
-            operation: "CreateOrReconcileUsersGroups",
-            target_wave: "W3",
-        }),
         RealBrokerRequest::CreatePersistentTap(req) => {
             let resolver = require_resolver(resolver)?;
             let exec = live_exec(config);
@@ -4809,14 +4967,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::no_fds(ack_response("DelegateCgroupV2")))
         }
-        RealBrokerRequest::InjectSecretById(_) => Err(BrokerError::Unimplemented {
-            operation: "InjectSecretById",
-            target_wave: "W8",
-        }),
-        RealBrokerRequest::LaunchMinijailChild(_) => Err(BrokerError::Unimplemented {
-            operation: "LaunchMinijailChild",
-            target_wave: "W5",
-        }),
         RealBrokerRequest::ModprobeIfAllowed(req) => {
             let resolver = require_resolver(resolver)?;
             let exec = live_exec(config);
@@ -4971,14 +5121,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 outcome.fd,
             ))
         }
-        RealBrokerRequest::SecurityKeyOpenDevice(_) => Err(BrokerError::Unimplemented {
-            operation: "SecurityKeyOpenDevice",
-            target_wave: "security-key-broker",
-        }),
-        RealBrokerRequest::SecurityKeyApplyUdevRules(_) => Err(BrokerError::Unimplemented {
-            operation: "SecurityKeyApplyUdevRules",
-            target_wave: "security-key-broker",
-        }),
         RealBrokerRequest::OpenKvm(req) => {
             let resolver = require_resolver(resolver)?;
             let exec = live_exec(config);
@@ -5221,10 +5363,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 outcome.fd,
             ))
         }
-        RealBrokerRequest::PauseBroker => Err(BrokerError::Unimplemented {
-            operation: "PauseBroker",
-            target_wave: "W4",
-        }),
         RealBrokerRequest::PollChildReaped => {
             let notifications = drain_child_reap_buffer();
             audit_log
@@ -5286,33 +5424,33 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             // on the legacy manifest and refuse a zone-native subject the
             // verified storage contract does name (the same row the
             // spawn-time swtpm-dir fence and the volume-local controller use).
-            let prepared =
-                match crate::ops::state_dir::live_prepare_state_dir(&exec, resolver, &req, audit_log)
-                {
-                    Ok(prepared) => prepared,
-                    Err(crate::ops::state_dir::PrepareStateDirError::SwtpmDirHardening(error)) => {
-                        write_decision_op_record!(
-                            audit_log,
-                            bundle_metadata,
-                            "PrepareSwtpmDir",
-                            req.vm_id.as_str(),
-                            caller_uid,
-                            caller_gid,
-                            &caller_role,
-                            req.vm_id.as_str(),
-                            req.vm_id.as_str(),
-                            tracing_span_id_str(req.tracing_span_id.as_ref()),
-                            "denied-refused",
-                            Some(error.reason),
-                            OperationFields::PrepareSwtpmDir(error.audit.clone()),
-                        )?;
-                        return Err(BrokerError::SwtpmDirHardening {
-                            audit: error.audit,
-                            reason: error.reason,
-                        });
-                    }
-                    Err(error) => return Err(BrokerError::LiveHandler(error.to_string())),
-                };
+            let prepared = match crate::ops::state_dir::live_prepare_state_dir(
+                &exec, resolver, &req, audit_log,
+            ) {
+                Ok(prepared) => prepared,
+                Err(crate::ops::state_dir::PrepareStateDirError::SwtpmDirHardening(error)) => {
+                    write_decision_op_record!(
+                        audit_log,
+                        bundle_metadata,
+                        "PrepareSwtpmDir",
+                        req.vm_id.as_str(),
+                        caller_uid,
+                        caller_gid,
+                        &caller_role,
+                        req.vm_id.as_str(),
+                        req.vm_id.as_str(),
+                        tracing_span_id_str(req.tracing_span_id.as_ref()),
+                        "denied-refused",
+                        Some(error.reason),
+                        OperationFields::PrepareSwtpmDir(error.audit.clone()),
+                    )?;
+                    return Err(BrokerError::SwtpmDirHardening {
+                        audit: error.audit,
+                        reason: error.reason,
+                    });
+                }
+                Err(error) => return Err(BrokerError::LiveHandler(error.to_string())),
+            };
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -5750,14 +5888,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 response,
             )))
         }
-        RealBrokerRequest::ReadSecretById(_) => Err(BrokerError::Unimplemented {
-            operation: "ReadSecretById",
-            target_wave: "W8",
-        }),
-        RealBrokerRequest::ResumeBroker => Err(BrokerError::Unimplemented {
-            operation: "ResumeBroker",
-            target_wave: "W4",
-        }),
         RealBrokerRequest::RunHostInstall(req) => {
             let response = backend.run_host_install(&req, resolver.map(std::sync::Arc::as_ref))?;
             write_success_op_record!(
@@ -6085,10 +6215,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 },
             )))
         }
-        RealBrokerRequest::RotateSecretById(_) => Err(BrokerError::Unimplemented {
-            operation: "RotateSecretById",
-            target_wave: "W8",
-        }),
         RealBrokerRequest::SetBridgePortFlags(req) => {
             let resolver = require_resolver_ref(resolver.map(|resolver| resolver.as_ref()))?;
             let response = backend.set_bridge_port_flags(&req, resolver)?;
@@ -6118,10 +6244,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 response,
             )))
         }
-        RealBrokerRequest::SetSocketAcl(_) => Err(BrokerError::Unimplemented {
-            operation: "SetSocketAcl",
-            target_wave: "W5",
-        }),
         RealBrokerRequest::SetupMountNamespace(req) => {
             let resolver = require_resolver(resolver)?;
             let vm_name = lookup_vm_name(resolver, &req.vm_id);
@@ -6476,14 +6598,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 "BindMountFromHardlinkFarm",
             )))
         }
-        RealBrokerRequest::OwnershipMatrixCheck(_) => Err(BrokerError::Unimplemented {
-            operation: "OwnershipMatrixCheck",
-            target_wave: "P2",
-        }),
-        RealBrokerRequest::SshHostKeyPreflight(_) => Err(BrokerError::Unimplemented {
-            operation: "SshHostKeyPreflight",
-            target_wave: "P2",
-        }),
         RealBrokerRequest::UsbipExplicitBind(req) => {
             // Explicit attach: bind a present sysfs busid to a USB-capable VM without
             // a bundle allowlist. The daemon has already performed:
@@ -6810,6 +6924,23 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(ack_response("DiskInit")))
+        }
+        // Every remaining variant is a reserved stub. One table arm serves
+        // them all, so the arm count follows the committed dispositions rather
+        // than the variant list, and the refusal names the deferral marker the
+        // committed row carries. A variant that is neither served nor reserved
+        // is a bug in this match, not a silent success.
+        request => {
+            let operation = request.op_name();
+            match crate::catalog::stub_target(operation) {
+                Some(stub) => Err(BrokerError::Unimplemented {
+                    operation,
+                    target_wave: stub.as_str(),
+                }),
+                None => Err(BrokerError::Protocol(format!(
+                    "uncommitted dispatch arm for {operation}"
+                ))),
+            }
         }
     }
 }
@@ -8050,6 +8181,14 @@ fn store_sync_error_kind(stage: crate::ops::store_sync_audit::ErrorStage) -> &'s
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 trait DispatchBackend {
+    /// The committed-operation envelope this process serves.
+    ///
+    /// The broker holds the committed rows; the handler code lives in the
+    /// declaring crate's process. Implementations either serve the rows they
+    /// hold handlers for or refuse them, so a registered handler is never
+    /// authority and an unwired operation stays unreachable.
+    fn operation_envelope(&self) -> &crate::envelope::BrokerEnvelope;
+
     fn apply_nftables(
         &self,
         resolver: &BundleResolver,
@@ -8261,11 +8400,15 @@ trait DispatchBackend {
 struct LiveDispatchBackend {
     daemon_uid: u32,
     daemon_gid: u32,
+    profile: BrokerProfile,
     state_dir: PathBuf,
     /// Broker runtime root (the private socket's directory): the tree a
     /// Device-owned worker's per-Guest socket directory must strictly live
     /// under before the broker opens it to the worker's principal.
     runtime_root: PathBuf,
+    /// The declaring process that serves family-owned operation handlers, as
+    /// the server resolved it from its configuration.
+    forward_socket_path: Option<PathBuf>,
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -8414,6 +8557,12 @@ fn prepare_runner_preopened_fds(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 impl DispatchBackend for LiveDispatchBackend {
+    fn operation_envelope(&self) -> &crate::envelope::BrokerEnvelope {
+        // The forward socket is fixed at process start, so the cell's runtime
+        // input cannot change after the first call.
+        live_operation_envelope(self.profile, self.forward_socket_path.as_deref())
+    }
+
     fn apply_nftables(
         &self,
         resolver: &BundleResolver,
@@ -8975,6 +9124,37 @@ impl DispatchBackend for LiveDispatchBackend {
     }
 }
 
+/// The committed-operation envelope of this broker instance.
+///
+/// The rows are the committed catalog; the handlers live in the declaring
+/// crates' processes, so the dispatch step forwards to the peer that serves
+/// them. The envelope is built once per process so an invocation identifier
+/// is unique across the instance's lifetime.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn live_operation_envelope(
+    profile: BrokerProfile,
+    forward_socket_path: Option<&Path>,
+) -> &'static crate::envelope::BrokerEnvelope {
+    static ENVELOPE: OnceLock<crate::envelope::BrokerEnvelope> = OnceLock::new();
+    ENVELOPE.get_or_init(|| {
+        let profile = match profile {
+            BrokerProfile::Host => crate::catalog::BrokerProfileId::Host,
+            BrokerProfile::Guest => crate::catalog::BrokerProfileId::Guest,
+        };
+        let forwarder = match forward_socket_path {
+            Some(path) => crate::envelope::ForwardingDispatcher::new(
+                crate::forwarding::SocketForwarder::new(path),
+            ),
+            // No peer is configured: every forwarded operation refuses rather
+            // than being served by a process that does not declare it.
+            None => crate::envelope::ForwardingDispatcher::default(),
+        };
+        crate::envelope::BrokerEnvelope::over(profile, Box::new(forwarder))
+            .commit_forwarded()
+            .build()
+    })
+}
+
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn require_resolver_ref(resolver: Option<&BundleResolver>) -> Result<&BundleResolver, BrokerError> {
     resolver.ok_or(BrokerError::BundleResolverUnavailable)
@@ -9112,9 +9292,7 @@ pub fn dispatch_run_host_install_response(
 #[cfg(not(feature = "layer1-bootstrap"))]
 pub fn probe_bundle_load_response(bundle_path: &std::path::Path) -> BrokerResponse {
     match try_load_resolver(bundle_path) {
-        BundleSlot::Loaded(_) => BrokerResponse::ValidateBundle(
-            d2b_contracts_broker::broker_wire::ValidateBundleResponse { valid: true },
-        ),
+        BundleSlot::Loaded(_) => ack_response("BundleLoad"),
         BundleSlot::Unavailable => BrokerError::BundleResolverUnavailable.into_response(),
         BundleSlot::Tampered { path, reason } => {
             BrokerError::BundleTampered { path, reason }.into_response()
@@ -9132,9 +9310,7 @@ pub fn probe_bundle_load_response_with_policy(
     policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
 ) -> BrokerResponse {
     match try_load_resolver_with_policy(bundle_path, policy) {
-        BundleSlot::Loaded(_) => BrokerResponse::ValidateBundle(
-            d2b_contracts_broker::broker_wire::ValidateBundleResponse { valid: true },
-        ),
+        BundleSlot::Loaded(_) => ack_response("BundleLoad"),
         BundleSlot::Unavailable => BrokerError::BundleResolverUnavailable.into_response(),
         BundleSlot::Tampered { path, reason } => {
             BrokerError::BundleTampered { path, reason }.into_response()
@@ -10587,9 +10763,7 @@ fn runner_role_for_process_role(
 /// SINGLE EVALUATION POINT for the alias: spawn validation and observation
 /// both read it instead of re-listing the match.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn wire_role_id_for_intent(
-    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
-) -> &str {
+fn wire_role_id_for_intent(intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent) -> &str {
     match intent.role {
         d2b_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
         _ => intent.role_id.as_str(),
@@ -11182,9 +11356,7 @@ fn validate_typed_process_metadata(
             // (it is derived from the attachment tuple at reconcile time),
             // so the fence pins the owner type; the template, execution
             // target, and runtime-scope fences pin the rest.
-            if !owner_ref.is_some_and(|owner| {
-                owner.resource_type().as_str() == "VolumeBinding"
-            }) {
+            if !owner_ref.is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding") {
                 return Err(BrokerError::SpawnRunnerIntentMismatch {
                     field: "owner_ref",
                     requested: "invalid".to_owned(),
@@ -12270,36 +12442,6 @@ fn usbip_lock_path_for_busid(bus_id: &str) -> PathBuf {
     PathBuf::from(format!("/run/d2b/locks/usbip/{bus_id}"))
 }
 
-// Route ValidateBundle through `d2b_core::manifest::validate_bundle`,
-// which parses the configured bundle path as a v0.4 manifest. The
-// bootstrap path keeps its own loose "file exists" check in
-// `crate::bootstrap::manifest` because the legacy probe-* test harnesses
-// pre-date the v0.4 schema.
-#[cfg(not(feature = "layer1-bootstrap"))]
-use d2b_core::manifest as manifest_api;
-
-#[cfg(feature = "layer1-bootstrap")]
-fn handle_validate_bundle(
-    path: &Path,
-    caller_uid: u32,
-    caller_gid: u32,
-    audit_log: &AuditLog,
-) -> Result<BrokerResponse, BrokerError> {
-    crate::bootstrap::manifest::validate_bundle(path)
-        .map_err(|err| BrokerError::ValidateBundle(err.to_string()))?;
-    audit_log
-        .write_entry_with_caller_ids(
-            "ValidateBundle",
-            caller_uid,
-            caller_gid,
-            "callable-read-only",
-            "bundle",
-            "ok",
-        )
-        .map_err(|err| BrokerError::Protocol(err.to_string()))?;
-    Ok(validate_bundle_ok_response())
-}
-
 #[cfg(feature = "layer1-bootstrap")]
 fn handle_export_broker_audit(
     since: Option<&str>,
@@ -12702,17 +12844,6 @@ impl BrokerError {
                     runner_id,
                     "Broker.NoPidfd",
                     &format!("no pidfd registered for runner `{runner_id}`"),
-                )?;
-            }
-            Self::ValidateBundle(message) => {
-                audit_log.write_error_entry_with_caller_ids(
-                    operation,
-                    caller_uid,
-                    caller_gid,
-                    "bundle-validation-failed",
-                    opaque_target_id,
-                    "Broker.ValidateBundleFailed",
-                    message,
                 )?;
             }
             Self::BundleResolverUnavailable => {
@@ -13189,13 +13320,6 @@ impl BrokerError {
                 &format!("no pidfd registered for runner `{runner_id}`"),
                 "Open or spawn the runner first so the broker can retain a pidfd for signaling.",
             ),
-            Self::ValidateBundle(message) => error_response(
-                "Broker.ValidateBundleFailed",
-                "ValidateBundle",
-                None,
-                &message,
-                "Fix the bundle inputs and retry via d2b_core::manifest::validate_bundle.",
-            ),
             Self::BundleResolverUnavailable => error_response(
                 "Broker.BundleResolverUnavailable",
                 "BundleResolver",
@@ -13446,19 +13570,6 @@ fn hello_ok_response(profile: BrokerProfile) -> BrokerResponse {
     }
 }
 
-fn validate_bundle_ok_response() -> BrokerResponse {
-    #[cfg(feature = "layer1-bootstrap")]
-    {
-        BrokerResponse::ValidateBundleOk { valid: true }
-    }
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    {
-        BrokerResponse::ValidateBundle(d2b_contracts_broker::broker_wire::ValidateBundleResponse {
-            valid: true,
-        })
-    }
-}
-
 #[cfg(feature = "layer1-bootstrap")]
 fn export_broker_audit_ok_response(lines: Vec<String>) -> BrokerResponse {
     BrokerResponse::ExportBrokerAuditOk { lines }
@@ -13552,29 +13663,19 @@ fn redact_public_detail(detail: &str) -> String {
     d2b_contracts_resource::v3::canonical_digest("d2b:broker-public-error:v1", detail.as_bytes())
 }
 
-/// Start a background tokio runtime that listens for SIGCHLD and reaps
-/// broker-spawned children via `waitid(P_PIDFD, WEXITED|WNOHANG)`.
+/// Start the background SIGCHLD reaper on the broker's own reactor.
 ///
-/// The runtime runs in a dedicated OS thread so the main synchronous
-/// accept loop is not blocked. The pidfd registry Mutex is safe to lock
-/// from a tokio task (no signal-context access; no async Mutex needed).
-///
-/// Returns the `tokio::runtime::Runtime` handle - must stay alive for
-/// the duration of the broker process (bind it to a local in `run_server`).
+/// The loop waits on async signals, so it shares the reactor the accept loop
+/// runs on rather than owning a runtime of its own. The pidfd registry Mutex
+/// is safe to lock from a tokio task: it is never held across an await, and
+/// the reaper's `waitid` calls are non-blocking (`WNOHANG`).
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
+fn start_sigchld_reaper(runtime: &tokio::runtime::Runtime, audit_log: Arc<AuditLog>) {
     // Publish the audit handle so the targeted post-spawn reap can
     // write the same forensic ChildReaped record the SIGCHLD loop does.
     let _ = broker_audit_log_handle().set(Arc::clone(&audit_log));
 
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .thread_name("d2b-broker-reaper")
-        .enable_all()
-        .build()
-        .expect("broker sigchld reaper tokio runtime");
-
-    let sigchld = rt.block_on(async {
+    let sigchld = runtime.block_on(async {
         use tokio::signal::unix::{SignalKind, signal};
 
         signal(SignalKind::child())
@@ -13587,11 +13688,11 @@ fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
                 error = %err,
                 "broker: failed to install SIGCHLD handler; pidfd reap loop disabled"
             );
-            return rt;
+            return;
         }
     };
 
-    rt.spawn(async move {
+    runtime.spawn(async move {
         loop {
             if sigchld.recv().await.is_none() {
                 break;
@@ -13599,8 +13700,6 @@ fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
             reap_all_pidfds(audit_log.as_ref());
         }
     });
-
-    rt
 }
 
 /// Iterate the pidfd registry and call
@@ -14529,6 +14628,185 @@ mod tests {
     }
 
     #[test]
+    fn every_wire_variant_has_a_dispatch_arm_or_a_recorded_deferral() {
+        // The real-wire dispatch match serves one explicit arm per operation it
+        // implements and defers the committed reserved stubs to the fallback
+        // arm. Retiring a family arm is the point of the per-variant shrink, so
+        // an arm that disappears must show up as a deliberate state rather
+        // than as a variant that silently falls through to a refusal: a
+        // committed deferral marker.
+        //
+        // The sets are pinned because the gate has to fail on a *new* state, and
+        // a source-scanning test would fail on a comment. An arm moved out of the
+        // match therefore has to move one of these names with it - which is
+        // exactly the moment the retirement has to be decided.
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        const DISPATCHED: &[&str] = &[
+            "ApplyHostGenerationHandoff",
+            "ApplyNftables",
+            "ApplyNftablesProjection",
+            "ApplyNmUnmanaged",
+            "ApplyRoute",
+            "ApplySysctl",
+            "BindMountFromHardlinkFarm",
+            "CgroupKill",
+            "CheckSystemdUserManager",
+            "ConsumeLifecycleLease",
+            "CreateBridge",
+            "CreatePersistentTap",
+            "CreateTapFd",
+            "DelegateCgroupV2",
+            "DeleteBridge",
+            "DeletePersistentTap",
+            "DeregisterRunnerPidfd",
+            "DiskInit",
+            "ExportBrokerAudit",
+            "Hello",
+            "MigrateLegacySwtpmState",
+            "ModprobeIfAllowed",
+            "ObserveRunner",
+            "ObserveSystemdUnit",
+            "OpenCgroupDir",
+            "OpenDevice",
+            "OpenFuse",
+            "OpenHidrawSecurityKey",
+            "OpenKvm",
+            "OpenPeerPidfdFromAcceptedSocket",
+            "OpenPidfd",
+            "OpenSystemdUnitPidfd",
+            "OpenVhostNet",
+            "PipeWireAudio",
+            "PollChildReaped",
+            "PrepareRuntimeDir",
+            "PrepareStateDir",
+            "PrepareStoreView",
+            "QemuMediaAttach",
+            "QemuMediaBoot",
+            "QemuMediaDetach",
+            "QemuMediaEnroll",
+            "QemuMediaQueryStatus",
+            "QemuMediaQuit",
+            "QemuMediaRefreshRegistry",
+            "QemuMediaSystemPowerdown",
+            "ReconcileStorageScope",
+            "RunActivation",
+            "RunGc",
+            "RunHostInstall",
+            "RunHostKeyTrust",
+            "RunKeysRotate",
+            "RunMigrate",
+            "RunRotateKnownHost",
+            "SeedDnsmasqLease",
+            "SetBridgePortFlags",
+            "SetupMountNamespace",
+            "SignalRunner",
+            "SpawnRunner",
+            "StartSystemdUnit",
+            "StopSystemdUnit",
+            "StoreSync",
+            "StoreVerify",
+            "UpdateHostsFile",
+            "UsbipBind",
+            "UsbipBindFirewallRule",
+            "UsbipExplicitBind",
+            "UsbipExplicitFirewallRule",
+            "UsbipProxyReconcile",
+            "UsbipUnbind",
+            "ValidateLockSpec",
+        ];
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        {
+            let dispatched: BTreeSet<&str> = DISPATCHED.iter().copied().collect();
+            assert_eq!(
+                dispatched.len(),
+                DISPATCHED.len(),
+                "the arm set names one operation once"
+            );
+            let wire: BTreeSet<&str> = crate::catalog::WIRE_VARIANTS.iter().copied().collect();
+            for name in &dispatched {
+                assert!(
+                    wire.contains(name),
+                    "{name}: an arm serves a variant the committed wire enum does not declare"
+                );
+            }
+            let mut undecided: Vec<&str> = Vec::new();
+            for name in crate::catalog::WIRE_VARIANTS {
+                if dispatched.contains(name) {
+                    assert_eq!(
+                        crate::catalog::stub_target(name),
+                        None,
+                        "{name}: an arm serves it, so it is not a reserved stub"
+                    );
+                    continue;
+                }
+                if crate::catalog::stub_target(name).is_some() {
+                    continue;
+                }
+                undecided.push(name);
+            }
+            assert!(
+                undecided.is_empty(),
+                "variants with no dispatch arm and no committed deferral: {undecided:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_served_operation_names_the_audit_shape_its_records_use() {
+        // A variant dispatched by hand carries its own typed audit fields, and
+        // the fallback arm refuses the reserved stubs. A served operation whose
+        // row declares no audit shape therefore has no record shape on either
+        // path - a row that can be dispatched but cannot be audited. The
+        // reserved stubs never serve a request, so no record shape is expected
+        // of them.
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        {
+            // Served, but their records carry no typed field shape yet. Pinned
+            // so the gap cannot grow while the audit shapes are brought up to
+            // the served set.
+            const UNAUDITED: &[&str] = &["PollChildReaped", "QemuMediaQueryStatus"];
+            for name in crate::catalog::WIRE_VARIANTS {
+                if crate::catalog::stub_target(name).is_some() || UNAUDITED.contains(name)
+                {
+                    continue;
+                }
+                let row = crate::catalog::BrokerOperationRow::find(name)
+                    .unwrap_or_else(|| panic!("{name}: a wire variant with no committed row"));
+                assert!(
+                    !row.audit_fields.is_empty(),
+                    "{name}: dispatched without an audit shape"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_committed_stub_carries_its_deferral_marker_rather_than_a_dispatch() {
+        // A row the committed catalog still marks as a reserved stub is refused
+        // by name through the fallback arm; the mirror image is a row that is
+        // neither stubbed nor dispatchable, which would be a row the broker
+        // commits and then cannot reach at all.
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        {
+            let mut both_stubbed_and_dispatchable: Vec<&str> = Vec::new();
+            for name in crate::catalog::WIRE_VARIANTS {
+                let Some(_marker) = crate::catalog::stub_target(name) else {
+                    continue;
+                };
+                if crate::catalog::BrokerOperationRow::find(name)
+                    .is_some_and(|row| row.disposition == "promoted-live")
+                {
+                    both_stubbed_and_dispatchable.push(name);
+                }
+            }
+            assert!(
+                both_stubbed_and_dispatchable.is_empty(),
+                "stubbed rows the catalog also promotes: {both_stubbed_and_dispatchable:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_command_rejects_removed_realm_metadata_flags() {
         for flag in ["--realm-controllers-path", "--realm-identity-path"] {
             let error = parse_command([
@@ -14547,6 +14825,27 @@ mod tests {
                 "unexpected parser error for {flag}: {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn parse_command_binds_the_forward_socket_flag() {
+        // The flag is the one deterministic input: the environment is only a
+        // fallback, and a broker that names no peer must stay fail-closed
+        // rather than picking a path of its own.
+        let mode = parse_command([
+            "host".to_owned(),
+            "--test-mode".to_owned(),
+            "--forward-socket".to_owned(),
+            "/run/d2b/d2bd-forward.sock".to_owned(),
+        ])
+        .expect("a host command with a forward socket");
+        let BrokerMode::Host(config) = mode else {
+            panic!("host subcommand must build a host config");
+        };
+        assert_eq!(
+            config.forward_socket_path.as_deref(),
+            Some(Path::new("/run/d2b/d2bd-forward.sock"))
+        );
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -15091,6 +15390,9 @@ mod tests {
             d2bd_uid: 1000,
             d2bd_gid: Gid::current().as_raw(),
             store_sync_export_dir: root.join("observability").join("store-sync"),
+            // No forwarding peer in a broker unit test: the envelope refuses
+            // every forwarded operation, which is the fail-closed default.
+            forward_socket_path: None,
             test_mode: true,
         }
     }
@@ -15868,9 +16170,13 @@ mod tests {
         // The two trees the ticket names are opened to that principal
         // (asserted through the setfacl xattr, skipped when the host has no
         // setfacl binary).
-        if ["/run/current-system/sw/bin/setfacl", "/usr/bin/setfacl", "/bin/setfacl"]
-            .iter()
-            .any(|candidate| Path::new(candidate).exists())
+        if [
+            "/run/current-system/sw/bin/setfacl",
+            "/usr/bin/setfacl",
+            "/bin/setfacl",
+        ]
+        .iter()
+        .any(|candidate| Path::new(candidate).exists())
         {
             for path in [&socket_dir, &served] {
                 let fd = crate::sys::path_safe::open_dir_path_safe(path).expect("open dir");
@@ -16015,7 +16321,13 @@ mod tests {
         assert_eq!(posture, LaunchPosture::Standard);
         assert!(!posture.is_provider_controller());
 
-        let request = typed_runner_request(&intent, RunnerRole::Swtpm, "swtpm-tpm", Some("Device/tpm"), 0);
+        let request = typed_runner_request(
+            &intent,
+            RunnerRole::Swtpm,
+            "swtpm-tpm",
+            Some("Device/tpm"),
+            0,
+        );
         let admitted = admission_posture(&request, &intent, 0).expect("device worker");
         assert_eq!(admitted, LaunchPosture::Standard);
 
@@ -16107,6 +16419,7 @@ mod tests {
     struct FakeDispatchBackend {
         registered_runners: Mutex<std::collections::BTreeSet<String>>,
         usbip_events: Mutex<Vec<FakeUsbipEvent>>,
+        envelope: crate::envelope::BrokerEnvelope,
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -16154,6 +16467,10 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     impl DispatchBackend for FakeDispatchBackend {
+        fn operation_envelope(&self) -> &crate::envelope::BrokerEnvelope {
+            &self.envelope
+        }
+
         fn apply_nftables(
             &self,
             _resolver: &BundleResolver,
@@ -16680,7 +16997,9 @@ mod tests {
     #[test]
     fn prepare_state_dir_dispatch_resolves_the_zone_native_subject_from_the_storage_contract() {
         use d2b_contracts::types::{PathClass, VmId};
-        use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest, PrepareDirRequest};
+        use d2b_contracts_broker::broker_wire::{
+            BrokerCallerRole, BrokerRequest, PrepareDirRequest,
+        };
 
         let root = test_audit_dir("prepare-state-dir-zone-native");
         fs::create_dir_all(&root).expect("create test root");
@@ -16754,11 +17073,8 @@ mod tests {
                 assert_eq!(vm_id, "acceptance-guest");
                 // The record names the directory the worker opens: the state
                 // Volume of the Guest's own TPM Device under the trusted root.
-                let device_uid = crate::ops::device_worker::deterministic_resource_uid(
-                    "work",
-                    "Device",
-                    "tpm0",
-                );
+                let device_uid =
+                    crate::ops::device_worker::deterministic_resource_uid("work", "Device", "tpm0");
                 assert_eq!(
                     base_dir,
                     format!(
@@ -17049,17 +17365,6 @@ mod tests {
                 assert!(response.capabilities.contains(&"Hello".to_owned()));
             }
             other => panic!("expected Hello response, got {other:?}"),
-        }
-
-        let validate_bundle = assert_dispatch(
-            BrokerRequest::ValidateBundle,
-            "ValidateBundle",
-            OperationFields::ValidateBundle {},
-            None,
-        );
-        match validate_bundle.response {
-            BrokerResponse::ValidateBundle(response) => assert!(response.valid),
-            other => panic!("expected ValidateBundle response, got {other:?}"),
         }
 
         let export_filter = BrokerAuditFilter {
@@ -19033,14 +19338,28 @@ mod tests {
         let mut config = test_server_config(&root, &root.join("unused-bundle.json"));
         config.test_mode = false;
         config.d2bd_uid = configured_daemon_uid;
-        let log = AuditLog::open(
-            &config.audit_dir,
-            Gid::current().as_raw(),
-            true,
-            config.audit_retention_days,
-        )
-        .expect("open audit log");
+        let log = Arc::new(
+            AuditLog::open(
+                &config.audit_dir,
+                Gid::current().as_raw(),
+                true,
+                config.audit_retention_days,
+            )
+            .expect("open audit log"),
+        );
         let limiter = Arc::new(Mutex::new(IpcRateLimiter::new(64)));
+        // The connection handler reads and writes frames through the reactor
+        // now, so the test drives it the way the server does.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let served = Server {
+            config: Arc::new(config.clone()),
+            audit_log: Arc::clone(&log),
+            dispatches: DispatchPool::new(2),
+            ipc_rate_limiter: Arc::clone(&limiter),
+        };
 
         let requests = vec![
             BrokerRequest::UsbipBind(UsbipBindRequest {
@@ -19089,7 +19408,12 @@ mod tests {
             .expect("socketpair");
             crate::protocol::send_json_frame(client.as_raw_fd(), &envelope)
                 .expect("send broker request");
-            handle_connection(server, &config, &log, None, None, &limiter)
+            runtime
+                .block_on(async {
+                    let connection =
+                        AsyncSeqpacket::from_owned(server).expect("register accepted socket");
+                    handle_connection(connection, &served).await
+                })
                 .expect("handle refused peer");
             let response = crate::protocol::recv_json_frame::<BrokerResponse>(client.as_raw_fd());
             assert!(
@@ -20648,14 +20972,6 @@ mod tests {
                     .to_owned(),
             },
             AuditCase {
-                error: BrokerError::ValidateBundle("bundle digest mismatch".to_owned()),
-                operation: "ValidateBundle",
-                target_id: "bundle".to_owned(),
-                decision: "bundle-validation-failed",
-                error_kind: "Broker.ValidateBundleFailed",
-                error_message: "bundle digest mismatch".to_owned(),
-            },
-            AuditCase {
                 error: BrokerError::Protocol("read request frame failed: unexpected EOF".to_owned()),
                 operation: "RunHostInstall",
                 target_id: "operation".to_owned(),
@@ -20795,7 +21111,13 @@ mod tests {
             fs::create_dir_all(&audit_dir).expect("create reap audit dir");
             let audit_log = AuditLog::open(&audit_dir, Gid::current().as_raw(), true, 0)
                 .expect("open reap audit log");
-            let rt = start_sigchld_reaper(Arc::new(audit_log));
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .thread_name("d2b-broker-test-reaper")
+                .enable_all()
+                .build()
+                .expect("test reaper runtime");
+            start_sigchld_reaper(&rt, Arc::new(audit_log));
             std::thread::sleep(Duration::from_millis(50));
             rt
         }
@@ -21313,5 +21635,129 @@ mod tests {
             assert!(!drained.iter().any(|n| n.runner_id == "overflow-0"));
             assert!(drained.iter().any(|n| n.runner_id == "overflow-256"));
         }
+    }
+
+    /// Two dispatch jobs run at the same time, not one after the other.
+    ///
+    /// Each job blocks until the other has started. A pool that ran one job
+    /// at a time - the shape a single accept thread had, and the shape a lone
+    /// blocking worker would keep - never releases the barrier and the join
+    /// below times out.
+    #[test]
+    fn two_dispatch_jobs_run_at_the_same_time() {
+        let dispatches = DispatchPool::new(2);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let rendezvous = Arc::new(std::sync::Barrier::new(2));
+        let both = runtime.block_on(async {
+            let first = {
+                let rendezvous = Arc::clone(&rendezvous);
+                dispatches.run(move || rendezvous.wait())
+            };
+            let second = {
+                let rendezvous = Arc::clone(&rendezvous);
+                dispatches.run(move || rendezvous.wait())
+            };
+            tokio::time::timeout(Duration::from_secs(10), async move {
+                tokio::join!(first, second)
+            })
+            .await
+        });
+        assert!(
+            both.is_ok(),
+            "two requests must be able to run at once: {both:?}"
+        );
+    }
+
+    /// The broker serves connections concurrently: the accept path never runs
+    /// a request, so a caller that connects and then sends nothing cannot hold
+    /// the next caller's request behind it.
+    ///
+    /// This is the regression the async listener exists for. The synchronous
+    /// server read the first connection's frame inline on its accept thread,
+    /// so the second client's request stayed in the listen backlog, unaccepted,
+    /// until the silent connection closed - and the read below timed out.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn a_silent_connection_does_not_hold_the_next_request() {
+        use d2b_contracts_broker::broker_wire::{
+            BrokerCallerRole, BrokerRequestEnvelope, HelloRequest,
+        };
+        use nix::unistd::Uid;
+
+        let root = test_audit_dir("broker-serves-connections-concurrently");
+        fs::create_dir_all(&root).expect("create test dir");
+        // The socket lives in its own short directory: a Unix socket path is
+        // capped at 107 bytes, and the scratch root above is longer than that.
+        let socket_dir = tempfile::tempdir().expect("socket dir");
+        let socket_path = socket_dir.path().join("broker.sock");
+        let mut config = test_server_config(&root, &root.join("absent-bundle.json"));
+        let caller_uid = Uid::current().as_raw();
+        config.d2bd_uid = caller_uid;
+        config.d2bd_gid = Gid::current().as_raw();
+        config.socket_path = socket_path.clone();
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let listener =
+            crate::protocol::bind_seqpacket(&socket_path).expect("bind the broker's test socket");
+        let audit_log = Arc::new(
+            AuditLog::open(&config.audit_dir, Gid::current().as_raw(), true, 0)
+                .expect("open audit log"),
+        );
+        let server = Arc::new(Server {
+            config: Arc::new(config),
+            audit_log,
+            dispatches: DispatchPool::new(2),
+            ipc_rate_limiter: Arc::new(Mutex::new(IpcRateLimiter::new(64))),
+        });
+        let serving = runtime.spawn(serve(server, listener));
+
+        let answer = runtime.block_on(async move {
+            // The first client connects and stays silent for the whole test.
+            let silent =
+                crate::protocol::connect_seqpacket_bounded(&socket_path, Duration::from_secs(5))
+                    .await
+                    .expect("first client connects");
+            let caller =
+                crate::protocol::connect_seqpacket_bounded(&socket_path, Duration::from_secs(5))
+                    .await
+                    .expect("second client connects");
+            let envelope = BrokerRequestEnvelope {
+                request: BrokerRequest::Hello(HelloRequest {
+                    client_version: "0.0.0-test".to_owned(),
+                    supported_features: Vec::new(),
+                }),
+                caller_role: BrokerCallerRole::AdminUid { uid: caller_uid },
+                test_peer_uid: Some(caller_uid),
+                audit_join: None,
+            };
+            caller.send_json_frame(&envelope).await.expect("send Hello");
+            let answer = tokio::time::timeout(
+                Duration::from_secs(10),
+                caller.recv_json_frame::<BrokerResponse>(),
+            )
+            .await
+            .expect("the next request is answered while the first connection stays silent")
+            .expect("frame read")
+            .expect("the broker answered");
+            drop(silent);
+            answer
+        });
+        assert!(
+            matches!(
+                answer,
+                BrokerResponse::Hello(ref response) if response.selected_version == "0.0.0-w2"
+            ),
+            "expected the daemon handshake, got {answer:?}"
+        );
+        serving.abort();
+        let _ = fs::remove_dir_all(&root);
     }
 }

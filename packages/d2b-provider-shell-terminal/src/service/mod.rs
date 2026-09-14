@@ -4,8 +4,7 @@ mod controller;
 mod supervisor;
 
 pub use controller::{
-    OpenSessionRequest, OpenSessionResult, SHELL_POOL_FINALIZER, SHELL_REPAIR_INTERVAL_SECS,
-    SHELL_SESSION_FINALIZER, ShellRunnerContract, ShellTerminalController, shell_runner_contract,
+    OpenSessionRequest, OpenSessionResult, SHELL_REPAIR_INTERVAL_SECS, ShellTerminalController,
 };
 pub use supervisor::{
     AttachReceipt, AttachRequest, Attachment, InMemoryShellAuthority, SessionCapability,

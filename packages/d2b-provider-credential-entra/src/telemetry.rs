@@ -5,6 +5,7 @@ use d2b_contracts_provider::v3::credential_controller::{
     CredentialObservabilityError, CredentialProviderKind, CredentialTelemetryFrame,
     CredentialTelemetryOperation, CredentialTelemetryOutcome,
 };
+use d2b_provider_toolkit::credential;
 
 pub(super) fn frame(
     zone: &str,
@@ -13,7 +14,7 @@ pub(super) fn frame(
     placement: PlacementBinding,
     rotation_generation: u64,
 ) -> Result<CredentialTelemetryFrame, CredentialObservabilityError> {
-    CredentialTelemetryFrame::new(
+    credential::credential_frame(
         CredentialProviderKind::Entra,
         zone,
         operation,

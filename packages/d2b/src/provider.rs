@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::{
     CliFailure,
     context::{OutputMode, RequestDeadline, ZoneContext, parse_resource_ref},
-    dispatch::BUILTIN_COMMANDS,
+    dispatch::is_builtin_command,
     resource,
 };
 
@@ -164,7 +164,7 @@ pub(crate) fn validate_projection_value(
     };
     validate_name(top_level, "top-level projection name")
         .map_err(|message| context.failure("resource-schema-invalid", &message, mode, 1))?;
-    if BUILTIN_COMMANDS.contains(&top_level) {
+    if is_builtin_command(top_level) {
         return Err(context.failure(
             "resource-schema-invalid",
             "Provider CLI projection collides with a built-in command",
@@ -292,7 +292,7 @@ pub(crate) fn bind_projection(
     already_bound: &[(&str, &str)],
 ) -> Result<(), &'static str> {
     validate_name(top_level, "top-level projection name").map_err(|_| "projection-name-invalid")?;
-    if BUILTIN_COMMANDS.contains(&top_level) {
+    if is_builtin_command(top_level) {
         return Err("projection-built-in-collision");
     }
     if already_bound

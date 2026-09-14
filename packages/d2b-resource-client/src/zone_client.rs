@@ -13,7 +13,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 use d2b_contracts_resource::v3::{
@@ -908,8 +907,7 @@ where
             Err(error) => match classify_session_error(&driver, error) {
                 AttemptDisposition::RetryNow => continue,
                 AttemptDisposition::RetryAfterMs(delay) => {
-                    let sleep = tokio::time::sleep(Duration::from_millis(u64::from(delay)));
-                    await_with_cancellation(sleep, cancellation).await?;
+                    crate::call::retry_backoff(delay, cancellation).await?;
                 }
                 AttemptDisposition::Fail(error) => return Err(error),
             },

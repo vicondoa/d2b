@@ -29,15 +29,16 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
+use tokio::sync::oneshot;
 
 /// Closed detached exec audit action.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -497,19 +498,181 @@ pub enum WorkloadLaunchResult {
 ///   [`DaemonAuditLog::no_op`]; best-effort writes are discarded, while
 ///   authoritative writes fail closed.
 ///
-/// Appends are serialized behind a single in-process writer mutex so
-/// concurrent connection-handler threads cannot interleave bytes within
-/// a JSONL line. Retention is enforced best-effort: stale
+/// One appender thread owns the hash chain and every file operation, and
+/// callers hand it records over the bounded queue in [`AUDIT_QUEUE_DEPTH`],
+/// so a concurrent connection-handler thread can neither interleave bytes
+/// within a JSONL line nor do filesystem work (or hold a lock) on the
+/// request path. Retention is enforced best-effort: stale
 /// `daemon-events-*.jsonl` files older than [`AUDIT_RETENTION_DAYS`] are
 /// pruned on open and again whenever a write crosses a day boundary
 /// (the file name itself provides day-boundary rotation).
 pub struct DaemonAuditLog {
     state_dir: Option<PathBuf>,
-    writer: Arc<Mutex<AuditWriterState>>,
+    /// Queue into the appender thread. `None` only when the appender could
+    /// not start, which fails every write closed.
+    sink: Option<AuditSink>,
     #[cfg(any(test, feature = "test-support"))]
-    pub captured: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    pub captured: Arc<Mutex<Vec<String>>>,
+}
+
+/// The appender's queue and its thread handle.
+struct AuditSink {
+    sender: SyncSender<AuditAppend>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Bounded depth of the appender's queue.
+///
+/// One record is a cloned event plus its reply seat, so the bound is small;
+/// admission into a full queue is refused rather than waited on, which keeps
+/// the queue the only thing a stalled sink can grow.
+const AUDIT_QUEUE_DEPTH: usize = 1024;
+
+/// One append handed to the single audit appender.
+struct AuditAppend {
+    /// Timestamp taken when the caller emitted the event, not when the
+    /// appender reached it.
+    ts_ms: u128,
+    event: DaemonEvent,
+    authority: DaemonAuditAuthority,
+    reply: AuditReply,
+}
+
+/// Where the appender reports one append's outcome.
+enum AuditReply {
+    /// A synchronous caller waits on this channel.
+    Blocking(SyncSender<io::Result<()>>),
+    /// An async caller awaits this oneshot.
+    Async(oneshot::Sender<io::Result<()>>),
+}
+
+impl AuditReply {
+    fn complete(self, result: io::Result<()>) {
+        match self {
+            Self::Blocking(reply) => {
+                let _ = reply.send(result);
+            }
+            Self::Async(reply) => {
+                let _ = reply.send(result);
+            }
+        }
+    }
+}
+
+/// The single appender: the only seat that reads the chain tail, computes a
+/// record hash, appends a line, syncs it, or prunes stale files, so records
+/// land in the order they were admitted and no caller thread blocks on the
+/// sink.
+struct AuditAppender {
+    state_dir: Option<PathBuf>,
     #[cfg(any(test, feature = "test-support"))]
-    allow_authoritative_without_state: bool,
+    captured: Arc<Mutex<Vec<String>>>,
+    writer: AuditWriterState,
+}
+
+impl AuditAppender {
+    /// Append every queued record until the log drops the queue, then exit.
+    fn run(mut self, queue: Receiver<AuditAppend>) {
+        while let Ok(request) = queue.recv() {
+            let AuditAppend {
+                ts_ms,
+                event,
+                authority,
+                reply,
+            } = request;
+            let result = self.append(ts_ms, &event, authority);
+            reply.complete(result);
+        }
+    }
+
+    /// Build one chained record and append it.
+    ///
+    /// A failed chain initialization, append, or sync poisons the appender
+    /// until the daemon is restarted and the state is repaired.
+    fn append(
+        &mut self,
+        ts_ms: u128,
+        event: &DaemonEvent,
+        authority: DaemonAuditAuthority,
+    ) -> io::Result<()> {
+        if self.writer.poisoned {
+            return Err(io::Error::other("daemon audit unavailable"));
+        }
+        if authority == DaemonAuditAuthority::Authoritative && self.state_dir.is_none() {
+            // A sink with no state directory is the capture-only test seat: it
+            // is not a production durability path, so it records the event for
+            // assertions without claiming host persistence and fails closed
+            // everywhere else.
+            #[cfg(not(any(test, feature = "test-support")))]
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "authoritative-daemon-audit-unavailable",
+            ));
+            #[cfg(any(test, feature = "test-support"))]
+            {}
+        }
+        let event_value = sanitize_daemon_event(
+            serde_json::to_value(event)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        );
+        if let Some(state_dir) = self.state_dir.as_deref()
+            && let Err(error) = initialize_chain_from_disk(state_dir, &mut self.writer)
+        {
+            self.writer.poisoned = true;
+            return Err(error);
+        }
+
+        let prev_hash = self
+            .writer
+            .last_hash
+            .as_deref()
+            .unwrap_or(DAEMON_AUDIT_GENESIS_HASH);
+        let (record, record_hash) = build_chained_record(ts_ms, &event_value, prev_hash)?;
+        let mut line = serde_json::to_string(&record)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        line.push('\n');
+
+        if let Some(state_dir) = self.state_dir.as_deref() {
+            let today = utc_date_string();
+            // First write of the process or a day-boundary crossing:
+            // re-run retention pruning (best-effort) before appending.
+            if self.writer.last_date.as_deref() != Some(today.as_str()) {
+                if let Err(error) = prune_old_audit_logs(state_dir, AUDIT_RETENTION_DAYS) {
+                    self.writer.poisoned = true;
+                    return Err(error);
+                }
+                self.writer.last_date = Some(today.clone());
+            }
+            let path = daemon_audit_path(state_dir, &today);
+            let offset = match write_jsod2b_line_for_date(state_dir, &today, &line) {
+                Ok(offset) => offset,
+                Err(error) => {
+                    self.writer.poisoned = true;
+                    return Err(error);
+                }
+            };
+            if authority == DaemonAuditAuthority::Authoritative
+                && let Err(error) = sync_daemon_audit_path(state_dir, &today)
+            {
+                self.writer.poisoned = true;
+                if rollback_daemon_audit_line(&path, offset, state_dir).is_err() {
+                    return Err(io::Error::other("daemon audit rollback uncertain"));
+                }
+                return Err(error);
+            }
+        }
+
+        self.writer.last_hash = Some(record_hash);
+
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            self.captured
+                .lock()
+                .map_err(|_| io::Error::other("DaemonAuditLog capture mutex poisoned"))?
+                .push(line.trim_end_matches('\n').to_owned());
+        }
+        Ok(())
+    }
 }
 
 impl core::fmt::Debug for DaemonAuditLog {
@@ -715,28 +878,50 @@ impl DaemonAuditLog {
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         let state_dir = state_dir.into();
         let poisoned = prune_old_audit_logs(&state_dir, AUDIT_RETENTION_DAYS).is_err();
-        Self {
-            state_dir: Some(state_dir),
-            writer: Arc::new(Mutex::new(AuditWriterState {
-                poisoned,
-                ..AuditWriterState::default()
-            })),
-            #[cfg(any(test, feature = "test-support"))]
-            captured: Default::default(),
-            #[cfg(any(test, feature = "test-support"))]
-            allow_authoritative_without_state: false,
-        }
+        Self::with_appender(Some(state_dir), poisoned)
     }
 
     /// No-op constructor for tests that do not exercise audit output.
     pub fn no_op() -> Self {
+        Self::with_appender(None, false)
+    }
+
+    /// Start the single appender and return the handle over its queue.
+    ///
+    /// A failed spawn is fail-closed: the sink stays `None`, so every later
+    /// write reports the sink as unavailable instead of silently dropping the
+    /// record.
+    fn with_appender(state_dir: Option<PathBuf>, poisoned: bool) -> Self {
+        #[cfg(any(test, feature = "test-support"))]
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let appender = AuditAppender {
+            state_dir: state_dir.clone(),
+            #[cfg(any(test, feature = "test-support"))]
+            captured: Arc::clone(&captured),
+            writer: AuditWriterState {
+                poisoned,
+                ..AuditWriterState::default()
+            },
+        };
+        let (sender, queue) = sync_channel(AUDIT_QUEUE_DEPTH);
+        let join = std::thread::Builder::new()
+            .name("d2bd-audit-appender".to_owned())
+            .spawn(move || appender.run(queue));
+        let sink = match join {
+            Ok(join) => Some(AuditSink {
+                sender,
+                join: Some(join),
+            }),
+            Err(error) => {
+                tracing::warn!(%error, "daemon audit appender could not start");
+                None
+            }
+        };
         Self {
-            state_dir: None,
-            writer: Arc::new(Mutex::new(AuditWriterState::default())),
+            state_dir,
+            sink,
             #[cfg(any(test, feature = "test-support"))]
-            captured: Default::default(),
-            #[cfg(any(test, feature = "test-support"))]
-            allow_authoritative_without_state: true,
+            captured,
         }
     }
 
@@ -745,10 +930,11 @@ impl DaemonAuditLog {
     /// The default method is best-effort. Callers of an authoritative event
     /// must use [`Self::write_event_with_authority`] and propagate failure.
     ///
-    /// The actual file append is serialized behind a single writer mutex
-    /// so concurrent handler threads produce a valid, line-atomic JSONL
-    /// stream. A day-boundary crossing triggers best-effort retention
-    /// pruning of stale `daemon-events-*.jsonl` files.
+    /// The append itself runs on the single audit appender thread, which is
+    /// also what keeps concurrent handler threads from interleaving bytes
+    /// within a JSONL line: this call queues the record and waits for that
+    /// append's outcome. A day-boundary crossing triggers best-effort
+    /// retention pruning of stale `daemon-events-*.jsonl` files.
     pub fn write_event(&self, event: &DaemonEvent) -> io::Result<()> {
         self.write_event_with_authority(event, DaemonAuditAuthority::BestEffort)
     }
@@ -759,95 +945,65 @@ impl DaemonAuditLog {
         event: &DaemonEvent,
         authority: DaemonAuditAuthority,
     ) -> io::Result<()> {
-        let ts_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let event_value = serde_json::to_value(event)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let event_value = sanitize_daemon_event(event_value);
+        let (reply, outcome) = std::sync::mpsc::sync_channel(1);
+        self.enqueue(event, authority, AuditReply::Blocking(reply))?;
+        outcome
+            .recv()
+            .unwrap_or_else(|_| Err(io::Error::other("daemon audit unavailable")))
+    }
 
-        let mut writer = self
-            .writer
-            .lock()
-            .map_err(|_| io::Error::other("DaemonAuditLog writer mutex poisoned"))?;
-        if writer.poisoned {
+    /// Append one event without parking the caller's thread on the sink.
+    pub async fn write_event_async(&self, event: &DaemonEvent) -> io::Result<()> {
+        self.write_event_with_authority_async(event, DaemonAuditAuthority::BestEffort)
+            .await
+    }
+
+    /// Write an event with an explicit authority class from an async path.
+    ///
+    /// The append runs on the appender thread like the synchronous seat, but
+    /// the caller awaits the outcome instead of blocking a runtime worker on
+    /// it.
+    pub async fn write_event_with_authority_async(
+        &self,
+        event: &DaemonEvent,
+        authority: DaemonAuditAuthority,
+    ) -> io::Result<()> {
+        let (reply, outcome) = oneshot::channel();
+        self.enqueue(event, authority, AuditReply::Async(reply))?;
+        outcome
+            .await
+            .unwrap_or_else(|_| Err(io::Error::other("daemon audit unavailable")))
+    }
+
+    /// Admit one append into the appender queue.
+    ///
+    /// Admission is non-blocking and the queue is bounded, so a stalled sink
+    /// is reported instead of parking the caller (and the queue, not the
+    /// caller, is what a backlog grows).
+    fn enqueue(
+        &self,
+        event: &DaemonEvent,
+        authority: DaemonAuditAuthority,
+        reply: AuditReply,
+    ) -> io::Result<()> {
+        let Some(sink) = self.sink.as_ref() else {
             return Err(io::Error::other("daemon audit unavailable"));
-        }
-        if authority == DaemonAuditAuthority::Authoritative && self.state_dir.is_none() {
-            #[cfg(any(test, feature = "test-support"))]
-            if self.allow_authoritative_without_state {
-                // The test-only capture sink is not a production durability
-                // path; it records the event for assertions without claiming
-                // host persistence.
-            } else {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "authoritative-daemon-audit-unavailable",
-                ));
+        };
+        let request = AuditAppend {
+            ts_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+            event: event.clone(),
+            authority,
+            reply,
+        };
+        sink.sender.try_send(request).map_err(|error| match error {
+            TrySendError::Full(_) => {
+                io::Error::new(io::ErrorKind::WouldBlock, "daemon-audit-queue-full")
             }
-            #[cfg(not(any(test, feature = "test-support")))]
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "authoritative-daemon-audit-unavailable",
-            ));
-        }
-        if let Some(ref state_dir) = self.state_dir
-            && let Err(error) = initialize_chain_from_disk(state_dir, &mut writer)
-        {
-            writer.poisoned = true;
-            return Err(error);
-        }
-
-        let prev_hash = writer
-            .last_hash
-            .as_deref()
-            .unwrap_or(DAEMON_AUDIT_GENESIS_HASH);
-        let (record, record_hash) = build_chained_record(ts_ms, &event_value, prev_hash)?;
-        let mut line = serde_json::to_string(&record)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        line.push('\n');
-
-        if let Some(ref state_dir) = self.state_dir {
-            let today = utc_date_string();
-            // First write of the process or a day-boundary crossing:
-            // re-run retention pruning (best-effort) before appending.
-            if writer.last_date.as_deref() != Some(today.as_str()) {
-                if let Err(error) = prune_old_audit_logs(state_dir, AUDIT_RETENTION_DAYS) {
-                    writer.poisoned = true;
-                    return Err(error);
-                }
-                writer.last_date = Some(today.clone());
-            }
-            let path = daemon_audit_path(state_dir, &today);
-            let offset = match write_jsod2b_line_for_date(state_dir, &today, &line) {
-                Ok(offset) => offset,
-                Err(error) => {
-                    writer.poisoned = true;
-                    return Err(error);
-                }
-            };
-            if authority == DaemonAuditAuthority::Authoritative
-                && let Err(error) = sync_daemon_audit_path(state_dir, &today)
-            {
-                writer.poisoned = true;
-                if rollback_daemon_audit_line(&path, offset, state_dir).is_err() {
-                    return Err(io::Error::other("daemon audit rollback uncertain"));
-                }
-                return Err(error);
-            }
-        }
-
-        writer.last_hash = Some(record_hash);
-
-        #[cfg(any(test, feature = "test-support"))]
-        {
-            self.captured
-                .lock()
-                .map_err(|_| io::Error::other("DaemonAuditLog capture mutex poisoned"))?
-                .push(line.trim_end_matches('\n').to_owned());
-        }
-        Ok(())
+            TrySendError::Disconnected(_) => io::Error::other("daemon audit unavailable"),
+        })
     }
 
     /// Return the policy classification for one event.
@@ -884,6 +1040,22 @@ impl DaemonAuditLog {
                 required_retention_floor_days,
                 DaemonAuditSinkProblem::NoStateDir,
             ),
+        }
+    }
+}
+
+impl Drop for DaemonAuditLog {
+    fn drop(&mut self) {
+        // Close the queue first so the appender drains what is already
+        // admitted and exits, then join it: every append this log admitted
+        // has landed (or reported its failure) before the log is gone.
+        let Some(sink) = self.sink.take() else {
+            return;
+        };
+        let AuditSink { sender, join } = sink;
+        drop(sender);
+        if let Some(join) = join {
+            let _ = join.join();
         }
     }
 }
@@ -2519,6 +2691,54 @@ mod tests {
         assert!(
             report.is_clean(),
             "concurrent writes must preserve hash-chain order: {:?}",
+            report
+        );
+    }
+
+    /// The async seat appends before it returns.
+    ///
+    /// An async caller must be able to read its own record back - and its
+    /// link to the record before it - as soon as the call returns; an append
+    /// that were only queued would show up here as a missing record or a
+    /// broken chain.
+    #[tokio::test]
+    async fn async_seat_appends_before_it_returns() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let log = DaemonAuditLog::new(dir.path());
+        log.write_event_async(&DaemonEvent::ApiReadyTimeout {
+            vm: "vm-a".to_owned(),
+            runner: "ch-runner".to_owned(),
+            elapsed_secs: 60,
+            mode: "strict".to_owned(),
+        })
+        .await
+        .expect("async best-effort append");
+        log.write_event_with_authority_async(
+            &DaemonEvent::ResourcePlaneLifecycle {
+                zone: "work".to_owned(),
+                action: ResourcePlaneAction::Start,
+                result: ResourcePlaneResult::Ready,
+            },
+            DaemonAuditAuthority::Authoritative,
+        )
+        .await
+        .expect("async authoritative append");
+
+        let today = utc_date_string();
+        let content = std::fs::read_to_string(
+            dir.path().join(format!("daemon-events-{today}.jsonl")),
+        )
+        .expect("read jsonl file");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "an async append must have landed by the time its call returns"
+        );
+        let report = verify_daemon_audit_lines(lines.iter().map(|line| (None::<&str>, *line)));
+        assert!(
+            report.is_clean(),
+            "the async seat must keep record order: {:?}",
             report
         );
     }

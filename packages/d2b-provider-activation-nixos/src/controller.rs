@@ -1,7 +1,5 @@
 //! Pure activation-nixos reconciliation policy.
 
-use std::collections::BTreeSet;
-
 use d2b_contracts_resource::v3::{
     ActivationMode, ActivationOutcomeCode, ActivationRunnerInput, ArtifactId, EnvironmentClass,
     ExecutionDomain, NixosGenerationSpec, ResourceName, ResourcePhase, ResourceRef,
@@ -94,10 +92,6 @@ impl GenerationPhase {
             Self::Degraded => ResourcePhase::Degraded,
             Self::Deleted => ResourcePhase::Deleted,
         }
-    }
-
-    fn terminal(self) -> bool {
-        matches!(self, Self::Succeeded | Self::Failed)
     }
 }
 
@@ -703,37 +697,14 @@ impl RunnerResult {
     }
 }
 
-/// Retention result for terminal generation rows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RetentionPlan {
-    delete_names: Vec<String>,
-}
-
-impl RetentionPlan {
-    /// Return rows eligible for finalizer-driven deletion.
-    pub fn delete_names(&self) -> &[String] {
-        &self.delete_names
-    }
-
-    /// Retention never uses a time-to-live.
-    pub const fn uses_ttl(&self) -> bool {
-        false
-    }
-}
-
 /// Activation-nixos controller policy.
-#[derive(Debug, Clone, Copy)]
-pub struct ActivationController {
-    retained_generations: usize,
-}
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ActivationController;
 
 impl ActivationController {
-    /// Construct a controller with the bounded retention window.
-    pub fn new(retained_generations: usize) -> Self {
-        assert!((1..=16).contains(&retained_generations));
-        Self {
-            retained_generations,
-        }
+    /// Construct the pure activation policy.
+    pub const fn new() -> Self {
+        Self
     }
 
     /// Gate activation/application on the complete signed artifact envelope.
@@ -863,27 +834,5 @@ impl ActivationController {
             audit_codes: vec![outcome],
             runner_requests: Vec::new(),
         })
-    }
-
-    /// Compute finalizer-driven retention deletions.
-    pub fn retention_plan(&self, observations: &[GenerationObservation]) -> RetentionPlan {
-        let mut ordered = observations
-            .iter()
-            .map(|row| (row.ordinal, row.name.clone()))
-            .collect::<Vec<_>>();
-        ordered.sort_by_key(|(ordinal, _)| *ordinal);
-        let keep = ordered
-            .iter()
-            .rev()
-            .take(self.retained_generations)
-            .map(|(_, name)| name.as_str())
-            .collect::<BTreeSet<_>>();
-        RetentionPlan {
-            delete_names: observations
-                .iter()
-                .filter(|row| row.phase.terminal() && !keep.contains(row.name.as_str()))
-                .map(|row| row.name.clone())
-                .collect(),
-        }
     }
 }

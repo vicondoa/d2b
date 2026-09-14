@@ -6,45 +6,21 @@ let
   qualifiedTypePattern =
     "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9-]{0,62}$";
   credentialRefPattern = "^Credential/[a-z][a-z0-9-]{0,62}$";
-  registeredTypes = [
-    "Zone"
-    "ZoneLink"
-    "Provider"
-    "Role"
-    "RoleBinding"
-    "Quota"
-    "EmergencyPolicy"
-    "Host"
-    "Guest"
-    "Process"
-    "EphemeralProcess"
-    "Volume"
-    "VolumeBinding"
-    "Network"
-    "Device"
-    "User"
-    "Credential"
-    "Endpoint"
-    "ResourceExport"
-    "ResourceImport"
-  ];
-  runtimeFields = [
-    "uid"
-    "revision"
-    "generation"
-    "finalizers"
-    "managedBy"
-    "configurationGeneration"
-    "timestamp"
-    "createdAt"
-    "updatedAt"
-    "status"
-  ];
-  resourceFields = [ "type" "metadata" "spec" ];
-  metadataFields = [ "ownerRef" "labels" "annotations" ];
-  telemetryFields = [ "emitter" ];
-  emitterFields = [ "ringCapacityBytes" ];
-  auditFields = [ "retentionDays" "maxSegmentBytes" ];
+  # The canonical standard ResourceType registry, projected from the resource
+  # contract. A type the registry names is authorable in a bundle; a qualified
+  # Provider type is admitted by grammar because its schema is installed from
+  # the signed Provider catalog, not from this registry.
+  registeredTypes = import ./generated/resource-types.nix;
+  # The shared resource-envelope field vocabularies. Generated beside the
+  # registry so the option surface, the bundle validator, and the public
+  # projection cannot drift apart on what a runtime-managed field is.
+  vocabulary = import ./generated/resource-inventories.nix;
+  runtimeFields = vocabulary.runtimeFields;
+  resourceFields = vocabulary.resourceFields;
+  metadataFields = vocabulary.metadataFields;
+  telemetryFields = vocabulary.telemetryFields;
+  emitterFields = vocabulary.emitterFields;
+  auditFields = vocabulary.auditFields;
   forbiddenKeyNames = [
     "secret"
     "password"

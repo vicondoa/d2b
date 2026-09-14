@@ -1,6 +1,7 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
+use d2bd::principal_allocation::{HostAccounts, check_committed_against};
 use d2bd::{
     DEFAULT_CONFIG_PATH, GuestServeOptions, LockOnlyOptions, ServeOptions, TestClientOptions,
     banner, banner_note, lock_only, run_test_client, serve, serve_guest,
@@ -58,6 +59,12 @@ enum Command {
         socket: PathBuf,
         #[arg(long = "frame-json", required = true)]
         frame_json: Vec<String>,
+    },
+    /// Check the committed principal allocation against a host account table.
+    PrincipalAllocation {
+        /// The host account table to check against, in `passwd` format.
+        #[arg(long)]
+        host_accounts: PathBuf,
     },
 }
 
@@ -240,11 +247,50 @@ async fn main() {
                 std::process::exit(i32::from(exit_code));
             }
         }),
+        Some(Command::PrincipalAllocation { host_accounts }) => {
+            match check_principal_allocation(&host_accounts) {
+                Ok(()) => Ok(()),
+                Err(message) => {
+                    eprintln!("{message}");
+                    std::process::exit(1);
+                }
+            }
+        }
     };
 
     if let Err(error) = result {
         let _ = error.to_envelope();
         eprintln!("{}: {}", error.kind(), error.message());
         std::process::exit(i32::from(error.exit_code()));
+    }
+}
+
+/// Check the committed principal allocation against one host account table.
+///
+/// The daemon loads no host table at startup: whether a uid the allocation
+/// pins is free is a property of the host the build deploys to. The check is
+/// therefore a diagnostic the operator runs with that host's table, and it
+/// refuses the same overlap the allocator refuses a candidate for.
+///
+/// The report names the overlaps but not the table it read: the operator passed
+/// that path in, and a printed path labelled as an account table reads to a
+/// scanner as account data leaving the host in a log.
+fn check_principal_allocation(path: &Path) -> Result<(), String> {
+    let table = std::fs::read_to_string(path)
+        .map_err(|error| format!("read host account table: {error}"))?;
+    let host = HostAccounts::parse_passwd(&table)
+        .map_err(|error| format!("host account table: {error}"))?;
+    let check = check_committed_against(&host).map_err(|error| error.to_string())?;
+    for overlap in check.overlaps() {
+        eprintln!("{overlap}");
+    }
+    if check.is_clear() {
+        println!("principal allocation is clear of the host account table");
+        Ok(())
+    } else {
+        Err(format!(
+            "{} principal allocation overlap(s)",
+            check.overlaps().len()
+        ))
     }
 }

@@ -1,8 +1,8 @@
 use d2b_provider_clipboard_wayland::{
     ClipboardAuditEvent, ClipboardAuditQueue, ClipboardConfig, ClipboardController, ClipboardEntry,
-    ClipboardHistory, ClipboardProviderDescriptor, ClipboardReason, DependencyStatus, FdCapModel,
-    FdObjectKind, FdStatModel, FileSystemKind, PickerRequest, Policy, SizeBucket,
-    classify_fd_model, validate_fd_cap, validate_recvmsg_control,
+    ClipboardHistory, ClipboardReason, DependencyStatus, FdCapModel, FdObjectKind, FdStatModel,
+    FileSystemKind, PickerRequest, Policy, SizeBucket, classify_fd_model, validate_fd_cap,
+    validate_recvmsg_control,
 };
 
 #[test]
@@ -111,14 +111,6 @@ fn picker_protocol_carries_metadata_only() {
     )
     .unwrap();
     assert!(!format!("{request:?}").contains("Guest/work"));
-}
-
-#[test]
-fn clipboard_descriptor_publishes_only_typed_attachment_classes() {
-    let descriptor = ClipboardProviderDescriptor::default();
-    assert!(descriptor.validate().is_ok());
-    assert_eq!(descriptor.attachment_classes().len(), 3);
-    assert!(!descriptor.provider_state_volume);
 }
 
 #[test]

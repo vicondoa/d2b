@@ -214,6 +214,17 @@ impl core::fmt::Display for FdSafetyError {
 
 impl std::error::Error for FdSafetyError {}
 
+/// Classify a live descriptor with `fstat` and `fstatfs`.
+pub fn classify_fd(fd: impl AsFd) -> Result<AcceptedTransferFdKind, FdSafetyError> {
+    let stat = fstat(fd.as_fd()).map_err(|_| FdSafetyError::MetadataIo)?;
+    let object_kind = object_kind_from_mode(stat.st_mode);
+    let filesystem_kind = filesystem_kind_for_object(fd.as_fd(), object_kind)?;
+    classify_fd_model(FdStatModel {
+        object_kind,
+        filesystem_kind,
+    })
+}
+
 /// Classify a pure FD metadata model.
 pub fn classify_fd_model(model: FdStatModel) -> Result<AcceptedTransferFdKind, FdSafetyError> {
     match model.object_kind {
@@ -225,6 +236,34 @@ pub fn classify_fd_model(model: FdStatModel) -> Result<AcceptedTransferFdKind, F
         FdObjectKind::Regular => Err(FdSafetyError::RegularNotMemoryBacked(model.filesystem_kind)),
         rejected => Err(FdSafetyError::RejectedKind(rejected)),
     }
+}
+
+fn object_kind_from_mode(mode: rustix::fs::RawMode) -> FdObjectKind {
+    match FileType::from_raw_mode(mode) {
+        FileType::RegularFile => FdObjectKind::Regular,
+        FileType::Fifo => FdObjectKind::Pipe,
+        FileType::Socket => FdObjectKind::Socket,
+        FileType::BlockDevice => FdObjectKind::BlockDevice,
+        FileType::CharacterDevice => FdObjectKind::CharacterDevice,
+        FileType::Directory => FdObjectKind::Directory,
+        FileType::Symlink => FdObjectKind::Symlink,
+        FileType::Unknown => FdObjectKind::Other,
+    }
+}
+
+fn filesystem_kind_for_object(
+    fd: impl AsFd,
+    object_kind: FdObjectKind,
+) -> Result<FileSystemKind, FdSafetyError> {
+    if object_kind != FdObjectKind::Regular {
+        return Ok(FileSystemKind::Unknown);
+    }
+    let filesystem = fstatfs(fd.as_fd()).map_err(|_| FdSafetyError::MetadataIo)?;
+    Ok(match filesystem.f_type as i64 {
+        TMPFS_MAGIC | RAMFS_MAGIC | HUGETLBFS_MAGIC => FileSystemKind::MemoryBacked,
+        NFS_SUPER_MAGIC | CIFS_MAGIC_NUMBER | SMB2_MAGIC_NUMBER => FileSystemKind::NetworkBacked,
+        _ => FileSystemKind::DiskBacked,
+    })
 }
 
 /// FD bound validation model.
@@ -336,28 +375,8 @@ pub fn inspect_fd(
     attachment_class: AttachmentClass,
 ) -> Result<FdMetadata, FdSafetyError> {
     let stat = fstat(fd.as_fd()).map_err(|_| FdSafetyError::MetadataIo)?;
-    let object_kind = match FileType::from_raw_mode(stat.st_mode) {
-        FileType::RegularFile => FdObjectKind::Regular,
-        FileType::Fifo => FdObjectKind::Pipe,
-        FileType::Socket => FdObjectKind::Socket,
-        FileType::BlockDevice => FdObjectKind::BlockDevice,
-        FileType::CharacterDevice => FdObjectKind::CharacterDevice,
-        FileType::Directory => FdObjectKind::Directory,
-        FileType::Symlink => FdObjectKind::Symlink,
-        FileType::Unknown => FdObjectKind::Other,
-    };
-    let filesystem_kind = if object_kind == FdObjectKind::Regular {
-        let filesystem = fstatfs(fd.as_fd()).map_err(|_| FdSafetyError::MetadataIo)?;
-        match filesystem.f_type as i64 {
-            TMPFS_MAGIC | RAMFS_MAGIC | HUGETLBFS_MAGIC => FileSystemKind::MemoryBacked,
-            NFS_SUPER_MAGIC | CIFS_MAGIC_NUMBER | SMB2_MAGIC_NUMBER => {
-                FileSystemKind::NetworkBacked
-            }
-            _ => FileSystemKind::DiskBacked,
-        }
-    } else {
-        FileSystemKind::Unknown
-    };
+    let object_kind = object_kind_from_mode(stat.st_mode);
+    let filesystem_kind = filesystem_kind_for_object(fd.as_fd(), object_kind)?;
     let flags = fcntl_getfd(fd.as_fd()).map_err(|_| FdSafetyError::MetadataIo)?;
     let access_flags = fcntl_getfl(fd.as_fd()).map_err(|_| FdSafetyError::MetadataIo)?;
     let access_mode = match access_flags & OFlags::ACCMODE {
@@ -699,6 +718,37 @@ mod tests {
             Err(FdSafetyError::RegularNotMemoryBacked(
                 FileSystemKind::NetworkBacked
             ))
+        ));
+    }
+
+    #[test]
+    fn live_socket_fd_classifies_as_socket() {
+        let (left, _right) = std::os::unix::net::UnixStream::pair().expect("socketpair");
+        assert_eq!(
+            classify_fd(&left).expect("classify socket"),
+            AcceptedTransferFdKind::Socket
+        );
+    }
+
+    #[test]
+    fn fd_caps_must_leave_the_reserved_margin() {
+        assert_eq!(
+            validate_fd_cap(FdCapModel {
+                requested_cap: 64,
+                rlimit_nofile: 256,
+                base_reserved: 64,
+                max_fds_per_recvmsg: 16,
+            }),
+            Ok(64)
+        );
+        assert!(matches!(
+            validate_fd_cap(FdCapModel {
+                requested_cap: 200,
+                rlimit_nofile: 256,
+                base_reserved: 64,
+                max_fds_per_recvmsg: 16,
+            }),
+            Err(FdSafetyError::CapExceedsRlimit { .. })
         ));
     }
 

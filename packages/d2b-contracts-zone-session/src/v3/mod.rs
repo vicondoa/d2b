@@ -2,7 +2,6 @@
 
 pub mod component_session;
 pub mod emergency_policy;
-pub mod generation_bundle;
 pub mod resource_bundle;
 pub mod resource_export;
 pub mod resource_import;
@@ -41,16 +40,15 @@ pub use component_session::{
     SequenceError, ServicePackage, SessionErrorCode, TransportClass,
 };
 pub use emergency_policy::*;
-pub use generation_bundle::*;
 pub use resource_export::*;
 pub use resource_import::*;
 pub use role::{
-    RoleConditionType, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec, RoleStatus,
-    RoleStatusResource,
+    PrincipalRef, RoleConditionType, RoleMount, RoleMountPath, RoleNamespaces, RolePosture,
+    RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec, RoleStatus, RoleStatusResource,
 };
 pub use role_binding::{
-    ExternalPrincipalSelector, RoleBindingConditionType, RoleBindingSpec, RoleBindingStatus,
-    RoleBindingStatusResource, ScopeNarrowing,
+    BINDABLE_SUBJECT_TYPES, ExternalPrincipalSelector, RelayAuthority, RoleBindingConditionType,
+    RoleBindingSpec, RoleBindingStatus, RoleBindingStatusResource, ScopeNarrowing,
 };
 pub use services::*;
 pub use zone::*;

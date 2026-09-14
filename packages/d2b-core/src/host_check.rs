@@ -463,6 +463,30 @@ where
     run_with_probe(host, &probe, closures, strict)
 }
 
+/// Run the host check on the bounded loader worker's probe seat
+/// ([`crate::loader_worker`]).
+///
+/// The async seat for callers that must not park their executor on the probe
+/// reads and the `nft`/`systemctl` subprocesses [`run`] performs. The inputs
+/// are owned, so the whole check runs on the probe worker; a probe that hangs
+/// occupies only that seat and cannot starve the bundle-load seat.
+pub async fn run_on_loader_worker(
+    host: HostJson,
+    closures: Vec<ClosureMetadata>,
+    strict: bool,
+) -> Result<HostCheckReport, ProbeError> {
+    crate::loader_worker::run_probe(move || run(&host, closures.iter(), strict))
+        .await
+        .map_err(|refusal| {
+            ProbeError::new(match refusal {
+                crate::loader_worker::LoaderRefusal::Busy => "host-check-loader-busy",
+                crate::loader_worker::LoaderRefusal::Unavailable => {
+                    "host-check-loader-unavailable"
+                }
+            })
+        })?
+}
+
 #[cfg(test)]
 pub(crate) fn run_with_fixture<'a, I>(
     host: &HostJson,

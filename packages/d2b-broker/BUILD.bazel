@@ -11,8 +11,15 @@ exports_files(
 exports_files(
     [
         "src/live_handlers.rs",
+        "src/ops/state-posture-contract.json",
         "src/runtime.rs",
     ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_broker_operation_catalog",
+    srcs = ["src/generated/broker_operation_catalog.rs"],
     visibility = ["//visibility:public"],
 )
 

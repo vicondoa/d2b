@@ -9,8 +9,8 @@
 //! `OpenKvm`, `OpenVhostNet`, `OpenFuse`, `OpenDevice`, `CreateTapFd`,
 //! `CreatePersistentTap`, `SetBridgePortFlags`, `ApplyNftables`,
 //! `ApplyRoute`, `ApplySysctl`, `ApplyNmUnmanaged`, `UpdateHostsFile`,
-//! `BindUnixSocket`, `SetSocketAcl`, `ModprobeIfAllowed`,
-//! `PrepareStateDir`, `PrepareRuntimeDir`) already have rows in
+//! `ModprobeIfAllowed`, `PrepareStateDir`, `PrepareRuntimeDir`) already have
+//! rows in
 //! [`super::privileges::BROKER_OPERATION_AUTHZ`]. Their audit fields are
 //! documented in `docs/reference/privileges.md` and enforced by the broker
 //! dispatcher.
@@ -44,8 +44,6 @@ pub enum W3BrokerOperation {
     ApplySysctl,
     ApplyNmUnmanaged,
     UpdateHostsFile,
-    BindUnixSocket,
-    SetSocketAcl,
     ModprobeIfAllowed,
     UsbipBindFirewallRule,
     MigrateLegacySwtpmState,
@@ -83,8 +81,6 @@ impl W3BrokerOperation {
             Self::ApplySysctl => "ApplySysctl",
             Self::ApplyNmUnmanaged => "ApplyNmUnmanaged",
             Self::UpdateHostsFile => "UpdateHostsFile",
-            Self::BindUnixSocket => "BindUnixSocket",
-            Self::SetSocketAcl => "SetSocketAcl",
             Self::ModprobeIfAllowed => "ModprobeIfAllowed",
             Self::UsbipBindFirewallRule => "UsbipBindFirewallRule",
             Self::MigrateLegacySwtpmState => "MigrateLegacySwtpmState",
@@ -97,35 +93,7 @@ impl W3BrokerOperation {
     /// the `Capabilities::broker_operations` advertisement in
     /// `d2b-contracts` and by the broker-enum-disposition gate.
     pub const fn all() -> &'static [W3BrokerOperation] {
-        &[
-            Self::DelegateCgroupV2,
-            Self::OpenCgroupDir,
-            Self::PrepareStateDir,
-            Self::PrepareRuntimeDir,
-            Self::OpenKvm,
-            Self::OpenVhostNet,
-            Self::OpenFuse,
-            Self::OpenDevice,
-            Self::CreateTapFd,
-            Self::CreatePersistentTap,
-            Self::DeletePersistentTap,
-            Self::CreateBridge,
-            Self::DeleteBridge,
-            Self::SetBridgePortFlags,
-            Self::ApplyNftables,
-            Self::ApplyNftablesProjection,
-            Self::ApplyRoute,
-            Self::ApplySysctl,
-            Self::ApplyNmUnmanaged,
-            Self::UpdateHostsFile,
-            Self::BindUnixSocket,
-            Self::SetSocketAcl,
-            Self::ModprobeIfAllowed,
-            Self::UsbipBindFirewallRule,
-            Self::MigrateLegacySwtpmState,
-            Self::SecurityKeyOpenDevice,
-            Self::SecurityKeyApplyUdevRules,
-        ]
+        include!("generated/w3_broker_operations.rs")
     }
 
     /// Returns the audit, mutation, and secret-access posture for the row.
@@ -165,11 +133,6 @@ impl W3BrokerOperation {
             | Self::ApplySysctl
             | Self::ApplyNmUnmanaged
             | Self::UpdateHostsFile => W3OperationFlags {
-                audit: true,
-                destructive: true,
-                secret_access: false,
-            },
-            Self::BindUnixSocket | Self::SetSocketAcl => W3OperationFlags {
                 audit: true,
                 destructive: true,
                 secret_access: false,

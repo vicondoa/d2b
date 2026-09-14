@@ -5,7 +5,8 @@
 //! readable FIDO report descriptor, and returns an
 //! `OwnedFd` to be passed to `d2bd` via `SCM_RIGHTS`. Long-lived
 //! CTAPHID session state (CID isolation, lease serialization, relay)
-//! lives in `d2bd::security_key`, not here. This module only opens the
+//! lives in `d2b_provider_device_security_key::relay`, not here. This module
+//! only opens the
 //! device and hands off the fd.
 //!
 //! Security notes:

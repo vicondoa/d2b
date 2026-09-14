@@ -6,8 +6,14 @@
 >
 > Source: [`packages/d2b-provider-device-usbip/src/state_machine.rs`](../../packages/d2b-provider-device-usbip/src/state_machine.rs).
 > The production-wired lifecycle path is the Provider's
-> [`reconcile_state.rs`](../../packages/d2b-provider-device-usbip/src/reconcile_state.rs),
-> which the daemon composition currently consumes.
+> [`lifecycle.rs`](../../packages/d2b-provider-device-usbip/src/lifecycle.rs) - the
+> USB Service and USB Binding lifecycles behind the family's typed driver seam
+> ([`driver.rs`](../../packages/d2b-provider-device-usbip/src/driver.rs)), which the
+> daemon's production port runs with the zone-wide authority ledger
+> ([`packages/d2bd/src/usbip_production.rs`](../../packages/d2bd/src/usbip_production.rs)).
+> [`reconcile_state.rs`](../../packages/d2b-provider-device-usbip/src/reconcile_state.rs)
+> retains only the Provider-owned degraded-reason vocabulary that the daemon
+> projects into the probe and status surfaces.
 > Canonical-order anchor: [AGENTS.md "Critical subsystems"](../../AGENTS.md#critical-subsystems--handle-with-care).
 
 ## Why a state machine
@@ -155,55 +161,69 @@ current daemon or broker adapter maps it into a public error envelope.
 The executor MUST treat each step as idempotent so retries after
 a partial failure are safe.
 
-## Per-env proxy synchronization
+## Proxy ownership and release order
 
-The production-wired reconcile path encodes the current generic L4 proxy strategy in
-`UsbipProxySynchronizationPlan`
-([`packages/d2b-provider-device-usbip/src/reconcile_state.rs`](../../packages/d2b-provider-device-usbip/src/reconcile_state.rs)).
-The encoded strategy deliberately avoids busid-aware claims that the current
-`socat` proxy cannot satisfy:
+The v3 reconcile model that encoded the shared-listener proxy strategy
+(`UsbipProxySynchronizationPlan`) went with the rest of the unreachable model.
+The live path
+([`lifecycle.rs`](../../packages/d2b-provider-device-usbip/src/lifecycle.rs))
+makes the Binding the release unit: it owns its Guest attachment, its private
+proxy, and one Service slot, while the Service owns Host-global authority, the
+physical bus binding, and the multiplexed relay
+([`workers.rs`](../../packages/d2b-provider-device-usbip/src/workers.rs)).
 
-* **Attach / single-VM restart:** optimistically refresh backend/export
-  readiness and verify the per-env proxy listener. Do not stop, rebind, or
-  recycle the proxy, so unrelated same-env streams stay up.
-* **Single-busid release:** before host stream shutdown or `usbip unbind`, prove
-  that the firewall carve-out can be blocked/withdrawn and that any established
-  stream can be terminated by exact VM/proxy tuple cleanup whose source identity
-  is not hidden by SNAT and whose anti-spoofing posture is proven. If the
-  reconciler cannot prove that ordering and tuple,
-  the daemon surfaces a revocation isolation failure with the target VM and
-  busid, fails closed, and preserves the broker-owned session busid lock for
-  manual drain/recovery rather than
-  pretending the generic proxy selectively closed that busid.
-* **Targeted cleanup (future/explicit):** only after a proven stream tuple or a
-  busid-aware proxy implementation exists may the daemon run targeted cleanup.
-  The firewall carve-out is withdrawn before any flow kill, so a killed TCP
-  stream cannot immediately reconnect. TCP may use exact conntrack deletion
-  and/or exact established-socket kill by VM/proxy tuple; UDP may use exact
-  conntrack deletion only. SNAT-obscured sources, unproven anti-spoofing, shared
-  listeners, and ambiguous same-env streams are never killed for a single busid.
-* **Proxy recycle:** bouncing same-env active streams is allowed only through an
-  explicit bounded-drain or force policy. Any implementation that rebinds the
-  proxy socket must hold an exclusive socket lifecycle lock (or use socket
-  activation) and perform fd-relative socket-path handling before the rebind.
+* **Attach / single-VM restart:** a Binding activates only once its Service is
+  ready; it acquires the Service slot, then its private proxy, then the Guest
+  attach Process. It never stops, rebinds, or recycles the shared backend or
+  the per-Network relay, so unrelated Bindings' streams stay up.
+* **Single-busid release:** a Binding finalizes its own Guest Endpoint, attach
+  Process, private proxy, and Service slot, and it has no access to Service
+  authority or unbind - so it cannot release a physical device that another
+  Binding still uses. The Service does not unbind its owned device until every
+  Binding has closed: the supervisor drains them first, then releases relay and
+  physical authority. Restart adopts only a matching child identity, and an
+  ambiguous identity is quarantined without a destructive effect.
+* **Revocation that cannot be isolated:** the retained provider vocabulary
+  ([`reconcile_state.rs`](../../packages/d2b-provider-device-usbip/src/reconcile_state.rs))
+  reports the closed degraded reasons for this path (`ProxyUnavailable`,
+  `HostBindUnavailable`, `StaleHostState`, `StaleGuestState`,
+  `LockHeldByOtherOwner`), and its remediation stays fail-closed on the
+  broker-owned session claim: cleanup refused before `usbip-host` unbind is
+  retried only once a single targeted stream can be proven, or the VM is
+  stopped so USBIP streams drain. The planning model's stop path records the
+  same contract - selective revocation relies on host unbind plus targeted
+  conntrack/socket cleanup, or fails closed when the selected stream cannot be
+  isolated.
+* **Proxy recycle:** bouncing same-Network active streams is allowed only
+  through an explicit bounded-drain or force policy. Any implementation that
+  rebinds a proxy socket must hold an exclusive socket lifecycle lock (or use
+  socket activation) and perform fd-relative socket-path handling before the
+  rebind.
 
 ## VM lifecycle carrier cleanup
 
-VM stop/restart uses `UsbipVmCarrierCleanupPlan` to detach any guest import and
-drain host-side active carrier state only when the selected stream can first be
-isolated. The host-session per-busid claim is preserved on VM stop/restart so
+VM stop/restart detaches the Binding's Guest attachment and drains the carrier
+state the Binding owns; the Service-owned physical bind and the broker-owned
+session claim stay in place. The deleted reconcile model's
+`UsbipVmCarrierCleanupPlan` no longer exists - the Binding finalizer in
+[`lifecycle.rs`](../../packages/d2b-provider-device-usbip/src/lifecycle.rs)
+carries the cleanup, and the daemon's probe/status projection reports what is
+left behind. The host-session per-busid claim is preserved on VM stop/restart so
 the same VM can start again and reattach through the normal bind path during the
 current host boot/session. It is not preserved across host reboot because the
 lock is under `/run/d2b/locks/usbip`. Only an explicit USB detach may revoke
 backend ACLs and release the claim during a host session, and only after
 firewall withdrawal/targeted flow cleanup and host unbind succeed. A
-dead/unreachable VM target-local detach failure stays visible as degraded cleanup but
-does not block host-side firewall withdrawal or unbind.
+dead/unreachable VM target-local detach failure stays visible as degraded
+cleanup, and the Service keeps the owned bind - with the broker keeping the
+session claim for manual recovery - until the Binding closes or an operator
+clears it.
 
-The cleanup plan never stops or rebinds the per-env backend/proxy sidecars. If a
-selected stream cannot be isolated from unrelated same-env traffic, cleanup fails
-closed before sysfs `usbip-host` unbind, keeps the session claim, and surfaces
-manual recovery instead of killing the shared listener.
+A single-binding release never stops or rebinds the shared backend or the
+per-Network relay. If a selected stream cannot be isolated from unrelated
+same-Network traffic, cleanup fails closed before sysfs `usbip-host` unbind,
+keeps the session claim, and surfaces manual recovery instead of killing the
+shared listener.
 
 VM start treats same-host-session same-VM USBIP session claims as required until an explicit
 optional-device policy exists. Runtime absence, target-local import failure, or
@@ -243,7 +263,8 @@ locks, sysfs driver links, nftables rules, or per-env sidecars directly.
 | Layer | Path | What it asserts |
 | --- | --- | --- |
 | Unit | `packages/d2b-provider-device-usbip/src/state_machine.rs` (`mod tests`) | `CANONICAL_STEPS` is pinned, `stop_order()` and failure rollback preserve per-env backend/proxy sidecars, and step failures remain typed provider results. |
-| Unit | `packages/d2b-provider-device-usbip/src/reconcile_state.rs` (`mod tests`) | VM stop/restart carrier cleanup preserves session claims, explicit detach releases only after successful cleanup, failures preserve claims/manual recovery, firewall-before-flow-kill ordering holds, and same-env sidecars are not bounced. |
+| Integration | `packages/d2b-provider-device-usbip/tests/service_binding_lifecycle.rs` | Binding activation acquires the Service slot, then the private proxy, then the Guest Process; wrong-zone/opt-out and authority conflicts refuse before any bind; a matching restart identity adopts while a stale one quarantines; a Binding closes its Process before the Service unbinds, and one Binding finalizes without unbinding the shared Service. |
+| Integration | `packages/d2b-provider-device-usbip/tests/production_port.rs` | The production port keeps Binding teardown ahead of Service release. |
 
 ## See also
 

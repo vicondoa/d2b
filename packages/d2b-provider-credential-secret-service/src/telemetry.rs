@@ -12,7 +12,7 @@ pub(super) fn frame(
     outcome: CredentialTelemetryOutcome,
     rotation_generation: u64,
 ) -> Result<CredentialTelemetryFrame, CredentialObservabilityError> {
-    CredentialTelemetryFrame::new(
+    d2b_provider_toolkit::credential::credential_frame(
         CredentialProviderKind::SecretService,
         zone,
         operation,

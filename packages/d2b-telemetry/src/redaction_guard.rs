@@ -220,7 +220,7 @@ mod tests {
         let fields = RedactionGuard::span_attributes([
             ("kind", "single"),
             ("operation", "scan"),
-            ("op", "vmStart"),
+            ("op", "SpawnRunner"),
             ("service", "store"),
             ("transport", "unix"),
             ("profile", "NN"),
@@ -228,7 +228,7 @@ mod tests {
         .expect("closed semantic fields");
         assert_eq!(fields.get("kind").map(String::as_str), Some("single"));
         assert_eq!(fields.get("operation").map(String::as_str), Some("scan"));
-        assert_eq!(fields.get("op").map(String::as_str), Some("vmStart"));
+        assert_eq!(fields.get("op").map(String::as_str), Some("SpawnRunner"));
         assert_eq!(fields.get("service").map(String::as_str), Some("store"));
         assert_eq!(fields.get("transport").map(String::as_str), Some("unix"));
         assert_eq!(fields.get("profile").map(String::as_str), Some("NN"));

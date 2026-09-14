@@ -7,20 +7,14 @@
 
 #![deny(missing_docs)]
 
-mod controller;
 mod migration;
 mod resource_controller;
 mod resource_effect;
 mod resources;
 mod runner;
 mod state;
-mod status;
 pub mod swtpm_argv;
 
-pub use controller::{
-    TpmController, TpmControllerError, TpmEffectError, TpmEffectPort, TpmPhase,
-    TpmReconcileDisposition, TpmReconcileOutcome, TpmStatePreparationResult,
-};
 pub use migration::LegacyMigrationOutcome;
 pub use resource_controller::{
     TPM_MAX_REPAIR_INTERVAL_SECS, TPM_REPAIR_INTERVAL_SECS, TpmResourceController,
@@ -32,18 +26,12 @@ pub use resources::{
     build_swtpm_flush_spec, build_swtpm_process_spec, build_tpm_state_volume_resource,
     build_tpm_state_volume_spec,
 };
-pub use runner::{
-    BinaryKind, FlushLaunchTicket, SignedBinaryRef, SwtpmArgv, SwtpmArgvError, SwtpmSettings,
-    SwtpmStartLaunchTicket, validate_start_ticket,
-};
+pub use runner::{SwtpmArgvError, SwtpmSettings};
 pub use state::{
-    StateDirIntent, StateDirectoryToken, StateOwnerToken, TamperMarkerToken, TpmStateObservation,
-    TpmStateObservationKind, TpmStatePreparation, TpmStateValidationError,
+    StateDirIntent, StateDirectoryToken, StateOwnerToken, TamperMarkerToken,
 };
-pub use status::{TpmMarkerStatus, TpmStatusReport};
 pub use swtpm_argv::{
-    SwtpmArgvInput, SwtpmIoctlFlushInput, exec_arg0, exec_arg0_flush, generate_swtpm_argv,
-    generate_swtpm_ioctl_flush_argv,
+    SwtpmArgvInput, SwtpmIoctlFlushInput, generate_swtpm_argv, generate_swtpm_ioctl_flush_argv,
 };
 
 /// Provider identity.

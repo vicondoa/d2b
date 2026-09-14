@@ -276,13 +276,8 @@ the retired identifiers kept solely for cutover.
   and that environment variable **replaces** `build.rustflags` rather than
   merging with it, so a linker configured through `rustflags` is silently
   dead there.
-- The persistent-shell helper is intentionally excluded from the main
-- The persistent-shell helper is intentionally excluded from the main
-  product workspace at `packages/d2b-guest-shell-runner/`. Its feature
-  variant remains a direct Bazel target, and the Rust, supply-chain, and
-  guest-runner aliases wire it explicitly like the broker workspace.
 - Run `nix-collect-garbage` after integrating a completed change when disk
-reclamation is needed.
+  reclamation is needed.
 - For the operator host running heavy iteration: prune OLD
   NixOS system generations periodically:
 

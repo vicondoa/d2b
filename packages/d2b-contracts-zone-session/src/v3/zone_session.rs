@@ -77,9 +77,14 @@
 //! the Zone enumerations is a change to `component_session.rs`, which this
 //! work item does not own.
 
+use std::fmt;
+
+use d2b_contracts_resource::v3::identity::ReconnectGeneration;
+use d2b_contracts_resource::v3::{ResourceUid, ZoneId};
 use serde::{Deserialize, Serialize};
 
 use super::component_session as base;
+use super::zone_routing::{ZoneLinkControllerGeneration, ZoneTreeEdge};
 
 pub use super::component_session::{
     COMPONENT_SESSION_MAJOR, COMPONENT_SESSION_MINOR, ENDPOINT_POLICY_IDENTITY_CANONICAL_LEN,
@@ -337,8 +342,386 @@ impl ServicePackage {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Zone enrollment control messages
+// ---------------------------------------------------------------------------
+
+/// Frozen wire method name of the one-time ZoneLink enrollment bootstrap.
+///
+/// The Zone service's own method inventory reports this constant rather than a
+/// second copy of the spelling, so the service, the allocator, and a Guest
+/// agent cannot drift apart on the method name.
+pub const ZONE_BOOTSTRAP_METHOD: &str = "zone-bootstrap";
+
+/// Frozen wire method name of the enrolled `Noise_KK` enrollment.
+pub const ZONE_ENROLL_METHOD: &str = "zone-enroll";
+
+/// Protocol marker carried by every Zone enrollment control payload.
+pub const ZONE_ENROLLMENT_PROTOCOL: &str = "d2b-zone-enrollment-v1";
+
+/// Largest encoded Zone enrollment control payload one endpoint accepts.
+pub const MAX_ZONE_ENROLLMENT_PAYLOAD_BYTES: usize = 16 * 1024;
+
+/// The exact link identity one Zone enrollment control payload names.
+///
+/// These are comparison inputs, never authority: the authority is the
+/// runtime-issued admission the serving Zone holds. Naming the identity on the
+/// wire is what lets a Guest agent's request be refused before any PSK or
+/// enrollment record is touched when the allocator issued its admission for a
+/// different link.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ZoneEnrollmentIdentity {
+    /// The committed ZoneLink resource identity this enrollment is for.
+    pub zone_link_uid: ResourceUid,
+    /// The immutable parent/child edge the link joins.
+    pub edge: ZoneTreeEdge,
+    /// The ZoneLink controller generation that authorized the link.
+    pub controller_generation: ZoneLinkControllerGeneration,
+    /// The link identity generation this enrollment is for.
+    pub reconnect_generation: ReconnectGeneration,
+    /// The compiled schema fingerprint of the session being enrolled.
+    pub schema_fingerprint: [u8; 32],
+}
+
+impl ZoneEnrollmentIdentity {
+    /// Whether the declared identity is structurally admissible.
+    ///
+    /// An all-zero schema fingerprint is refused: an uninitialised buffer can
+    /// never become a fingerprint that later compares equal to another one.
+    pub fn validate(&self) -> Result<(), ZoneEnrollmentRefusal> {
+        if self.schema_fingerprint == [0; 32] {
+            return Err(ZoneEnrollmentRefusal::MalformedRequest);
+        }
+        Ok(())
+    }
+}
+
+/// One `zone-bootstrap` request: the link identity plus the allocator-issued
+/// single-use PSK issuance descriptor it presents.
+///
+/// The PSK itself never appears here. An issuance is its ordinal and the
+/// lifetime it was issued with, which is all the consuming state machine
+/// needs and all the wire may carry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ZoneBootstrapCall {
+    protocol: String,
+    /// The link identity being bootstrapped.
+    pub identity: ZoneEnrollmentIdentity,
+    /// The allocator's issuance ordinal for the presented PSK.
+    pub issuance: u64,
+    /// The declared lifetime of the presented PSK in milliseconds.
+    pub ttl_ms: u64,
+    /// When the allocator issued the presented PSK, in Unix milliseconds.
+    pub issued_at_unix_ms: u64,
+}
+
+impl ZoneBootstrapCall {
+    /// Build one bootstrap request.
+    pub fn new(
+        identity: ZoneEnrollmentIdentity,
+        issuance: u64,
+        ttl_ms: u64,
+        issued_at_unix_ms: u64,
+    ) -> Self {
+        Self {
+            protocol: ZONE_ENROLLMENT_PROTOCOL.to_owned(),
+            identity,
+            issuance,
+            ttl_ms,
+            issued_at_unix_ms,
+        }
+    }
+
+    /// Encode the bounded request payload.
+    pub fn encode(&self) -> Result<Vec<u8>, ZoneEnrollmentRefusal> {
+        encode_enrollment_payload(self)
+    }
+
+    /// Decode one bounded request payload, refusing anything else.
+    pub fn decode(bytes: &[u8]) -> Result<Self, ZoneEnrollmentRefusal> {
+        let call: Self = decode_enrollment_payload(bytes)?;
+        if call.protocol != ZONE_ENROLLMENT_PROTOCOL {
+            return Err(ZoneEnrollmentRefusal::MalformedRequest);
+        }
+        call.identity.validate()?;
+        if call.issuance == 0 || call.ttl_ms == 0 {
+            return Err(ZoneEnrollmentRefusal::MalformedRequest);
+        }
+        Ok(call)
+    }
+}
+
+/// One `zone-enroll` request: the link identity and the observed peer
+/// static-key fingerprint.
+///
+/// Only what the peer itself observed crosses the wire. The fingerprint the
+/// allocator sealed, and the opaque digest of the allocator enrollment that
+/// authorized it, stay with the allocator: neither is something a Guest agent
+/// is asked to echo back, and nothing here can be used to enroll a peer the
+/// allocator did not pin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ZoneEnrollCall {
+    protocol: String,
+    /// The link identity being enrolled.
+    pub identity: ZoneEnrollmentIdentity,
+    /// The observed peer static-key fingerprint.
+    pub observed_peer_fingerprint: [u8; 32],
+    /// When the enrollment was completed, in Unix milliseconds.
+    pub enrolled_at_unix_ms: u64,
+}
+
+impl ZoneEnrollCall {
+    /// Build one enrollment request.
+    pub fn new(
+        identity: ZoneEnrollmentIdentity,
+        observed_peer_fingerprint: [u8; 32],
+        enrolled_at_unix_ms: u64,
+    ) -> Self {
+        Self {
+            protocol: ZONE_ENROLLMENT_PROTOCOL.to_owned(),
+            identity,
+            observed_peer_fingerprint,
+            enrolled_at_unix_ms,
+        }
+    }
+
+    /// Encode the bounded request payload.
+    pub fn encode(&self) -> Result<Vec<u8>, ZoneEnrollmentRefusal> {
+        encode_enrollment_payload(self)
+    }
+
+    /// Decode one bounded request payload, refusing anything else.
+    pub fn decode(bytes: &[u8]) -> Result<Self, ZoneEnrollmentRefusal> {
+        let call: Self = decode_enrollment_payload(bytes)?;
+        if call.protocol != ZONE_ENROLLMENT_PROTOCOL {
+            return Err(ZoneEnrollmentRefusal::MalformedRequest);
+        }
+        call.identity.validate()?;
+        if call.observed_peer_fingerprint == [0; 32] {
+            return Err(ZoneEnrollmentRefusal::MalformedRequest);
+        }
+        Ok(call)
+    }
+}
+
+/// The closed reason one Zone enrollment control request was refused.
+///
+/// Every variant is a stable lower-kebab label. The label set is the union of
+/// the service's own admission refusals and the ZoneLink enrollment state
+/// machine's refusals, so a Guest agent learns exactly which rule refused it
+/// without learning any identity, key, path, or store fact.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ZoneEnrollmentRefusal {
+    /// No runtime-issued admission was presented.
+    AdmissionAbsent,
+    /// The presented admission was already consumed.
+    AdmissionConsumed,
+    /// The presented admission is past its validity.
+    AdmissionExpired,
+    /// Policy refused the request.
+    PolicyDenial,
+    /// The named edge is not one this Zone's sealed topology contains.
+    UnsealedZoneLink,
+    /// The request's identity is not the identity the admission was issued
+    /// for.
+    IdentityMismatch,
+    /// The session profile is not the enrolled Guest-local carriage profile.
+    SessionProfileRefused,
+    /// The presented PSK issuance was already burned or superseded.
+    BootstrapPskConsumed,
+    /// The presented PSK is past its absolute expiry.
+    BootstrapPskExpired,
+    /// The IKpsk2 bootstrap handshake failed. The PSK stays burned.
+    BootstrapHandshakeFailed,
+    /// The peer's static key does not match the sealed enrollment.
+    ZoneLinkEnrollmentKeyMismatch,
+    /// The sealed enrollment is durably invalidated.
+    ZoneLinkRevoked,
+    /// The transition is not defined from the current state.
+    InvalidTransition,
+    /// The declared PSK lifetime is outside the frozen range.
+    BootstrapPskTtlOutOfRange,
+    /// The declared enrolled-session lifetime is outside the frozen range.
+    KkSessionLifetimeOutOfRange,
+    /// A link epoch must be nonzero and must not wrap.
+    LinkEpochExhausted,
+    /// Resource traffic was offered before the link reached `Ready`.
+    ResourceTrafficBeforeReady,
+    /// The request payload is malformed, truncated, or names a zero digest.
+    MalformedRequest,
+    /// The request payload exceeds the bounded enrollment payload size.
+    PayloadTooLarge,
+}
+
+impl ZoneEnrollmentRefusal {
+    /// Every variant, in declaration order.
+    pub const ALL: &'static [Self] = &[
+        Self::AdmissionAbsent,
+        Self::AdmissionConsumed,
+        Self::AdmissionExpired,
+        Self::PolicyDenial,
+        Self::UnsealedZoneLink,
+        Self::IdentityMismatch,
+        Self::SessionProfileRefused,
+        Self::BootstrapPskConsumed,
+        Self::BootstrapPskExpired,
+        Self::BootstrapHandshakeFailed,
+        Self::ZoneLinkEnrollmentKeyMismatch,
+        Self::ZoneLinkRevoked,
+        Self::InvalidTransition,
+        Self::BootstrapPskTtlOutOfRange,
+        Self::KkSessionLifetimeOutOfRange,
+        Self::LinkEpochExhausted,
+        Self::ResourceTrafficBeforeReady,
+        Self::MalformedRequest,
+        Self::PayloadTooLarge,
+    ];
+
+    /// The stable lower-kebab label of this refusal.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AdmissionAbsent => "admission-absent",
+            Self::AdmissionConsumed => "admission-consumed",
+            Self::AdmissionExpired => "admission-expired",
+            Self::PolicyDenial => "policy-denial",
+            Self::UnsealedZoneLink => "unsealed-zone-link",
+            Self::IdentityMismatch => "identity-mismatch",
+            Self::SessionProfileRefused => "session-profile-refused",
+            Self::BootstrapPskConsumed => "bootstrap-psk-consumed",
+            Self::BootstrapPskExpired => "bootstrap-psk-expired",
+            Self::BootstrapHandshakeFailed => "bootstrap-handshake-failed",
+            Self::ZoneLinkEnrollmentKeyMismatch => "zone-link-enrollment-key-mismatch",
+            Self::ZoneLinkRevoked => "zone-link-revoked",
+            Self::InvalidTransition => "invalid-transition",
+            Self::BootstrapPskTtlOutOfRange => "bootstrap-psk-ttl-out-of-range",
+            Self::KkSessionLifetimeOutOfRange => "kk-session-lifetime-out-of-range",
+            Self::LinkEpochExhausted => "link-epoch-exhausted",
+            Self::ResourceTrafficBeforeReady => "resource-traffic-before-ready",
+            Self::MalformedRequest => "malformed-request",
+            Self::PayloadTooLarge => "payload-too-large",
+        }
+    }
+}
+
+impl fmt::Display for ZoneEnrollmentRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::error::Error for ZoneEnrollmentRefusal {}
+
+/// The answer to one `zone-bootstrap` request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ZoneBootstrapReply {
+    /// The bootstrap was admitted and the presented PSK is burned.
+    Admitted {
+        /// The absolute expiry of the consumed issuance, in Unix milliseconds.
+        expires_at_unix_ms: u64,
+    },
+    /// The bootstrap was refused for one closed reason.
+    Refused {
+        /// The closed refusal reason.
+        reason: ZoneEnrollmentRefusal,
+    },
+}
+
+impl ZoneBootstrapReply {
+    /// Encode the bounded reply payload.
+    pub fn encode(&self) -> Result<Vec<u8>, ZoneEnrollmentRefusal> {
+        encode_enrollment_payload(self)
+    }
+
+    /// Decode one bounded reply payload, refusing anything else.
+    pub fn decode(bytes: &[u8]) -> Result<Self, ZoneEnrollmentRefusal> {
+        decode_enrollment_payload(bytes)
+    }
+}
+
+/// The answer to one `zone-enroll` request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ZoneEnrollReply {
+    /// The enrollment committed and the enrolled session reached `Ready`.
+    Enrolled {
+        /// The Zone the allocator placed this agent in.
+        zone: ZoneId,
+        /// The link epoch the established session was assigned.
+        generation: u64,
+    },
+    /// The enrollment was refused for one closed reason.
+    Refused {
+        /// The closed refusal reason.
+        reason: ZoneEnrollmentRefusal,
+    },
+}
+
+impl ZoneEnrollReply {
+    /// Encode the bounded reply payload.
+    pub fn encode(&self) -> Result<Vec<u8>, ZoneEnrollmentRefusal> {
+        encode_enrollment_payload(self)
+    }
+
+    /// Decode one bounded reply payload, refusing anything else.
+    pub fn decode(bytes: &[u8]) -> Result<Self, ZoneEnrollmentRefusal> {
+        let reply: Self = decode_enrollment_payload(bytes)?;
+        if let Self::Enrolled { generation, .. } = &reply {
+            if *generation == 0 {
+                return Err(ZoneEnrollmentRefusal::MalformedRequest);
+            }
+        }
+        Ok(reply)
+    }
+}
+
+fn encode_enrollment_payload<T: Serialize>(value: &T) -> Result<Vec<u8>, ZoneEnrollmentRefusal> {
+    let bytes = serde_json::to_vec(value).map_err(|_| ZoneEnrollmentRefusal::MalformedRequest)?;
+    if bytes.len() > MAX_ZONE_ENROLLMENT_PAYLOAD_BYTES {
+        return Err(ZoneEnrollmentRefusal::PayloadTooLarge);
+    }
+    Ok(bytes)
+}
+
+fn decode_enrollment_payload<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+) -> Result<T, ZoneEnrollmentRefusal> {
+    if bytes.is_empty() {
+        return Err(ZoneEnrollmentRefusal::MalformedRequest);
+    }
+    if bytes.len() > MAX_ZONE_ENROLLMENT_PAYLOAD_BYTES {
+        return Err(ZoneEnrollmentRefusal::PayloadTooLarge);
+    }
+    serde_json::from_slice(bytes).map_err(|_| ZoneEnrollmentRefusal::MalformedRequest)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::zone_routing::{ZoneLabelId, ZonePath};
     use super::*;
 
     /// Golden canonical wire vector: every variant, its frozen tag, and its
@@ -611,5 +994,145 @@ mod tests {
         for value in EndpointPurpose::ALL {
             assert!(!value.as_str().contains("guest-bootstrap"));
         }
+    }
+
+    // -- Zone enrollment control messages --------------------------------
+
+    fn enrollment_identity() -> ZoneEnrollmentIdentity {
+        ZoneEnrollmentIdentity {
+            zone_link_uid: ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+                .expect("valid UID"),
+            edge: ZoneTreeEdge::new(
+                ZonePath::new(vec![ZoneLabelId::parse("k0").expect("label")]).expect("zone"),
+                ZonePath::new(vec![
+                    ZoneLabelId::parse("k1").expect("label"),
+                    ZoneLabelId::parse("k0").expect("label"),
+                ])
+                .expect("zone"),
+            )
+            .expect("direct child edge"),
+            controller_generation: ZoneLinkControllerGeneration::parse("controller-1")
+                .expect("valid generation"),
+            reconnect_generation: ReconnectGeneration::new(7).expect("valid generation"),
+            schema_fingerprint: [0x2a; 32],
+        }
+    }
+
+    #[test]
+    fn enrollment_payloads_round_trip_within_the_bound() {
+        let bootstrap =
+            ZoneBootstrapCall::new(enrollment_identity(), 3, 300_000, 1_700_000_000_000);
+        let encoded = bootstrap.encode().expect("encodes");
+        assert!(encoded.len() <= MAX_ZONE_ENROLLMENT_PAYLOAD_BYTES);
+        assert_eq!(ZoneBootstrapCall::decode(&encoded), Ok(bootstrap));
+
+        let enroll = ZoneEnrollCall::new(enrollment_identity(), [0x11; 32], 1_700_000_000_100);
+        let encoded = enroll.encode().expect("encodes");
+        assert_eq!(ZoneEnrollCall::decode(&encoded), Ok(enroll));
+
+        let admitted = ZoneBootstrapReply::Admitted {
+            expires_at_unix_ms: 1_700_000_300_000,
+        };
+        let encoded = admitted.encode().expect("encodes");
+        assert_eq!(ZoneBootstrapReply::decode(&encoded), Ok(admitted));
+
+        let enrolled = ZoneEnrollReply::Enrolled {
+            zone: ZoneId::parse("zone-1").expect("valid zone"),
+            generation: 1,
+        };
+        let encoded = enrolled.encode().expect("encodes");
+        assert_eq!(ZoneEnrollReply::decode(&encoded), Ok(enrolled));
+
+        let refused = ZoneEnrollReply::Refused {
+            reason: ZoneEnrollmentRefusal::BootstrapPskConsumed,
+        };
+        let encoded = refused.encode().expect("encodes");
+        assert_eq!(ZoneEnrollReply::decode(&encoded), Ok(refused));
+    }
+
+    #[test]
+    fn enrollment_payload_refusals_are_closed_and_bounded() {
+        let bootstrap = ZoneBootstrapCall::new(enrollment_identity(), 3, 300_000, 0);
+        let encoded = bootstrap.encode().expect("encodes");
+
+        // Truncated, empty, oversize, and unknown-member payloads are all
+        // refused, and a zero-digest identity never decodes.
+        assert_eq!(
+            ZoneBootstrapCall::decode(&[]),
+            Err(ZoneEnrollmentRefusal::MalformedRequest)
+        );
+        assert_eq!(
+            ZoneBootstrapCall::decode(&encoded[..encoded.len() - 1]),
+            Err(ZoneEnrollmentRefusal::MalformedRequest)
+        );
+        let oversize = vec![b' '; MAX_ZONE_ENROLLMENT_PAYLOAD_BYTES + 1];
+        assert_eq!(
+            ZoneBootstrapCall::decode(&oversize),
+            Err(ZoneEnrollmentRefusal::PayloadTooLarge)
+        );
+        assert_eq!(
+            ZoneBootstrapCall::decode(br#"{"protocol":"d2b-zone-enrollment-v1"}"#),
+            Err(ZoneEnrollmentRefusal::MalformedRequest)
+        );
+
+        let mut zero_digest = enrollment_identity();
+        zero_digest.schema_fingerprint = [0; 32];
+        let call = ZoneBootstrapCall::new(zero_digest, 3, 300_000, 0);
+        let encoded = call.encode().expect("encodes");
+        assert_eq!(
+            ZoneBootstrapCall::decode(&encoded),
+            Err(ZoneEnrollmentRefusal::MalformedRequest)
+        );
+
+        let zero_issuance = ZoneBootstrapCall::new(enrollment_identity(), 0, 300_000, 0);
+        assert_eq!(
+            ZoneBootstrapCall::decode(&zero_issuance.encode().expect("encodes")),
+            Err(ZoneEnrollmentRefusal::MalformedRequest)
+        );
+
+        let mut reply = ZoneEnrollReply::Enrolled {
+            zone: ZoneId::parse("zone-1").expect("valid zone"),
+            generation: 0,
+        }
+        .encode()
+        .expect("encodes");
+        assert_eq!(
+            ZoneEnrollReply::decode(&reply),
+            Err(ZoneEnrollmentRefusal::MalformedRequest)
+        );
+        reply.clear();
+        assert_eq!(
+            ZoneEnrollReply::decode(&reply),
+            Err(ZoneEnrollmentRefusal::MalformedRequest)
+        );
+    }
+
+    #[test]
+    fn enrollment_refusal_labels_are_unique_and_stable() {
+        let mut labels: Vec<&str> = ZoneEnrollmentRefusal::ALL
+            .iter()
+            .map(|reason| reason.as_str())
+            .collect();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), ZoneEnrollmentRefusal::ALL.len());
+        for reason in ZoneEnrollmentRefusal::ALL {
+            assert_eq!(reason.as_str(), reason.as_str().to_ascii_lowercase());
+            assert!(!reason.as_str().contains('_'));
+            let json = serde_json::to_string(reason).expect("serialize");
+            assert_eq!(json, format!("\"{}\"", reason.as_str()));
+            assert_eq!(
+                serde_json::from_str::<ZoneEnrollmentRefusal>(&json).expect("deserialize"),
+                *reason
+            );
+        }
+        assert_eq!(
+            ZoneEnrollmentRefusal::ZoneLinkEnrollmentKeyMismatch.as_str(),
+            "zone-link-enrollment-key-mismatch"
+        );
+        assert_eq!(
+            serde_json::to_string(&ZoneEnrollmentRefusal::PolicyDenial).expect("serialize"),
+            "\"policy-denial\""
+        );
     }
 }

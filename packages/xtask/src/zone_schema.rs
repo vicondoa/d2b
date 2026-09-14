@@ -40,35 +40,26 @@ const CREDENTIAL_REF_PATTERN: &str = "^Credential/[a-z][a-z0-9-]{0,62}$";
 const TRANSPORT_PROVIDER_REF_PATTERN: &str = "^Provider/transport-[a-z][a-z0-9-]{0,52}$";
 /// Any same-Zone `<Type>/<name>` ref, used by `metadata.ownerRef`.
 const RESOURCE_REF_PATTERN: &str = "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$";
+/// Role posture `principalRef` spelling: the host-account identity the
+/// committed principal allocation names. It is not a ResourceRef.
+const PRINCIPAL_REF_PATTERN: &str = "^Principal/[a-z][a-z0-9-]{0,62}$";
+/// Role posture mount path: absolute and control-character-free, the same
+/// language `RoleMountPath` enforces.
+const MOUNT_PATH_PATTERN: &str = "^/[^\\u0000]*$";
+/// Maximum bytes of one posture mount path, mirroring `RoleMountPath`.
+const MOUNT_PATH_MAX_BYTES: usize = 255;
 
 const API_VERSION: &str = "resources.d2bus.org/v3";
 const CORE_SCHEMA_NAMESPACE: &str = "core.d2bus.org";
 
-/// The canonical 20-type registry from `ADR-046-resource-object-model`. The
-/// unit test below pins it against `nixos-modules/resources.nix`, which is the
-/// hand-maintained registry the structural option base already uses.
-pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
-    "Zone",
-    "ZoneLink",
-    "Provider",
-    "Role",
-    "RoleBinding",
-    "Quota",
-    "EmergencyPolicy",
-    "Host",
-    "Guest",
-    "Process",
-    "EphemeralProcess",
-    "Volume",
-    "VolumeBinding",
-    "Network",
-    "Device",
-    "User",
-    "Credential",
-    "Endpoint",
-    "ResourceExport",
-    "ResourceImport",
-];
+/// The canonical standard ResourceType registry from
+/// `ADR-046-resource-object-model`.
+///
+/// The registry has one declaration - `d2b_contracts::identity` - and this
+/// generator projects it into the committed Nix registry that every consumer
+/// imports. Nothing here restates a type name, so a type cannot be authorable
+/// in Nix while the resource plane refuses it.
+pub use d2b_contracts::identity::STANDARD_RESOURCE_TYPES;
 
 /// U12 Provider-owned qualified ResourceTypes. They are generated from their
 /// signed Provider schemas and must never enter the Core standard registry.
@@ -747,12 +738,104 @@ fn role_rule_schema() -> Value {
 const RESOURCE_TYPE_NAME_PATTERN: &str =
     "^[A-Z][A-Za-z0-9]{0,62}$|^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}$";
 
+/// The namespace set one Role posture isolates. The seven booleans mirror
+/// `RoleNamespaces`; there is deliberately no `user` member, because the
+/// user-namespace flag is the top-level `userNs` field.
+fn role_namespaces_schema() -> Value {
+    object_from_pairs(
+        [
+            ("mount", json!({ "type": "boolean" })),
+            ("pid", json!({ "type": "boolean" })),
+            ("net", json!({ "type": "boolean" })),
+            ("uts", json!({ "type": "boolean" })),
+            ("ipc", json!({ "type": "boolean" })),
+            ("cgroup", json!({ "type": "boolean" })),
+            ("time", json!({ "type": "boolean" })),
+        ],
+        &["mount", "pid", "net", "uts", "ipc", "cgroup", "time"],
+    )
+}
+
+/// The confined posture facet of one Role. Every member is required inside
+/// the object: the contract always serializes the closed posture, so an
+/// authored row that omits one is a decode refusal at the daemon.
+fn role_posture_schema() -> Value {
+    object_from_pairs(
+        [
+            (
+                "seccompRef",
+                resource_ref_schema_with(
+                    "^SeccompProfile/[a-z][a-z0-9-]{0,62}$",
+                    &["SeccompProfile"],
+                ),
+            ),
+            ("principalRef", string_schema(PRINCIPAL_REF_PATTERN)),
+            (
+                "capabilities",
+                array_schema(string_schema(BOUNDED_TOKEN_PATTERN), 64),
+            ),
+            ("namespaces", role_namespaces_schema()),
+            (
+                "mounts",
+                array_schema(
+                    object_from_pairs(
+                        [
+                            (
+                                "path",
+                                json!({
+                                    "type": "string",
+                                    "pattern": MOUNT_PATH_PATTERN,
+                                    "maxLength": MOUNT_PATH_MAX_BYTES,
+                                }),
+                            ),
+                            ("writable", json!({ "type": "boolean" })),
+                        ],
+                        &["path", "writable"],
+                    ),
+                    64,
+                ),
+            ),
+            ("umask", nullable(json!({ "type": "integer", "minimum": 0, "maximum": 511 }))),
+            ("userNs", json!({ "type": "boolean" })),
+        ],
+        &[
+            "seccompRef",
+            "principalRef",
+            "capabilities",
+            "namespaces",
+            "mounts",
+            "umask",
+            "userNs",
+        ],
+    )
+}
+
 fn standard_core_schemas() -> Vec<(&'static str, Value)> {
     let role = core_resource_schema(
         "Role",
         "Zone-local bounded authorization rules.",
         object_from_pairs(
-            [("rules", array_schema(role_rule_schema(), 32))],
+            [
+                ("rules", array_schema(role_rule_schema(), 32)),
+                (
+                    "operationRefs",
+                    array_schema(
+                        resource_ref_schema_with(
+                            "^Operation/[a-z][a-z0-9-]{0,62}$",
+                            &["Operation"],
+                        ),
+                        64,
+                    ),
+                ),
+                (
+                    "commandRefs",
+                    array_schema(
+                        resource_ref_schema_with("^Command/[a-z][a-z0-9-]{0,62}$", &["Command"]),
+                        64,
+                    ),
+                ),
+                ("posture", nullable(role_posture_schema())),
+            ],
             &["rules"],
         ),
     );
@@ -771,6 +854,13 @@ fn standard_core_schemas() -> Vec<(&'static str, Value)> {
                     nullable(json!({ "type": "object" })),
                 ),
                 ("scopeNarrowing", nullable(json!({ "type": "object" }))),
+                ("resourceRefs", array_schema(resource_ref_schema(), 64)),
+                ("zoneRefs", array_schema(string_schema(NAME_PATTERN), 8)),
+                ("executionRefs", array_schema(resource_ref_schema(), 32)),
+                (
+                    "relayAuthority",
+                    nullable(enum_schema(&["none", "core-generated", "durable-local-admin"])),
+                ),
             ],
             &[
                 "roleRef",
@@ -1137,6 +1227,30 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
             dto_resource_schema::<d2b_contracts_provider::v3::credential::CredentialSpec>(
                 "Credential",
                 "Opaque rotating credential lease policy.",
+                true,
+            ),
+        ),
+        (
+            "Command",
+            dto_resource_schema::<d2b_contracts_resource::v3::CommandSpec>(
+                "Command",
+                "Declared launch shape: executable, argv placeholder slots, parameters, worker role, and intent.",
+                true,
+            ),
+        ),
+        (
+            "Operation",
+            dto_resource_schema::<d2b_contracts_resource::v3::OperationSpec>(
+                "Operation",
+                "Committed broker operation: payload schema, authority, audit, fd, bounds, and provenance facets.",
+                true,
+            ),
+        ),
+        (
+            "SeccompProfile",
+            dto_resource_schema::<d2b_contracts_resource::v3::SeccompProfileSpec>(
+                "SeccompProfile",
+                "Posture row: syscall allowlist, namespace and cgroup sets, and inline device-node binds.",
                 true,
             ),
         ),
@@ -1511,34 +1625,18 @@ mod tests {
     }
 
     #[test]
-    fn standard_registry_matches_hand_maintained_nix_registry() {
-        let source = fs::read_to_string(repo_root().join("nixos-modules/resources.nix"))
-            .expect("resources.nix is readable");
-        let start = source
-            .find("standardResourceTypes = [")
-            .expect("standardResourceTypes list is present");
-        let rest = &source[start..];
-        let end = rest
-            .find("];")
-            .expect("standardResourceTypes list terminates");
-        let body = &rest[..end];
-        let found: Vec<String> = body
-            .lines()
-            .skip(1)
-            .filter_map(|line| {
-                let trimmed = line.trim();
-                trimmed
-                    .strip_prefix('"')
-                    .and_then(|rest| rest.strip_suffix('"'))
-                    .map(str::to_owned)
-            })
+    fn standard_registry_is_projected_into_the_committed_nix_registry() {
+        let authority: Vec<String> = STANDARD_RESOURCE_TYPES
+            .iter()
+            .map(|name| format!("  \"{name}\"\n"))
             .collect();
-        assert_eq!(
-            found,
-            STANDARD_RESOURCE_TYPES
-                .iter()
-                .map(|name| (*name).to_owned())
-                .collect::<Vec<String>>()
+        let generated = generated_resource_types_module();
+        let mut expected = String::from("[\n");
+        expected.push_str(&authority.concat());
+        expected.push_str("]\n");
+        assert!(
+            generated.ends_with(&expected),
+            "the generated registry is the authority list entry for entry"
         );
     }
 

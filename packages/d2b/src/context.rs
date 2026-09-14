@@ -4,16 +4,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
-    future::{Future, ready},
-    io::{self, IoSliceMut, Read as _},
+    future::Future,
+    io::{self, Read as _},
     os::fd::{AsRawFd as _, OwnedFd},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    task::{Context as TaskContext, Poll, Wake, Waker},
-    thread,
     time::{Duration, Instant},
 };
 
@@ -26,7 +24,9 @@ use d2b_contracts_control::public_wire::{
     NamedProcessStreamRequest, NamedProcessStreamRequestFrame, NamedProcessStreamResponse,
     NamedProcessStreamResponseFrame,
 };
-use d2b_contracts_resource::v3::identity::V3_CONVERTED_RESOURCE_TYPES;
+use d2b_contracts_resource::v3::identity::{
+    STANDARD_RESOURCE_TYPES, V3_CONVERTED_RESOURCE_TYPES,
+};
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceErrorKind, ResourceRef, ResourceTypeName, RetryClass, ZoneId,
 };
@@ -43,15 +43,15 @@ use d2b_resource_client::{
     ZoneClient, ZonePeerIdentity, ZoneServiceKind, ZoneSessionConnector, ZoneSessionPin,
     ZoneSocketConnector, resource_verb_is_mutating,
 };
-use nix::sys::socket::{
-    AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, send, socket,
-};
-use rustix::net::sockopt::{Timeout as SocketTimeout, set_socket_timeout};
-use rustix::net::{RecvAncillaryBuffer, RecvFlags, recvmsg};
+use nix::errno::Errno;
+use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tokio::io::unix::AsyncFd;
+use tokio::sync::Mutex as AsyncMutex;
 
+use crate::runtime::{block_on, inside_runtime};
 use crate::terminal_client::TerminalHostIo;
 use crate::{CliFailure, MAX_FRAME_BYTES, print_stdout};
 
@@ -65,6 +65,13 @@ pub(crate) const DEFAULT_REQUEST_LIFETIME_MS: u64 = 30_000;
 pub(crate) const MAX_EXPEDITED_DEADLINE_MS: u64 = 10_000;
 /// The maximum bytes accepted from a caller-provided resource spec.
 pub(crate) const MAX_SPEC_BYTES: usize = 64 * 1024;
+/// The deadline for one interactive named-stream round trip.
+///
+/// The terminal loop reports a named transport failure when a peer does not
+/// answer within this bound, instead of blocking the operator's terminal.
+pub(crate) const SHELL_STREAM_IO_DEADLINE_MS: u64 = 5_000;
+/// The framed-envelope width: a 4-byte little-endian length prefix.
+const FRAME_PREFIX_BYTES: usize = 4;
 
 pub(crate) const DEFAULT_MANIFEST_PATH: &str = "/run/current-system/sw/share/d2b/vms.json";
 pub(crate) const DEFAULT_BUNDLE_PATH: &str = "/etc/d2b/bundle.json";
@@ -452,108 +459,242 @@ pub(crate) fn is_daemon_unreachable(err: &io::Error) -> bool {
 }
 
 pub(crate) fn probe_socket(path: &Path) -> Result<SocketProbe, CliFailure> {
-    let mut socket = SeqpacketUnixSocket::connect(path).map_err(|err| {
-        CliFailure::new(1, format!("failed to connect to {}: {err}", path.display()))
+    block_on(probe_socket_within(
+        path,
+        Duration::from_millis(LOCAL_HANDSHAKE_DEADLINE_MS),
+    ))
+}
+
+async fn probe_socket_within(path: &Path, budget: Duration) -> Result<SocketProbe, CliFailure> {
+    let socket = CliSocket::connect(path, budget).await.map_err(|error| {
+        CliFailure::new(
+            1,
+            format!(
+                "zone-unavailable: failed to connect to {}: {error}",
+                path.display()
+            ),
+        )
     })?;
     let payload = daemon_hello_frame("hello")?;
-    socket
-        .send_frame(&payload)
-        .map_err(|err| CliFailure::new(1, format!("failed to send hello frame: {err}")))?;
-    let response = socket
-        .recv_frame()
-        .map_err(|err| CliFailure::new(1, format!("failed to receive hello reply: {err}")))?;
+    socket.send_frame(&payload, budget).await.map_err(|error| {
+        CliFailure::new(
+            1,
+            format!("exec-transport-error: failed to send hello frame: {error}"),
+        )
+    })?;
+    let response = socket.recv_frame(budget).await.map_err(|error| {
+        CliFailure::new(
+            1,
+            format!("exec-transport-error: failed to receive hello reply: {error}"),
+        )
+    })?;
     let hello = parse_hello_reply(&response)?;
+    socket.close();
     Ok(SocketProbe {
         reachable: true,
         version: Some(hello.selected_version.as_str().to_owned()),
     })
 }
 
-pub(crate) struct SeqpacketUnixSocket {
-    fd: OwnedFd,
+/// Connect once to `path` with the handshake deadline, for reachability
+/// checks that do not need a session.
+pub(crate) fn socket_connectable(path: &Path) -> io::Result<()> {
+    let socket = block_on(CliSocket::connect(
+        path,
+        Duration::from_millis(LOCAL_HANDSHAKE_DEADLINE_MS),
+    ))?;
+    socket.close();
+    Ok(())
 }
 
-impl SeqpacketUnixSocket {
-    #[cfg(test)]
-    pub(crate) fn from_owned_fd(fd: OwnedFd) -> Self {
-        Self { fd }
+/// One end of the CLI's framed JSON protocol over a non-blocking seqpacket
+/// socket.
+///
+/// Readiness is tokio's [`AsyncFd`]: the descriptor is registered with the
+/// process runtime's reactor and every syscall below is non-blocking, so no
+/// CLI thread parks in the kernel on this path. The CLI envelope is unchanged
+/// - one datagram per frame, a 4-byte little-endian length prefix and one JSON
+/// body - and each operation carries an explicit deadline whose expiry
+/// surfaces as [`io::ErrorKind::TimedOut`] for the caller to name.
+pub(crate) struct CliSocket {
+    fd: AsyncFd<OwnedFd>,
+}
+
+impl CliSocket {
+    fn from_owned_fd(fd: OwnedFd) -> io::Result<Self> {
+        Ok(Self {
+            fd: AsyncFd::new(fd)?,
+        })
     }
 
-    pub(crate) fn connect(path: &Path) -> io::Result<Self> {
+    /// Connect to `path`, bounded by `budget`.
+    ///
+    /// AF_UNIX `connect` completes synchronously except when the listener's
+    /// queue is full, where a non-blocking connect refuses with `EAGAIN`; the
+    /// retry loop stays inside the budget rather than parking the thread in
+    /// the kernel on a wedged listener.
+    pub(crate) async fn connect(path: &Path, budget: Duration) -> io::Result<Self> {
         let fd = socket(
             AddressFamily::Unix,
             SockType::SeqPacket,
-            SockFlag::SOCK_CLOEXEC,
+            SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
             None,
         )
         .map_err(nix_err_to_io)?;
         let addr = UnixAddr::new(path).map_err(nix_err_to_io)?;
-        connect(fd.as_raw_fd(), &addr).map_err(nix_err_to_io)?;
-        Ok(Self { fd })
+        let deadline = Instant::now() + budget;
+        let mut delay = Duration::from_millis(1);
+        loop {
+            match connect(fd.as_raw_fd(), &addr) {
+                Ok(()) => break,
+                // A full accept queue or an interrupted attempt: retry.
+                Err(Errno::EAGAIN | Errno::EINTR | Errno::EINPROGRESS) => {
+                    let now = Instant::now();
+                    let Some(remaining) = deadline.checked_duration_since(now) else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!(
+                                "connect to {} exceeded {}ms",
+                                path.display(),
+                                budget.as_millis()
+                            ),
+                        ));
+                    };
+                    tokio::time::sleep(delay.min(remaining)).await;
+                    delay = (delay * 2).min(Duration::from_millis(25));
+                }
+                // A prior attempt that did complete: the socket is connected.
+                Err(Errno::EISCONN) => break,
+                Err(error) => return Err(nix_err_to_io(error)),
+            }
+        }
+        Self::from_owned_fd(fd)
     }
 
-    pub(crate) fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
+    pub(crate) fn close(&self) {
+        let _ = rustix::net::shutdown(self.fd.get_ref(), rustix::net::Shutdown::ReadWrite);
+    }
+
+    pub(crate) async fn send_frame(&self, payload: &[u8], budget: Duration) -> io::Result<()> {
         if payload.len() > MAX_FRAME_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "frame exceeds 1 MiB limit",
             ));
         }
-        let mut frame = Vec::with_capacity(payload.len() + 4);
+        let mut frame = Vec::with_capacity(payload.len() + FRAME_PREFIX_BYTES);
         frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         frame.extend_from_slice(payload);
-        let sent = send(self.fd.as_raw_fd(), &frame, MsgFlags::empty()).map_err(nix_err_to_io)?;
-        if sent != frame.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::WriteZero,
-                "short write on seqpacket socket",
-            ));
+        match tokio::time::timeout(budget, self.write_frame(&frame)).await {
+            Ok(result) => result,
+            Err(_) => Err(deadline_error("send", budget)),
         }
-        Ok(())
     }
 
-    pub(crate) fn set_io_timeout(&self, timeout: Duration) -> io::Result<()> {
-        set_socket_timeout(&self.fd, SocketTimeout::Recv, Some(timeout))
-            .map_err(io::Error::from)?;
-        set_socket_timeout(&self.fd, SocketTimeout::Send, Some(timeout))
-            .map_err(io::Error::from)?;
-        Ok(())
-    }
-
-    pub(crate) fn recv_frame(&mut self) -> io::Result<Vec<u8>> {
-        let mut buffer = vec![0_u8; MAX_FRAME_BYTES + 4];
-        let mut iov = [IoSliceMut::new(&mut buffer)];
-        let mut ancillary_bytes = [0_u8; rustix::cmsg_space!(ScmRights(32))];
-        let mut ancillary = RecvAncillaryBuffer::new(&mut ancillary_bytes);
-        let received = recvmsg(&self.fd, &mut iov, &mut ancillary, RecvFlags::empty())
-            .map_err(io::Error::from)?;
-        if received.flags.contains(RecvFlags::TRUNC) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "oversized seqpacket frame",
-            ));
-        }
-        if received.bytes < 4 {
+    pub(crate) async fn recv_frame(&self, budget: Duration) -> io::Result<Vec<u8>> {
+        let frame = match tokio::time::timeout(budget, self.read_frame()).await {
+            Ok(result) => result?,
+            Err(_) => return Err(deadline_error("receive", budget)),
+        };
+        if frame.len() < FRAME_PREFIX_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "short frame from seqpacket socket",
             ));
         }
-        let expected = u32::from_le_bytes(buffer[..4].try_into().expect("frame prefix")) as usize;
-        if expected > MAX_FRAME_BYTES || expected + 4 != received.bytes {
+        let expected = u32::from_le_bytes(frame[..FRAME_PREFIX_BYTES].try_into().expect("prefix"));
+        if expected as usize > MAX_FRAME_BYTES
+            || expected as usize + FRAME_PREFIX_BYTES != frame.len()
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "malformed seqpacket frame",
             ));
         }
-        if ancillary.drain().next().is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "ancillary data is not permitted on the CLI transport",
-            ));
-        }
-        Ok(buffer[4..4 + expected].to_vec())
+        Ok(frame[FRAME_PREFIX_BYTES..].to_vec())
     }
+
+    /// Send one datagram: a seqpacket send is atomic, so a partial write is a
+    /// protocol failure rather than a retry.
+    async fn write_frame(&self, frame: &[u8]) -> io::Result<()> {
+        loop {
+            let mut ready = self.fd.writable().await?;
+            match ready.try_io(|inner| {
+                rustix::net::send(
+                    inner.get_ref(),
+                    frame,
+                    rustix::net::SendFlags::DONTWAIT | rustix::net::SendFlags::NOSIGNAL,
+                )
+                .map_err(io::Error::from)
+            }) {
+                Ok(Ok(sent)) if sent == frame.len() => return Ok(()),
+                Ok(Ok(sent)) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        format!("short write on seqpacket socket: {sent} of {}", frame.len()),
+                    ));
+                }
+                Ok(Err(error)) => return Err(error),
+                // Spurious readiness: re-arm and wait again.
+                Err(_) => continue,
+            }
+        }
+    }
+
+    /// Receive one datagram, refusing ancillary data and oversized frames.
+    async fn read_frame(&self) -> io::Result<Vec<u8>> {
+        let mut buffer = vec![0_u8; MAX_FRAME_BYTES + FRAME_PREFIX_BYTES];
+        loop {
+            let mut ready = self.fd.readable().await?;
+            match ready.try_io(|inner| {
+                let mut iov = [rustix::io::IoSliceMut::new(&mut buffer)];
+                let mut control_bytes = [0_u8; rustix::cmsg_space!(ScmRights(1))];
+                let mut control = rustix::net::RecvAncillaryBuffer::new(&mut control_bytes);
+                let received = loop {
+                    match rustix::net::recvmsg(
+                        inner.get_ref(),
+                        &mut iov,
+                        &mut control,
+                        rustix::net::RecvFlags::DONTWAIT | rustix::net::RecvFlags::CMSG_CLOEXEC,
+                    ) {
+                        Err(rustix::io::Errno::INTR) => continue,
+                        result => break result.map_err(io::Error::from),
+                    }
+                }?;
+                if control.drain().next().is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "ancillary data is not permitted on the CLI transport",
+                    ));
+                }
+                if received.flags.contains(rustix::net::RecvFlags::TRUNC) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "oversized seqpacket frame",
+                    ));
+                }
+                if received.bytes == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::ConnectionReset,
+                        "peer closed the socket",
+                    ));
+                }
+                buffer.truncate(received.bytes);
+                Ok(std::mem::take(&mut buffer))
+            }) {
+                Ok(result) => return result,
+                // Spurious readiness: re-arm and wait again.
+                Err(_) => continue,
+            }
+        }
+    }
+}
+
+fn deadline_error(operation: &str, budget: Duration) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("socket {operation} exceeded {}ms", budget.as_millis()),
+    )
 }
 
 pub(crate) fn nix_err_to_io(err: nix::errno::Errno) -> io::Error {
@@ -949,71 +1090,7 @@ impl ZoneContext {
                 deadline,
             )
             .map_err(|error| self.client_failure(error, OutputMode::Human))?;
-        let mut guard = crate::exec_client::FdStateGuard::enter(true, true)
-            .map_err(|_| CliFailure::new(69, "shell terminal setup failed"))?;
-        let mut host = crate::exec_client::RealHostIo;
-        let mut signals = crate::exec_client::install_signals()
-            .map_err(|_| CliFailure::new(69, "shell signal setup failed"))?;
-        let mut input = [0_u8; d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES as usize];
-        loop {
-            for signal in crate::terminal_client::TerminalSignalSource::drain(&mut signals) {
-                match signal {
-                    crate::exec_client::ExecSignal::Winch => {
-                        if let Some((rows, cols)) = host.window_size() {
-                            let size = u16::try_from(rows)
-                                .ok()
-                                .zip(u16::try_from(cols).ok())
-                                .and_then(|(rows, cols)| TerminalSize::new(rows, cols).ok());
-                            if let Some(size) = size {
-                                let _ = block_on(stream.resize(size));
-                            }
-                        }
-                    }
-                    crate::exec_client::ExecSignal::Hangup
-                    | crate::exec_client::ExecSignal::Terminate
-                    | crate::exec_client::ExecSignal::Stop
-                    | crate::exec_client::ExecSignal::Interrupt
-                    | crate::exec_client::ExecSignal::Quit => {
-                        let _ = block_on(stream.cancel());
-                        guard.restore();
-                        return Ok(());
-                    }
-                }
-            }
-            match host.read_stdin(&mut input) {
-                Ok(0) => {
-                    let _ = block_on(stream.close());
-                    guard.restore();
-                    return Ok(());
-                }
-                Ok(read) => {
-                    block_on(stream.send(&input[..read]))
-                        .map_err(|_| CliFailure::new(69, "shell input transport failed"))?;
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                    ) => {}
-                Err(_) => {
-                    let _ = block_on(stream.cancel());
-                    guard.restore();
-                    return Err(CliFailure::new(69, "shell input failed"));
-                }
-            }
-            let output = match block_on(stream.receive()) {
-                Ok(output) => output,
-                Err(ClientError::Cancelled) => {
-                    guard.restore();
-                    return Ok(());
-                }
-                Err(_) => return Err(CliFailure::new(69, "shell output transport failed")),
-            };
-            if !output.is_empty() {
-                host.write_stdout(&output)
-                    .map_err(|_| CliFailure::new(69, "shell output failed"))?;
-            }
-        }
+        block_on(run_shell_session(stream))
     }
 
     #[cfg(test)]
@@ -1254,6 +1331,11 @@ impl ZoneContext {
                 "Zone request retry budget was exhausted",
                 1,
             ),
+            ClientError::RetryBackoffUnavailable => (
+                "zone-unavailable",
+                "Zone request retry backoff was unavailable",
+                1,
+            ),
             ClientError::Remote { kind, .. } => resource_error_surface(kind),
         };
         let mut failure = self.failure(class, message, mode, exit_code);
@@ -1348,6 +1430,162 @@ impl ZoneContext {
         }
         value
     }
+}
+
+/// Terminal ownership for one interactive shell attachment.
+///
+/// This loop is the *only* reader of the terminal while it runs: the guard
+/// holds raw mode, [`TerminalInput`] owns readiness on a duplicate of stdin,
+/// and every branch below waits through the runtime rather than reading
+/// synchronously. Adding a blocking read anywhere in this file would fight
+/// this owner, which is why the loop is the single entry point.
+///
+/// crossterm's `EventStream` is the canonical async reader for a *line* UI
+/// (and `reedline` for a REPL); this path is neither. It forwards raw bytes to
+/// the guest's PTY, so re-encoding keystrokes as `Event`s would drop escape
+/// sequences, IME composition, and paste fidelity. The established primitive
+/// for raw terminal bytes is readiness on the tty descriptor, which is what
+/// [`TerminalInput`] uses.
+async fn run_shell_session(
+    stream: d2b_resource_client::ProcessAttachStream<CliAttachStream>,
+) -> Result<(), CliFailure> {
+    let mut guard = crate::exec_client::FdStateGuard::enter(true, true)
+        .map_err(|_| CliFailure::new(69, "shell terminal setup failed"))?;
+    let mut host = crate::exec_client::RealHostIo;
+    let mut signals = crate::exec_client::install_signals()
+        .map_err(|_| CliFailure::new(69, "shell signal setup failed"))?;
+    let terminal =
+        TerminalInput::open().map_err(|_| CliFailure::new(69, "shell terminal setup failed"))?;
+    let mut input = [0_u8; d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES as usize];
+    loop {
+        tokio::select! {
+            // Every branch below reuses this structure: the selected future
+            // completes, the others are dropped, and the body runs to
+            // completion - so a terminal read can never be cancelled between
+            // "bytes were read" and "bytes were sent".
+            _ = signals.waiter() => {
+                for signal in crate::terminal_client::TerminalSignalSource::drain(&mut signals) {
+                    match signal {
+                        crate::exec_client::ExecSignal::Winch => {
+                            if let Some(size) = shell_terminal_size(&host) {
+                                let _ = stream.resize(size).await;
+                            }
+                        }
+                        crate::exec_client::ExecSignal::Hangup
+                        | crate::exec_client::ExecSignal::Terminate
+                        | crate::exec_client::ExecSignal::Stop
+                        | crate::exec_client::ExecSignal::Interrupt
+                        | crate::exec_client::ExecSignal::Quit => {
+                            let _ = stream.cancel().await;
+                            guard.restore();
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            read = terminal.read(&mut input) => {
+                match read {
+                    Ok(0) => {
+                        let _ = stream.close().await;
+                        guard.restore();
+                        return Ok(());
+                    }
+                    Ok(read) => {
+                        stream
+                            .send(&input[..read])
+                            .await
+                            .map_err(|error| shell_failure("shell input transport failed", error))?;
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(_) => {
+                        let _ = stream.cancel().await;
+                        guard.restore();
+                        return Err(CliFailure::new(69, "shell input failed"));
+                    }
+                }
+            }
+            output = stream.receive() => {
+                match output {
+                    Ok(output) => {
+                        if !output.is_empty() {
+                            host.write_stdout(&output)
+                                .map_err(|_| CliFailure::new(69, "shell output failed"))?;
+                        }
+                    }
+                    Err(ClientError::Cancelled) => {
+                        guard.restore();
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        guard.restore();
+                        return Err(shell_failure("shell output transport failed", error));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Readiness-driven raw terminal input for the interactive shell.
+///
+/// The descriptor is a duplicate of stdin sharing its open file description,
+/// so the guard's non-blocking flag applies to both while the original stays
+/// owned by the process.
+struct TerminalInput {
+    fd: AsyncFd<OwnedFd>,
+}
+
+impl TerminalInput {
+    fn open() -> io::Result<Self> {
+        let fd = rustix::io::dup(rustix::stdio::stdin()).map_err(io::Error::from)?;
+        Ok(Self {
+            fd: AsyncFd::new(fd)?,
+        })
+    }
+
+    async fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            let mut ready = self.fd.readable().await?;
+            match ready.try_io(|inner| {
+                loop {
+                    match rustix::io::read(inner.get_ref(), buf) {
+                        Err(rustix::io::Errno::INTR) => continue,
+                        result => return result.map_err(io::Error::from),
+                    }
+                }
+            }) {
+                Ok(result) => return result,
+                // Spurious readiness (or a blocking read another handler
+                // consumed): re-arm and wait again.
+                Err(_) => continue,
+            }
+        }
+    }
+}
+
+fn shell_terminal_size(host: &crate::exec_client::RealHostIo) -> Option<TerminalSize> {
+    let (rows, cols) = host.window_size()?;
+    let size = u16::try_from(rows)
+        .ok()
+        .zip(u16::try_from(cols).ok())
+        .and_then(|(rows, cols)| TerminalSize::new(rows, cols).ok());
+    size
+}
+
+/// Name one interactive shell transport failure.
+///
+/// A wedged peer must read as a bounded, named refusal (with its class) and
+/// never as a hung terminal.
+fn shell_failure(step: &str, error: ClientError) -> CliFailure {
+    let class = match error {
+        ClientError::DeadlineExpired => "deadline-exceeded",
+        _ => "exec-transport-error",
+    };
+    CliFailure::new(69, format!("{class}: {step}"))
 }
 
 fn canonical_backend(zone_name: &str, socket_path: &Path) -> Result<ContextBackend, CliFailure> {
@@ -1614,7 +1852,7 @@ impl CliZoneConnector {
         }
     }
 
-    fn connect_now(
+    async fn connect_now(
         &self,
         target: &d2b_resource_client::ResolvedTarget,
         service: ZoneServiceKind,
@@ -1653,16 +1891,18 @@ impl CliZoneConnector {
                 pin,
             ));
         }
-        let mut socket =
-            SeqpacketUnixSocket::connect(&self.socket_path).map_err(classify_client_io_error)?;
-        socket
-            .set_io_timeout(self.handshake_timeout)
+        let socket = CliSocket::connect(&self.socket_path, self.handshake_timeout)
+            .await
             .map_err(classify_client_io_error)?;
         let hello = daemon_hello_frame("hello").map_err(|_| ClientError::ContractViolation)?;
         socket
-            .send_frame(&hello)
+            .send_frame(&hello, self.handshake_timeout)
+            .await
             .map_err(classify_client_io_error)?;
-        let hello_reply = socket.recv_frame().map_err(classify_client_io_error)?;
+        let hello_reply = socket
+            .recv_frame(self.handshake_timeout)
+            .await
+            .map_err(classify_client_io_error)?;
         let hello_type = serde_json::from_slice::<Value>(&hello_reply)
             .ok()
             .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_owned));
@@ -1695,7 +1935,7 @@ impl CliZoneConnector {
                 service,
                 operation,
                 session_verb: self.session_verb.clone(),
-                socket: Some(Arc::new(Mutex::new(socket))),
+                socket: Some(Arc::new(socket)),
                 #[cfg(test)]
                 injected: self.injected.clone(),
             },
@@ -1712,7 +1952,7 @@ impl ZoneSessionConnector for CliZoneConnector {
         target: &d2b_resource_client::ResolvedTarget,
         service: ZoneServiceKind,
     ) -> impl Future<Output = Result<(Self::Session, ZoneSessionPin), ClientError>> + Send {
-        ready(self.connect_now(target, service))
+        self.connect_now(target, service)
     }
 }
 
@@ -1722,7 +1962,7 @@ struct CliConnectedSession {
     service: ZoneServiceKind,
     operation: String,
     session_verb: Option<String>,
-    socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>,
+    socket: Option<Arc<CliSocket>>,
     #[cfg(test)]
     injected: Option<Arc<dyn SessionClient>>,
 }
@@ -1737,65 +1977,86 @@ impl std::fmt::Debug for CliConnectedSession {
 ///
 /// Process attachments need only establishment, while ShellSession attachments
 /// retain the socket for bounded stdin, output, resize, cancellation, and
-/// close messages on the admitted named stream.
+/// close messages on the admitted named stream. Every method awaits one
+/// bounded round trip on the pump: no terminal read and no kernel-blocking
+/// call happens here, so a wedged peer surfaces as a named deadline instead
+/// of a hung CLI.
 struct CliAttachStream {
     closed: AtomicBool,
     teardown_sent: AtomicBool,
     eof: AtomicBool,
-    socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>,
-    stdin_offset: Mutex<u64>,
-    stdout_offset: AtomicU64,
+    socket: Option<Arc<CliSocket>>,
+    /// Serializes whole request/response exchanges: the socket carries one
+    /// frame stream, and the daemon answers requests in order.
+    round_trip_guard: AsyncMutex<()>,
     next_request_id: AtomicU64,
+    stdin_offset: AsyncMutex<u64>,
+    stdout_offset: AtomicU64,
     control_sequence: AtomicU64,
 }
 
 impl CliAttachStream {
-    fn new(socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>) -> Self {
+    fn new(socket: Option<Arc<CliSocket>>) -> Self {
         Self {
             closed: AtomicBool::new(false),
             teardown_sent: AtomicBool::new(false),
             eof: AtomicBool::new(false),
             socket,
-            stdin_offset: Mutex::new(0),
-            stdout_offset: AtomicU64::new(0),
+            round_trip_guard: AsyncMutex::new(()),
             next_request_id: AtomicU64::new(1),
+            stdin_offset: AsyncMutex::new(0),
+            stdout_offset: AtomicU64::new(0),
             control_sequence: AtomicU64::new(1),
         }
+    }
+
+    fn io_budget(&self) -> Duration {
+        Duration::from_millis(SHELL_STREAM_IO_DEADLINE_MS)
     }
 }
 
 impl NamedStreamTransport for CliAttachStream {
     fn send(&self, bytes: Vec<u8>) -> impl Future<Output = Result<(), ClientError>> + Send {
-        ready(self.send_stdin(&bytes))
+        async move { self.send_stdin(&bytes).await }
     }
 
     fn resize(&self, size: TerminalSize) -> impl Future<Output = Result<(), ClientError>> + Send {
-        ready(
-            self.stream_round_trip(NamedProcessStreamRequest::Resize {
-                control_seq: self.control_sequence.fetch_add(1, Ordering::AcqRel),
-                rows: u32::from(size.rows()),
-                cols: u32::from(size.cols()),
-            })
-            .and_then(|response| match response {
+        async move {
+            match self
+                .round_trip(
+                    NamedProcessStreamRequest::Resize {
+                        control_seq: self.control_sequence.fetch_add(1, Ordering::AcqRel),
+                        rows: u32::from(size.rows()),
+                        cols: u32::from(size.cols()),
+                    },
+                    self.io_budget(),
+                )
+                .await?
+            {
                 NamedProcessStreamResponse::Delivered(_) => Ok(()),
                 _ => Err(ClientError::ContractViolation),
-            }),
-        )
+            }
+        }
     }
 
     fn receive(&self) -> impl Future<Output = Result<Vec<u8>, ClientError>> + Send {
-        if self.eof.load(Ordering::Acquire) {
-            return ready(Err(ClientError::Cancelled));
-        }
-        let result = self
-            .stream_round_trip(NamedProcessStreamRequest::Read {
-                stream: ExecStream::Stdout,
-                offset: self.stdout_offset.load(Ordering::Acquire),
-                max_len: d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES,
-                wait: true,
-                timeout_ms: 50,
-            })
-            .and_then(|response| match response {
+        async move {
+            if self.eof.load(Ordering::Acquire) {
+                return Err(ClientError::Cancelled);
+            }
+            match self
+                .round_trip(
+                    NamedProcessStreamRequest::Read {
+                        stream: ExecStream::Stdout,
+                        offset: self.stdout_offset.load(Ordering::Acquire),
+                        max_len: d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES,
+                        wait: true,
+                        timeout_ms: 50,
+                    },
+                    self.io_budget(),
+                )
+                .await?
+            {
                 NamedProcessStreamResponse::Output(ExecReadOutputResult {
                     data_base64,
                     next_offset,
@@ -1818,69 +2079,96 @@ impl NamedStreamTransport for CliAttachStream {
                     Err(ClientError::Cancelled)
                 }
                 _ => Err(ClientError::ContractViolation),
-            });
-        ready(result)
+            }
+        }
     }
 
     fn close(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
-        self.closed.store(true, Ordering::Release);
-        let result = if self.socket.is_some() {
-            self.stream_round_trip(NamedProcessStreamRequest::Close)
-                .and_then(|response| match response {
-                    NamedProcessStreamResponse::Closed(_) => Ok(()),
-                    _ => Err(ClientError::ContractViolation),
-                })
-        } else {
-            Ok(())
-        };
-        if result.is_ok() {
-            self.teardown_sent.store(true, Ordering::Release);
+        async move {
+            self.closed.store(true, Ordering::Release);
+            let result = if self.socket.is_some() {
+                match self
+                    .round_trip(NamedProcessStreamRequest::Close, self.io_budget())
+                    .await
+                {
+                    Ok(NamedProcessStreamResponse::Closed(_)) => Ok(()),
+                    Ok(_) => Err(ClientError::ContractViolation),
+                    Err(error) => Err(error),
+                }
+            } else {
+                Ok(())
+            };
+            if result.is_ok() {
+                self.teardown_sent.store(true, Ordering::Release);
+            }
+            result
         }
-        ready(result)
     }
 
     fn cancel(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
-        self.closed.store(true, Ordering::Release);
-        let result = if self.socket.is_some() {
-            self.stream_round_trip(NamedProcessStreamRequest::Cancel)
-                .and_then(|response| match response {
-                    NamedProcessStreamResponse::Closed(_)
-                    | NamedProcessStreamResponse::Delivered(_) => Ok(()),
-                    _ => Err(ClientError::ContractViolation),
-                })
-        } else {
-            Ok(())
-        };
-        if result.is_ok() {
-            self.teardown_sent.store(true, Ordering::Release);
+        async move {
+            self.closed.store(true, Ordering::Release);
+            let result = if self.socket.is_some() {
+                match self
+                    .round_trip(NamedProcessStreamRequest::Cancel, self.io_budget())
+                    .await
+                {
+                    Ok(NamedProcessStreamResponse::Closed(_))
+                    | Ok(NamedProcessStreamResponse::Delivered(_)) => Ok(()),
+                    Ok(_) => Err(ClientError::ContractViolation),
+                    Err(error) => Err(error),
+                }
+            } else {
+                Ok(())
+            };
+            if result.is_ok() {
+                self.teardown_sent.store(true, Ordering::Release);
+            }
+            result
         }
-        ready(result)
     }
 }
 
 impl Drop for CliAttachStream {
     fn drop(&mut self) {
-        if self.teardown_sent.swap(true, Ordering::AcqRel) || self.socket.is_none() {
+        let Some(socket) = self.socket.take() else {
+            return;
+        };
+        if self.teardown_sent.swap(true, Ordering::AcqRel) {
             return;
         }
-        let _ = self.stream_round_trip(NamedProcessStreamRequest::Cancel);
+        // Best-effort teardown. Drop cannot await, so one bounded cancel round
+        // trip is driven here - unless a future the runtime is already driving
+        // is what dropped the stream, where a nested `block_on` would panic;
+        // there the socket close still ends the named stream.
+        if inside_runtime() {
+            return;
+        }
+        let _ = block_on(stream_round_trip(
+            &socket,
+            &self.next_request_id,
+            NamedProcessStreamRequest::Cancel,
+            Duration::from_millis(SHELL_STREAM_IO_DEADLINE_MS),
+        ));
     }
 }
 
 impl CliAttachStream {
-    fn send_stdin(&self, bytes: &[u8]) -> Result<(), ClientError> {
-        let mut offset = self
-            .stdin_offset
-            .lock()
-            .map_err(|_| ClientError::SessionLost)?;
-        let deadline = Instant::now() + Duration::from_secs(5);
+    async fn send_stdin(&self, bytes: &[u8]) -> Result<(), ClientError> {
+        let mut offset = self.stdin_offset.lock().await;
+        let deadline = Instant::now() + self.io_budget();
         let mut consumed = 0;
         while consumed < bytes.len() {
-            let response = self.stream_round_trip(NamedProcessStreamRequest::Stdin {
-                offset: *offset,
-                chunk_base64: d2b_core::base64_codec::encode(&bytes[consumed..]),
-                eof: false,
-            })?;
+            let response = self
+                .round_trip(
+                    NamedProcessStreamRequest::Stdin {
+                        offset: *offset,
+                        chunk_base64: d2b_core::base64_codec::encode(&bytes[consumed..]),
+                        eof: false,
+                    },
+                    self.io_budget(),
+                )
+                .await?;
             let NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
                 accepted_len,
                 next_offset,
@@ -1910,7 +2198,7 @@ impl CliAttachStream {
                         retry: RetryClass::AfterDelay,
                     });
                 }
-                thread::sleep(Duration::from_millis(5));
+                tokio::time::sleep(Duration::from_millis(5)).await;
                 continue;
             }
             *offset = next_offset;
@@ -1919,31 +2207,64 @@ impl CliAttachStream {
         Ok(())
     }
 
-    fn stream_round_trip(
+    async fn round_trip(
         &self,
         request: NamedProcessStreamRequest,
+        budget: Duration,
     ) -> Result<NamedProcessStreamResponse, ClientError> {
         let socket = self.socket.as_ref().ok_or(ClientError::ContractViolation)?;
-        let request_id = self.next_request_id.fetch_add(1, Ordering::AcqRel);
-        if request_id == 0 {
-            return Err(ClientError::ContractViolation);
-        }
-        let frame = NamedProcessStreamRequestFrame::new(request_id, request);
-        let bytes = serde_json::to_vec(&frame).map_err(|_| ClientError::ContractViolation)?;
-        let mut socket = socket.lock().map_err(|_| ClientError::SessionLost)?;
-        socket
-            .send_frame(&bytes)
-            .map_err(|_| ClientError::TransportFailed)?;
-        let response = socket.recv_frame().map_err(|_| ClientError::SessionLost)?;
+        // One exchange at a time: a second request would otherwise interleave
+        // its frame with the one in flight on this single socket.
+        let _guard = self.round_trip_guard.lock().await;
+        stream_round_trip(socket, &self.next_request_id, request, budget).await
+    }
+}
+
+/// One bounded request/response exchange on an established named stream.
+///
+/// A response nobody is waiting for - a call the terminal loop stopped
+/// waiting on when another `select!` branch won - is skipped instead of
+/// mis-correlated with the next request. Stream reads are offset-addressed,
+/// so dropping that response costs one round trip and never data. The budget
+/// bounds the whole exchange, skips included, so a peer that answers only in
+/// stale frames still ends as a named deadline.
+async fn stream_round_trip(
+    socket: &CliSocket,
+    next_request_id: &AtomicU64,
+    request: NamedProcessStreamRequest,
+    budget: Duration,
+) -> Result<NamedProcessStreamResponse, ClientError> {
+    let request_id = next_request_id.fetch_add(1, Ordering::AcqRel);
+    if request_id == 0 {
+        return Err(ClientError::ContractViolation);
+    }
+    let deadline = Instant::now() + budget;
+    let frame = NamedProcessStreamRequestFrame::new(request_id, request);
+    let bytes = serde_json::to_vec(&frame).map_err(|_| ClientError::ContractViolation)?;
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .ok_or(ClientError::DeadlineExpired)?;
+    socket
+        .send_frame(&bytes, remaining)
+        .await
+        .map_err(classify_client_io_error)?;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or(ClientError::DeadlineExpired)?;
+        let response = socket
+            .recv_frame(remaining)
+            .await
+            .map_err(classify_client_io_error)?;
         let frame: NamedProcessStreamResponseFrame =
             serde_json::from_slice(&response).map_err(|_| ClientError::ContractViolation)?;
         if frame.request_id != request_id {
-            return Err(ClientError::ContractViolation);
+            continue;
         }
-        if let NamedProcessStreamResponse::Error(error) = frame.response {
-            return Err(named_stream_client_error(error.kind));
-        }
-        Ok(frame.response)
+        return match frame.response {
+            NamedProcessStreamResponse::Error(error) => Err(named_stream_client_error(error.kind)),
+            response => Ok(response),
+        };
     }
 }
 
@@ -1990,8 +2311,7 @@ impl ConnectedZoneSession for CliConnectedSession {
         payload: CanonicalJsonObject,
         relative_timeout_nanos: u64,
     ) -> impl Future<Output = Result<CanonicalJsonObject, ClientError>> + Send {
-        let result = self.invoke(target, payload, relative_timeout_nanos);
-        ready(result)
+        self.invoke(target, payload, relative_timeout_nanos)
     }
 
     fn call_scoped_commit_batch(
@@ -2003,7 +2323,7 @@ impl ConnectedZoneSession for CliConnectedSession {
     ) -> impl Future<Output = Result<CanonicalJsonObject, ClientError>> + Send {
         // The CLI public socket is an operator route, not a controller
         // ComponentSession. Never downgrade a scoped write to plain CommitBatch.
-        ready(Err(ClientError::ContractViolation))
+        std::future::ready(Err(ClientError::ContractViolation))
     }
 }
 
@@ -2015,13 +2335,12 @@ impl ConnectedSession for CliConnectedSession {
         request: ProcessAttachOpenRequest,
         relative_timeout_nanos: u64,
     ) -> impl Future<Output = Result<Self::Stream, ClientError>> + Send {
-        let result = self.open_process_attach(request, relative_timeout_nanos);
-        ready(result)
+        self.open_process_attach(request, relative_timeout_nanos)
     }
 }
 
 impl CliConnectedSession {
-    fn open_process_attach(
+    async fn open_process_attach(
         &self,
         request: ProcessAttachOpenRequest,
         relative_timeout_nanos: u64,
@@ -2068,13 +2387,14 @@ impl CliConnectedSession {
             Some(request.target().resource_ref().clone()),
             payload,
             relative_timeout_nanos,
-        )?;
-        let socket = self.socket.clone();
+        )
+        .await?;
         let is_shell = matches!(request.target(), ProcessAttachTarget::ShellSession { .. });
-        Ok(CliAttachStream::new(is_shell.then_some(socket).flatten()))
+        let socket = if is_shell { self.socket.clone() } else { None };
+        Ok(CliAttachStream::new(socket))
     }
 
-    fn invoke(
+    async fn invoke(
         &self,
         target: Option<ResourceRef>,
         payload: CanonicalJsonObject,
@@ -2114,11 +2434,15 @@ impl CliConnectedSession {
                 .or_insert_with(|| Value::String(target.to_canonical_string()));
         }
         let request = serde_json::to_vec(&request).map_err(|_| ClientError::ContractViolation)?;
-        let timeout = Duration::from_nanos(relative_timeout_nanos.max(1));
+        // The caller's declared request lifetime is the bound; the protocol
+        // ceiling caps the sentinel value a deadline-less caller passes.
+        let budget = Duration::from_nanos(relative_timeout_nanos.max(1)).min(
+            Duration::from_millis(d2b_resource_client::MAX_REQUEST_LIFETIME_MS),
+        );
         #[cfg(test)]
         if let Some(client) = &self.injected {
             let response = client
-                .invoke(&request, RequestDeadline(timeout))
+                .invoke(&request, RequestDeadline(budget))
                 .map_err(|error| match error {
                     TransportError::Unavailable | TransportError::Io => ClientError::SessionLost,
                     TransportError::DeadlineExceeded => ClientError::DeadlineExpired,
@@ -2132,19 +2456,15 @@ impl CliConnectedSession {
                 })?;
             return decode_cli_response(&response);
         }
-        let mut socket = self
-            .socket
-            .as_ref()
-            .ok_or(ClientError::TransportFailed)?
-            .lock()
-            .map_err(|_| ClientError::TransportFailed)?;
+        let socket = self.socket.as_ref().ok_or(ClientError::TransportFailed)?;
         socket
-            .set_io_timeout(timeout)
+            .send_frame(&request, budget)
+            .await
             .map_err(classify_client_io_error)?;
-        socket
-            .send_frame(&request)
+        let response = socket
+            .recv_frame(budget)
+            .await
             .map_err(classify_client_io_error)?;
-        let response = socket.recv_frame().map_err(classify_client_io_error)?;
         decode_cli_response(&response)
     }
 }
@@ -2413,30 +2733,6 @@ fn resource_error_surface(kind: ResourceErrorKind) -> (&'static str, &'static st
     }
 }
 
-struct ThreadWaker(thread::Thread);
-
-impl Wake for ThreadWaker {
-    fn wake(self: Arc<Self>) {
-        self.0.unpark();
-    }
-}
-
-fn block_on<F>(future: F) -> F::Output
-where
-    F: Future,
-{
-    let current = thread::current();
-    let waker = Waker::from(Arc::new(ThreadWaker(current.clone())));
-    let mut future = Box::pin(future);
-    let mut context = TaskContext::from_waker(&waker);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => thread::park(),
-        }
-    }
-}
-
 pub(crate) fn output_mode(json_flag: bool, human_flag: bool) -> Result<OutputMode, CliFailure> {
     if json_flag && human_flag {
         return Err(CliFailure::new(
@@ -2472,10 +2768,14 @@ pub(crate) fn parse_resource_type(value: &str) -> Result<ResourceTypeName, CliFa
         .map_err(|_| CliFailure::new(2, "ref-invalid: unknown ResourceType"))
 }
 
+pub(crate) fn standard_resource_types() -> &'static [&'static str; 23] {
+    &STANDARD_RESOURCE_TYPES
+}
+
 /// The resource types the managed plane serves: what a zone-wide read must
 /// cover, since a type this catalog names but the caller cannot read is a
 /// degraded read rather than an absent one.
-pub(crate) fn converted_resource_types() -> &'static [&'static str; 33] {
+pub(crate) fn converted_resource_types() -> &'static [&'static str; 36] {
     &V3_CONVERTED_RESOURCE_TYPES
 }
 
@@ -2579,20 +2879,23 @@ fn classify_transport_error(error: &io::Error) -> TransportError {
 }
 
 fn socket_reachable(path: &Path) -> bool {
-    let Ok(mut socket) = SeqpacketUnixSocket::connect(path) else {
+    block_on(socket_reachable_within(
+        path,
+        Duration::from_millis(LOCAL_HANDSHAKE_DEADLINE_MS),
+    ))
+}
+
+async fn socket_reachable_within(path: &Path, budget: Duration) -> bool {
+    let Ok(socket) = CliSocket::connect(path, budget).await else {
         return false;
     };
-    let timeout = Duration::from_millis(LOCAL_HANDSHAKE_DEADLINE_MS);
-    if socket.set_io_timeout(timeout).is_err() {
-        return false;
-    }
     let Ok(hello) = daemon_hello_frame("hello") else {
         return false;
     };
-    if socket.send_frame(&hello).is_err() {
+    if socket.send_frame(&hello, budget).await.is_err() {
         return false;
     }
-    let Ok(reply) = socket.recv_frame() else {
+    let Ok(reply) = socket.recv_frame(budget).await else {
         return false;
     };
     serde_json::from_slice::<Value>(&reply)
@@ -2717,7 +3020,7 @@ fn human_summary(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+    use std::os::fd::AsFd as _;
     use std::sync::Mutex;
 
     #[derive(Debug)]
@@ -2726,51 +3029,144 @@ mod tests {
         response: Vec<u8>,
     }
 
+    /// A non-blocking client [`CliSocket`] plus a blocking mock peer for the
+    /// same one-frame-per-datagram envelope.
+    fn test_socket_pair() -> (CliSocket, OwnedFd) {
+        let (client, server) = rustix::net::socketpair(
+            rustix::net::AddressFamily::UNIX,
+            rustix::net::SocketType::SEQPACKET,
+            rustix::net::SocketFlags::NONBLOCK | rustix::net::SocketFlags::CLOEXEC,
+            None,
+        )
+        .expect("create seqpacket pair");
+        let flags =
+            rustix::fs::fcntl_getfl(&server).expect("server flags") - rustix::fs::OFlags::NONBLOCK;
+        rustix::fs::fcntl_setfl(&server, flags).expect("mock peer reads blocking");
+        let client = block_on(async move { CliSocket::from_owned_fd(client) })
+            .expect("client socket registers with the runtime reactor");
+        (client, server)
+    }
+
+    /// Read one CLI frame from the blocking mock peer.
+    ///
+    /// The envelope is one datagram per frame, so the read is sized for a whole
+    /// frame: a prefix-sized read truncates the datagram and the kernel
+    /// discards the body. The declared length must account for every byte the
+    /// datagram carried, which is what makes a split frame fail here rather
+    /// than pass as a truncated request.
+    fn mock_recv_frame(fd: std::os::fd::BorrowedFd<'_>) -> Vec<u8> {
+        let mut buffer = vec![0_u8; MAX_FRAME_BYTES + FRAME_PREFIX_BYTES];
+        let read = loop {
+            match rustix::io::read(fd, &mut buffer) {
+                Ok(0) => panic!("mock peer closed"),
+                Ok(read) => break read,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(error) => panic!("mock peer read: {error}"),
+            }
+        };
+        assert!(
+            read >= FRAME_PREFIX_BYTES,
+            "frame from mock peer is shorter than its length prefix: {read} bytes"
+        );
+        let declared =
+            u32::from_le_bytes(buffer[..FRAME_PREFIX_BYTES].try_into().expect("prefix")) as usize;
+        assert_eq!(
+            declared + FRAME_PREFIX_BYTES,
+            read,
+            "one datagram must carry exactly one declared frame"
+        );
+        buffer.truncate(read);
+        buffer.split_off(FRAME_PREFIX_BYTES)
+    }
+
+    /// Write one CLI frame from the blocking mock peer.
+    fn mock_send_frame(fd: std::os::fd::BorrowedFd<'_>, payload: &[u8]) {
+        let mut frame = Vec::with_capacity(payload.len() + FRAME_PREFIX_BYTES);
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        frame.extend_from_slice(payload);
+        let mut offset = 0;
+        while offset < frame.len() {
+            match rustix::io::write(fd, &frame[offset..]) {
+                Ok(0) => panic!("mock peer closed"),
+                Ok(written) => offset += written,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(error) => panic!("mock peer write: {error}"),
+            }
+        }
+    }
+
+    /// One frame leaves the client as exactly one datagram, so a reader that
+    /// sizes its buffer to the length prefix loses the body: the kernel
+    /// truncates the datagram and discards the rest. This pins both halves -
+    /// the sender writes one datagram per frame, and a prefix-sized read finds
+    /// nothing behind it.
+    #[test]
+    fn cli_socket_writes_one_datagram_per_frame() {
+        let (client, server) = rustix::net::socketpair(
+            rustix::net::AddressFamily::UNIX,
+            rustix::net::SocketType::SEQPACKET,
+            rustix::net::SocketFlags::NONBLOCK | rustix::net::SocketFlags::CLOEXEC,
+            None,
+        )
+        .expect("create seqpacket pair");
+        let client = block_on(async move { CliSocket::from_owned_fd(client) }).unwrap();
+        let payload = br#"{"type":"namedStreamCancel","requestId":1}"#;
+        block_on(client.send_frame(payload, Duration::from_millis(500))).unwrap();
+        let mut prefix = [0_u8; FRAME_PREFIX_BYTES];
+        let first = rustix::io::read(server.as_fd(), &mut prefix).expect("read the prefix");
+        assert_eq!(first, FRAME_PREFIX_BYTES);
+        assert_eq!(
+            u32::from_le_bytes(prefix) as usize,
+            payload.len(),
+            "the prefix declares the payload the same datagram carries"
+        );
+        let mut payload_buffer = vec![0_u8; payload.len()];
+        assert!(
+            matches!(
+                rustix::io::read(server.as_fd(), &mut payload_buffer),
+                Err(rustix::io::Errno::AGAIN)
+            ),
+            "a prefix-sized read must have consumed the whole datagram"
+        );
+    }
+
     #[cfg(test)]
     mod transport_contract_tests {
-        use super::{MAX_FRAME_BYTES, SeqpacketUnixSocket};
-        use nix::sys::socket::{AddressFamily, MsgFlags, SockFlag, SockType, send, socketpair};
+        use super::{MAX_FRAME_BYTES, test_socket_pair};
+        use crate::runtime::block_on;
         use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
         use std::{
             io::IoSlice,
-            os::fd::{AsFd as _, AsRawFd as _},
+            os::fd::AsFd as _,
+            time::{Duration, Instant},
         };
 
         #[test]
-        fn seqpacket_client_rejects_oversized_declared_packets() {
-            let (client, server) = socketpair(
-                AddressFamily::Unix,
-                SockType::SeqPacket,
-                None,
-                SockFlag::SOCK_CLOEXEC,
-            )
-            .expect("create seqpacket pair");
-            let mut socket = SeqpacketUnixSocket { fd: client };
-            let outbound = socket
-                .send_frame(&vec![0_u8; MAX_FRAME_BYTES + 1])
-                .expect_err("outbound oversized frame must fail closed");
-            assert_eq!(outbound.kind(), std::io::ErrorKind::InvalidInput);
-            let payload_len = MAX_FRAME_BYTES + 1;
-            let mut frame = Vec::with_capacity(4);
-            frame.extend_from_slice(&(payload_len as u32).to_le_bytes());
-            send(server.as_raw_fd(), &frame, MsgFlags::empty())
-                .expect("send oversized declaration");
-            let error = socket
-                .recv_frame()
-                .expect_err("oversized declaration must fail closed");
-            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-            assert!(error.to_string().contains("malformed"));
+        fn cli_socket_rejects_oversized_declared_packets() {
+            let (socket, server) = test_socket_pair();
+            block_on(async {
+                let outbound = socket
+                    .send_frame(&vec![0_u8; MAX_FRAME_BYTES + 1], Duration::from_millis(100))
+                    .await
+                    .expect_err("outbound oversized frame must fail closed");
+                assert_eq!(outbound.kind(), std::io::ErrorKind::InvalidInput);
+                // Declare more than the frame bound in the four-byte prefix.
+                let declared = (MAX_FRAME_BYTES + 1) as u32;
+                let prefix = declared.to_le_bytes();
+                let written = rustix::io::write(server.as_fd(), &prefix).expect("send prefix");
+                assert_eq!(written, prefix.len());
+                let error = socket
+                    .recv_frame(Duration::from_millis(500))
+                    .await
+                    .expect_err("oversized declaration must fail closed");
+                assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+                assert!(error.to_string().contains("malformed"));
+            });
         }
 
         #[test]
-        fn seqpacket_client_rejects_ancillary_file_descriptors() {
-            let (client, server) = socketpair(
-                AddressFamily::Unix,
-                SockType::SeqPacket,
-                None,
-                SockFlag::SOCK_CLOEXEC,
-            )
-            .expect("create seqpacket pair");
+        fn cli_socket_rejects_ancillary_file_descriptors() {
+            let (socket, server) = test_socket_pair();
             let file = std::fs::File::open("/dev/null").expect("open descriptor fixture");
             let rights = [file.as_fd()];
             let mut control_bytes = [0_u8; rustix::cmsg_space!(ScmRights(1))];
@@ -2778,13 +3174,48 @@ mod tests {
             assert!(control.push(SendAncillaryMessage::ScmRights(&rights)));
             let frame = 0_u32.to_le_bytes();
             let iov = [IoSlice::new(&frame)];
-            sendmsg(&server, &iov, &mut control, SendFlags::empty()).expect("send ancillary frame");
-            let mut socket = SeqpacketUnixSocket { fd: client };
-            let error = socket
-                .recv_frame()
-                .expect_err("ancillary data must fail closed");
+            sendmsg(server.as_fd(), &iov, &mut control, SendFlags::empty())
+                .expect("send ancillary frame");
+            let error = block_on(async {
+                socket
+                    .recv_frame(Duration::from_millis(500))
+                    .await
+                    .expect_err("ancillary data must fail closed")
+            });
             assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
             assert!(error.to_string().contains("ancillary"));
+        }
+
+        #[test]
+        fn cli_socket_reports_a_stalled_peer_as_a_bounded_deadline() {
+            let (socket, server) = test_socket_pair();
+            let started = Instant::now();
+            let error = block_on(async {
+                socket
+                    .recv_frame(Duration::from_millis(100))
+                    .await
+                    .expect_err("a silent peer must not park the CLI")
+            });
+            assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "the deadline must bound the wait, took {:?}",
+                started.elapsed()
+            );
+            drop(server);
+        }
+
+        #[test]
+        fn cli_socket_reports_a_closed_peer_with_the_unreachable_errno() {
+            let (socket, server) = test_socket_pair();
+            drop(server);
+            let error = block_on(async {
+                socket
+                    .recv_frame(Duration::from_millis(500))
+                    .await
+                    .expect_err("a closed peer is a session loss")
+            });
+            assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
         }
     }
 
@@ -2977,40 +3408,24 @@ mod tests {
 
     #[test]
     fn cli_attach_stream_drop_sends_a_typed_cancel_frame() {
-        let (client, server) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
+        let (client, server) = test_socket_pair();
         let server = std::thread::spawn(move || {
-            let mut server = SeqpacketUnixSocket::from_owned_fd(server);
             let request: NamedProcessStreamRequestFrame =
-                serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+                serde_json::from_slice(&mock_recv_frame(server.as_fd())).unwrap();
             assert_eq!(request.request_id, 1);
             assert!(matches!(request.request, NamedProcessStreamRequest::Cancel));
         });
-        let stream = CliAttachStream::new(Some(Arc::new(Mutex::new(
-            SeqpacketUnixSocket::from_owned_fd(client),
-        ))));
+        let stream = CliAttachStream::new(Some(Arc::new(client)));
         drop(stream);
         server.join().unwrap();
     }
 
     #[test]
     fn cli_attach_stream_retries_partial_stdin_writes() {
-        let (client, server) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
+        let (client, server) = test_socket_pair();
         let server = std::thread::spawn(move || {
-            let mut server = SeqpacketUnixSocket::from_owned_fd(server);
             let first: NamedProcessStreamRequestFrame =
-                serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+                serde_json::from_slice(&mock_recv_frame(server.as_fd())).unwrap();
             assert_eq!(first.request_id, 1);
             let NamedProcessStreamRequest::Stdin {
                 offset,
@@ -3026,22 +3441,21 @@ mod tests {
                 d2b_core::base64_codec::decode(&chunk_base64).unwrap(),
                 b"abc"
             );
-            server
-                .send_frame(
-                    &serde_json::to_vec(&NamedProcessStreamResponseFrame::new(
-                        1,
-                        NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
-                            accepted_len: 1,
-                            next_offset: 1,
-                            backpressured: true,
-                            stdin_closed: false,
-                        }),
-                    ))
-                    .unwrap(),
-                )
-                .unwrap();
+            mock_send_frame(
+                server.as_fd(),
+                &serde_json::to_vec(&NamedProcessStreamResponseFrame::new(
+                    1,
+                    NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
+                        accepted_len: 1,
+                        next_offset: 1,
+                        backpressured: true,
+                        stdin_closed: false,
+                    }),
+                ))
+                .unwrap(),
+            );
             let second: NamedProcessStreamRequestFrame =
-                serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+                serde_json::from_slice(&mock_recv_frame(server.as_fd())).unwrap();
             assert_eq!(second.request_id, 2);
             let NamedProcessStreamRequest::Stdin {
                 offset,
@@ -3057,42 +3471,34 @@ mod tests {
                 d2b_core::base64_codec::decode(&chunk_base64).unwrap(),
                 b"bc"
             );
-            server
-                .send_frame(
-                    &serde_json::to_vec(&NamedProcessStreamResponseFrame::new(
-                        2,
-                        NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
-                            accepted_len: 2,
-                            next_offset: 3,
-                            backpressured: false,
-                            stdin_closed: false,
-                        }),
-                    ))
-                    .unwrap(),
-                )
-                .unwrap();
+            mock_send_frame(
+                server.as_fd(),
+                &serde_json::to_vec(&NamedProcessStreamResponseFrame::new(
+                    2,
+                    NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
+                        accepted_len: 2,
+                        next_offset: 3,
+                        backpressured: false,
+                        stdin_closed: false,
+                    }),
+                ))
+                .unwrap(),
+            );
         });
-        let stream = CliAttachStream::new(Some(Arc::new(Mutex::new(
-            SeqpacketUnixSocket::from_owned_fd(client),
-        ))));
-        block_on(stream.send(b"abc".to_vec())).unwrap();
-        assert_eq!(*stream.stdin_offset.lock().unwrap(), 3);
+        let stream = CliAttachStream::new(Some(Arc::new(client)));
+        block_on(async {
+            stream.send(b"abc".to_vec()).await.unwrap();
+            assert_eq!(*stream.stdin_offset.lock().await, 3);
+        });
         server.join().unwrap();
     }
 
     #[test]
     fn cli_attach_stream_delivers_final_bytes_then_reports_eof() {
-        let (client, server) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
+        let (client, server) = test_socket_pair();
         let server = std::thread::spawn(move || {
-            let mut server = SeqpacketUnixSocket::from_owned_fd(server);
             let request: NamedProcessStreamRequestFrame =
-                serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+                serde_json::from_slice(&mock_recv_frame(server.as_fd())).unwrap();
             assert_eq!(request.request_id, 1);
             assert!(matches!(
                 request.request,
@@ -3101,49 +3507,38 @@ mod tests {
                     ..
                 }
             ));
-            server
-                .send_frame(
-                    &serde_json::to_vec(&NamedProcessStreamResponseFrame::new(
-                        1,
-                        NamedProcessStreamResponse::Output(ExecReadOutputResult {
-                            data_base64: d2b_core::base64_codec::encode(b"done"),
-                            next_offset: 4,
-                            eof: true,
-                            dropped_bytes: 0,
-                            truncated: false,
-                            timed_out: false,
-                        }),
-                    ))
-                    .unwrap(),
-                )
-                .unwrap();
+            mock_send_frame(
+                server.as_fd(),
+                &serde_json::to_vec(&NamedProcessStreamResponseFrame::new(
+                    1,
+                    NamedProcessStreamResponse::Output(ExecReadOutputResult {
+                        data_base64: d2b_core::base64_codec::encode(b"done"),
+                        next_offset: 4,
+                        eof: true,
+                        dropped_bytes: 0,
+                        truncated: false,
+                        timed_out: false,
+                    }),
+                ))
+                .unwrap(),
+            );
         });
-        let stream = CliAttachStream::new(Some(Arc::new(Mutex::new(
-            SeqpacketUnixSocket::from_owned_fd(client),
-        ))));
-        assert_eq!(block_on(stream.receive()).unwrap(), b"done");
-        assert_eq!(
-            block_on(stream.receive()).unwrap_err(),
-            ClientError::Cancelled
-        );
+        let stream = CliAttachStream::new(Some(Arc::new(client)));
+        block_on(async {
+            assert_eq!(stream.receive().await.unwrap(), b"done");
+            assert_eq!(stream.receive().await.unwrap_err(), ClientError::Cancelled);
+        });
         server.join().unwrap();
     }
 
     #[test]
     fn cli_attach_stream_never_interprets_stdin_as_resize_control() {
-        let (client, server) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
+        let (client, server) = test_socket_pair();
         let stdin = br#"{"type":"namedStreamResize","rows":1,"cols":1}"#.to_vec();
         let expected = stdin.clone();
         let server = std::thread::spawn(move || {
-            let mut server = SeqpacketUnixSocket::from_owned_fd(server);
             let request: NamedProcessStreamRequestFrame =
-                serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+                serde_json::from_slice(&mock_recv_frame(server.as_fd())).unwrap();
             let NamedProcessStreamRequest::Stdin {
                 offset,
                 chunk_base64,
@@ -3157,25 +3552,57 @@ mod tests {
             assert!(!eof);
             let data = d2b_core::base64_codec::decode(&chunk_base64).unwrap();
             assert_eq!(data, expected);
-            server
-                .send_frame(
-                    &serde_json::to_vec(&NamedProcessStreamResponseFrame::new(
-                        1,
-                        NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
-                            accepted_len: data.len() as u64,
-                            next_offset: data.len() as u64,
-                            backpressured: false,
-                            stdin_closed: false,
-                        }),
-                    ))
-                    .unwrap(),
-                )
-                .unwrap();
+            mock_send_frame(
+                server.as_fd(),
+                &serde_json::to_vec(&NamedProcessStreamResponseFrame::new(
+                    1,
+                    NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
+                        accepted_len: data.len() as u64,
+                        next_offset: data.len() as u64,
+                        backpressured: false,
+                        stdin_closed: false,
+                    }),
+                ))
+                .unwrap(),
+            );
         });
-        let stream = CliAttachStream::new(Some(Arc::new(Mutex::new(
-            SeqpacketUnixSocket::from_owned_fd(client),
-        ))));
-        block_on(stream.send(stdin)).unwrap();
+        let stream = CliAttachStream::new(Some(Arc::new(client)));
+        block_on(async {
+            stream.send(stdin).await.unwrap();
+        });
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn cli_attach_stream_names_a_stalled_round_trip_as_a_deadline() {
+        // The interactive shell counts on this bound: a peer that stops
+        // answering must end the round trip as a named deadline instead of
+        // parking the operator's terminal in a read.
+        let (client, server) = test_socket_pair();
+        let server = std::thread::spawn(move || {
+            // The read request is delivered, then deliberately unanswered.
+            let request: NamedProcessStreamRequestFrame =
+                serde_json::from_slice(&mock_recv_frame(server.as_fd())).unwrap();
+            assert!(matches!(
+                request.request,
+                NamedProcessStreamRequest::Read { .. }
+            ));
+            // Answering teardown would hide the bound; the mock reads the
+            // cancel and returns, closing the peer.
+            let cancel: NamedProcessStreamRequestFrame =
+                serde_json::from_slice(&mock_recv_frame(server.as_fd())).unwrap();
+            assert!(matches!(cancel.request, NamedProcessStreamRequest::Cancel));
+        });
+        let stream = CliAttachStream::new(Some(Arc::new(client)));
+        let started = Instant::now();
+        let error = block_on(stream.receive()).unwrap_err();
+        let elapsed = started.elapsed();
+        assert_eq!(error, ClientError::DeadlineExpired);
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "a silent peer must not park the terminal loop; took {elapsed:?}"
+        );
+        drop(stream);
         server.join().unwrap();
     }
 

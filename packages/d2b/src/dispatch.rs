@@ -6,18 +6,19 @@ use std::{
     fmt::Write as _,
     io::{self, Write as _},
     path::{Path, PathBuf},
+    sync::LazyLock,
+    time::Duration,
 };
 
 use crate::context::{
-    CliContext, ErrorFrame, OutputMode, SeqpacketUnixSocket, ZoneContext,
-    cli_failure_from_daemon_error, daemon_hello_frame, decode_daemon_frame, is_daemon_unreachable,
-    output_mode, parse_hello_reply,
+    CliContext, CliSocket, ErrorFrame, OutputMode, ZoneContext, cli_failure_from_daemon_error,
+    daemon_hello_frame, decode_daemon_frame, is_daemon_unreachable, output_mode, parse_hello_reply,
 };
 use crate::{
     CliFailure, activation, complete, debug, endpoint, exec, guest, host, print_json, print_stdout,
     provider, resource, share, shell, zone,
 };
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use d2b_contracts_broker::broker_wire::AuditExportCursor;
 use d2b_contracts_control::{
     cli_output::{AuthDeniedSubcommandV2, AuthRoleV2, AuthSocketStatusV2, AuthStatusOutputV2},
@@ -27,45 +28,40 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-/// The one built-in top-level command registry.
+/// The Provider projection commands the parser carries as static variants.
 ///
-/// Provider projection binding and completion consume this list as well as
-/// clap's parser, so collision handling never depends on a second list.
-pub(crate) const BUILTIN_COMMANDS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "delete",
-    "status",
-    "upgrade",
-    "reconcile",
-    "debug",
-    "host",
-    "guest",
-    "process",
-    "exec",
-    "shell",
-    "volume",
-    "network",
-    "device",
-    "endpoint",
-    "export",
-    "import",
-    "resource",
-    "user",
-    "credential",
-    "provider",
-    "zone",
-    "quota",
-    "emergency-policy",
-    "activation",
-    "audit",
-    "op",
-    "auth",
-    "complete",
-];
+/// A projected command is named by the declaring Provider's own
+/// `cliProjection.topLevel` (`d2b provider inspect`), which no compile-time
+/// table can enumerate, so clap holds one static variant per projection
+/// Provider and the projection binding admits exactly these names in place of
+/// a built-in command. They are parser carriers, not resource knowledge: the
+/// declaration they mirror lives on the Provider, and nothing here needs an
+/// edit when a Provider's projection is renamed - only the variant does.
+const PROJECTION_COMMANDS: &[&str] = &["audio", "clipboard", "display"];
+
+/// The one built-in top-level command registry: the parser's own subcommands,
+/// in declaration order, less the Provider projection carriers.
+///
+/// The parser is the sole authority for a built-in name; projection binding
+/// and completion read this list, so collision handling cannot drift from
+/// what `d2b` actually parses.
+static BUILTIN_COMMANDS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    ModernCli::command()
+        .get_subcommands()
+        .map(|subcommand| subcommand.get_name().to_owned())
+        .filter(|name| !PROJECTION_COMMANDS.contains(&name.as_str()))
+        .collect()
+});
+
+/// The built-in top-level commands, in parser order.
+pub(crate) fn builtin_commands() -> &'static [String] {
+    &BUILTIN_COMMANDS
+}
+
+/// Whether the name is a built-in top-level command.
+pub(crate) fn is_builtin_command(name: &str) -> bool {
+    BUILTIN_COMMANDS.iter().any(|command| command == name)
+}
 
 /// The clean-break CLI parser is the sole runtime entry point.
 #[derive(Debug, Parser)]
@@ -508,40 +504,56 @@ pub(crate) fn render_daemon_audit_lines(
 pub(crate) fn try_audit_via_socket(
     public_socket: &Path,
     json_mode: bool,
+    deadline: crate::context::RequestDeadline,
 ) -> Result<AuditSocketOutcome, CliFailure> {
     if !public_socket.exists() {
         return Ok(AuditSocketOutcome::Unreachable);
     }
-    let mut socket = match SeqpacketUnixSocket::connect(public_socket) {
+    crate::runtime::block_on(audit_via_socket(
+        public_socket,
+        json_mode,
+        deadline.duration(),
+    ))
+}
+
+/// One bounded audit export over the public socket.
+///
+/// Every connect, send, and receive carries the command's deadline, so a
+/// silent or wedged peer becomes a named refusal instead of a hung CLI.
+async fn audit_via_socket(
+    public_socket: &Path,
+    json_mode: bool,
+    budget: Duration,
+) -> Result<AuditSocketOutcome, CliFailure> {
+    let socket = match CliSocket::connect(public_socket, budget).await {
         Ok(socket) => socket,
         Err(error) if is_daemon_unreachable(&error) => {
             return Ok(AuditSocketOutcome::Unreachable);
         }
-        Err(error) => {
-            return Err(CliFailure::new(
-                1,
-                format!("failed to connect to {}: {error}", public_socket.display()),
-            ));
-        }
+        Err(error) => return Err(audit_failure(public_socket, "connect", &error)),
     };
     socket
-        .send_frame(&daemon_hello_frame("hello")?)
-        .map_err(|error| CliFailure::new(1, format!("failed to send hello frame: {error}")))?;
+        .send_frame(&daemon_hello_frame("hello")?, budget)
+        .await
+        .map_err(|error| audit_failure(public_socket, "hello send", &error))?;
     let hello_response = socket
-        .recv_frame()
-        .map_err(|error| CliFailure::new(1, format!("failed to receive hello reply: {error}")))?;
+        .recv_frame(budget)
+        .await
+        .map_err(|error| audit_failure(public_socket, "hello receive", &error))?;
     let _ = parse_hello_reply(&hello_response)?;
 
     let mut cursor = None;
     let mut lines = Vec::new();
     for _ in 0..1024 {
         let request = daemon_audit_frame_with_cursor("audit", json_mode, cursor.clone())?;
-        socket.send_frame(&request).map_err(|error| {
-            CliFailure::new(1, format!("failed to send audit request: {error}"))
-        })?;
-        let response = socket.recv_frame().map_err(|error| {
-            CliFailure::new(1, format!("failed to receive audit reply: {error}"))
-        })?;
+        socket
+            .send_frame(&request, budget)
+            .await
+            .map_err(|error| audit_failure(public_socket, "request send", &error))?;
+        let response = socket
+            .recv_frame(budget)
+            .await
+            .map_err(|error| audit_failure(public_socket, "reply receive", &error))?;
         let (page, next_cursor, complete) = parse_audit_page(&response)?;
         lines.extend(page);
         if complete {
@@ -559,6 +571,25 @@ pub(crate) fn try_audit_via_socket(
         1,
         "audit export exceeded the bounded pagination limit",
     ))
+}
+
+/// Name one audit transport failure, and give the CLI an exit code that
+/// matches the class it prints.
+fn audit_failure(public_socket: &Path, step: &str, error: &io::Error) -> CliFailure {
+    let (class, exit_code) = match error.kind() {
+        io::ErrorKind::TimedOut => ("deadline-exceeded", 1),
+        io::ErrorKind::NotFound
+        | io::ErrorKind::ConnectionRefused
+        | io::ErrorKind::ConnectionReset => ("zone-unavailable", 1),
+        _ => ("exec-transport-error", 69),
+    };
+    CliFailure::new(
+        exit_code,
+        format!(
+            "{class}: audit {step} failed against {}: {error}",
+            public_socket.display()
+        ),
+    )
 }
 
 fn auth_status(
@@ -790,22 +821,22 @@ pub(crate) fn runtime_dispatch(cli: &ModernCli, context: &ZoneContext) -> Result
         ModernCommand::Process(args) => guest::run_process(context, args, mode, deadline),
         ModernCommand::Exec(args) => exec::run(context, args, mode, deadline),
         ModernCommand::Shell(args) => shell::run(context, args, mode, deadline),
-        ModernCommand::Volume(args) => resource::typed(context, "Volume", args, mode, deadline),
-        ModernCommand::Network(args) => resource::typed(context, "Network", args, mode, deadline),
-        ModernCommand::Device(args) => resource::typed(context, "Device", args, mode, deadline),
+        ModernCommand::Volume(args) => resource::typed_noun(context, "volume", args, mode, deadline),
+        ModernCommand::Network(args) => resource::typed_noun(context, "network", args, mode, deadline),
+        ModernCommand::Device(args) => resource::typed_noun(context, "device", args, mode, deadline),
         ModernCommand::Endpoint(args) => endpoint::run(context, args, mode, deadline),
         ModernCommand::Export(args) => share::run_export(context, args, mode, deadline),
         ModernCommand::Import(args) => share::run_import(context, args, mode, deadline),
         ModernCommand::Resource(args) => resource::run_resource(context, args, mode, deadline),
-        ModernCommand::User(args) => resource::typed(context, "User", args, mode, deadline),
+        ModernCommand::User(args) => resource::typed_noun(context, "user", args, mode, deadline),
         ModernCommand::Credential(args) => {
-            resource::typed(context, "Credential", args, mode, deadline)
+            resource::typed_noun(context, "credential", args, mode, deadline)
         }
         ModernCommand::Provider(args) => provider::run(context, args, mode, deadline),
         ModernCommand::Zone(args) => zone::run(context, args, mode, deadline),
-        ModernCommand::Quota(args) => resource::typed(context, "Quota", args, mode, deadline),
+        ModernCommand::Quota(args) => resource::typed_noun(context, "quota", args, mode, deadline),
         ModernCommand::EmergencyPolicy(args) => {
-            resource::typed(context, "EmergencyPolicy", args, mode, deadline)
+            resource::typed_noun(context, "emergency-policy", args, mode, deadline)
         }
         ModernCommand::Activation(args) => activation::run(context, args, mode, deadline),
         ModernCommand::Complete(args) => complete::run(args, Some(context), mode, deadline),
@@ -826,7 +857,7 @@ fn audit(
     context: &ZoneContext,
     args: &GenericAuditArgs,
     mode: OutputMode,
-    _deadline: crate::context::RequestDeadline,
+    deadline: crate::context::RequestDeadline,
 ) -> Result<i32, CliFailure> {
     if args.strict {
         return emit_host_error(
@@ -834,7 +865,7 @@ fn audit(
             mode.is_json(),
         );
     }
-    match try_audit_via_socket(context.public_socket_path(), mode.is_json())? {
+    match try_audit_via_socket(context.public_socket_path(), mode.is_json(), deadline)? {
         AuditSocketOutcome::Lines(lines) => {
             render_daemon_audit_lines(&lines, mode.is_json())?;
             Ok(0)
@@ -901,7 +932,7 @@ fn provider_projection(
     mode: OutputMode,
     deadline: crate::context::RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    if crate::dispatch::BUILTIN_COMMANDS.contains(&top_level) {
+    if crate::dispatch::is_builtin_command(top_level) {
         return Err(context.failure(
             "resource-schema-invalid",
             "Provider command collides with a built-in command",
@@ -1172,14 +1203,32 @@ mod tests {
     }
 
     #[test]
-    fn built_in_registry_is_unique_and_matches_expected_size() {
-        let mut names = BUILTIN_COMMANDS.to_vec();
+    fn built_in_registry_is_the_parser_less_the_projection_carriers() {
+        let mut names = builtin_commands().to_vec();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), BUILTIN_COMMANDS.len());
-        assert_eq!(BUILTIN_COMMANDS.len(), 33);
-        assert!(BUILTIN_COMMANDS.contains(&"endpoint"));
-        assert!(BUILTIN_COMMANDS.contains(&"import"));
+        assert_eq!(names.len(), builtin_commands().len());
+        assert!(is_builtin_command("endpoint"));
+        assert!(is_builtin_command("import"));
+
+        // The projection carriers are parser subcommands, not built-ins: the
+        // declaring Provider names them through its own `cliProjection`, so
+        // the binding must not refuse them as a built-in collision.
+        for carrier in PROJECTION_COMMANDS {
+            assert!(
+                ModernCli::command()
+                    .get_subcommands()
+                    .any(|subcommand| subcommand.get_name() == *carrier),
+                "{carrier} is not a parser subcommand"
+            );
+            assert!(!is_builtin_command(carrier), "{carrier} is a built-in");
+        }
+
+        // Every typed noun the generated CLI catalog declares is a parser
+        // command, so an entry cannot drift away from what the parser accepts.
+        for (noun, _) in crate::generated::surface_catalog::TYPED_NOUNS {
+            assert!(is_builtin_command(noun), "{noun} is not a built-in");
+        }
     }
 
     #[test]

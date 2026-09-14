@@ -34,17 +34,10 @@ rust_binary(
     compile_data = ["Cargo.toml"] + glob(["src/clipd_host/**/*.rs"]),
     visibility = ["//visibility:public"],
     deps = [
+        ":d2b_provider_clipboard_wayland",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
     ] + all_crate_deps(normal = True, cargo_only = True),
-)
-
-rust_binary(
-    name = "d2b-clip-debug",
-    srcs = ["src/bin/d2b-clip-debug.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -62,20 +55,6 @@ rust_library(
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
     visibility = ["//visibility:public"],
-)
-
-rust_test(
-    name = "fd_safety",
-    srcs = [
-        "tests/fd_safety.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_provider_clipboard_wayland",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(

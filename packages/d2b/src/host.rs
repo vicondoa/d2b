@@ -261,16 +261,21 @@ fn mark_unsafe_local_host(value: &mut Value) {
         .and_then(|status| status.get("providerKind"))
         .and_then(Value::as_str)
         .or_else(|| object.get("providerKind").and_then(Value::as_str));
-    let is_host = resource_ref.is_some_and(|value| value == "Host" || value.starts_with("Host/"));
-    let is_unsafe_local = provider == Some("Provider/unsafe-local")
-        || provider_kind == Some("unsafe-local")
+    let is_host = resource_ref.is_some_and(|value| {
+        let resource_type = value
+            .split_once('/')
+            .map_or(value, |(resource_type, _)| resource_type);
+        crate::generated::surface_catalog::is_no_isolation_target(resource_type)
+    });
+    let is_unsafe_local = provider.is_some_and(crate::generated::surface_catalog::is_unsafe_local_provider)
+        || provider_kind.is_some_and(crate::generated::surface_catalog::is_unsafe_local_provider_kind)
         || object
             .get("status")
             .and_then(Value::as_object)
             .and_then(|status| status.get("isolationPosture"))
             .and_then(Value::as_str)
             .or_else(|| object.get("isolationPosture").and_then(Value::as_str))
-            .is_some_and(|value| matches!(value, "none" | "unsafe-local"));
+            .is_some_and(crate::generated::surface_catalog::is_no_isolation_posture);
     if !(is_host && is_unsafe_local) {
         return;
     }

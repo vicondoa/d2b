@@ -5,8 +5,6 @@ exports_files(
     [
         "BUILD.bazel",
         "nix/default.nix",
-        "nix/guest.nix",
-        "nix/host.nix",
         "nix/projection.nix",
         "nix/tests/default.nix",
     ],
@@ -47,7 +45,6 @@ rust_test(
     ],
     compile_data = [
         "Cargo.toml",
-        "//:tests/golden/runner-shape/audio-argv-minimal.txt",
     ],
     visibility = ["//visibility:public"],
     deps = [
@@ -55,20 +52,6 @@ rust_test(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_audio_pipewire",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "audio_argv_impl",
-    compile_data = [
-        "Cargo.toml",
-        "//:tests/golden/runner-shape/audio-argv-minimal.txt",
-    ],
-    crate = ":d2b_provider_audio_pipewire",
-    deps = [
-        "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

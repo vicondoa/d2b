@@ -18,7 +18,8 @@
 //! The daemon-only end state moves the side effect into the typed
 //! broker `RunRotateKnownHost` op (reachable today via the public
 //! `rotateKnownHost` verb - see
-//! `dispatch_broker_rotate_known_host` in `lib.rs`). This module
+//! `dispatch_broker_rotate_known_host_as` in the daemon's composition
+//! dispatch). This module
 //! splits that work into:
 //!
 //!   * a **pure** [`build_refresh_intent`] that turns

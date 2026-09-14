@@ -48,12 +48,9 @@ const MAX_LABEL_CHARS: usize = 64;
 const BYTES_PER_PIXEL: u32 = 4;
 const MAX_DECORATION_DIMENSION: u32 = 16_384;
 const MAX_DECORATION_BUFFER_BYTES: usize = 64 * 1024 * 1024;
-const MAX_LABEL_FALLBACK_WIDTH: u32 = 1024;
-const LABEL_PAD_X: u32 = 5;
 const LABEL_PAD_Y: u32 = 3;
 const GLYPH_W: u32 = 5;
 const GLYPH_H: u32 = 7;
-const GLYPH_ADVANCE: u32 = 6;
 const MIN_LABEL_BAND_HEIGHT: u32 = LABEL_PAD_Y + GLYPH_H;
 const VERTICAL_LABEL_X_SCALE: u32 = 1;
 const VERTICAL_LABEL_Y_SCALE: u32 = 2;
@@ -242,70 +239,6 @@ pub struct Point {
     pub y: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BorderGeometry {
-    pub content: Size,
-    pub outer: Size,
-    pub content_origin: Point,
-    pub thickness: u32,
-    pub top_thickness: u32,
-}
-
-impl BorderGeometry {
-    pub fn expand(content: Size, thickness: u32) -> Option<Self> {
-        Self::expand_with_label_band(content, thickness, false)
-    }
-
-    pub fn expand_with_label_band(
-        content: Size,
-        thickness: u32,
-        label_present: bool,
-    ) -> Option<Self> {
-        if content.is_empty() || thickness == 0 {
-            return None;
-        }
-        let horizontal = thickness.checked_mul(2)?;
-        let top_thickness = top_border_height(thickness, label_present);
-        let vertical = top_thickness.checked_add(thickness)?;
-        Some(Self {
-            content,
-            outer: Size::new(
-                content.width.checked_add(horizontal)?,
-                content.height.checked_add(vertical)?,
-            ),
-            content_origin: Point {
-                x: i32::try_from(thickness).ok()?,
-                y: i32::try_from(top_thickness).ok()?,
-            },
-            thickness,
-            top_thickness,
-        })
-    }
-
-    fn label_fallback_for_oversized(content: Size, thickness: u32) -> Option<Self> {
-        if content.is_empty() || thickness == 0 {
-            return None;
-        }
-        let horizontal = thickness.checked_mul(2)?;
-        let top_thickness = top_border_height(thickness, true);
-        let outer_width = content
-            .width
-            .checked_add(horizontal)?
-            .min(MAX_LABEL_FALLBACK_WIDTH)
-            .max(horizontal.checked_add(GLYPH_W)?);
-        Some(Self {
-            content,
-            outer: Size::new(outer_width, top_thickness.checked_add(thickness)?),
-            content_origin: Point {
-                x: i32::try_from(thickness).ok()?,
-                y: i32::try_from(top_thickness).ok()?,
-            },
-            thickness,
-            top_thickness,
-        })
-    }
-}
-
 fn top_border_height(thickness: u32, label_present: bool) -> u32 {
     if label_present {
         thickness.max(MIN_LABEL_BAND_HEIGHT)
@@ -345,13 +278,6 @@ impl ConfigureSize {
     }
 }
 
-pub fn expand_window_geometry_for_border(
-    geometry: WindowGeometry,
-    thickness: u32,
-) -> Option<WindowGeometry> {
-    expand_window_geometry_for_decoration(geometry, thickness, false)
-}
-
 fn expand_window_geometry_for_decoration(
     geometry: WindowGeometry,
     thickness: u32,
@@ -381,48 +307,6 @@ pub struct VisualState {
     pub active: bool,
     pub urgent: bool,
     pub fullscreen: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DecorationPlan {
-    pub geometry: BorderGeometry,
-    pub color: Color,
-    pub label: Option<SanitizedLabel>,
-    pub label_position: LabelPosition,
-}
-
-pub fn decoration_plan(
-    config: &BorderConfig,
-    content: Size,
-    state: VisualState,
-) -> Option<DecorationPlan> {
-    if !config.enabled() || state.fullscreen {
-        return None;
-    }
-    let mut geometry =
-        BorderGeometry::expand_with_label_band(content, config.thickness, config.label.is_some())?;
-    if decoration_buffer_layout(geometry.outer).is_none() {
-        if config.label.is_some() {
-            geometry = BorderGeometry::label_fallback_for_oversized(content, config.thickness)?;
-            decoration_buffer_layout(geometry.outer)?;
-        } else {
-            return None;
-        }
-    }
-    Some(DecorationPlan {
-        geometry,
-        color: config.color_for_state(state),
-        label: config.label.clone(),
-        label_position: config.label_position,
-    })
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DrawInput {
-    pub geometry: BorderGeometry,
-    pub color: Color,
-    pub label: Option<SanitizedLabel>,
-    pub label_position: LabelPosition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -455,31 +339,6 @@ fn decoration_buffer_layout(size: Size) -> Option<DecorationBufferLayout> {
     })
 }
 
-pub fn draw_decoration(input: &DrawInput) -> Option<Vec<u8>> {
-    let layout = decoration_buffer_layout(input.geometry.outer)?;
-    let mut pixels = vec![0_u8; layout.len];
-    fill_border(
-        &mut pixels,
-        layout.width,
-        layout.height,
-        input.geometry.thickness as usize,
-        input.geometry.top_thickness as usize,
-        input.color,
-    );
-    if let Some(label) = &input.label {
-        draw_label(
-            &mut pixels,
-            layout.width,
-            layout.height,
-            input.geometry.top_thickness,
-            input.color,
-            label.as_str(),
-            input.label_position,
-        );
-    }
-    Some(pixels)
-}
-
 fn draw_wrapper_rail(
     width: u32,
     height: u32,
@@ -506,28 +365,6 @@ fn draw_wrapper_rail(
         );
     }
     Some(pixels)
-}
-
-fn fill_border(
-    pixels: &mut [u8],
-    width: usize,
-    height: usize,
-    thickness: usize,
-    top_thickness: usize,
-    color: Color,
-) {
-    let color = color.argb8888_bytes();
-    for y in 0..height {
-        for x in 0..width {
-            if x < thickness
-                || y < top_thickness
-                || x >= width.saturating_sub(thickness)
-                || y >= height.saturating_sub(thickness)
-            {
-                set_pixel(pixels, width, x, y, color);
-            }
-        }
-    }
 }
 
 fn draw_vertical_label(
@@ -616,80 +453,6 @@ fn draw_rotated_glyph(pixels: &mut [u8], width: usize, height: usize, glyph: Rot
                     if sx < width && sy < height {
                         set_pixel(pixels, width, sx, sy, color);
                     }
-                }
-            }
-        }
-    }
-}
-
-fn draw_label(
-    pixels: &mut [u8],
-    width: usize,
-    height: usize,
-    top_thickness: u32,
-    border: Color,
-    label: &str,
-    position: LabelPosition,
-) {
-    let max_label_width = width.saturating_sub((LABEL_PAD_X * 2) as usize);
-    if max_label_width < GLYPH_W as usize || top_thickness < MIN_LABEL_BAND_HEIGHT {
-        return;
-    }
-    let label_height = height.min(top_thickness as usize);
-    let glyphs_that_fit = ((max_label_width as u32) / GLYPH_ADVANCE).max(1) as usize;
-    let text: String = label.chars().take(glyphs_that_fit).collect();
-    let text_width = text.chars().count() as u32 * GLYPH_ADVANCE;
-    let x = match position {
-        LabelPosition::TopLeft => LABEL_PAD_X,
-        LabelPosition::TopCenter => input_center(width as u32, text_width),
-    } as usize;
-    let y = LABEL_PAD_Y as usize;
-    let foreground = border.readable_text_color().argb8888_bytes();
-    let shadow = Color {
-        a: 160,
-        ..Color::BLACK
-    }
-    .argb8888_bytes();
-    draw_text_pixels(pixels, width, label_height, x + 1, y + 1, &text, shadow);
-    draw_text_pixels(pixels, width, label_height, x, y, &text, foreground);
-}
-
-fn input_center(width: u32, text_width: u32) -> u32 {
-    width.saturating_sub(text_width) / 2
-}
-
-fn draw_text_pixels(
-    pixels: &mut [u8],
-    width: usize,
-    height: usize,
-    x: usize,
-    y: usize,
-    text: &str,
-    color: [u8; 4],
-) {
-    let mut cursor = x;
-    for ch in text.chars() {
-        draw_glyph(pixels, width, height, cursor, y, glyph(ch), color);
-        cursor = cursor.saturating_add(GLYPH_ADVANCE as usize);
-    }
-}
-
-fn draw_glyph(
-    pixels: &mut [u8],
-    width: usize,
-    height: usize,
-    x: usize,
-    y: usize,
-    rows: [u8; 7],
-    color: [u8; 4],
-) {
-    for (row, bits) in rows.iter().enumerate() {
-        for col in 0..GLYPH_W as usize {
-            if bits & (1 << (GLYPH_W as usize - 1 - col)) != 0 {
-                let px = x + col;
-                let py = y + row;
-                if px < width && py < height {
-                    set_pixel(pixels, width, px, py, color);
                 }
             }
         }
@@ -960,7 +723,6 @@ struct SurfaceState {
     current_window_geometry: Option<WindowGeometry>,
     toplevel: bool,
     visual: VisualState,
-    decoration: Option<DecorationSurface>,
     wrapper: Option<WrapperToplevel>,
 }
 
@@ -979,7 +741,6 @@ impl Default for SurfaceState {
             current_window_geometry: None,
             toplevel: false,
             visual: VisualState::default(),
-            decoration: None,
             wrapper: None,
         }
     }
@@ -1055,19 +816,6 @@ impl SurfaceState {
     }
 }
 
-#[derive(Debug)]
-struct DecorationSurface {
-    surface: Rc<WlSurface>,
-    subsurface: Rc<WlSubsurface>,
-    buffer: Option<ProxyDecorationBuffer>,
-    // The compositor may still scan out an attached decoration buffer until it
-    // sends wl_buffer.release. Keep released-aware retired buffers instead of
-    // destroying every replacement immediately, but cap the queue so a guest
-    // cannot force unbounded proxy memfd retention with rapid geometry changes.
-    retired_buffers: Vec<ProxyDecorationBuffer>,
-    key: Option<FrameKey>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct WrapperGeometry {
     rail_width: u32,
@@ -1123,33 +871,6 @@ struct WrapperToplevel {
 }
 
 impl WrapperToplevel {
-    fn retire_buffer(&mut self, buffer: ProxyDecorationBuffer) {
-        buffer.retire();
-        if !buffer.destroyed() {
-            self.retired_buffers.push(buffer);
-        }
-        self.prune_destroyed_buffers();
-        while self.retired_buffers.len() > MAX_RETIRED_DECORATION_BUFFERS {
-            let buffer = self.retired_buffers.remove(0);
-            buffer.force_destroy();
-        }
-    }
-
-    fn force_destroy_buffers(&mut self) {
-        if let Some(buffer) = self.buffer.take() {
-            buffer.force_destroy();
-        }
-        for buffer in self.retired_buffers.drain(..) {
-            buffer.force_destroy();
-        }
-    }
-
-    fn prune_destroyed_buffers(&mut self) {
-        self.retired_buffers.retain(|buffer| !buffer.destroyed());
-    }
-}
-
-impl DecorationSurface {
     fn retire_buffer(&mut self, buffer: ProxyDecorationBuffer) {
         buffer.retire();
         if !buffer.destroyed() {
@@ -1304,7 +1025,6 @@ pub struct DecorationManager {
     wm_base: Option<Rc<XdgWmBase>>,
     buffers: HashMap<u64, BufferDimensions>,
     surfaces: HashMap<u64, SurfaceState>,
-    subsurfaces_by_parent: HashMap<u64, Vec<Weak<WlSurface>>>,
 }
 
 impl DecorationManager {
@@ -1318,7 +1038,6 @@ impl DecorationManager {
             wm_base: None,
             buffers: HashMap::new(),
             surfaces: HashMap::new(),
-            subsurfaces_by_parent: HashMap::new(),
         }
     }
 
@@ -1787,19 +1506,8 @@ impl DecorationManager {
             return;
         };
         state.apply_commit_state(&self.buffers);
-        if !state.toplevel {
-            return;
-        }
         if state.wrapper.is_some() {
             self.apply_wrapper(surface_id);
-            return;
-        }
-        let plan = state
-            .current_size
-            .and_then(|size| decoration_plan(&self.config, size, state.visual));
-        match plan {
-            Some(plan) => self.apply_decoration(surface, surface_id, plan),
-            None => self.remove_decoration(surface_id),
         }
     }
 
@@ -1958,14 +1666,6 @@ impl DecorationManager {
         let id = surface.unique_id();
         self.remove_decoration(id);
         self.surfaces.remove(&id);
-        self.subsurfaces_by_parent.remove(&id);
-        for siblings in self.subsurfaces_by_parent.values_mut() {
-            siblings.retain(|sibling| {
-                sibling
-                    .upgrade()
-                    .is_some_and(|sibling| sibling.unique_id() != id)
-            });
-        }
     }
 
     pub fn toplevel_destroyed(&mut self, surface_id: u64) {
@@ -1974,36 +1674,6 @@ impl DecorationManager {
             state.toplevel = false;
             state.pending_window_geometry = None;
             state.current_window_geometry = None;
-        }
-    }
-
-    pub fn register_guest_subsurface(&mut self, surface: &Rc<WlSurface>, parent: &Rc<WlSurface>) {
-        let parent_id = parent.unique_id();
-        let siblings = self.subsurfaces_by_parent.entry(parent_id).or_default();
-        if !siblings.iter().any(|sibling| {
-            sibling
-                .upgrade()
-                .is_some_and(|sibling| sibling.unique_id() == surface.unique_id())
-        }) {
-            siblings.push(Rc::downgrade(surface));
-        }
-        self.raise_decoration_above_guest_subsurfaces(parent);
-    }
-
-    pub fn raise_decoration_above_guest_subsurfaces(&mut self, parent: &Rc<WlSurface>) {
-        let parent_id = parent.unique_id();
-        let Some(state) = self.surfaces.get_mut(&parent_id) else {
-            return;
-        };
-        let Some(decoration) = state.decoration.as_mut() else {
-            return;
-        };
-        decoration.subsurface.send_place_above(parent);
-        if let Some(siblings) = self.subsurfaces_by_parent.get_mut(&parent_id) {
-            siblings.retain(|sibling| sibling.strong_count() > 0);
-            for sibling in siblings.iter().filter_map(Weak::upgrade) {
-                decoration.subsurface.send_place_above(&sibling);
-            }
         }
     }
 
@@ -2025,144 +1695,6 @@ impl DecorationManager {
         if let Some(state) = self.surfaces.get_mut(&surface_id) {
             state.visual.urgent = urgent;
         }
-    }
-
-    fn apply_decoration(&mut self, parent: &Rc<WlSurface>, surface_id: u64, plan: DecorationPlan) {
-        let key = FrameKey {
-            outer: plan.geometry.outer,
-            color: plan.color,
-            label: plan.label.clone(),
-            label_position: plan.label_position,
-        };
-        let needs_surface = self
-            .surfaces
-            .get(&surface_id)
-            .and_then(|state| state.decoration.as_ref())
-            .is_none();
-        let new_decoration = if needs_surface {
-            self.create_decoration_surface(parent)
-        } else {
-            None
-        };
-        let needs_buffer = self
-            .surfaces
-            .get(&surface_id)
-            .and_then(|state| state.decoration.as_ref())
-            .is_none_or(|decoration| decoration.key.as_ref() != Some(&key));
-        let new_buffer = if needs_buffer {
-            match self.create_buffer_for_plan(&plan) {
-                Ok(buffer) => Some(buffer),
-                Err(error) => {
-                    let error = bounded_error_detail(error.to_string());
-                    self.diag
-                        .borrow_mut()
-                        .warn("border-decoration", "draw-failed", || {
-                            format!(
-                                "[d2b-wlproxy] event=border-decoration reason=draw-failed error={error}"
-                            )
-                        });
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        let Some(state) = self.surfaces.get_mut(&surface_id) else {
-            return;
-        };
-        if state.decoration.is_none() {
-            state.decoration = new_decoration;
-        }
-        if let Some(decoration) = state.decoration.as_mut() {
-            decoration.subsurface.send_set_position(
-                -i32::try_from(plan.geometry.thickness).unwrap_or(i32::MAX),
-                -i32::try_from(plan.geometry.top_thickness).unwrap_or(i32::MAX),
-            );
-        } else {
-            return;
-        }
-        self.raise_decoration_above_guest_subsurfaces(parent);
-        if let Some(buffer) = new_buffer {
-            let Some(state) = self.surfaces.get_mut(&surface_id) else {
-                return;
-            };
-            let Some(decoration) = state.decoration.as_mut() else {
-                return;
-            };
-            let old_buffer = decoration.buffer.take();
-            decoration
-                .surface
-                .send_attach(Some(buffer.wl_buffer()), 0, 0);
-            decoration.surface.send_damage_buffer(
-                0,
-                0,
-                plan.geometry.outer.width as i32,
-                plan.geometry.outer.height as i32,
-            );
-            decoration.surface.send_commit();
-            if let Some(old_buffer) = old_buffer {
-                decoration.retire_buffer(old_buffer);
-            } else {
-                decoration.prune_destroyed_buffers();
-            }
-            decoration.buffer = Some(buffer);
-            decoration.key = Some(key);
-        }
-    }
-
-    fn create_decoration_surface(&self, parent: &Rc<WlSurface>) -> Option<DecorationSurface> {
-        let compositor = self.compositor.as_ref()?;
-        let subcompositor = self.subcompositor.as_ref()?;
-        let surface = compositor.new_send_create_surface();
-        let empty = compositor.new_send_create_region();
-        surface.send_set_input_region(Some(&empty));
-        empty.send_destroy();
-        let subsurface = subcompositor.new_send_get_subsurface(&surface, parent);
-        subsurface.send_set_desync();
-        Some(DecorationSurface {
-            surface,
-            subsurface,
-            buffer: None,
-            retired_buffers: Vec::new(),
-            key: None,
-        })
-    }
-
-    fn create_buffer_for_plan(&self, plan: &DecorationPlan) -> io::Result<ProxyDecorationBuffer> {
-        let shm = self
-            .shm
-            .as_ref()
-            .ok_or_else(|| io::Error::other("wl_shm is not available"))?;
-        let layout = decoration_buffer_layout(plan.geometry.outer)
-            .ok_or_else(|| io::Error::other("border buffer exceeds decoration limits"))?;
-        let input = DrawInput {
-            geometry: plan.geometry,
-            color: plan.color,
-            label: plan.label.clone(),
-            label_position: plan.label_position,
-        };
-        let pixels = draw_decoration(&input)
-            .ok_or_else(|| io::Error::other("border buffer exceeds decoration limits"))?;
-        let fd = create_memfd_with_contents(
-            &pixels,
-            u64::try_from(layout.len).map_err(|_| io::Error::other("border buffer too large"))?,
-        )?;
-        let fd = Rc::new(fd);
-        let pool = shm.new_send_create_pool(
-            &fd,
-            i32::try_from(layout.len).map_err(|_| io::Error::other("border buffer too large"))?,
-        );
-        let buffer = pool.new_send_create_buffer(
-            0,
-            i32::try_from(layout.width).map_err(|_| io::Error::other("border width too large"))?,
-            i32::try_from(layout.height)
-                .map_err(|_| io::Error::other("border height too large"))?,
-            i32::try_from(layout.stride)
-                .map_err(|_| io::Error::other("border stride too large"))?,
-            WlShmFormat::ARGB8888,
-        );
-        pool.send_destroy();
-        Ok(ProxyDecorationBuffer::new(buffer))
     }
 
     fn create_wrapper_rail_buffer(
@@ -2218,13 +1750,6 @@ impl DecorationManager {
             wrapper.wrapper_toplevel.send_destroy();
             wrapper.wrapper_xdg_surface.send_destroy();
             wrapper.wrapper_surface.send_destroy();
-        }
-        if let Some(mut decoration) = state.decoration.take() {
-            decoration.surface.send_attach(None, 0, 0);
-            decoration.surface.send_commit();
-            decoration.force_destroy_buffers();
-            decoration.subsurface.send_destroy();
-            decoration.surface.send_destroy();
         }
     }
 }
@@ -2501,14 +2026,6 @@ mod tests {
     }
 
     #[test]
-    fn geometry_expand_and_contract_offsets_content() {
-        let expanded = BorderGeometry::expand(Size::new(640, 480), 4).unwrap();
-        assert_eq!(expanded.outer, Size::new(648, 488));
-        assert_eq!(expanded.content_origin, Point { x: 4, y: 4 });
-        assert_eq!(expanded.top_thickness, 4);
-    }
-
-    #[test]
     fn wrapper_geometry_reserves_left_rail_without_moving_guest_content_vertically() {
         let geometry = WrapperGeometry::from_window_geometry(WindowGeometry::new(0, 0, 800, 600))
             .expect("valid wrapper geometry");
@@ -2541,76 +2058,7 @@ mod tests {
     }
 
     #[test]
-    fn label_band_keeps_default_side_border_but_makes_label_visible() {
-        let config = BorderConfig {
-            enabled: true,
-            label: sanitize_label("work"),
-            ..BorderConfig::default()
-        };
-        let plan = decoration_plan(&config, Size::new(640, 480), VisualState::default()).unwrap();
-
-        assert_eq!(plan.geometry.thickness, DEFAULT_BORDER_THICKNESS);
-        assert_eq!(plan.geometry.top_thickness, MIN_LABEL_BAND_HEIGHT);
-        assert_eq!(
-            plan.geometry.content_origin,
-            Point {
-                x: DEFAULT_BORDER_THICKNESS as i32,
-                y: MIN_LABEL_BAND_HEIGHT as i32,
-            }
-        );
-        assert_eq!(plan.geometry.outer, Size::new(648, 494));
-
-        let pixels = draw_decoration(&DrawInput {
-            geometry: plan.geometry,
-            color: Color::BLACK,
-            label: plan.label,
-            label_position: plan.label_position,
-        })
-        .unwrap();
-
-        assert!(
-            pixels
-                .chunks_exact(4)
-                .any(|px| px == Color::WHITE.argb8888_bytes())
-        );
-    }
-
-    #[test]
-    fn oversized_labeled_surface_keeps_bounded_label_decoration() {
-        let config = BorderConfig {
-            enabled: true,
-            label: sanitize_label("work"),
-            ..BorderConfig::default()
-        };
-        let plan = decoration_plan(
-            &config,
-            Size::new(MAX_DECORATION_DIMENSION, MAX_DECORATION_DIMENSION),
-            VisualState::default(),
-        )
-        .unwrap();
-
-        assert!(plan.geometry.outer.width <= MAX_LABEL_FALLBACK_WIDTH);
-        assert_eq!(
-            plan.geometry.outer.height,
-            MIN_LABEL_BAND_HEIGHT + DEFAULT_BORDER_THICKNESS
-        );
-        assert!(
-            draw_decoration(&DrawInput {
-                geometry: plan.geometry,
-                color: Color::BLACK,
-                label: plan.label,
-                label_position: plan.label_position,
-            })
-            .is_some()
-        );
-    }
-
-    #[test]
     fn window_geometry_expansion_covers_outer_border() {
-        assert_eq!(
-            expand_window_geometry_for_border(WindowGeometry::new(8, 9, 100, 50), 4),
-            Some(WindowGeometry::new(4, 5, 108, 58))
-        );
         assert_eq!(
             expand_window_geometry_for_decoration(WindowGeometry::new(8, 20, 100, 50), 4, true),
             Some(WindowGeometry::new(4, 10, 108, 64))
@@ -2620,15 +2068,15 @@ mod tests {
     #[test]
     fn window_geometry_expansion_rejects_invalid_or_overflowing_values() {
         assert_eq!(
-            expand_window_geometry_for_border(WindowGeometry::new(0, 0, 0, 50), 4),
+            expand_window_geometry_for_decoration(WindowGeometry::new(0, 0, 0, 50), 4, false),
             None
         );
         assert_eq!(
-            expand_window_geometry_for_border(WindowGeometry::new(i32::MIN, 0, 10, 10), 4),
+            expand_window_geometry_for_decoration(WindowGeometry::new(i32::MIN, 0, 10, 10), 4, false),
             None
         );
         assert_eq!(
-            expand_window_geometry_for_border(WindowGeometry::new(0, 0, i32::MAX, 10), 4),
+            expand_window_geometry_for_decoration(WindowGeometry::new(0, 0, i32::MAX, 10), 4, false),
             None
         );
     }
@@ -2698,53 +2146,6 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_disables_decoration_plan() {
-        let config = BorderConfig {
-            enabled: true,
-            thickness: 3,
-            ..BorderConfig::default()
-        };
-        assert!(decoration_plan(&config, Size::new(100, 100), VisualState::default()).is_some());
-        assert!(
-            decoration_plan(
-                &config,
-                Size::new(100, 100),
-                VisualState {
-                    fullscreen: true,
-                    ..VisualState::default()
-                }
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn decoration_plan_rejects_oversized_outer_dimensions() {
-        let config = BorderConfig {
-            enabled: true,
-            thickness: 1,
-            ..BorderConfig::default()
-        };
-
-        assert!(
-            decoration_plan(
-                &config,
-                Size::new(MAX_DECORATION_DIMENSION, 100),
-                VisualState::default()
-            )
-            .is_none()
-        );
-        assert!(
-            decoration_plan(
-                &config,
-                Size::new(100, MAX_DECORATION_DIMENSION),
-                VisualState::default()
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
     fn decoration_buffer_layout_enforces_allocation_bounds() {
         assert_eq!(
             decoration_buffer_layout(Size::new(4096, 4096)).map(|layout| layout.len),
@@ -2755,24 +2156,6 @@ mod tests {
     }
 
     #[test]
-    fn draw_decoration_rejects_oversized_geometry_before_allocation() {
-        let input = DrawInput {
-            geometry: BorderGeometry {
-                content: Size::new(u32::MAX, u32::MAX),
-                outer: Size::new(u32::MAX, u32::MAX),
-                content_origin: Point { x: 1, y: 1 },
-                thickness: 1,
-                top_thickness: 1,
-            },
-            color: Color::rgb(1, 2, 3),
-            label: sanitize_label("work"),
-            label_position: LabelPosition::TopLeft,
-        };
-
-        assert!(draw_decoration(&input).is_none());
-    }
-
-    #[test]
     fn label_sanitization_bounds_and_strips_controls() {
         let raw = format!("work\nvm\t{}", "x".repeat(100));
         let label = sanitize_label(&raw).unwrap();
@@ -2780,35 +2163,6 @@ mod tests {
         assert!(!label.as_str().contains('\t'));
         assert!(label.as_str().chars().count() <= MAX_LABEL_CHARS);
         assert_eq!(sanitize_label("\n\t"), None);
-    }
-
-    #[test]
-    fn draw_input_contains_only_proxy_owned_render_data() {
-        let input = DrawInput {
-            geometry: BorderGeometry::expand(Size::new(10, 10), 2).unwrap(),
-            color: Color::rgb(1, 2, 3),
-            label: sanitize_label("work"),
-            label_position: LabelPosition::TopLeft,
-        };
-        let pixels = draw_decoration(&input).unwrap();
-        assert_eq!(pixels.len(), 14 * 14 * 4);
-        assert!(
-            pixels
-                .chunks_exact(4)
-                .any(|px| px == Color::rgb(1, 2, 3).argb8888_bytes())
-        );
-    }
-
-    #[test]
-    fn draw_path_takes_no_guest_buffer_or_fd_inputs() {
-        fn accepts_only_render_metadata(_: DrawInput) {}
-
-        accepts_only_render_metadata(DrawInput {
-            geometry: BorderGeometry::expand(Size::new(32, 24), 4).unwrap(),
-            color: Color::rgb(10, 20, 30),
-            label: sanitize_label("work"),
-            label_position: LabelPosition::TopCenter,
-        });
     }
 
     #[test]

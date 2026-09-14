@@ -16,23 +16,19 @@ use d2b_session::{
     OwnedTransport, TransportDescriptor, TransportError, TransportPacket, TransportReader,
     TransportWriter,
 };
-use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
-use tokio::time::{Instant, sleep, timeout_at};
+use tokio::time::{Instant, timeout_at};
 use zeroize::Zeroizing;
 
 use crate::{
     backpressure::{BackpressureError, CreditWindow, MAX_RELAY_FRAME_BYTES},
     credential_client::{
-        RelayCredentialBinding, RelayCredentialLease, RelayCredentialRole, RelaySecret,
-        ScopedCredentialClient, ScopedCredentialRequest,
+        RelayCredentialBinding, RelayCredentialLease, RelayCredentialRole, ScopedCredentialClient,
+        ScopedCredentialRequest,
     },
-    reconnect::{ReconnectBackoff, ReconnectDecision},
     transport_settings::RelayTransportSettings,
 };
-
-type HmacSha256 = Hmac<Sha256>;
 
 /// Maximum number of retained ZoneLink/session generation fences.
 pub const MAX_RELAY_GENERATION_FENCES: usize = 1_024;
@@ -40,7 +36,6 @@ pub const MAX_RELAY_GENERATION_FENCES: usize = 1_024;
 pub const MAX_RELAY_CA_BYTES: usize = 256 * 1024;
 /// Maximum WebSocket write buffer for one Relay connection.
 pub const MAX_RELAY_WS_WRITE_BUFFER_BYTES: usize = 2 * MAX_RELAY_FRAME_BYTES;
-const MAX_COMPLETED_RELAY_TRANSPORTS: usize = MAX_RELAY_GENERATION_FENCES;
 
 /// Relay endpoint role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -934,7 +929,6 @@ fn map_transport_error(error: RelayTransportError) -> TransportError {
         | RelayTransportError::InvalidSessionTransition
         | RelayTransportError::DeadlineExpired
         | RelayTransportError::StaleGeneration
-        | RelayTransportError::UnknownTransportHandle
         | RelayTransportError::DuplicateTransport => TransportError::Disconnected,
         RelayTransportError::InvalidConfiguration => TransportError::Other,
     }
@@ -1060,8 +1054,6 @@ pub enum RelayTransportError {
     DeadlineExpired,
     /// A newer reconnect generation superseded this connection.
     StaleGeneration,
-    /// A transport handle was not owned by this service.
-    UnknownTransportHandle,
     /// A carriage already exists for the exact binding.
     DuplicateTransport,
 }
@@ -1083,7 +1075,6 @@ impl fmt::Display for RelayTransportError {
             Self::InvalidSessionTransition => "relay-invalid-session-transition",
             Self::DeadlineExpired => "relay-deadline-expired",
             Self::StaleGeneration => "relay-stale-generation",
-            Self::UnknownTransportHandle => "relay-unknown-transport-handle",
             Self::DuplicateTransport => "relay-duplicate-transport",
         })
     }
@@ -1107,11 +1098,6 @@ fn map_credential_error(error: crate::RelayCredentialError) -> RelayTransportErr
             RelayTransportError::CredentialInvalid
         }
     }
-}
-
-enum RetryResult {
-    Retry(Duration),
-    Return(RelayTransportError),
 }
 
 const CREDENTIAL_REVOKE_CLEANUP_TIMEOUT: Duration = Duration::from_millis(250);
@@ -1204,34 +1190,6 @@ where
     }))
 }
 
-fn retry_or_close(
-    backoff: &mut ReconnectBackoff,
-    remaining: Duration,
-    error: RelayTransportError,
-) -> RetryResult {
-    match backoff.failed() {
-        ReconnectDecision::RetryAfter(delay)
-            if Duration::from_millis(u64::from(delay)) <= remaining =>
-        {
-            tracing::debug!(
-                provider = "transport-azure-relay",
-                delay_ms = delay,
-                "relay reconnect scheduled after carriage failure"
-            );
-            RetryResult::Retry(Duration::from_millis(u64::from(delay)))
-        }
-        ReconnectDecision::RetryAfter(_) | ReconnectDecision::Closed => {
-            tracing::warn!(
-                provider = "transport-azure-relay",
-                reason = %error,
-                "relay reconnect budget exhausted; abandoning session"
-            );
-            RetryResult::Return(error)
-        }
-        ReconnectDecision::OpenNow => RetryResult::Retry(Duration::ZERO),
-    }
-}
-
 fn revoke_or(
     original: RelayTransportError,
     revoke: Result<(), RelayTransportError>,
@@ -1286,23 +1244,12 @@ where
         &self,
         request: ScopedCredentialRequest,
     ) -> Result<RelayConnection, RelayTransportError> {
-        self.open_scoped_with_backoff(request, ReconnectBackoff::with_limits(0, 0, 0, 0))
-            .await
-    }
-
-    /// Open a scoped connection with bounded carriage-attempt retries.
-    pub async fn open_scoped_with_backoff(
-        &self,
-        request: ScopedCredentialRequest,
-        backoff: ReconnectBackoff,
-    ) -> Result<RelayConnection, RelayTransportError> {
-        self.open_inner(request, backoff).await
+        self.open_inner(request).await
     }
 
     async fn open_inner(
         &self,
         request: ScopedCredentialRequest,
-        mut backoff: ReconnectBackoff,
     ) -> Result<RelayConnection, RelayTransportError> {
         let role = relay_role(request.role());
         let binding = request.binding().clone();
@@ -1344,190 +1291,158 @@ where
                 RelayTransportError::Unavailable
             })?;
         let credential_role = credential_role(role);
-        loop {
-            if !generation_attempt.eligible() {
+        if !generation_attempt.eligible() {
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                role = ?role,
+                binding = ?binding,
+                "relay session open rejected: stale generation fence"
+            );
+            return Err(RelayTransportError::StaleGeneration);
+        }
+        let remaining_ms = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(u128::from(u32::MAX)) as u32;
+        if remaining_ms == 0 {
+            return Err(RelayTransportError::DeadlineExpired);
+        }
+        let request = request
+            .with_deadline(remaining_ms)
+            .map_err(map_credential_error)?;
+        let lease = match timeout_at(deadline, self.credentials.read_credential(&request)).await
+        {
+            Err(_) => {
                 tracing::warn!(
                     provider = "transport-azure-relay",
                     role = ?role,
                     binding = ?binding,
-                    "relay session open rejected: stale generation fence"
+                    "relay credential read deadline expired"
                 );
-                return Err(RelayTransportError::StaleGeneration);
-            }
-            let remaining_ms = deadline
-                .saturating_duration_since(Instant::now())
-                .as_millis()
-                .min(u128::from(u32::MAX)) as u32;
-            if remaining_ms == 0 {
                 return Err(RelayTransportError::DeadlineExpired);
             }
-            let request = request
-                .with_deadline(remaining_ms)
-                .map_err(map_credential_error)?;
-            let lease = match timeout_at(deadline, self.credentials.read_credential(&request)).await
-            {
-                Err(_) => {
-                    tracing::warn!(
-                        provider = "transport-azure-relay",
-                        role = ?role,
-                        binding = ?binding,
-                        "relay credential read deadline expired"
-                    );
-                    return Err(RelayTransportError::DeadlineExpired);
-                }
-                Ok(Ok(lease)) => lease,
-                Ok(Err(error)) => {
-                    let mapped = map_credential_error(error);
-                    if !matches!(mapped, RelayTransportError::CredentialUnavailable) {
-                        tracing::warn!(
-                            provider = "transport-azure-relay",
-                            role = ?role,
-                            binding = ?binding,
-                            reason = %mapped,
-                            "relay credential read rejected"
-                        );
-                        return Err(mapped);
-                    }
-                    match retry_or_close(
-                        &mut backoff,
-                        deadline.saturating_duration_since(Instant::now()),
-                        mapped,
-                    ) {
-                        RetryResult::Retry(delay) => {
-                            timeout_at(deadline, sleep(delay))
-                                .await
-                                .map_err(|_| RelayTransportError::DeadlineExpired)?;
-                            continue;
-                        }
-                        RetryResult::Return(error) => return Err(error),
-                    }
-                }
-            };
-            let mut lease_guard = CredentialLeaseGuard::new(Arc::clone(&self.credentials), lease);
-            let now_unix_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
-                Ok(duration) => duration.as_millis() as u64,
-                Err(_) => {
-                    tracing::warn!(
-                        provider = "transport-azure-relay",
-                        role = ?role,
-                        binding = ?binding,
-                        "system clock before Unix epoch; relay session open rejected"
-                    );
-                    return Err(revoke_or(
-                        RelayTransportError::CredentialExpired,
-                        lease_guard.revoke(deadline).await,
-                    ));
-                }
-            };
-            let required_binding = lease_guard.lease().binding() == Some(&binding);
-            let role_matches = lease_guard.lease().role() == credential_role;
-            let lifetime_satisfies_deadline = lease_guard.lease().expires_at_unix_ms()
-                > now_unix_ms.saturating_add(u64::from(remaining_ms));
-            if !required_binding || !role_matches || !lifetime_satisfies_deadline {
-                let reason = if !required_binding {
-                    RelayTransportError::CredentialBindingMismatch
-                } else if !role_matches {
-                    RelayTransportError::CredentialRoleMismatch
-                } else {
-                    RelayTransportError::CredentialExpired
-                };
+            Ok(Ok(lease)) => lease,
+            Ok(Err(error)) => {
+                let mapped = map_credential_error(error);
                 tracing::warn!(
                     provider = "transport-azure-relay",
                     role = ?role,
                     binding = ?binding,
-                    reason = %reason,
-                    "relay credential lease rejected for session open"
+                    reason = %mapped,
+                    "relay credential read rejected"
                 );
-                return Err(revoke_or(reason, lease_guard.revoke(deadline).await));
+                return Err(mapped);
             }
-
-            let connect_deadline = std::cmp::min(
-                deadline,
-                Instant::now()
-                    + Duration::from_secs(u64::from(self.config.connect_timeout_seconds)),
+        };
+        let mut lease_guard = CredentialLeaseGuard::new(Arc::clone(&self.credentials), lease);
+        let now_unix_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(duration) => duration.as_millis() as u64,
+            Err(_) => {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    role = ?role,
+                    binding = ?binding,
+                    "system clock before Unix epoch; relay session open rejected"
+                );
+                return Err(revoke_or(
+                    RelayTransportError::CredentialExpired,
+                    lease_guard.revoke(deadline).await,
+                ));
+            }
+        };
+        let required_binding = lease_guard.lease().binding() == Some(&binding);
+        let role_matches = lease_guard.lease().role() == credential_role;
+        let lifetime_satisfies_deadline = lease_guard.lease().expires_at_unix_ms()
+            > now_unix_ms.saturating_add(u64::from(remaining_ms));
+        if !required_binding || !role_matches || !lifetime_satisfies_deadline {
+            let reason = if !required_binding {
+                RelayTransportError::CredentialBindingMismatch
+            } else if !role_matches {
+                RelayTransportError::CredentialRoleMismatch
+            } else {
+                RelayTransportError::CredentialExpired
+            };
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                role = ?role,
+                binding = ?binding,
+                reason = %reason,
+                "relay credential lease rejected for session open"
             );
-            let socket_result = match timeout_at(
-                connect_deadline,
-                self.connector
-                    .connect(&self.endpoint, role, lease_guard.lease()),
-            )
-            .await
-            {
-                Ok(result) => result,
-                Err(_) => {
-                    tracing::warn!(
-                        provider = "transport-azure-relay",
-                        role = ?role,
-                        binding = ?binding,
-                        "relay websocket connect deadline expired"
-                    );
-                    Err(RelayTransportError::DeadlineExpired)
-                }
-            };
-            let revoke_result = lease_guard.revoke(deadline).await;
-            let socket = match socket_result {
-                Ok(socket) => socket,
-                Err(error) => {
-                    tracing::warn!(
-                        provider = "transport-azure-relay",
-                        role = ?role,
-                        binding = ?binding,
-                        reason = %error,
-                        "relay websocket connect failed"
-                    );
-                    revoke_result?;
-                    if !matches!(error, RelayTransportError::Unavailable) {
-                        return Err(error);
-                    }
-                    match retry_or_close(
-                        &mut backoff,
-                        deadline.saturating_duration_since(Instant::now()),
-                        RelayTransportError::Unavailable,
-                    ) {
-                        RetryResult::Retry(delay) => {
-                            timeout_at(deadline, sleep(delay))
-                                .await
-                                .map_err(|_| RelayTransportError::DeadlineExpired)?;
-                            continue;
-                        }
-                        RetryResult::Return(error) => return Err(error),
-                    }
-                }
-            };
-            if let Err(error) = revoke_result {
+            return Err(revoke_or(reason, lease_guard.revoke(deadline).await));
+        }
+
+        let connect_deadline = std::cmp::min(
+            deadline,
+            Instant::now()
+                + Duration::from_secs(u64::from(self.config.connect_timeout_seconds)),
+        );
+        let socket_result = match timeout_at(
+            connect_deadline,
+            self.connector
+                .connect(&self.endpoint, role, lease_guard.lease()),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    role = ?role,
+                    binding = ?binding,
+                    "relay websocket connect deadline expired"
+                );
+                Err(RelayTransportError::DeadlineExpired)
+            }
+        };
+        let revoke_result = lease_guard.revoke(deadline).await;
+        let socket = match socket_result {
+            Ok(socket) => socket,
+            Err(error) => {
                 tracing::warn!(
                     provider = "transport-azure-relay",
                     role = ?role,
                     binding = ?binding,
                     reason = %error,
-                    "credential revocation failed after connect; closing socket"
+                    "relay websocket connect failed"
+                );
+                revoke_result?;
+                return Err(error);
+            }
+        };
+        if let Err(error) = revoke_result {
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                role = ?role,
+                binding = ?binding,
+                reason = %error,
+                "credential revocation failed after connect; closing socket"
+            );
+            let _ = socket.close().await;
+            return Err(error);
+        }
+        let generation_lease = match generation_attempt.commit() {
+            Ok(lease) => lease,
+            Err(error) => {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    role = ?role,
+                    binding = ?binding,
+                    reason = %error,
+                    "relay generation fence commit failed; closing socket"
                 );
                 let _ = socket.close().await;
                 return Err(error);
             }
-            let generation_lease = match generation_attempt.commit() {
-                Ok(lease) => lease,
-                Err(error) => {
-                    tracing::warn!(
-                        provider = "transport-azure-relay",
-                        role = ?role,
-                        binding = ?binding,
-                        reason = %error,
-                        "relay generation fence commit failed; closing socket"
-                    );
-                    let _ = socket.close().await;
-                    return Err(error);
-                }
-            };
-            return RelayConnection::from_committed_socket(
-                socket,
-                256 * 1024,
-                session_permit,
-                binding,
-                Arc::clone(&self.generation_fence),
-                generation_lease,
-            );
-        }
+        };
+        return RelayConnection::from_committed_socket(
+            socket,
+            256 * 1024,
+            session_permit,
+            binding,
+            Arc::clone(&self.generation_fence),
+            generation_lease,
+        );
     }
 
     /// Return the gateway execution boundary.
@@ -1550,32 +1465,6 @@ fn relay_role(role: RelayCredentialRole) -> RelayRole {
     }
 }
 
-/// Opaque handle for one relay carriage owned by a transport service.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RelayTransportHandle(u64);
-
-impl RelayTransportHandle {
-    /// Construct a handle at the trusted Core boundary.
-    pub const fn from_core(value: u64) -> Self {
-        Self(value)
-    }
-}
-
-impl fmt::Debug for RelayTransportHandle {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("RelayTransportHandle(<redacted>)")
-    }
-}
-
-/// Typed response for one relay carriage open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RelayOpenTransportResponse {
-    /// Opaque handle used by close and observe.
-    pub transport_handle: RelayTransportHandle,
-    /// Remote carriage descriptor.
-    pub descriptor: TransportDescriptor,
-}
-
 /// Typed observation for one relay carriage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RelayTransportObservation {
@@ -1587,15 +1476,6 @@ pub struct RelayTransportObservation {
     pub in_flight_credits: usize,
     /// Core-owned reconnect generation.
     pub reconnect_generation: u64,
-}
-
-fn relay_transport_descriptor() -> TransportDescriptor {
-    TransportDescriptor {
-        class: d2b_contracts_zone_session::v3::component_session::TransportClass::ProviderStream,
-        locality: d2b_contracts_zone_session::v3::component_session::Locality::Remote,
-        packet_atomic: false,
-        supports_attachments: false,
-    }
 }
 
 impl RelayConnection {
@@ -1611,142 +1491,3 @@ impl RelayConnection {
     }
 }
 
-/// Typed transport-only service façade.
-///
-/// The service owns only high-churn carriage handles. It does not watch or
-/// reconcile ZoneLink resources; Core supplies the scoped request and decides
-/// reconnect timing.
-pub struct RelayTransportService<C, K> {
-    provider: AzureRelayTransportProvider<C, K>,
-    active: Mutex<HashMap<RelayTransportHandle, RelayConnection>>,
-    completed: Mutex<HashMap<RelayTransportHandle, RelayTransportObservation>>,
-    open_lock: Mutex<()>,
-    next_handle: AtomicU64,
-}
-
-impl<C, K> RelayTransportService<C, K>
-where
-    C: ScopedCredentialClient + 'static,
-    K: RelaySocketConnector + 'static,
-{
-    /// Construct one service over one transport Provider instance.
-    pub fn new(provider: AzureRelayTransportProvider<C, K>) -> Self {
-        Self {
-            provider,
-            active: Mutex::new(HashMap::new()),
-            completed: Mutex::new(HashMap::new()),
-            open_lock: Mutex::new(()),
-            next_handle: AtomicU64::new(1),
-        }
-    }
-
-    /// Open one scoped carriage supplied by Core.
-    pub async fn open_transport(
-        &self,
-        request: ScopedCredentialRequest,
-        backoff: ReconnectBackoff,
-    ) -> Result<RelayOpenTransportResponse, RelayTransportError> {
-        let _open_guard = self.open_lock.lock().await;
-        if self
-            .active
-            .lock()
-            .await
-            .values()
-            .any(|connection| connection.binding() == request.binding())
-        {
-            return Err(RelayTransportError::DuplicateTransport);
-        }
-        let connection = self
-            .provider
-            .open_scoped_with_backoff(request, backoff)
-            .await?;
-        let handle =
-            RelayTransportHandle::from_core(self.next_handle.fetch_add(1, Ordering::Relaxed));
-        self.active.lock().await.insert(handle, connection);
-        Ok(RelayOpenTransportResponse {
-            transport_handle: handle,
-            descriptor: relay_transport_descriptor(),
-        })
-    }
-
-    /// Close one carriage. Repeating a successful close is idempotent.
-    pub async fn close_transport(
-        &self,
-        handle: RelayTransportHandle,
-    ) -> Result<(), RelayTransportError> {
-        let connection = self.active.lock().await.remove(&handle);
-        let Some(connection) = connection else {
-            return if self.completed.lock().await.contains_key(&handle) {
-                Ok(())
-            } else {
-                Err(RelayTransportError::UnknownTransportHandle)
-            };
-        };
-        let result = connection.close().await;
-        let observation = connection.observe_transport().await;
-        let mut completed = self.completed.lock().await;
-        if completed.len() >= MAX_COMPLETED_RELAY_TRANSPORTS {
-            if let Some(evicted) = completed.keys().next().copied() {
-                completed.remove(&evicted);
-            }
-        }
-        completed.insert(handle, observation);
-        result
-    }
-
-    /// Observe one active or completed carriage.
-    pub async fn observe_transport(
-        &self,
-        handle: RelayTransportHandle,
-    ) -> Result<RelayTransportObservation, RelayTransportError> {
-        if let Some(connection) = self.active.lock().await.get(&handle) {
-            return Ok(connection.observe_transport().await);
-        }
-        self.completed
-            .lock()
-            .await
-            .get(&handle)
-            .copied()
-            .ok_or(RelayTransportError::UnknownTransportHandle)
-    }
-
-    /// Close every carriage owned by this service.
-    pub async fn finalize(&self) -> Result<(), RelayTransportError> {
-        let handles = self.active.lock().await.keys().copied().collect::<Vec<_>>();
-        let mut first_error = None;
-        for handle in handles {
-            if let Err(error) = self.close_transport(handle).await {
-                first_error.get_or_insert(error);
-            }
-        }
-        first_error.map_or(Ok(()), Err)
-    }
-}
-
-/// Mint a short-lived SAS token inside the gateway Guest.
-pub fn mint_sas(
-    resource_uri: &str,
-    key_name: &str,
-    key: &RelaySecret,
-    ttl_secs: u64,
-    now_unix_secs: u64,
-) -> Result<RelaySecret, RelayTransportError> {
-    if ttl_secs == 0 || ttl_secs > 15 * 60 || resource_uri.is_empty() || key_name.is_empty() {
-        return Err(RelayTransportError::InvalidConfiguration);
-    }
-    let expiry = now_unix_secs.saturating_add(ttl_secs);
-    let encoded_uri = urlencoding::encode(resource_uri);
-    let string_to_sign = format!("{encoded_uri}\n{expiry}");
-    let mut mac = HmacSha256::new_from_slice(key.as_bytes())
-        .map_err(|_| RelayTransportError::AuthenticationFailed)?;
-    mac.update(string_to_sign.as_bytes());
-    let signature = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        mac.finalize().into_bytes(),
-    );
-    RelaySecret::new(format!(
-        "SharedAccessSignature sr={encoded_uri}&sig={}&se={expiry}&skn={key_name}",
-        urlencoding::encode(&signature)
-    ))
-    .map_err(|_| RelayTransportError::AuthenticationFailed)
-}

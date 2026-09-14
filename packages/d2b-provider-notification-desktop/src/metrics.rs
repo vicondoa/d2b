@@ -16,6 +16,15 @@ pub enum NotificationOutcome {
 }
 
 impl NotificationOutcome {
+    /// Every outcome admitted by the closed telemetry vocabulary.
+    pub const ALL: [Self; 5] = [
+        Self::Accepted,
+        Self::SinkUnavailable,
+        Self::CapacityExceeded,
+        Self::Rejected,
+        Self::ActionInvoked,
+    ];
+
     /// Return the stable metric label.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -110,41 +119,16 @@ impl NotificationTelemetryFrame {
                     return Err("notification-telemetry-field-rejected");
                 }
                 "category"
-                    if ![
-                        "device.added",
-                        "device.removed",
-                        "device.error",
-                        "network.connected",
-                        "network.disconnected",
-                        "network.error",
-                        "presence.online",
-                        "presence.offline",
-                        "security.event",
-                        "security.error",
-                        "transfer.complete",
-                        "transfer.error",
-                        "transfer.cancelled",
-                        "update.available",
-                        "update.downloading",
-                        "update.ready",
-                        "update.error",
-                        "system.info",
-                        "system.warning",
-                        "system.error",
-                    ]
-                    .contains(&field.value.as_str()) =>
+                    if !crate::Category::ALL
+                        .iter()
+                        .any(|category| category.as_str() == field.value) =>
                 {
                     return Err("notification-telemetry-field-rejected");
                 }
                 "outcome"
-                    if ![
-                        "accepted",
-                        "sink-unavailable",
-                        "capacity-exceeded",
-                        "rejected",
-                        "action-invoked",
-                    ]
-                    .contains(&field.value.as_str()) =>
+                    if !NotificationOutcome::ALL
+                        .iter()
+                        .any(|outcome| outcome.as_str() == field.value) =>
                 {
                     return Err("notification-telemetry-field-rejected");
                 }

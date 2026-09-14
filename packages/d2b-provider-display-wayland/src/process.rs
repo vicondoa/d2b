@@ -739,42 +739,6 @@ pub enum DisplayProcessRole {
     GuestFrontend,
 }
 
-/// Canonical proxy readiness stage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ProxyReadinessStage {
-    /// Upstream compositor attachment was checked.
-    Upstream,
-    /// The proxy listener was created.
-    Listener,
-    /// The first client was accepted.
-    FirstClient,
-}
-
-/// Canonical proxy readiness state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ProxyReadinessState {
-    /// The stage is ready.
-    Ready,
-    /// The stage failed.
-    Failed,
-}
-
-/// Closed proxy readiness failures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ProxyReadinessFailure {
-    /// The compositor attachment was unavailable.
-    UpstreamUnavailable,
-    /// The proxy listener could not be created.
-    ListenerUnavailable,
-    /// No first client arrived before the deadline.
-    FirstClientTimeout,
-    /// The client failed policy admission.
-    ClientRejected,
-}
-
 /// Bounded process observation supplied by the Process controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessObservation {
@@ -921,41 +885,6 @@ impl ProcessObservation {
             && self.session_digest != [0; 32]
             && self.proxy.is_ready()
             && self.frontend.is_ready()
-    }
-}
-
-/// Canonical process template projection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProxyProcessTemplate {
-    /// Process role.
-    pub role: DisplayProcessRole,
-    /// Fixed binary name.
-    pub binary: &'static str,
-    /// Execution domain.
-    pub domain: &'static str,
-    /// Whether the process has any broker or bus authority after launch.
-    pub bus_authority_after_launch: bool,
-}
-
-impl ProxyProcessTemplate {
-    /// Host proxy template.
-    pub const fn host_proxy() -> Self {
-        Self {
-            role: DisplayProcessRole::HostProxy,
-            binary: "d2b-display-wayland-host-proxy",
-            domain: "system",
-            bus_authority_after_launch: false,
-        }
-    }
-
-    /// Guest frontend template.
-    pub const fn guest_frontend() -> Self {
-        Self {
-            role: DisplayProcessRole::GuestFrontend,
-            binary: "wl-cross-domain-proxy",
-            domain: "system",
-            bus_authority_after_launch: false,
-        }
     }
 }
 

@@ -570,7 +570,7 @@ dependencies = [
  "find-msvc-tools",
  "jobserver",
  "libc",
- "shlex 2.0.1",
+ "shlex",
 ]
 
 
@@ -837,6 +837,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-control",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",
@@ -850,6 +851,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
 ]
 
 
@@ -1005,6 +1007,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
 ]
 
 
@@ -1020,7 +1023,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
- "tracing",
 ]
 
 
@@ -1056,14 +1058,6 @@ dependencies = [
 
 
 [[package]]
-name = "d2b-process"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-process-conformance",
-]
-
-
-[[package]]
 name = "d2b-process-conformance"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1080,11 +1074,9 @@ dependencies = [
 name = "d2b-provider"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-bus",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-zone-routing",
  "tokio",
 ]
 
@@ -1093,14 +1085,34 @@ dependencies = [
 name = "d2b-provider-activation-nixos"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts-broker",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
  "ring",
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
  "tracing",
+]
+
+
+[[package]]
+name = "d2b-provider-audio-binding"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-provider-audio-pipewire",
+ "d2b-provider-wayland-policy",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "serde_json",
 ]
 
 
@@ -1119,6 +1131,20 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
+]
+
+
+[[package]]
+name = "d2b-provider-audio-service"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-audio-pipewire",
+ "d2b-provider-wayland-policy",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "serde_json",
 ]
 
 
@@ -1150,6 +1176,15 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-provider-command"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-resource-types",
+ "tokio",
+]
+
+
+[[package]]
 name = "d2b-provider-config-nixos"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1161,8 +1196,29 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
  "tracing",
  "ttrpc",
+]
+
+
+[[package]]
+name = "d2b-provider-credential"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-provider-credential-entra",
+ "d2b-provider-credential-managed-identity",
+ "d2b-provider-credential-secret-service",
+ "d2b-provider-process-minijail",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 
@@ -1215,6 +1271,26 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-provider-device"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-core-controller",
+ "d2b-provider-device-gpu",
+ "d2b-provider-device-security-key",
+ "d2b-provider-device-tpm",
+ "d2b-provider-device-usbip",
+ "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+]
+
+
+[[package]]
 name = "d2b-provider-device-gpu"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1230,11 +1306,20 @@ dependencies = [
 name = "d2b-provider-device-security-key"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "serde",
+ "d2b-core-controller",
+ "d2b-provider-process-minijail",
+ "d2b-provider-process-systemd",
+ "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "nix 0.29.0",
+ "parking_lot",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -1255,15 +1340,22 @@ dependencies = [
 name = "d2b-provider-device-usbip"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",
+ "d2b-core-controller",
+ "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
  "libc",
+ "parking_lot",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -1295,18 +1387,151 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-provider-emergency-policy"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-resource-types",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-endpoint"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-guest"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-guest-azure-container-apps",
+ "d2b-provider-guest-azure-virtual-machine",
+ "d2b-provider-guest-cloud-hypervisor",
+ "d2b-provider-guest-qemu-media",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "ttrpc",
+]
+
+
+[[package]]
+name = "d2b-provider-guest-azure-container-apps"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+]
+
+
+[[package]]
+name = "d2b-provider-guest-azure-virtual-machine"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "base64",
+ "d2b-contracts",
+ "d2b-provider-toolkit",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+
+[[package]]
+name = "d2b-provider-guest-cloud-hypervisor"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-core-controller",
+ "d2b-session",
+ "d2b-session-unix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+]
+
+
+[[package]]
+name = "d2b-provider-guest-qemu-media"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-process-conformance",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tracing",
+]
+
+
+[[package]]
+name = "d2b-provider-host"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-system-core",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+]
+
+
+[[package]]
 name = "d2b-provider-network-local"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",
+ "d2b-provider-guest-cloud-hypervisor",
+ "d2b-provider-process-minijail",
+ "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
  "tracing",
 ]
 
@@ -1319,7 +1544,6 @@ dependencies = [
  "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
  "getrandom 0.2.17",
- "schemars",
  "serde",
  "serde_json",
  "sha2",
@@ -1344,68 +1568,160 @@ dependencies = [
 
 
 [[package]]
-name = "d2b-provider-runtime-azure-container-apps"
+name = "d2b-provider-operation"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-resource-types",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-process"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-contracts",
- "d2b-contracts-provider",
  "d2b-contracts-resource",
- "serde",
+ "d2b-process-conformance",
+ "d2b-provider-process-minijail",
+ "d2b-provider-process-systemd",
+ "d2b-provider-volume-virtiofs",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
  "serde_json",
- "sha2",
  "tokio",
  "tracing",
 ]
 
 
 [[package]]
-name = "d2b-provider-runtime-azure-virtual-machine"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "base64",
- "d2b-contracts",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tracing",
- "zeroize",
-]
-
-
-[[package]]
-name = "d2b-provider-runtime-cloud-hypervisor"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-contracts-provider",
- "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "d2b-core-controller",
- "d2b-session",
- "d2b-session-unix",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tracing",
-]
-
-
-[[package]]
-name = "d2b-provider-runtime-qemu-media"
+name = "d2b-provider-process-minijail"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-process-conformance",
- "schemars",
+ "serde",
+ "tracing",
+]
+
+
+[[package]]
+name = "d2b-provider-process-systemd"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-control",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-process-conformance",
+ "d2b-provider-toolkit",
  "serde",
  "serde_json",
- "sha2",
+ "tokio",
  "tracing",
+]
+
+
+[[package]]
+name = "d2b-provider-provider"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-controller-toolkit",
+ "d2b-provider-process-minijail",
+ "d2b-provider-system-core",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+
+[[package]]
+name = "d2b-provider-quota"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-resource-types",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-resource-export"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-resource-types",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-resource-import"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-resource-types",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-role"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-resource",
+ "d2b-resource-types",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-role-binding"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-resource-types",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-seccomp-profile"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-resource-types",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-shell-pool"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-shell-terminal",
+ "d2b-provider-wayland-policy",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "serde_json",
+]
+
+
+[[package]]
+name = "d2b-provider-shell-session"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-shell-terminal",
+ "d2b-provider-wayland-policy",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "serde_json",
 ]
 
 
@@ -1415,7 +1731,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-process-conformance",
  "tracing",
 ]
 
@@ -1429,11 +1744,10 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",
- "d2b-process",
  "d2b-process-conformance",
- "d2b-provider-system-minijail",
- "d2b-provider-system-systemd",
- "d2b-telemetry",
+ "d2b-provider-process",
+ "d2b-provider-process-minijail",
+ "d2b-provider-process-systemd",
  "rustix 0.38.44",
  "serde_json",
  "sha2",
@@ -1449,39 +1763,39 @@ name = "d2b-provider-system-core"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "serde",
  "serde_json",
- "sha2",
  "tracing",
 ]
 
 
 [[package]]
-name = "d2b-provider-system-minijail"
+name = "d2b-provider-telemetry-binding"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "d2b-process-conformance",
- "serde",
- "tracing",
-]
-
-
-[[package]]
-name = "d2b-provider-system-systemd"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts-control",
- "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "d2b-process-conformance",
- "d2b-provider-toolkit",
- "serde",
+ "d2b-core-controller",
+ "d2b-provider-observability-otel",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
  "serde_json",
  "tokio",
- "tracing",
+]
+
+
+[[package]]
+name = "d2b-provider-telemetry-service"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "serde_json",
+ "tokio",
 ]
 
 
@@ -1507,12 +1821,16 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-provider",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
  "d2b-session",
  "d2b-session-unix",
+ "parking_lot",
  "schemars",
  "serde",
  "serde_json",
  "sha2",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "ttrpc",
@@ -1532,7 +1850,6 @@ dependencies = [
  "d2b-contracts-zone-session",
  "d2b-session",
  "futures-util",
- "getrandom 0.2.17",
  "hmac",
  "libc",
  "rustls",
@@ -1579,13 +1896,60 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-provider-user"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-system-core",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-volume"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-volume-local",
+ "d2b-provider-volume-virtiofs",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-volume-binding"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-process-minijail",
+ "d2b-provider-volume-virtiofs",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+
+[[package]]
 name = "d2b-provider-volume-local"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core",
  "serde",
  "serde_json",
@@ -1608,6 +1972,64 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-provider-wayland-policy"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-core-controller",
+ "d2b-provider-display-wayland",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-wayland-session"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-core-controller",
+ "d2b-provider-display-wayland",
+ "d2b-provider-wayland-policy",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "serde_json",
+]
+
+
+[[package]]
+name = "d2b-provider-zone"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-resource-types",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-zone-link"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-resource-types",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+
+[[package]]
 name = "d2b-resource-api"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1616,8 +2038,8 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core-controller",
+ "d2b-provider-role",
  "d2b-resource-runtime",
- "d2b-telemetry",
  "protobuf",
  "ractor",
  "serde_json",
@@ -1683,6 +2105,18 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-resource-types"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "bitflags 2.13.1",
+ "d2b-contracts-resource",
+ "d2b-resource-runtime",
+ "serde_json",
+]
+
+
+[[package]]
 name = "d2b-session"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1731,6 +2165,12 @@ dependencies = [
 name = "d2b-sk-frontend"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-provider-toolkit",
+ "d2b-session",
+ "d2b-session-unix",
  "libc",
  "tokio",
  "tokio-vsock",
@@ -1776,10 +2216,16 @@ dependencies = [
 name = "d2b-zone-routing"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-bus",
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-provider-toolkit",
+ "d2b-session",
+ "d2b-session-unix",
+ "d2b-sk-frontend",
+ "tokio",
 ]
 
 
@@ -2395,7 +2841,7 @@ dependencies = [
  "html5ever",
  "tendril",
  "thiserror 2.0.20",
- "unicode-width 0.2.2",
+ "unicode-width",
 ]
 
 
@@ -2737,7 +3183,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30d65c71f1ce40ab09135ce117d742b9f8a19ff91a41a8b57ed50bc2de59c427"
 dependencies = [
  "libc",
- "log",
  "wasi",
  "windows-sys 0.61.2",
 ]
@@ -3224,7 +3669,7 @@ dependencies = [
  "protobuf-support",
  "tempfile",
  "thiserror 1.0.69",
- "which 4.4.2",
+ "which",
 ]
 
 
@@ -3486,7 +3931,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154"
 dependencies = [
  "bitflags 2.13.1",
- "errno 0.3.14",
+ "errno",
  "itoa",
  "libc",
  "linux-raw-sys 0.4.15",
@@ -3501,7 +3946,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
 dependencies = [
  "bitflags 2.13.1",
- "errno 0.3.14",
+ "errno",
  "libc",
  "linux-raw-sys 0.12.1",
  "windows-sys 0.61.2",
@@ -3703,7 +4148,7 @@ version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
- "errno 0.3.14",
+ "errno",
  "libc",
 ]
 

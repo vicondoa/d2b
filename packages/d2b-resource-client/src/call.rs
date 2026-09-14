@@ -211,6 +211,36 @@ pub struct CallOptions {
     pub retry: RetryPolicy,
 }
 
+/// Wait out one retry backoff on the caller's executor.
+///
+/// The client owns no executor and must not assume one: a runtime-less caller
+/// can drive these futures itself, and `tokio::time::sleep` panics when no
+/// Tokio runtime is installed. When the caller installed one, the delay rides
+/// its timer (and the caller who installed it owns whether that runtime
+/// enables a time driver); when none is present the retry budget cannot be
+/// honoured and this returns a named refusal instead of panicking.
+pub(crate) async fn retry_backoff(
+    delay_ms: u32,
+    cancellation: &CancellationToken,
+) -> Result<(), ClientError> {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return Err(ClientError::RetryBackoffUnavailable);
+    }
+    let sleep = tokio::time::sleep(Duration::from_millis(u64::from(delay_ms)));
+    let mut sleep = Box::pin(sleep);
+    let mut cancelled = Box::pin(cancellation.cancelled());
+    core::future::poll_fn(move |context| {
+        if sleep.as_mut().poll(context).is_ready() {
+            return Poll::Ready(Ok(()));
+        }
+        if cancelled.as_mut().poll(context).is_ready() {
+            return Poll::Ready(Err(ClientError::Cancelled));
+        }
+        Poll::Pending
+    })
+    .await
+}
+
 /// A cooperative cancellation signal shared by a caller and a call driver.
 ///
 /// Cancellation is observed, never inferred: a driver checks the token before
@@ -426,4 +456,42 @@ mod tests {
         assert!(rendered.contains("has_correlation: true"), "{rendered}");
     }
 
+    /// A caller with no executor must get a refusal, not a panic from
+    /// `tokio::time::sleep`.
+    #[test]
+    fn retry_backoff_refuses_without_a_caller_runtime() {
+        let token = CancellationToken::default();
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        let mut delay = Box::pin(retry_backoff(10_000, &token));
+        assert_eq!(
+            Future::poll(delay.as_mut(), &mut context),
+            Poll::Ready(Err(ClientError::RetryBackoffUnavailable))
+        );
+    }
+
+    /// The delay is driven by the caller's executor: with a Tokio runtime
+    /// installed it rides that runtime's timer.
+    #[tokio::test(flavor = "current_thread")]
+    async fn retry_backoff_rides_the_caller_runtime_timer() {
+        let token = CancellationToken::default();
+        retry_backoff(5, &token).await.unwrap();
+    }
+
+    /// An already-cancelled call refuses immediately instead of sleeping.
+    #[tokio::test(flavor = "current_thread")]
+    async fn retry_backoff_observes_cancellation() {
+        let token = CancellationToken::default();
+        token.cancel();
+        assert_eq!(
+            retry_backoff(60_000, &token).await,
+            Err(ClientError::Cancelled)
+        );
+    }
+
+    struct NoopWake;
+
+    impl std::task::Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
 }

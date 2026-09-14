@@ -5,12 +5,8 @@
 //! routes named view descriptors out-of-band to the target supervisor.
 
 use std::fmt;
-use std::future::Future;
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::{MarkerStatus, ResourceUid};
-
-use crate::marker::MarkerError;
 
 /// Neutral core/broker Volume effect boundary.
 pub use d2b_contracts::v3::effect_port::{
@@ -20,47 +16,6 @@ pub use d2b_contracts::v3::effect_port::{
     VolumeEffectIdError, VolumeEffectPort, VolumeId, VolumeMountToken,
 };
 
-/// A stable Provider-side Volume effect identity.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct VolumeEffectId(ResourceUid);
-
-impl VolumeEffectId {
-    /// Derive an opaque effect identity from the immutable Volume UID.
-    pub const fn from_resource_uid(volume_uid: ResourceUid) -> Self {
-        Self(volume_uid)
-    }
-
-    /// Borrow the UID for serialization into the neutral effect contract.
-    pub const fn resource_uid(&self) -> &ResourceUid {
-        &self.0
-    }
-}
-
-impl fmt::Debug for VolumeEffectId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("VolumeEffectId(<redacted>)")
-    }
-}
-
-/// One declared named view.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NamedViewId(BoundedToken);
-
-impl NamedViewId {
-    /// Parse a bounded view name.
-    pub fn parse(value: impl Into<String>) -> Result<Self, VolumeEffectError> {
-        BoundedToken::parse(value)
-            .map(Self)
-            .map_err(|_| VolumeEffectError::InvalidRequest)
-    }
-}
-
-impl fmt::Debug for NamedViewId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("NamedViewId(<redacted>)")
-    }
-}
-
 /// The execution domain in which a volume-local controller runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionDomain {
@@ -68,24 +23,6 @@ pub enum ExecutionDomain {
     Host(BoundedToken),
     /// One Guest-local domain.
     Guest(BoundedToken),
-}
-
-/// Opaque result of provisioning one Volume root.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProvisionDisposition {
-    /// A root and external marker were created.
-    Created,
-    /// Existing state and marker were verified without replacement.
-    Verified,
-}
-
-/// Marker verification result with no path or marker bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MarkerObservation {
-    /// Public marker status.
-    pub status: MarkerStatus,
-    /// Stable failure, when status is not verified.
-    pub error: Option<MarkerError>,
 }
 
 /// Closed error set for the Provider-side effect seam.
@@ -136,59 +73,6 @@ pub fn validate_domain(
         Ok(())
     } else {
         Err(VolumeEffectError::DomainMismatch)
-    }
-}
-
-/// Provider-side state effect operations.
-///
-/// A production implementation is the fixed core adapter. Methods return only
-/// opaque dispositions and named-view authorizations. No method returns a raw
-/// filesystem descriptor to Provider code.
-pub trait VolumeStateEffectPort: Send + Sync {
-    /// Provision or verify one anchored Volume root and external marker.
-    fn provision_volume(
-        &self,
-        volume: &VolumeEffectId,
-        domain: &ExecutionDomain,
-        quota_bytes: Option<u64>,
-    ) -> impl Future<Output = Result<ProvisionDisposition, VolumeEffectError>> + Send;
-
-    /// Verify the external marker before restart adoption or Process launch.
-    fn verify_marker(
-        &self,
-        volume: &VolumeEffectId,
-    ) -> impl Future<Output = Result<MarkerObservation, VolumeEffectError>> + Send;
-
-    /// Ask core to route one named view descriptor to a target supervisor.
-    fn route_named_view(
-        &self,
-        volume: &VolumeEffectId,
-        view: &NamedViewId,
-        target_domain: &ExecutionDomain,
-    ) -> impl Future<Output = Result<NamedViewAuthorization, VolumeEffectError>> + Send;
-
-    /// Remove the marker and root after ordered leaf-first cleanup.
-    fn destroy_volume(
-        &self,
-        volume: &VolumeEffectId,
-    ) -> impl Future<Output = Result<(), VolumeEffectError>> + Send;
-}
-
-/// Opaque proof that core authorized and routed one named view.
-pub struct NamedViewAuthorization {
-    _private: (),
-}
-
-impl NamedViewAuthorization {
-    /// Issue an authorization after core has routed the descriptor.
-    pub const fn routed() -> Self {
-        Self { _private: () }
-    }
-}
-
-impl fmt::Debug for NamedViewAuthorization {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("NamedViewAuthorization(<redacted>)")
     }
 }
 

@@ -121,8 +121,8 @@ must not add discovery,
 sharding, fan-out, or rollup logic.
 
 The facade's package-level `all-tests` suites provide the fixed main package
-authority. Broker and guest-shell-runner workspaces use dedicated component
-suites, while local Rust leaves stay in the audited tag-driven local suite.
+authority. The broker workspace uses a dedicated component
+suite, while local Rust leaves stay in the audited tag-driven local suite.
 
 ```bash
 make check-tier0

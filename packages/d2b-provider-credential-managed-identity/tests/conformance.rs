@@ -1,7 +1,6 @@
 mod common;
 #[allow(dead_code)]
-#[path = "../../d2b-provider-toolkit/src/conformance.rs"]
-mod provider_conformance;
+use d2b_provider_toolkit::testing::conformance as provider_conformance;
 
 use d2b_contracts_provider::v3::credential::{
     AudienceToken, CredentialMethod, CredentialResourceVerb, CredentialSpec, RolePermission,

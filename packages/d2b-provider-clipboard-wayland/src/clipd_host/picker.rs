@@ -107,9 +107,6 @@ pub trait PickerSpawner {
 pub enum PickerError {
     #[error("picker is not configured")]
     NotConfigured,
-    #[error("picker environment must not include {name}")]
-    #[cfg_attr(not(test), allow(dead_code))] // test-only environment assertion
-    ForbiddenEnvironment { name: &'static str },
     #[error("picker is already active for request {request_id}")]
     AlreadyActive { request_id: String },
     #[error("failed to create picker socketpair: {0}")]
@@ -362,19 +359,6 @@ pub fn sanitize_picker_env(ambient: &BTreeMap<OsString, OsString>) -> BTreeMap<O
         .collect()
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // test-only environment assertion
-pub fn assert_picker_env_excludes_niri_socket(
-    picker_env: &BTreeMap<OsString, OsString>,
-) -> Result<(), PickerError> {
-    if picker_env.contains_key(OsStr::new("NIRI_SOCKET")) {
-        Err(PickerError::ForbiddenEnvironment {
-            name: "NIRI_SOCKET",
-        })
-    } else {
-        Ok(())
-    }
-}
-
 pub fn picker_argv(command: &PickerCommand, actual_child_fd: i32) -> Vec<OsString> {
     let mut argv = command.args.clone();
     argv.push(OsString::from(format!("--ipc-fd={actual_child_fd}")));
@@ -476,14 +460,6 @@ mod tests {
         );
         assert!(!sanitized.contains_key(OsStr::new("NIRI_SOCKET")));
         assert!(!sanitized.contains_key(OsStr::new("SECRET_TOKEN")));
-        assert_picker_env_excludes_niri_socket(&sanitized).expect("no niri socket");
-        let forbidden = BTreeMap::from([(OsString::from("NIRI_SOCKET"), OsString::from("sock"))]);
-        assert!(matches!(
-            assert_picker_env_excludes_niri_socket(&forbidden),
-            Err(PickerError::ForbiddenEnvironment {
-                name: "NIRI_SOCKET"
-            })
-        ));
     }
 
     #[test]

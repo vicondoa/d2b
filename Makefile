@@ -11,15 +11,13 @@
 D2B_MAKE_BAZEL_TARGETS := \
 	check check-fast check-tier0 bazel-check test-unit \
 	test-lint test-rust test-rust-main test-rust-broker \
-	test-rust-guest-shell-runner \
 	test-rust-schema test-rust-supply-chain test-rust-leaf-main-workspace \
 	test-rust-leaf-schema test-rust-leaf-fixture-contracts test-rust-leaf-broker \
-	test-rust-leaf-guest-shell-runner \
 	test-rust-leaf-supply-chain test-fixture-contracts test-proofs test-flake \
 	test-flake-realized test-flake-aarch64 test-flake-x86 test-nix-unit \
 	test-performance-budgets test-drift test-policy test-changelog
 D2B_MAKE_LOCAL_TARGETS := \
-	check-ci test-integration test-host-integration perf \
+	check-clippy check-ci test-integration test-host-integration perf \
 	pre-tag smoke-lite heavy-check heavy-flake-check
 # Meta helpers that invoke Bazel directly but are not Layer-1 test aliases.
 D2B_MAKE_UTILITY_TARGETS := changelog-fold generate
@@ -72,16 +70,15 @@ else
 SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 
 .PHONY: pre-tag smoke-lite \
-        check check-ci check-fast check-tier0 \
+        check check-clippy check-ci check-fast check-tier0 \
         bazel-check \
         test-unit \
         test-lint test-rust test-rust-main \
-        test-rust-broker test-rust-guest-shell-runner \
+        test-rust-broker \
         test-rust-schema test-rust-supply-chain \
         test-rust-leaf-main-workspace \
         test-rust-leaf-schema \
         test-rust-leaf-fixture-contracts test-rust-leaf-broker \
-        test-rust-leaf-guest-shell-runner \
         test-rust-leaf-supply-chain \
         test-fixture-contracts test-proofs test-flake test-flake-realized \
         test-flake-aarch64 test-flake-x86 test-nix-unit \
@@ -119,8 +116,27 @@ BAZEL_BIN ?= $(if $(D2B_BAZEL_BIN),$(D2B_BAZEL_BIN),bazel)
 D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG) $(if $(strip $(D2B_BAZEL_JOBS)),--jobs=$(D2B_BAZEL_JOBS)) $(if $(strip $(D2B_BAZEL_LOCAL_TEST_JOBS)),--local_test_jobs=$(D2B_BAZEL_LOCAL_TEST_JOBS)) $(if $(strip $(D2B_BAZEL_TEST_OUTPUT)),--test_output=$(D2B_BAZEL_TEST_OUTPUT)) --test_env=D2B_REPO_ROOT="$(CURDIR)"
 export D2B_BAZEL_PROFILE D2B_BAZEL_LOCAL_TEST_JOBS D2B_BAZEL_JOBS D2B_BAZEL_TEST_OUTPUT
 
+## check - Layer-1 Bazel gate, preceded by the cargo clippy deny-rule gate.
+## The clippy half is cargo-scoped because Bazel has no clippy aspect over the
+## workspace crates; `check` runs in the same dispatched shell either way.
+check: check-clippy
+
+## check-clippy - cargo clippy over the workspace with the workspace lint
+## table's levels as the failure condition. `.cargo/config.toml` sets
+## `-D warnings` (this worktree's copy and the enclosing checkout's both apply,
+## and cargo merges their rustflags), which would turn the pre-existing
+## `clippy::all` corpus (833 diagnostics at 040896e9f) into gate failures.
+## `RUSTFLAGS=` replaces the config's rustflags instead of merging with them,
+## so the manifest decides: only lints denied by `[workspace.lints]` fail the
+## build, everything else stays a warning. `disallowed_methods` is allowed
+## there while its 4,948-site backlog is converted - see the removal condition
+## beside the allowance in Cargo.toml; `await_holding_lock` and
+## `await_holding_refcell_ref` are denied and enforced by this target.
+check-clippy:
+	RUSTFLAGS= cargo clippy --workspace --all-targets --locked --keep-going
+
 ## check-ci - run the Layer-1 gate, then the conditional container lane.
-check-ci:
+check-ci: check-clippy
 	$(D2B_BAZEL_TEST) //bazel/checks:check
 	$(MAKE) test-integration
 
@@ -238,7 +254,7 @@ test-host-integration:
 	//packages/d2b-resource-compiler:d2b-resource-compiler \
 	//packages/d2b-provider-display-wayland:d2b-wayland-proxy \
 	//packages/d2b-provider-test-controller:d2b-provider-test-controller \
-	//packages/d2b-provider-runtime-cloud-hypervisor:d2b-cloud-hypervisor-controller; \
+	//packages/d2b-provider-guest-cloud-hypervisor:d2b-cloud-hypervisor-controller; \
 	bazel_bin="$$(realpath -e "$$('$(BAZEL_BIN)' info --config=local bazel-bin)")"; \
 	stage="$$run_dir/bundle"; \
 	controller_stage="$$run_dir/cloud-hypervisor-controller"; \
@@ -254,7 +270,7 @@ test-host-integration:
 	stage_tool packages/d2b-resource-compiler/d2b-resource-compiler d2b-resource-compiler; \
 	stage_tool packages/d2b-provider-display-wayland/d2b-wayland-proxy d2b-wayland-proxy; \
 	stage_tool packages/d2b-provider-test-controller/d2b-provider-test-controller d2b-provider-test-controller; \
-	source="$$(realpath -e "$$bazel_bin/packages/d2b-provider-runtime-cloud-hypervisor/d2b-cloud-hypervisor-controller")"; \
+	source="$$(realpath -e "$$bazel_bin/packages/d2b-provider-guest-cloud-hypervisor/d2b-cloud-hypervisor-controller")"; \
 	case "$$source" in "$$bazel_bin"/*) ;; *) echo "test-host-integration: Cloud Hypervisor controller escaped bazel-bin" >&2; exit 1;; esac; \
 	[ -f "$$source" ] && [ -x "$$source" ] || { echo "test-host-integration: invalid Bazel Cloud Hypervisor controller" >&2; exit 1; }; \
 	install -m 755 "$$source" "$$controller_stage/d2b-cloud-hypervisor-controller"; \
@@ -263,23 +279,40 @@ test-host-integration:
 	: >"$$run_dir/outputs"; \
 	: >"$$run_dir/summary"; \
 	lane_rc=0; \
-	for name in $$names; do \
+	max_jobs="$${D2B_HOST_VM_JOBS:-1}"; \
+	case "$$max_jobs" in ''|*[!0-9]*) echo "test-host-integration: invalid D2B_HOST_VM_JOBS (want a positive integer)" >&2; exit 1;; esac; \
+	if [ "$$max_jobs" -lt 1 ]; then echo "test-host-integration: D2B_HOST_VM_JOBS must be at least 1" >&2; exit 1; fi; \
+	echo "test-host-integration: building vmChecks (jobs=$$max_jobs): $$names"; \
+	: >"$$run_dir/failed"; \
+	run_vm_check() { \
+	name="$$1"; \
 	check_start="$$(date +%s)"; \
 	rc=0; \
 	D2B_HOST_TOOL_BUNDLE="$$stage" D2B_CH_CONTROLLER_BUNDLE="$$controller_stage" \
 	D2B_HOST_RUNTIME_PATH="$$run_dir/absent-host-runtime.json" \
-	sudo -A -E nix build --option build-users-group "" --option extra-sandbox-paths "/dev/vhost-vsock" --impure --out-link "$$run_dir/result-$$name" --print-build-logs --print-out-paths "git+file://$$root#vmChecks.$$system.$$name" >"$$run_dir/$$name.outputs" || rc=$$?; \
+	sudo -A -E nix build --option build-users-group "" --option extra-sandbox-paths "/dev/vhost-vsock" --impure --out-link "$$run_dir/result-$$name" --print-build-logs --print-out-paths "git+file://$$root#vmChecks.$$system.$$name" >"$$run_dir/$$name.outputs" 2>"$$run_dir/$$name.log" || rc=$$?; \
 	check_duration="$$(( $$(date +%s) - check_start ))"; \
 	if [ "$$rc" -eq 0 ]; then \
 	status=PASS; \
 	cat "$$run_dir/$$name.outputs" >>"$$run_dir/outputs"; \
-	cat "$$run_dir/$$name.outputs"; \
 	else \
 	status=FAIL; \
-	lane_rc=1; \
+	printf '%s\n' "$$name" >>"$$run_dir/failed"; \
 	fi; \
 	printf 'test-host-integration: vmCheck %-42s %s  %ss\n' "$$name" "$$status" "$$check_duration" | tee -a "$$run_dir/summary"; \
+	if [ "$$rc" -ne 0 ]; then \
+	printf 'test-host-integration: %s tail of %s:\n' "$$name" "$$run_dir/$$name.log" >&2; \
+	tail -20 "$$run_dir/$$name.log" >&2 || true; \
+	fi; \
+	}; \
+	running=0; \
+	for name in $$names; do \
+	if [ "$$running" -ge "$$max_jobs" ]; then wait || true; running=0; fi; \
+	run_vm_check "$$name" & \
+	running="$$((running + 1))"; \
 	done; \
+	wait || true; \
+	if [ -s "$$run_dir/failed" ]; then lane_rc=1; fi; \
 	echo "test-host-integration: vmCheck summary (name, status, wall time):"; \
 	cat "$$run_dir/summary"; \
 	if [ -n "$$attic_cache" ]; then \

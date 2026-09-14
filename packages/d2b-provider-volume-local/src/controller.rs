@@ -23,7 +23,7 @@ use crate::finalization::{
 use crate::identity::{MarkerState, VolumeRootHandle};
 use d2b_contracts_resource::v3::volume::CleanupPolicy;
 use crate::layout::{ConditionSeverity, EntryCondition, EntryRequest, plan_cleanup, plan_entry};
-use crate::port::{QuotaCapability, VolumeLayoutEffectPort, VolumeSourceEffectPort};
+use crate::port::{VolumeLayoutEffectPort, VolumeSourceEffectPort};
 use crate::source::{SourcePolicyCatalog, validate_source_spec};
 use crate::status::{AttachmentState, AttachmentStatus, LayoutPhase, VolumeStatusReport};
 use crate::views::admit_attachments;
@@ -512,17 +512,7 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
         spec: &VolumeSpec,
         root: &VolumeRootHandle,
     ) -> Result<(), VolumeLocalError> {
-        use d2b_contracts_resource::v3::volume::QuotaEnforcement;
-        let Some(quota) = spec.quota() else {
-            return Ok(());
-        };
-        if quota.enforcement() != QuotaEnforcement::Hard {
-            return Ok(());
-        }
-        match self.source.quota_capability(root).await? {
-            QuotaCapability::Enforceable => Ok(()),
-            QuotaCapability::Unenforceable => Err(VolumeLocalError::QuotaUnenforceable),
-        }
+        crate::quota::admit_quota(spec.quota(), self.source.quota_capability(root).await?)
     }
 
     fn validate_spec(&self, spec: &VolumeSpec) -> Result<SourceKind, VolumeLocalError> {

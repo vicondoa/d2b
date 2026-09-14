@@ -25,14 +25,18 @@
 
 #![deny(missing_docs)]
 
+/// The canonical `Provider/<name>` reference this Provider owns.
+///
+/// The VolumeBinding rows this Provider serves select it, and the
+/// binding-owned worker Process and its Endpoint are minted under it, so the
+/// declaring crates read the reference instead of spelling it again.
+pub const PROVIDER_REF: &str = "Provider/volume-virtiofs";
+
 mod controller;
 mod error;
 mod bindings;
 mod port;
-mod readiness;
 mod socket_path;
-mod user_ns;
-mod virtiofsd_argv;
 mod worker;
 
 pub mod testing;
@@ -48,19 +52,7 @@ pub use bindings::{
 pub use port::{
     BindingPhase, BindingStatusReport, LaunchedWorker, VirtiofsBindingEffectPort,
 };
-pub use readiness::{
-    GuestMountObservation, SocketObservation, StoreViewMarkerObservation, classify_readiness,
-    require_store_view_marker,
-};
-pub use socket_path::{MAX_SOCKET_PATH_BYTES, PrivateSocketPath, SocketPathError};
-pub use user_ns::{
-    CLONE_NEWNS_FLAG, CLONE_NEWUSER_FLAG, MappingStep, UserNamespaceError, UserNamespaceTemplate,
-    validate_clone3_flags, validate_mapping_order,
-};
-pub use virtiofsd_argv::{
-    SocketGroup, VirtiofsdArgvError, VirtiofsdArgvInput, VirtiofsdCacheMode,
-    generate_virtiofsd_argv,
-};
+pub use socket_path::MAX_SOCKET_PATH_BYTES;
 pub use worker::{
     INODE_FILE_HANDLES, SANDBOX_MODE, USER_NAMESPACE_MAPPING_CLASS, VirtiofsdWorkerPlan,
     WORKER_TEMPLATE, WorkerSandbox,

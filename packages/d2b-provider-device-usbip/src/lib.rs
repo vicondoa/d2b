@@ -11,13 +11,13 @@
 mod arbitration;
 mod busid;
 mod controller;
+mod driver;
 mod firewall;
 mod lifecycle;
 mod process;
 mod production;
 pub mod reconcile_state;
 pub mod state_machine;
-pub mod usbip_argv;
 mod workers;
 
 pub use arbitration::{UsbipArbitrator, UsbipClaim, UsbipClaimError};
@@ -30,6 +30,11 @@ pub use controller::{
     UsbipOperation, UsbipOutcome, UsbipRunnerContract, UsbipServicePhase, usbip_runner_contract,
 };
 pub use d2b_contracts::usbip::validate_bus_id;
+pub use driver::{
+    USBIP_BINDING_CONTROLLER_REF, USBIP_REGISTRATIONS, USBIP_RESYNC, USBIP_SERVICE_CONTROLLER_REF,
+    UsbipComponent, UsbipDriverArgs, UsbipDriverEffects, declared_dependency_refs,
+    usbip_descriptors,
+};
 pub use firewall::{
     FirewallConfirmation, FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence,
     FirewallObservation, FirewallProjectionAction, FirewallProjectionIntent, FirewallToken,
@@ -49,7 +54,6 @@ pub use state_machine::{
     UsbipPlanError, UsbipStepExecutor, build_usbip_explicit_plan, build_usbip_plan,
     execute_usbip_plan,
 };
-pub use usbip_argv::{UsbipArgvError, UsbipArgvInput, UsbipSubcommand, generate_usbip_argv};
 pub use workers::{
     AttachmentActivation, AttachmentCommand, UsbipWorkerClass, UsbipWorkerDeclaration,
 };

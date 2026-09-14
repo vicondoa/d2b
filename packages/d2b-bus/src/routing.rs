@@ -5,9 +5,6 @@ use std::collections::BTreeMap;
 use d2b_contracts_resource::v3::ZoneId;
 use d2b_contracts_zone_session::v3::zone_session::EndpointRole;
 
-/// The v3 Zone control service package.
-pub const ZONE_SERVICE_NAME: &str = "d2b.zone.v3.ZoneService";
-
 /// Maximum concurrently dispatched Zone service calls.
 pub const MAX_DISPATCH_IN_FLIGHT: usize = 64;
 

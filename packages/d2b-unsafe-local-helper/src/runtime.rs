@@ -1,5 +1,4 @@
 use crate::environment::EnvironmentError;
-use crate::shell_socket::validate_runtime_directory;
 use crate::systemd::{ScopeError, ScopeInspection, UserScopeManager, VerifiedScope};
 use d2b_contracts::{
     ids::OperationId, workload::WorkloadProviderKind, workload_identity::WorkloadTarget,
@@ -7,13 +6,10 @@ use d2b_contracts::{
 use d2b_contracts_control::proxy_readiness::{
     ProxyReadinessEvent, ProxyReadinessStage, ProxyReadinessState, READINESS_PROTOCOL_VERSION,
 };
-use d2b_contracts_control::public_wire::ShellName;
 use d2b_contracts_control::unsafe_local_wire::{
     HelperLaunchRequest, HelperOperationDisposition, HelperOperationResult, HelperScopeKind,
-    HelperScopeSnapshot, HelperScopeState, HelperShellRequest, HelperShellResponse, HelperSnapshot,
-    HelperSupervisorId, MAX_COMPLETED_OPERATION_AGE_SECS, MAX_COMPLETED_OPERATIONS_PER_UID,
-    MAX_HELPER_SNAPSHOT_SCOPES, RealmAccentColor, ZoneResourceIdentity,
-    validate_unsafe_local_resource_identity,
+    HelperScopeSnapshot, HelperScopeState, HelperSnapshot, MAX_HELPER_SNAPSHOT_SCOPES,
+    RealmAccentColor, ZoneResourceIdentity, validate_unsafe_local_resource_identity,
 };
 use nix::libc;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
@@ -27,7 +23,7 @@ use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::DirBuilderExt;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -59,10 +55,6 @@ pub enum RuntimeError {
     OperationIdConflict,
     OperationInProgress,
     QuotaExceeded,
-    ShellUnavailable,
-    ShellNotFound,
-    ShellAlreadyAttached,
-    TerminalClosed,
     Timeout,
     LedgerInvalid,
     Internal,
@@ -107,8 +99,6 @@ pub(crate) struct PersistedScope {
     pub(crate) invocation_id: String,
     pub(crate) control_group: String,
     pub(crate) kind: HelperScopeKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) persistent_shell: Option<PersistedShellMetadata>,
 }
 
 impl fmt::Debug for PersistedScope {
@@ -120,23 +110,6 @@ impl fmt::Debug for PersistedScope {
             .field("invocation_id", &"<redacted>")
             .field("control_group", &"<redacted>")
             .field("kind", &self.kind)
-            .field("has_persistent_shell", &self.persistent_shell.is_some())
-            .finish()
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct PersistedShellMetadata {
-    pub(crate) name: ShellName,
-    pub(crate) supervisor_id: HelperSupervisorId,
-}
-
-impl fmt::Debug for PersistedShellMetadata {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PersistedShellMetadata")
-            .field("name", &"<redacted>")
-            .field("supervisor_id", &"<redacted>")
             .finish()
     }
 }
@@ -173,17 +146,13 @@ pub struct ScopeRuntime<M: UserScopeManager> {
     pub(crate) ledger_path: PathBuf,
     pub(crate) ledger: Mutex<RuntimeLedger>,
     pub(crate) user_home: PathBuf,
-    pub(crate) shell_home: PathBuf,
     pub(crate) uid: u32,
-    pub(crate) executable: PathBuf,
     pub(crate) wayland_proxy_binary: Option<PathBuf>,
 }
 
 pub(crate) struct RuntimeLedger {
     pub(crate) persisted: PersistedScopeLedger,
     pub(crate) reservations: BTreeMap<String, LaunchReservation>,
-    pub(crate) shell_name_reservations: BTreeMap<String, u64>,
-    pub(crate) completed_shell_operations: BTreeMap<String, CompletedShellOperation>,
     next_owner: u64,
 }
 
@@ -207,26 +176,11 @@ enum LaunchBegin {
     AlreadyCommitted(Box<PersistedScope>),
 }
 
-#[derive(Clone)]
-pub(crate) struct CompletedShellOperation {
-    pub(crate) fingerprint: [u8; 32],
-    pub(crate) completed_at: Instant,
-    pub(crate) response: Option<HelperShellResponse>,
-}
-
-pub(crate) enum ShellOperationBegin {
-    Started(LaunchReservation),
-    ExistingScope(Box<PersistedScope>),
-    Replayed(Option<HelperShellResponse>),
-}
-
 impl RuntimeLedger {
     pub(crate) fn from_persisted(persisted: PersistedScopeLedger) -> Self {
         Self {
             persisted,
             reservations: BTreeMap::new(),
-            shell_name_reservations: BTreeMap::new(),
-            completed_shell_operations: BTreeMap::new(),
             next_owner: 0,
         }
     }
@@ -289,124 +243,6 @@ impl RuntimeLedger {
         }
     }
 
-    pub(crate) fn begin_shell_operation(
-        &mut self,
-        operation_id: &OperationId,
-        fingerprint: [u8; 32],
-    ) -> Result<ShellOperationBegin, RuntimeError> {
-        self.expire_completed_shell_operations();
-        if let Some(scope) = self
-            .persisted
-            .scopes
-            .iter()
-            .find(|scope| scope.operation_id == *operation_id)
-        {
-            return if scope.fingerprint == Some(fingerprint) {
-                Ok(ShellOperationBegin::ExistingScope(Box::new(scope.clone())))
-            } else {
-                Err(RuntimeError::OperationIdConflict)
-            };
-        }
-        if let Some(completed) = self.completed_shell_operations.get(operation_id.as_str()) {
-            return if completed.fingerprint == fingerprint {
-                Ok(ShellOperationBegin::Replayed(completed.response.clone()))
-            } else {
-                Err(RuntimeError::OperationIdConflict)
-            };
-        }
-        if let Some(reservation) = self.reservations.get(operation_id.as_str()) {
-            return if reservation.fingerprint == fingerprint {
-                Err(RuntimeError::OperationInProgress)
-            } else {
-                Err(RuntimeError::OperationIdConflict)
-            };
-        }
-        self.next_owner = self.next_owner.wrapping_add(1);
-        if self.next_owner == 0 {
-            self.next_owner = 1;
-        }
-        let reservation = LaunchReservation {
-            fingerprint,
-            owner: self.next_owner,
-        };
-        self.reservations
-            .insert(operation_id.to_string(), reservation);
-        Ok(ShellOperationBegin::Started(reservation))
-    }
-
-    pub(crate) fn reserve_shell_name(
-        &mut self,
-        key: String,
-        reservation: LaunchReservation,
-    ) -> Result<(), RuntimeError> {
-        if self.shell_name_reservations.contains_key(&key) {
-            return Err(RuntimeError::OperationInProgress);
-        }
-        self.shell_name_reservations.insert(key, reservation.owner);
-        Ok(())
-    }
-
-    pub(crate) fn clear_shell_operation(
-        &mut self,
-        operation_id: &OperationId,
-        reservation: LaunchReservation,
-        name_key: Option<&str>,
-    ) {
-        self.clear(operation_id, reservation);
-        if let Some(name_key) = name_key
-            && self.shell_name_reservations.get(name_key) == Some(&reservation.owner)
-        {
-            self.shell_name_reservations.remove(name_key);
-        }
-    }
-
-    pub(crate) fn complete_shell_operation(
-        &mut self,
-        operation_id: &OperationId,
-        reservation: LaunchReservation,
-        name_key: Option<&str>,
-        response: Option<HelperShellResponse>,
-    ) -> Result<(), RuntimeError> {
-        if !self.owns(operation_id, reservation) {
-            return Err(RuntimeError::OperationIdConflict);
-        }
-        self.clear_shell_operation(operation_id, reservation, name_key);
-        self.remember_completed_shell_operation(operation_id, reservation.fingerprint, response);
-        Ok(())
-    }
-
-    pub(crate) fn remember_completed_shell_operation(
-        &mut self,
-        operation_id: &OperationId,
-        fingerprint: [u8; 32],
-        response: Option<HelperShellResponse>,
-    ) {
-        while self.completed_shell_operations.len() >= MAX_COMPLETED_OPERATIONS_PER_UID {
-            let Some(oldest) = self
-                .completed_shell_operations
-                .iter()
-                .min_by_key(|(_, operation)| operation.completed_at)
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            self.completed_shell_operations.remove(&oldest);
-        }
-        self.completed_shell_operations.insert(
-            operation_id.to_string(),
-            CompletedShellOperation {
-                fingerprint,
-                completed_at: Instant::now(),
-                response,
-            },
-        );
-    }
-
-    fn expire_completed_shell_operations(&mut self) {
-        let maximum_age = Duration::from_secs(MAX_COMPLETED_OPERATION_AGE_SECS);
-        self.completed_shell_operations
-            .retain(|_, operation| operation.completed_at.elapsed() <= maximum_age);
-    }
 }
 
 impl<M: UserScopeManager> fmt::Debug for ScopeRuntime<M> {
@@ -414,9 +250,7 @@ impl<M: UserScopeManager> fmt::Debug for ScopeRuntime<M> {
         f.debug_struct("ScopeRuntime")
             .field("ledger_path", &"<redacted>")
             .field("user_home", &"<redacted>")
-            .field("shell_home", &"<redacted>")
             .field("uid", &"<redacted>")
-            .field("executable", &"<redacted>")
             .field(
                 "wayland_proxy_configured",
                 &self.wayland_proxy_binary.is_some(),
@@ -478,8 +312,7 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
             return Err(RuntimeError::InvalidIdentity);
         }
         let user = get_user_by_uid(uid).ok_or(RuntimeError::InvalidIdentity)?;
-        let shell_home = user.home_dir().to_path_buf();
-        if !shell_home.is_absolute() || !executable.is_absolute() {
+        if !user.home_dir().is_absolute() || !executable.is_absolute() {
             return Err(RuntimeError::InvalidIdentity);
         }
         let ledger = RuntimeLedger::from_persisted(load_ledger(&ledger_path)?);
@@ -488,18 +321,9 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
             ledger_path,
             ledger: Mutex::new(ledger),
             user_home,
-            shell_home,
             uid,
-            executable,
             wayland_proxy_binary,
         })
-    }
-
-    pub fn shell(
-        &self,
-        request: HelperShellRequest,
-    ) -> Result<crate::shell_runtime::ShellDispatch, RuntimeError> {
-        crate::shell_runtime::dispatch(self, request)
     }
 
     pub fn launch(
@@ -616,7 +440,6 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
             invocation_id: scope.invocation_id.clone(),
             control_group: scope.control_group.clone(),
             kind: scope.kind,
-            persistent_shell: None,
         };
         if let Err(error) = supervisor.release_and_wait_started() {
             supervisor.abort();
@@ -681,7 +504,7 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         let mut scopes = Vec::with_capacity(entries.len());
         let deadline = Instant::now() + SNAPSHOT_RECONCILE_TIMEOUT;
         for entry in entries {
-            let manager_state = if Instant::now() >= deadline {
+            let state = if Instant::now() >= deadline {
                 HelperScopeState::Degraded
             } else {
                 let verified = entry.verified();
@@ -693,18 +516,12 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
                     _ => HelperScopeState::Degraded,
                 }
             };
-            let (state, persistent_shell) = if entry.persistent_shell.is_some() {
-                crate::shell_runtime::snapshot_shell(self, &entry, manager_state)
-            } else {
-                (manager_state, None)
-            };
             let scope = entry.verified().wire_identity();
             scopes.push(HelperScopeSnapshot {
                 operation_id: entry.operation_id,
                 workload: entry.workload,
                 scope,
                 state,
-                persistent_shell,
             });
         }
         Ok(HelperSnapshot { generation, scopes })
@@ -1373,6 +1190,33 @@ fn stage_failure(stage: ProxyReadinessStage) -> RuntimeError {
     }
 }
 
+/// Require a private runtime directory owned by the helper's own uid.
+///
+/// The directory must be absolute, a real directory (never a symlink), owned
+/// by `expected_uid`, searchable only by that uid, and free of setuid/setgid/
+/// sticky bits.
+fn validate_runtime_directory(
+    directory: &Path,
+    expected_uid: u32,
+) -> Result<(), RuntimeError> {
+    let invalid = || RuntimeError::EnvironmentInvalid;
+    if !directory.is_absolute() {
+        return Err(invalid());
+    }
+    let metadata = fs::symlink_metadata(directory).map_err(|_| invalid())?;
+    let mode = metadata.permissions().mode() & 0o7777;
+    if !metadata.file_type().is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != expected_uid
+        || mode & 0o700 != 0o700
+        || mode & 0o027 != 0
+        || mode & 0o7000 != 0
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 fn load_ledger(path: &Path) -> Result<PersistedScopeLedger, RuntimeError> {
     match fs::metadata(path) {
         Ok(metadata) if metadata.len() > MAX_LEDGER_BYTES => {
@@ -1402,59 +1246,13 @@ fn load_ledger(path: &Path) -> Result<PersistedScopeLedger, RuntimeError> {
         .iter()
         .map(|scope| scope.operation_id.to_string())
         .collect::<HashSet<_>>();
-    let shell_keys = ledger
-        .scopes
-        .iter()
-        .filter_map(|scope| {
-            scope.persistent_shell.as_ref().map(|shell| {
-                format!(
-                    "{}\u{1f}{}",
-                    workload_identity_key(&scope.workload),
-                    shell.name.as_str()
-                )
-            })
-        })
-        .collect::<HashSet<_>>();
-    let supervisor_ids = ledger
-        .scopes
-        .iter()
-        .filter_map(|scope| {
-            scope
-                .persistent_shell
-                .as_ref()
-                .map(|shell| shell.supervisor_id.as_str().to_owned())
-        })
-        .collect::<HashSet<_>>();
-    let shell_count = ledger
-        .scopes
-        .iter()
-        .filter(|scope| scope.persistent_shell.is_some())
-        .count();
-    let shell_metadata_valid = ledger.scopes.iter().all(|scope| {
-        (scope.kind == HelperScopeKind::PersistentShell) == scope.persistent_shell.is_some()
-    });
     if ledger.schema_version != 1
         || ledger.scopes.len() > MAX_HELPER_SNAPSHOT_SCOPES
         || unique_operations.len() != ledger.scopes.len()
-        || shell_keys.len() != shell_count
-        || supervisor_ids.len() != shell_count
-        || !shell_metadata_valid
     {
         return Err(RuntimeError::LedgerInvalid);
     }
     Ok(ledger)
-}
-
-pub(crate) fn workload_identity_key(identity: &ZoneResourceIdentity) -> String {
-    format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
-        identity.zone().as_str(),
-        identity.zone_uid().as_str(),
-        identity.resource_ref().to_canonical_string(),
-        identity.resource_uid().as_str(),
-        identity.generation().get(),
-        identity.revision().get(),
-    )
 }
 
 pub(crate) fn persist_ledger(
@@ -1660,7 +1458,6 @@ mod tests {
             invocation_id: "00112233445566778899aabbccddeeff".to_owned(),
             control_group: "/user.slice/app-d2b.scope".to_owned(),
             kind: HelperScopeKind::LauncherApp,
-            persistent_shell: None,
         });
         assert!(matches!(
             ledger.begin(&first.operation_id, first_fingerprint),
@@ -1709,11 +1506,7 @@ mod tests {
             unit_name: canary.to_owned(),
             invocation_id: canary.to_owned(),
             control_group: format!("/{canary}"),
-            kind: HelperScopeKind::PersistentShell,
-            persistent_shell: Some(PersistedShellMetadata {
-                name: ShellName::new(canary).unwrap(),
-                supervisor_id: HelperSupervisorId::new(canary).unwrap(),
-            }),
+            kind: HelperScopeKind::LauncherApp,
         };
         assert!(!format!("{persisted:?}").contains(canary));
     }

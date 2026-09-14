@@ -83,7 +83,7 @@ d2b_flake_ref() {
 
 d2b_cargo_config_path() {
   case "${1:-workspace}" in
-    workspace|broker|guest-shell-runner) printf '%s\n' "$(d2b_repo_root)/.cargo/config.toml" ;;
+    workspace|broker) printf '%s\n' "$(d2b_repo_root)/.cargo/config.toml" ;;
     fuzz) printf '%s\n' "$(d2b_repo_root)/packages/d2b-core/fuzz/.cargo/config.toml" ;;
     *)
       fail "unknown cargo target scope: ${1:-<empty>}"
@@ -110,7 +110,7 @@ d2b_cargo_target_dir() {
     return 0
   fi
   case "$scope" in
-    workspace|broker|guest-shell-runner) base="$(d2b_repo_root)/target" ;;
+    workspace|broker) base="$(d2b_repo_root)/target" ;;
     fuzz) base="$(d2b_repo_root)/packages/d2b-core/fuzz/target" ;;
     *)
       fail "unknown cargo target scope: $scope"

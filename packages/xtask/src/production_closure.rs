@@ -29,7 +29,6 @@ const PROTECTED_CODEOWNERS_RULES: &[&str] = &[
     "/Cargo.lock @vicondoa",
     "/packages/Cargo.guest.lock @vicondoa",
     "/packages/d2b-broker/Cargo.toml @vicondoa",
-    "/packages/d2b-guest-shell-runner/Cargo.toml @vicondoa",
     "/packages/policy-inputs/** @vicondoa",
     "/packages/policy-inputs/advisory-policy.json @vicondoa",
     "/packages/xtask/Cargo.toml @vicondoa",
@@ -175,7 +174,7 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
         .iter()
         .filter_map(|package| package.get("name").and_then(Value::as_str))
         .filter(|name| {
-            !matches!(*name, "d2b-broker" | "d2b-guest-shell-runner" | "xtask")
+            !matches!(*name, "d2b-broker" | "xtask")
                 && (*name == "d2b" || name.starts_with("d2b-"))
         })
         .map(str::to_owned)
@@ -228,16 +227,6 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
         }
         contexts.push(ContextSpec {
             system: system.to_owned(),
-            target: musl.clone(),
-            name: "guest-shell-runner-static".to_owned(),
-            roots: vec!["d2b-guest-shell-runner".to_owned()],
-            features: vec!["real-libshpool".to_owned()],
-            default_features: false,
-            source_authority: "Cargo.lock".to_owned(),
-            lock_path: PRODUCT_LOCK.to_owned(),
-        });
-        contexts.push(ContextSpec {
-            system: system.to_owned(),
             target: musl,
             name: "guest-static".to_owned(),
             roots: vec!["d2bd".to_owned(), "d2b-broker".to_owned()],
@@ -250,9 +239,25 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
     Ok(contexts)
 }
 
+/// Write the current context set and prune context directories it no longer
+/// names.
+///
+/// The expected contexts are written first, then every directory under
+/// `OUTPUT_ROOT` whose `system/target/name` key is not in the current set - a
+/// dropped system/target tuple, a renamed context, or a context retired with
+/// the crate that owned it, as `guest-shell-runner-static` was - is deleted in
+/// deterministic order and reported on stderr. Pruning is part of the write
+/// path because the stranded directory's files keep their protected-owner
+/// status: a context that stops being regenerated is a context whose drift is
+/// no longer checked, and `check_outputs` fails on it until the tree is
+/// rewritten.
 fn generate_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let contexts = context_specs(root)?;
     let policy = read_advisory_policy(root, false)?;
+    let expected = contexts
+        .iter()
+        .map(ContextSpec::key)
+        .collect::<BTreeSet<_>>();
     let mut written = Vec::new();
     for spec in &contexts {
         let computed = compute_context(root, spec.clone())?;
@@ -261,12 +266,88 @@ fn generate_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
             .map(|context| context.approval.clone());
         write_context(root, &computed, approval, &mut written)?;
     }
+    prune_unexpected_contexts(root, &expected)?;
     if !root.join(ADVISORY_POLICY_PATH).exists() {
         write_advisory_skeleton(root, &contexts, &mut written)?;
     }
     Ok(written)
 }
 
+/// Delete every context directory the current context set does not name.
+///
+/// Only the third level under `OUTPUT_ROOT` is a context: the system and
+/// target parents are never treated as contexts, and an emptied parent is left
+/// in place. Each removal is reported on stderr; the returned written paths
+/// stay exactly the files the run emitted.
+fn prune_unexpected_contexts(root: &Path, expected: &BTreeSet<String>) -> Result<(), String> {
+    for (key, path) in existing_context_directories(root)? {
+        if expected.contains(&key) {
+            continue;
+        }
+        fs::remove_dir_all(&path)
+            .map_err(|error| format!("remove retired context {}: {error}", path.display()))?;
+        eprintln!("pruned retired context {key}");
+    }
+    Ok(())
+}
+
+/// The context directories under the output root today, with their
+/// `system/target/name` keys, in deterministic order.
+fn existing_context_directories(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+    let output_root = root.join(OUTPUT_ROOT);
+    if !output_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut found = Vec::new();
+    for system in sorted_child_directories(&output_root)? {
+        for target in sorted_child_directories(&system)? {
+            for context in sorted_child_directories(&target)? {
+                let key = format!(
+                    "{}/{}/{}",
+                    directory_name(&system)?,
+                    directory_name(&target)?,
+                    directory_name(&context)?
+                );
+                found.push((key, context));
+            }
+        }
+    }
+    Ok(found)
+}
+
+fn sorted_child_directories(directory: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut children = Vec::new();
+    for entry in fs::read_dir(directory)
+        .map_err(|error| format!("read output directory {}: {error}", directory.display()))?
+    {
+        let entry =
+            entry.map_err(|error| format!("read output entry {}: {error}", directory.display()))?;
+        if entry
+            .file_type()
+            .map_err(|error| format!("read output entry type {}: {error}", directory.display()))?
+            .is_dir()
+        {
+            children.push(entry.path());
+        }
+    }
+    children.sort();
+    Ok(children)
+}
+
+fn directory_name(directory: &Path) -> Result<String, String> {
+    directory
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("output directory has no name: {}", directory.display()))
+}
+
+/// Check the expected context set and reject a context directory the set does
+/// not name.
+///
+/// This is the detection half of the `generate_outputs` prune: a context
+/// retired with its crate stays on disk until the write path deletes it, and
+/// while it stays it is a directory of protected files no longer compared
+/// against anything, so check mode fails naming it instead of passing over it.
 fn check_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let contexts = context_specs(root)?;
     let policy = read_advisory_policy(root, true)?;
@@ -278,6 +359,16 @@ fn check_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
     if actual_keys != expected_keys {
         return Err(format!(
             "advisory policy contexts differ: expected {expected_keys:?}, found {actual_keys:?}"
+        ));
+    }
+    let unexpected = existing_context_directories(root)?
+        .into_iter()
+        .filter(|(key, _)| !expected_keys.contains(key))
+        .map(|(key, _)| key)
+        .collect::<Vec<_>>();
+    if !unexpected.is_empty() {
+        return Err(format!(
+            "unexpected context directories under {OUTPUT_ROOT}: {unexpected:?}; run gen-package-policy-inputs --write to prune"
         ));
     }
 
@@ -1211,11 +1302,33 @@ fn cargo_metadata(
     features: &[String],
     default_features: bool,
 ) -> Result<Value, String> {
+    // Offline first: a warm Cargo cache resolves the workspace from disk, which
+    // is what a developer machine has. A cold cache - a fresh CI runner is
+    // exactly that - holds no checkout of the workspace's git dependencies, and
+    // Cargo refuses to load their sources without the network, so the check
+    // fails on a fetch rather than on drift. Retry online for that case only;
+    // `--locked` pins the resolution either way, so the projection cannot
+    // differ between the two attempts.
+    match cargo_metadata_attempt(root, target, features, default_features, true) {
+        Ok(value) => Ok(value),
+        Err(error) if error.contains("offline mode") => {
+            cargo_metadata_attempt(root, target, features, default_features, false)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn cargo_metadata_attempt(
+    root: &Path,
+    target: &str,
+    features: &[String],
+    default_features: bool,
+    offline: bool,
+) -> Result<Value, String> {
     let mut command = Command::new("cargo");
     command.current_dir(root).args([
         "metadata",
         "--locked",
-        "--offline",
         "--format-version",
         "1",
         "--manifest-path",
@@ -1223,6 +1336,9 @@ fn cargo_metadata(
         "--filter-platform",
         target,
     ]);
+    if offline {
+        command.arg("--offline");
+    }
     if !default_features {
         command.arg("--no-default-features");
     }
@@ -1694,5 +1810,67 @@ mod tests {
         let mut selected = BTreeSet::from([0]);
         expand_audit_block_dependencies(&blocks, &mut selected);
         assert_eq!(selected, BTreeSet::from([0, 1]));
+    }
+
+    /// A context directory the current set does not name is pruned in
+    /// deterministic order; expected contexts survive, the emptied parents
+    /// stay, and a loose file at the parent level is never a context.
+    #[test]
+    fn retired_context_directories_are_pruned_and_expected_ones_survive() {
+        let root = std::env::temp_dir().join(format!(
+            "d2b-policy-input-prune-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let live = root
+            .join(OUTPUT_ROOT)
+            .join("x86_64-linux/x86_64-unknown-linux-gnu/live");
+        let retired = root
+            .join(OUTPUT_ROOT)
+            .join("x86_64-linux/x86_64-unknown-linux-gnu/retired");
+        let other = root
+            .join(OUTPUT_ROOT)
+            .join("aarch64-linux/aarch64-unknown-linux-gnu/retired");
+        fs::create_dir_all(live.join("production")).unwrap();
+        fs::write(live.join("production/closure.json"), "{}").unwrap();
+        fs::create_dir_all(retired.join("policy")).unwrap();
+        fs::write(retired.join("policy/closure.json"), "{}").unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let loose = root.join(OUTPUT_ROOT).join("x86_64-linux/loose.txt");
+        fs::write(&loose, "keep").unwrap();
+
+        let expected = BTreeSet::from(["x86_64-linux/x86_64-unknown-linux-gnu/live".to_owned()]);
+        let found = existing_context_directories(&root).unwrap();
+        assert_eq!(
+            found
+                .iter()
+                .map(|(key, _)| key.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "aarch64-linux/aarch64-unknown-linux-gnu/retired",
+                "x86_64-linux/x86_64-unknown-linux-gnu/live",
+                "x86_64-linux/x86_64-unknown-linux-gnu/retired",
+            ]
+        );
+
+        prune_unexpected_contexts(&root, &expected).unwrap();
+        assert!(live.join("production/closure.json").is_file());
+        assert!(!retired.exists());
+        assert!(!other.exists());
+        assert_eq!(fs::read_to_string(&loose).unwrap(), "keep");
+        // The emptied parents are not contexts and stay in place.
+        assert!(root
+            .join(OUTPUT_ROOT)
+            .join("x86_64-linux/x86_64-unknown-linux-gnu")
+            .is_dir());
+        assert_eq!(
+            existing_context_directories(&root).unwrap(),
+            vec![(
+                "x86_64-linux/x86_64-unknown-linux-gnu/live".to_owned(),
+                live.clone()
+            )]
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

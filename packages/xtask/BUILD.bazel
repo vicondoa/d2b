@@ -47,6 +47,12 @@ rust_binary(
 )
 
 generated_artifact_check(
+    name = "gen_broker_operations_drift",
+    command = "gen-broker-operations",
+    data = ["//:generated_broker_operations"],
+)
+
+generated_artifact_check(
     name = "gen_schemas_drift",
     command = "gen-schemas",
     data = ["//:generated_v2_schemas"],
@@ -102,6 +108,18 @@ generated_artifact_check(
     data = ["//:generated_resource_schemas"],
 )
 
+# The telemetry `op` label domain is projected from the committed broker rows,
+# so the drift target needs the row catalog as an input beside the artifacts it
+# compares.
+generated_artifact_check(
+    name = "gen_layer_catalogs_drift",
+    command = "gen-layer-catalogs",
+    data = [
+        "//:generated_layer_catalogs",
+        "//:docs/reference/policy/broker-operations.json",
+    ],
+)
+
 generated_artifact_check(
     name = "gen_resource_ttrpc_drift",
     command = "gen-resource-ttrpc",
@@ -135,6 +153,40 @@ generated_artifact_check(
     data = ["//:generated_semantic_service_schemas"],
 )
 
+generated_artifact_check(
+    name = "gen_nix_inventories_drift",
+    command = "gen-nix-inventories",
+    data = [
+        "//:committed_v3_schema_artifacts",
+        "//:docs/reference/policy/principal-allocation.json",
+        "//:generated_nix_inventories",
+    ],
+)
+
+# The policy-inputs bundle is projected from the locked Cargo metadata, so its
+# drift target needs the lock, the workspace sources, the protected ownership
+# declaration the advisory policy is validated against, and the bundle it
+# rewrites.
+#
+# The generator shells out to `cargo metadata --locked --offline`, so the run
+# also needs the invoking environment: cargo on `PATH`, and the caller's
+# `CARGO_HOME`/`RUSTUP_HOME` caches warm enough to resolve the locked git
+# dependencies offline. A sandboxed test with an isolated home fails before it
+# compares anything. The local profile supplies `PATH`; under the remote
+# profile the fixed `--test_env=PATH` wins, so run the gate through a profile
+# that carries the toolchain.
+generated_artifact_check(
+    name = "gen_package_policy_inputs_drift",
+    command = "gen-package-policy-inputs",
+    data = [
+        "//:.github/CODEOWNERS",
+        "//:Cargo.lock",
+        "//:packages_workspace_sources",
+        "//:policy_inputs_workspace_sources",
+    ],
+    env_inherit = ["HOME", "CARGO_HOME", "RUSTUP_HOME", "PATH"],
+)
+
 generated_artifact_generator(
     name = "generate",
     data = [
@@ -148,10 +200,14 @@ generated_artifact_generator(
 test_suite(
     name = "generated_artifacts",
     tests = [
+        ":gen_broker_operations_drift",
         ":gen_cli_schemas_drift",
         ":gen_cli_shell_artifacts_drift",
         ":gen_daemon_api_drift",
         ":gen_error_codes_drift",
+        ":gen_layer_catalogs_drift",
+        ":gen_nix_inventories_drift",
+        ":gen_package_policy_inputs_drift",
         ":gen_provider_packaging_drift",
         ":gen_resource_proto_drift",
         ":gen_resource_schemas_drift",
@@ -208,7 +264,9 @@ rust_test(
         "//packages/d2b-core:BUILD.bazel",
         "//packages/d2b-core-controller:BUILD.bazel",
         "//packages/d2b-host-activation-helper:BUILD.bazel",
-        "//packages/d2b-process:BUILD.bazel",
+        "//packages/d2b-provider-endpoint:BUILD.bazel",
+        "//packages/d2b-provider-guest:BUILD.bazel",
+        "//packages/d2b-provider-process:BUILD.bazel",
         "//packages/d2b-process-conformance:BUILD.bazel",
         "//packages/d2b-provider:BUILD.bazel",
         "//packages/d2b-provider-activation-nixos:BUILD.bazel",
@@ -225,15 +283,15 @@ rust_test(
         "//packages/d2b-provider-network-local:BUILD.bazel",
         "//packages/d2b-provider-notification-desktop:BUILD.bazel",
         "//packages/d2b-provider-observability-otel:BUILD.bazel",
-        "//packages/d2b-provider-runtime-azure-container-apps:BUILD.bazel",
-        "//packages/d2b-provider-runtime-azure-virtual-machine:BUILD.bazel",
-        "//packages/d2b-provider-runtime-cloud-hypervisor:BUILD.bazel",
-        "//packages/d2b-provider-runtime-qemu-media:BUILD.bazel",
+        "//packages/d2b-provider-guest-azure-container-apps:BUILD.bazel",
+        "//packages/d2b-provider-guest-azure-virtual-machine:BUILD.bazel",
+        "//packages/d2b-provider-guest-cloud-hypervisor:BUILD.bazel",
+        "//packages/d2b-provider-guest-qemu-media:BUILD.bazel",
         "//packages/d2b-provider-shell-terminal:BUILD.bazel",
         "//packages/d2b-provider-supervisor:BUILD.bazel",
         "//packages/d2b-provider-system-core:BUILD.bazel",
-        "//packages/d2b-provider-system-minijail:BUILD.bazel",
-        "//packages/d2b-provider-system-systemd:BUILD.bazel",
+        "//packages/d2b-provider-process-minijail:BUILD.bazel",
+        "//packages/d2b-provider-process-systemd:BUILD.bazel",
         "//packages/d2b-provider-toolkit:BUILD.bazel",
         "//packages/d2b-provider-transport-azure-relay:BUILD.bazel",
         "//packages/d2b-provider-transport-unix:BUILD.bazel",

@@ -76,11 +76,9 @@ exports_files([
     "tests/golden/host-json/unknown-field-firewallcoexistence.json",
     "tests/golden/host-json/unknown-field-ifnamemapping.json",
     "tests/golden/host-json/unknown-field-kernelmodules.json",
-    "tests/golden/runner-shape/audio-argv-minimal.txt",
     "tests/golden/runner-shape/gpu-argv-minimal.txt",
     "tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",
     "tests/golden/runner-shape/swtpm-argv-minimal.txt",
-    "tests/golden/runner-shape/usbip-argv-minimal.txt",
     "tests/golden/runner-shape/video-argv-minimal.txt",
     "tests/golden/runner-shape/virtiofsd-argv-minimal.txt",
     "tests/golden/runner-shape/vsock-relay-argv-minimal.txt",
@@ -281,21 +279,22 @@ filegroup(
         "//packages/d2b-core:cargo_workspace_sources",
         "//packages/d2b-core-controller:cargo_workspace_sources",
         "//packages/d2b-core/fuzz:BUILD.bazel",
-        "//packages/d2b-guest-shell-runner:cargo_workspace_sources",
         "//packages/d2b-host:cargo_workspace_sources",
         "//packages/d2b-host-activation-helper:cargo_workspace_sources",
         "//packages/d2b-broker:cargo_workspace_sources",
-        "//packages/d2b-process:cargo_workspace_sources",
+        "//packages/d2b-provider-process:cargo_workspace_sources",
         "//packages/d2b-process-conformance:cargo_workspace_sources",
         "//packages/d2b-provider:cargo_workspace_sources",
         "//packages/d2b-provider-activation-nixos:cargo_workspace_sources",
         "//packages/d2b-provider-audio-pipewire:cargo_workspace_sources",
         "//packages/d2b-provider-clipboard-wayland:cargo_workspace_sources",
         "//packages/d2b-provider-config-nixos:cargo_workspace_sources",
+        "//packages/d2b-provider-credential:cargo_workspace_sources",
         "//packages/d2b-provider-credential-entra:cargo_workspace_sources",
         "//packages/d2b-provider-credential-managed-identity:cargo_workspace_sources",
         "//packages/d2b-provider-credential-secret-service:cargo_workspace_sources",
         "//packages/d2b-provider-device-gpu:cargo_workspace_sources",
+        "//packages/d2b-provider-device:cargo_workspace_sources",
         "//packages/d2b-provider-device-security-key:cargo_workspace_sources",
         "//packages/d2b-provider-device-tpm:cargo_workspace_sources",
         "//packages/d2b-provider-device-usbip:cargo_workspace_sources",
@@ -303,15 +302,15 @@ filegroup(
         "//packages/d2b-provider-network-local:cargo_workspace_sources",
         "//packages/d2b-provider-notification-desktop:cargo_workspace_sources",
         "//packages/d2b-provider-observability-otel:cargo_workspace_sources",
-        "//packages/d2b-provider-runtime-azure-container-apps:cargo_workspace_sources",
-        "//packages/d2b-provider-runtime-azure-virtual-machine:cargo_workspace_sources",
-        "//packages/d2b-provider-runtime-cloud-hypervisor:cargo_workspace_sources",
-        "//packages/d2b-provider-runtime-qemu-media:cargo_workspace_sources",
+        "//packages/d2b-provider-guest-azure-container-apps:cargo_workspace_sources",
+        "//packages/d2b-provider-guest-azure-virtual-machine:cargo_workspace_sources",
+        "//packages/d2b-provider-guest-cloud-hypervisor:cargo_workspace_sources",
+        "//packages/d2b-provider-guest-qemu-media:cargo_workspace_sources",
         "//packages/d2b-provider-shell-terminal:cargo_workspace_sources",
         "//packages/d2b-provider-supervisor:cargo_workspace_sources",
         "//packages/d2b-provider-system-core:cargo_workspace_sources",
-        "//packages/d2b-provider-system-minijail:cargo_workspace_sources",
-        "//packages/d2b-provider-system-systemd:cargo_workspace_sources",
+        "//packages/d2b-provider-process-minijail:cargo_workspace_sources",
+        "//packages/d2b-provider-process-systemd:cargo_workspace_sources",
         "//packages/d2b-provider-toolkit:cargo_workspace_sources",
         "//packages/d2b-provider-transport-azure-relay:cargo_workspace_sources",
         "//packages/d2b-provider-transport-unix:cargo_workspace_sources",
@@ -321,6 +320,7 @@ filegroup(
         "//packages/d2b-resource-api:cargo_workspace_sources",
         "//packages/d2b-resource-client:cargo_workspace_sources",
         "//packages/d2b-resource-compiler:cargo_workspace_sources",
+        "//packages/d2b-resource-types:cargo_workspace_sources",
         "//packages/d2b-session:cargo_workspace_sources",
         "//packages/d2b-session-unix:cargo_workspace_sources",
         "//packages/d2b-sk-frontend:cargo_workspace_sources",
@@ -330,6 +330,34 @@ filegroup(
         "//packages/d2bd-runtime:cargo_workspace_sources",
         "//packages/d2bd:cargo_workspace_sources",
         "//packages/xtask:cargo_workspace_sources",
+        "//packages/d2b-provider-endpoint:cargo_workspace_sources",
+        "//packages/d2b-provider-guest:cargo_workspace_sources",
+        "//packages/d2b-provider-telemetry-service:cargo_workspace_sources",
+        "//packages/d2b-provider-telemetry-binding:cargo_workspace_sources",
+        "//packages/d2b-provider-volume:cargo_workspace_sources",
+        "//packages/d2b-provider-volume-binding:cargo_workspace_sources",
+        "//packages/d2b-provider-wayland-policy:cargo_workspace_sources",
+        "//packages/d2b-provider-wayland-session:cargo_workspace_sources",
+        "//packages/d2b-provider-audio-service:cargo_workspace_sources",
+        "//packages/d2b-provider-audio-binding:cargo_workspace_sources",
+        "//packages/d2b-provider-shell-pool:cargo_workspace_sources",
+        "//packages/d2b-provider-shell-session:cargo_workspace_sources",
+        "//packages/d2b-provider-zone:cargo_workspace_sources",
+        "//packages/d2b-provider-zone-link:cargo_workspace_sources",
+        "//packages/d2b-provider-provider:cargo_workspace_sources",
+        "//packages/d2b-provider-role:cargo_workspace_sources",
+        "//packages/d2b-provider-role-binding:cargo_workspace_sources",
+        "//packages/d2b-provider-quota:cargo_workspace_sources",
+        "//packages/d2b-provider-emergency-policy:cargo_workspace_sources",
+        "//packages/d2b-provider-resource-export:cargo_workspace_sources",
+        "//packages/d2b-provider-resource-import:cargo_workspace_sources",
+        "//packages/d2b-provider-command:cargo_workspace_sources",
+        "//packages/d2b-provider-operation:cargo_workspace_sources",
+        "//packages/d2b-provider-seccomp-profile:cargo_workspace_sources",
+        "//packages/d2b-provider-host:cargo_workspace_sources",
+        "//packages/d2b-provider-user:cargo_workspace_sources",
+        "//packages/d2b-provider-test-controller:cargo_workspace_sources",
+        "//packages/d2b-resource-runtime:cargo_workspace_sources",
     ],
     visibility = ["//visibility:public"],
 )
@@ -384,11 +412,23 @@ filegroup(
 )
 
 filegroup(
+    name = "generated_broker_operations",
+    srcs = [
+        "docs/reference/broker-operation-triage.md",
+        "docs/reference/policy/broker-operations.json",
+        "//packages/d2b-broker:generated_broker_operation_catalog",
+        "//packages/d2b-contracts:generated_w3_broker_operations",
+        "//packages/d2b-contracts-broker:generated_broker_operation_profiles",
+        "//packages/d2b-core:generated_broker_operation_authz",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
     name = "generated_daemon_api",
     srcs = ["docs/reference/daemon-api.md"],
     visibility = ["//visibility:public"],
 )
-
 filegroup(
     name = "generated_cli_shell_artifacts",
     srcs = glob([
@@ -424,6 +464,35 @@ filegroup(
 filegroup(
     name = "generated_provider_packaging",
     srcs = ["nixos-modules/generated/provider-catalog-shape.nix"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_nix_inventories",
+    srcs = [
+        "nixos-modules/generated/provider-projections.nix",
+        "nixos-modules/generated/resource-inventories.nix",
+        "nixos-modules/host-users.nix",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# The committed v3 schema artifacts the Nix inventory generator reads for its
+# schema pointers. Every qualified namespace is included: a new Provider's
+# schema entering the tree must be visible to the generator that points at it.
+filegroup(
+    name = "committed_v3_schema_artifacts",
+    srcs = glob(["docs/reference/schemas/v3/**/*.schema.json"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_layer_catalogs",
+    srcs = [
+        "//packages/d2b:generated_surface_catalog",
+        "//packages/d2b-audit:generated_audit_catalog",
+        "//packages/d2b-contracts-provider:generated_telemetry_catalog",
+    ],
     visibility = ["//visibility:public"],
 )
 

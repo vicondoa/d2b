@@ -2,7 +2,7 @@ use d2b_core::{
     processes::ProcessRole,
     runtime::{
         RuntimeAutostartPolicy, RuntimeMetadata, RuntimeOperationCapabilities,
-        RuntimeProviderDriver, RuntimeProviderType, RuntimeServiceRole, RuntimeServiceSummary,
+        RuntimeProviderDriver, RuntimeProviderType, RuntimeServiceRole, service_summary,
     },
 };
 use serde_json::json;
@@ -106,9 +106,8 @@ fn legacy_runtime_metadata_defaults_new_fields() {
 
 #[test]
 fn service_summary_derives_public_role_from_process_role() {
-    let qemu =
-        RuntimeServiceSummary::from_process_role("qemu-media", ProcessRole::QemuMediaRunner, false);
-    let gpu = RuntimeServiceSummary::from_process_role("gpu", ProcessRole::GpuRenderNode, true);
+    let qemu = service_summary("qemu-media", ProcessRole::QemuMediaRunner, false);
+    let gpu = service_summary("gpu", ProcessRole::GpuRenderNode, true);
 
     assert_eq!(qemu.role, RuntimeServiceRole::Hypervisor);
     assert!(!qemu.optional);

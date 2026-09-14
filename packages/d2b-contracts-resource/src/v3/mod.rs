@@ -3,6 +3,7 @@
 pub mod activation_nixos;
 pub mod artifact;
 pub mod bridge;
+pub mod command;
 pub mod device;
 pub mod endpoint;
 pub mod error;
@@ -12,12 +13,15 @@ pub mod host;
 pub mod identity;
 pub mod limits;
 pub mod network;
+pub mod operation;
 pub mod operations;
+pub mod payload_schema;
 pub mod process;
 pub mod quota;
 pub mod resource;
 pub mod resource_schema;
 pub mod resource_status;
+pub mod seccomp_profile;
 pub mod storage;
 pub mod user;
 pub mod volume;
@@ -27,6 +31,7 @@ pub mod volume_state;
 pub use activation_nixos::*;
 pub use artifact::*;
 pub use bridge::*;
+pub use command::*;
 pub use device::*;
 pub use endpoint::*;
 pub use error::{
@@ -49,6 +54,7 @@ pub use d2b_contracts::identity::ResourceRef;
 pub use ifname::*;
 pub use limits::*;
 pub use network::*;
+pub use operation::*;
 pub use operations::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, ExpectedRevision,
     MAX_STORE_SLOTS, MutationOrdinal, MutationOrdinalError, MutationSealAcceptor, MutationSealBody,
@@ -60,6 +66,7 @@ pub use operations::{
     StoreSealIdentity, StoreSlot, StoreSlotError, StoreWatchReceipt, StoreWatchRequest,
     StoredResource, StoredSchema,
 };
+pub use payload_schema::*;
 pub use process::*;
 pub use quota::*;
 pub use resource::{
@@ -69,6 +76,7 @@ pub use resource::{
 };
 pub use resource_schema::*;
 pub use resource_status::*;
+pub use seccomp_profile::*;
 pub use storage::*;
 pub use user::*;
 pub use volume_binding::*;

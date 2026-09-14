@@ -8,8 +8,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use d2b_contracts_resource::v3::{
-    ResourceName, ResourceRef, ResourceTypeName, ZoneId,
-    execution_policy::{BoundedText, redacted_debug},
+    COMMAND_RESOURCE_TYPE, OPERATION_RESOURCE_TYPE, ResourceName, ResourceRef, ResourceTypeName,
+    SECCOMP_PROFILE_RESOURCE_TYPE, ZoneId,
+    execution_policy::{
+        BoundedText, BoundedToken, MAX_PATH_BYTES, parsed_deserialize, redacted_debug,
+        require_resource_type,
+    },
 };
 
 /// Canonical Role ResourceType name.
@@ -30,6 +34,25 @@ pub const MAX_ROLE_RULE_RESOURCE_NAMES: usize = 64;
 pub const MAX_ROLE_RULE_EXECUTION_REFS: usize = 32;
 /// Maximum Zone selectors in one rule.
 pub const MAX_ROLE_RULE_ZONES: usize = 8;
+/// Maximum operation references in one Role.
+pub const MAX_ROLE_OPERATION_REFS: usize = 64;
+/// Maximum command references in one Role.
+pub const MAX_ROLE_COMMAND_REFS: usize = 64;
+/// Maximum capabilities in one Role posture.
+pub const MAX_ROLE_POSTURE_CAPABILITIES: usize = 64;
+/// Maximum mounts in one Role posture.
+pub const MAX_ROLE_POSTURE_MOUNTS: usize = 64;
+/// Highest umask a Role posture may request.
+pub const MAX_ROLE_POSTURE_UMASK: u32 = 0o777;
+/// Maximum bytes of the host-account name part of a `Principal` reference.
+pub const MAX_PRINCIPAL_NAME_BYTES: usize = 63;
+/// Canonical `Principal` reference prefix.
+const PRINCIPAL_REF_PREFIX: &str = "Principal/";
+/// Canonical `Principal/<name>` reference spelling.
+const PRINCIPAL_REF_PATTERN: &str = "^Principal/[a-z][a-z0-9-]{0,62}$";
+/// Absolute mount-path spelling. The compiled rule also refuses control
+/// characters.
+const MOUNT_PATH_PATTERN: &str = "^/[^\\u0000]*$";
 /// Core finalizer used while RoleBindings drain.
 pub const ROLE_BINDING_DRAIN_FINALIZER: &str = "core.role-binding-drain";
 
@@ -117,6 +140,12 @@ pub enum RoleContractError {
     DiagnosticSelectorInvalid,
     WildcardNotAllowed,
     InvalidWildcard,
+    InvalidOperationRef,
+    InvalidCommandRef,
+    InvalidSeccompRef,
+    InvalidPrincipalRef,
+    InvalidMountPath,
+    InvalidUmask,
 }
 
 impl core::fmt::Display for RoleContractError {
@@ -135,6 +164,12 @@ impl core::fmt::Display for RoleContractError {
             Self::DiagnosticSelectorInvalid => "role-diagnostic-selector-invalid",
             Self::WildcardNotAllowed => "role-wildcard-not-allowed",
             Self::InvalidWildcard => "role-wildcard-invalid",
+            Self::InvalidOperationRef => "role-operation-ref-invalid",
+            Self::InvalidCommandRef => "role-command-ref-invalid",
+            Self::InvalidSeccompRef => "role-seccomp-ref-invalid",
+            Self::InvalidPrincipalRef => "role-principal-ref-invalid",
+            Self::InvalidMountPath => "role-mount-path-invalid",
+            Self::InvalidUmask => "role-umask-invalid",
         })
     }
 }
@@ -392,25 +427,394 @@ fn duplicate<T: PartialEq>(values: &[T]) -> bool {
     values.windows(2).any(|pair| pair[0] == pair[1])
 }
 
+/// A validated `Principal/<name>` host-account reference.
+///
+/// A principal names a host account allocated by the committed principal
+/// allocation. It is deliberately not a `ResourceRef`: no resource selector
+/// may name a host account, and no resource may forge one.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct PrincipalRef(String);
+
+impl PrincipalRef {
+    /// Parse `^Principal/[a-z][a-z0-9-]{0,62}$`.
+    pub fn parse(value: impl Into<String>) -> Result<Self, RoleContractError> {
+        let value = value.into();
+        if let Some(name) = value.strip_prefix(PRINCIPAL_REF_PREFIX)
+            && !name.is_empty()
+            && name.len() <= MAX_PRINCIPAL_NAME_BYTES
+            && name.bytes().enumerate().all(|(index, byte)| {
+                if index == 0 {
+                    byte.is_ascii_lowercase()
+                } else {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                }
+            })
+        {
+            return Ok(Self(value));
+        }
+        Err(RoleContractError::InvalidPrincipalRef)
+    }
+
+    /// Borrow the host-account name after the `Principal/` prefix.
+    pub fn name(&self) -> &str {
+        &self.0[PRINCIPAL_REF_PREFIX.len()..]
+    }
+}
+
+redacted_debug!(PrincipalRef);
+parsed_deserialize!(PrincipalRef);
+
+impl JsonSchema for PrincipalRef {
+    fn schema_name() -> String {
+        "PrincipalRef".to_owned()
+    }
+
+    fn json_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        let mut schema = schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                schemars::schema::InstanceType::String,
+            ))),
+            ..Default::default()
+        };
+        schema.string().pattern = Some(PRINCIPAL_REF_PATTERN.to_owned());
+        schema.string().max_length =
+            Some((PRINCIPAL_REF_PREFIX.len() + MAX_PRINCIPAL_NAME_BYTES) as u32);
+        schemars::schema::Schema::Object(schema)
+    }
+}
+
+/// A validated absolute posture mount path.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct RoleMountPath(String);
+
+impl RoleMountPath {
+    /// Parse an absolute path bounded to 255 bytes with no control characters.
+    pub fn parse(value: impl Into<String>) -> Result<Self, RoleContractError> {
+        let value = value.into();
+        if !value.starts_with('/')
+            || value.len() > MAX_PATH_BYTES
+            || value.chars().any(char::is_control)
+        {
+            return Err(RoleContractError::InvalidMountPath);
+        }
+        Ok(Self(value))
+    }
+
+    /// Borrow the path.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+redacted_debug!(RoleMountPath);
+parsed_deserialize!(RoleMountPath);
+
+impl JsonSchema for RoleMountPath {
+    fn schema_name() -> String {
+        "RoleMountPath".to_owned()
+    }
+
+    fn json_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        let mut schema = schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                schemars::schema::InstanceType::String,
+            ))),
+            ..Default::default()
+        };
+        schema.string().pattern = Some(MOUNT_PATH_PATTERN.to_owned());
+        schema.string().max_length = Some(MAX_PATH_BYTES as u32);
+        schemars::schema::Schema::Object(schema)
+    }
+}
+
+/// One mount a posture grants.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RoleMount {
+    path: RoleMountPath,
+    #[serde(default)]
+    writable: bool,
+}
+
+impl RoleMount {
+    /// Construct one mount.
+    pub const fn new(path: RoleMountPath, writable: bool) -> Self {
+        Self { path, writable }
+    }
+
+    /// Borrow the absolute mount path.
+    pub const fn path(&self) -> &RoleMountPath {
+        &self.path
+    }
+
+    /// Whether the mount is writable.
+    pub const fn writable(&self) -> bool {
+        self.writable
+    }
+}
+
+/// The namespace set one posture isolates.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RoleNamespaces {
+    #[serde(default)]
+    mount: bool,
+    #[serde(default)]
+    pid: bool,
+    #[serde(default)]
+    net: bool,
+    #[serde(default)]
+    uts: bool,
+    #[serde(default)]
+    ipc: bool,
+    #[serde(default)]
+    cgroup: bool,
+    #[serde(default)]
+    time: bool,
+}
+
+impl RoleNamespaces {
+    /// Construct one namespace set.
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        mount: bool,
+        pid: bool,
+        net: bool,
+        uts: bool,
+        ipc: bool,
+        cgroup: bool,
+        time: bool,
+    ) -> Self {
+        Self {
+            mount,
+            pid,
+            net,
+            uts,
+            ipc,
+            cgroup,
+            time,
+        }
+    }
+
+    /// Whether a mount namespace is isolated.
+    pub const fn mount(&self) -> bool {
+        self.mount
+    }
+
+    /// Whether a PID namespace is isolated.
+    pub const fn pid(&self) -> bool {
+        self.pid
+    }
+
+    /// Whether a network namespace is isolated.
+    pub const fn net(&self) -> bool {
+        self.net
+    }
+
+    /// Whether a UTS namespace is isolated.
+    pub const fn uts(&self) -> bool {
+        self.uts
+    }
+
+    /// Whether an IPC namespace is isolated.
+    pub const fn ipc(&self) -> bool {
+        self.ipc
+    }
+
+    /// Whether a cgroup namespace is isolated.
+    pub const fn cgroup(&self) -> bool {
+        self.cgroup
+    }
+
+    /// Whether a time namespace is isolated.
+    pub const fn time(&self) -> bool {
+        self.time
+    }
+}
+
+/// The confined posture one Role grants its Processes.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RolePosture {
+    seccomp_ref: ResourceRef,
+    principal_ref: PrincipalRef,
+    capabilities: Vec<BoundedToken>,
+    namespaces: RoleNamespaces,
+    mounts: Vec<RoleMount>,
+    umask: Option<u32>,
+    user_ns: bool,
+}
+
+impl RolePosture {
+    /// Construct a posture after checking every reference, bound, and umask.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        seccomp_ref: ResourceRef,
+        principal_ref: PrincipalRef,
+        capabilities: Vec<BoundedToken>,
+        namespaces: RoleNamespaces,
+        mounts: Vec<RoleMount>,
+        umask: Option<u32>,
+        user_ns: bool,
+    ) -> Result<Self, RoleContractError> {
+        require_resource_type(&seccomp_ref, SECCOMP_PROFILE_RESOURCE_TYPE)
+            .map_err(|_| RoleContractError::InvalidSeccompRef)?;
+        if capabilities.len() > MAX_ROLE_POSTURE_CAPABILITIES
+            || mounts.len() > MAX_ROLE_POSTURE_MOUNTS
+        {
+            return Err(RoleContractError::BoundExceeded);
+        }
+        if umask.is_some_and(|value| value > MAX_ROLE_POSTURE_UMASK) {
+            return Err(RoleContractError::InvalidUmask);
+        }
+        Ok(Self {
+            seccomp_ref,
+            principal_ref,
+            capabilities,
+            namespaces,
+            mounts,
+            umask,
+            user_ns,
+        })
+    }
+
+    /// Borrow the referenced SeccompProfile.
+    pub const fn seccomp_ref(&self) -> &ResourceRef {
+        &self.seccomp_ref
+    }
+
+    /// Borrow the host-account principal this posture runs as.
+    pub const fn principal_ref(&self) -> &PrincipalRef {
+        &self.principal_ref
+    }
+
+    /// Borrow the capability tokens.
+    pub fn capabilities(&self) -> &[BoundedToken] {
+        &self.capabilities
+    }
+
+    /// Borrow the namespace set.
+    pub const fn namespaces(&self) -> &RoleNamespaces {
+        &self.namespaces
+    }
+
+    /// Borrow the mounts.
+    pub fn mounts(&self) -> &[RoleMount] {
+        &self.mounts
+    }
+
+    /// The requested umask, when the posture pins one.
+    pub const fn umask(&self) -> Option<u32> {
+        self.umask
+    }
+
+    /// Whether a user namespace is isolated.
+    pub const fn user_ns(&self) -> bool {
+        self.user_ns
+    }
+}
+
+redacted_debug!(RolePosture);
+
+impl<'de> Deserialize<'de> for RolePosture {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            seccomp_ref: ResourceRef,
+            principal_ref: PrincipalRef,
+            #[serde(default)]
+            capabilities: Vec<BoundedToken>,
+            #[serde(default)]
+            namespaces: RoleNamespaces,
+            #[serde(default)]
+            mounts: Vec<RoleMount>,
+            #[serde(default)]
+            umask: Option<u32>,
+            #[serde(default)]
+            user_ns: bool,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(
+            wire.seccomp_ref,
+            wire.principal_ref,
+            wire.capabilities,
+            wire.namespaces,
+            wire.mounts,
+            wire.umask,
+            wire.user_ns,
+        )
+        .map_err(serde::de::Error::custom)
+    }
+}
+
 /// The complete Role desired state.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RoleSpec {
     rules: Vec<RoleRule>,
+    operation_refs: Vec<ResourceRef>,
+    command_refs: Vec<ResourceRef>,
+    posture: Option<RolePosture>,
 }
 
 impl RoleSpec {
-    /// Construct a bounded Role spec.
+    /// Construct a bounded Role spec with an empty authority and posture
+    /// facet.
     pub fn new(rules: Vec<RoleRule>) -> Result<Self, RoleContractError> {
-        if rules.is_empty() || rules.len() > MAX_ROLE_RULES {
+        Self::with_facets(rules, Vec::new(), Vec::new(), None)
+    }
+
+    /// Construct a bounded Role spec with its authority and posture facets.
+    pub fn with_facets(
+        rules: Vec<RoleRule>,
+        operation_refs: Vec<ResourceRef>,
+        command_refs: Vec<ResourceRef>,
+        posture: Option<RolePosture>,
+    ) -> Result<Self, RoleContractError> {
+        if rules.is_empty()
+            || rules.len() > MAX_ROLE_RULES
+            || operation_refs.len() > MAX_ROLE_OPERATION_REFS
+            || command_refs.len() > MAX_ROLE_COMMAND_REFS
+        {
             return Err(RoleContractError::BoundExceeded);
         }
-        Ok(Self { rules })
+        for reference in &operation_refs {
+            require_resource_type(reference, OPERATION_RESOURCE_TYPE)
+                .map_err(|_| RoleContractError::InvalidOperationRef)?;
+        }
+        for reference in &command_refs {
+            require_resource_type(reference, COMMAND_RESOURCE_TYPE)
+                .map_err(|_| RoleContractError::InvalidCommandRef)?;
+        }
+        Ok(Self {
+            rules,
+            operation_refs,
+            command_refs,
+            posture,
+        })
     }
 
     /// Borrow rules.
     pub fn rules(&self) -> &[RoleRule] {
         &self.rules
+    }
+
+    /// Borrow the declared Operations this Role may launch.
+    pub fn operation_refs(&self) -> &[ResourceRef] {
+        &self.operation_refs
+    }
+
+    /// Borrow the declared Commands this Role may launch.
+    pub fn command_refs(&self) -> &[ResourceRef] {
+        &self.command_refs
+    }
+
+    /// Borrow the optional confined posture.
+    pub fn posture(&self) -> Option<&RolePosture> {
+        self.posture.as_ref()
     }
 }
 
@@ -422,8 +826,21 @@ impl<'de> Deserialize<'de> for RoleSpec {
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Wire {
             rules: Vec<RoleRule>,
+            #[serde(default)]
+            operation_refs: Vec<ResourceRef>,
+            #[serde(default)]
+            command_refs: Vec<ResourceRef>,
+            #[serde(default)]
+            posture: Option<RolePosture>,
         }
-        Self::new(Wire::deserialize(deserializer)?.rules).map_err(serde::de::Error::custom)
+        let wire = Wire::deserialize(deserializer)?;
+        Self::with_facets(
+            wire.rules,
+            wire.operation_refs,
+            wire.command_refs,
+            wire.posture,
+        )
+        .map_err(serde::de::Error::custom)
     }
 }
 
@@ -487,6 +904,7 @@ pub fn validate_role_owner(owner: Option<&ResourceRef>) -> Result<(), RoleContra
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::CanonicalJsonObject;
 
     fn type_name() -> ResourceTypeName {
         ResourceTypeName::parse("Process").unwrap()
@@ -554,5 +972,211 @@ mod tests {
             rule.validate_provenance(false),
             Err(RoleContractError::WildcardNotAllowed)
         );
+    }
+
+    fn process_rule() -> RoleRule {
+        RoleRule::new(
+            vec![type_name()],
+            vec![RoleResourceVerb::Get],
+            Vec::new(),
+            vec!["worker".to_owned()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap()
+    }
+
+    fn posture_with(
+        capabilities: Vec<BoundedToken>,
+        mounts: Vec<RoleMount>,
+        umask: Option<u32>,
+    ) -> Result<RolePosture, RoleContractError> {
+        RolePosture::new(
+            ResourceRef::parse("SeccompProfile/worker").unwrap(),
+            PrincipalRef::parse("Principal/worker").unwrap(),
+            capabilities,
+            RoleNamespaces::default(),
+            mounts,
+            umask,
+            false,
+        )
+    }
+
+    #[test]
+    fn operation_and_command_refs_are_type_gated() {
+        assert_eq!(
+            RoleSpec::with_facets(
+                vec![process_rule()],
+                vec![ResourceRef::parse("Process/worker").unwrap()],
+                Vec::new(),
+                None,
+            ),
+            Err(RoleContractError::InvalidOperationRef)
+        );
+        assert_eq!(
+            RoleSpec::with_facets(
+                vec![process_rule()],
+                vec![ResourceRef::parse("Operation/start").unwrap()],
+                vec![ResourceRef::parse("Operation/start").unwrap()],
+                None,
+            ),
+            Err(RoleContractError::InvalidCommandRef)
+        );
+        let spec = RoleSpec::with_facets(
+            vec![process_rule()],
+            vec![ResourceRef::parse("Operation/start").unwrap()],
+            vec![ResourceRef::parse("Command/worker").unwrap()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(spec.operation_refs().len(), 1);
+        assert_eq!(spec.command_refs().len(), 1);
+        assert_eq!(
+            serde_json::from_str::<RoleSpec>(
+                r#"{"rules":[{"resourceTypes":["Process"],"verbs":["get"],"subresources":[],"resourceNames":["worker"],"zones":[],"executionRefs":[],"sessionVerbs":[]}],"operationRefs":["Process/worker"]}"#
+            )
+            .unwrap_err()
+            .to_string()
+            .split(" at line")
+            .next(),
+            Some("role-operation-ref-invalid")
+        );
+    }
+
+    #[test]
+    fn principal_refs_and_seccomp_refs_are_gated() {
+        for value in [
+            "Principal/".to_owned(),
+            "Principal/Upper".to_owned(),
+            "Principal/with_underscore".to_owned(),
+            "principal/worker".to_owned(),
+            "User/alice".to_owned(),
+            format!("Principal/{}", "z".repeat(MAX_PRINCIPAL_NAME_BYTES + 1)),
+        ] {
+            assert_eq!(
+                PrincipalRef::parse(value),
+                Err(RoleContractError::InvalidPrincipalRef)
+            );
+        }
+        let principal = PrincipalRef::parse("Principal/d2bd").unwrap();
+        assert_eq!(principal.name(), "d2bd");
+        assert_eq!(
+            serde_json::to_string(&principal).unwrap(),
+            "\"Principal/d2bd\""
+        );
+        assert_eq!(
+            RolePosture::new(
+                ResourceRef::parse("Process/worker").unwrap(),
+                PrincipalRef::parse("Principal/worker").unwrap(),
+                Vec::new(),
+                RoleNamespaces::default(),
+                Vec::new(),
+                None,
+                false,
+            ),
+            Err(RoleContractError::InvalidSeccompRef)
+        );
+    }
+
+    #[test]
+    fn posture_umask_over_511_is_refused() {
+        assert!(posture_with(Vec::new(), Vec::new(), Some(0o777)).is_ok());
+        assert!(posture_with(Vec::new(), Vec::new(), None).is_ok());
+        assert_eq!(
+            posture_with(Vec::new(), Vec::new(), Some(0o1000)),
+            Err(RoleContractError::InvalidUmask)
+        );
+    }
+
+    #[test]
+    fn posture_list_bounds_and_mount_paths_are_refused() {
+        let capabilities = (0..=MAX_ROLE_POSTURE_CAPABILITIES)
+            .map(|index| BoundedToken::parse(format!("cap-{index}")).unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            posture_with(
+                capabilities[..MAX_ROLE_POSTURE_CAPABILITIES].to_vec(),
+                Vec::new(),
+                None,
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            posture_with(capabilities, Vec::new(), None),
+            Err(RoleContractError::BoundExceeded)
+        );
+        let mounts = (0..=MAX_ROLE_POSTURE_MOUNTS)
+            .map(|index| {
+                RoleMount::new(
+                    RoleMountPath::parse(format!("/mnt/{index}")).unwrap(),
+                    false,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            posture_with(Vec::new(), mounts, None),
+            Err(RoleContractError::BoundExceeded)
+        );
+        for value in [
+            "var/lib/d2b".to_owned(),
+            "/with\u{7f}control".to_owned(),
+            format!("/{}", "p".repeat(MAX_PATH_BYTES)),
+        ] {
+            assert_eq!(
+                RoleMountPath::parse(value),
+                Err(RoleContractError::InvalidMountPath)
+            );
+        }
+    }
+
+    #[test]
+    fn roles_with_posture_round_trip_through_canonical_json() {
+        let json = concat!(
+            r#"{"rules":[{"resourceTypes":["Process"],"verbs":["get"],"subresources":[],"resourceNames":["worker"],"zones":[],"executionRefs":[],"sessionVerbs":[]}],"#,
+            r#""operationRefs":["Operation/start"],"commandRefs":["Command/worker"],"#,
+            r#""posture":{"seccompRef":"SeccompProfile/worker","principalRef":"Principal/worker","capabilities":["cap-net-bind"],"namespaces":{"mount":true,"pid":false,"net":true,"uts":false,"ipc":false,"cgroup":false,"time":false},"mounts":[{"path":"/var/lib/d2b","writable":true}],"umask":18,"userNs":true}}"#,
+        );
+        let role: RoleSpec = serde_json::from_str(json).unwrap();
+        let posture = role.posture().unwrap();
+        assert_eq!(posture.seccomp_ref().name().as_str(), "worker");
+        assert_eq!(posture.principal_ref().name(), "worker");
+        assert_eq!(posture.capabilities()[0].as_str(), "cap-net-bind");
+        assert!(posture.namespaces().net());
+        assert!(!posture.namespaces().ipc());
+        assert_eq!(posture.mounts()[0].path().as_str(), "/var/lib/d2b");
+        assert!(posture.mounts()[0].writable());
+        assert_eq!(posture.umask(), Some(0o022));
+        assert!(posture.user_ns());
+        assert_eq!(serde_json::to_string(&role).unwrap(), json);
+        assert_eq!(
+            CanonicalJsonObject::parse(&serde_json::to_vec(&role).unwrap())
+                .unwrap()
+                .to_canonical_bytes(),
+            CanonicalJsonObject::parse(json.as_bytes())
+                .unwrap()
+                .to_canonical_bytes()
+        );
+    }
+
+    #[test]
+    fn role_facets_default_to_the_empty_facet() {
+        let role: RoleSpec = serde_json::from_str(
+            r#"{"rules":[{"resourceTypes":["Process"],"verbs":["get"],"subresources":[],"resourceNames":["worker"],"zones":[],"executionRefs":[],"sessionVerbs":[]}]}"#,
+        )
+        .unwrap();
+        assert!(role.operation_refs().is_empty());
+        assert!(role.command_refs().is_empty());
+        assert!(role.posture().is_none());
+        let role: RoleSpec = serde_json::from_str(
+            r#"{"rules":[{"resourceTypes":["Process"],"verbs":["get"],"subresources":[],"resourceNames":["worker"],"zones":[],"executionRefs":[],"sessionVerbs":[]}],"posture":{"seccompRef":"SeccompProfile/worker","principalRef":"Principal/worker"}}"#,
+        )
+        .unwrap();
+        let posture = role.posture().unwrap();
+        assert!(posture.capabilities().is_empty());
+        assert!(posture.mounts().is_empty());
+        assert_eq!(posture.umask(), None);
+        assert!(!posture.user_ns());
+        assert!(!posture.namespaces().mount());
     }
 }

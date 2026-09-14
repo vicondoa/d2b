@@ -8,7 +8,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use d2b_process::{
+use d2b_provider_process::{
     AdoptionCandidate, BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity,
     ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest, ProcessRequest,
     ProcessStopClass, StopClass, WaitReapOwner,
@@ -20,11 +20,11 @@ use d2b_process_conformance::{
 };
 use d2b_provider_supervisor::{
     BrokerLaunchIntent, BrokerLaunchResolver, BrokerObservedProcess, BrokerProcessBackend,
-    ProviderSupervisor, SystemdEffectLaunch, SystemdEffectOwner, SystemdIdentityContext,
-    SystemdInvocationIdentity, SystemdProcessBackend,
+    ProviderSupervisor, SystemdEffectLaunch, SystemdEffectOwner, SystemdInvocationIdentity,
+    SystemdProcessBackend,
 };
-use d2b_provider_system_minijail::{MinijailProcessProvider, PROVIDER_NAME as MINIJAIL};
-use d2b_provider_system_systemd::{PROVIDER_NAME as SYSTEMD, SystemdProcessProvider};
+use d2b_provider_process_minijail::{MinijailProcessProvider, PROVIDER_NAME as MINIJAIL};
+use d2b_provider_process_systemd::{PROVIDER_NAME as SYSTEMD, SystemdProcessProvider};
 
 fn minijail_bindings() -> Vec<IdentityBinding> {
     vec![
@@ -412,7 +412,8 @@ fn invocation(start_time: u64) -> SystemdInvocationIdentity {
         start_time,
         [3; 32],
         [4; 32],
-        SystemdIdentityContext::new(1, "bundle").unwrap(),
+        1,
+        "bundle",
     )
     .unwrap()
 }
@@ -869,12 +870,12 @@ impl ProcessEffectBackend for ParallelLaunchBackend {
     }
 }
 
-fn parallel_ticket(index: usize) -> d2b_process::LaunchTicket {
+fn parallel_ticket(index: usize) -> d2b_provider_process::LaunchTicket {
     use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
     use d2b_contracts_resource::v3::{
         ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid,
     };
-    use d2b_process::{LaunchTicket, OperationBinding};
+    use d2b_provider_process::{LaunchTicket, OperationBinding};
 
     let uid = ResourceUid::parse(format!("123e4567-e89b-42d3-a456-42661417{index:04x}"))
         .expect("parallel fixture UID is valid");

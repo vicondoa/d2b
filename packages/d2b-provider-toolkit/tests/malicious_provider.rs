@@ -30,8 +30,8 @@ use d2b_contracts_resource::v3::{
     resource_schema::{ExtensionSchemaId, PlacementAnchor, SchemaVersion, canonical_json_bytes},
 };
 use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
-use d2b_provider_toolkit::conformance::{CapabilityMatrix, ConformanceError};
-use d2b_provider_toolkit::fakes::{FakeBus, FakePortError, FakeResourceStore};
+use d2b_provider_toolkit::testing::conformance::{CapabilityMatrix, ConformanceError};
+use d2b_provider_toolkit::testing::fakes::{FakeBus, FakePortError, FakeResourceStore};
 use d2b_provider_toolkit::{AllocatorSessionBinding, ProviderAgentBootstrap, ProviderToolkitError};
 
 const DIGEST: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000001";

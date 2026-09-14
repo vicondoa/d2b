@@ -7,7 +7,7 @@ use std::time::Instant;
 use crate::{
     CliFailure,
     context::{OutputMode, RequestDeadline, ZoneContext},
-    dispatch::BUILTIN_COMMANDS,
+    dispatch::{builtin_commands, is_builtin_command},
     provider,
 };
 
@@ -38,7 +38,7 @@ pub(crate) fn run(
     if args.list_commands {
         let mut output = serde_json::to_string(&json!({
             "schemaVersion": 1,
-            "commands": BUILTIN_COMMANDS,
+            "commands": builtin_commands(),
         }))
         .map_err(|_| CliFailure::new(1, "failed to render completion commands"))?;
         output.push('\n');
@@ -74,12 +74,9 @@ pub(crate) fn render_completion(
 }
 
 fn render_completion_names(shell: CompletionShell, provider_commands: &[String]) -> String {
-    let mut names: Vec<String> = BUILTIN_COMMANDS
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect();
+    let mut names: Vec<String> = builtin_commands().to_vec();
     for name in provider_commands {
-        if valid_command_name(name) && !BUILTIN_COMMANDS.contains(&name.as_str()) {
+        if valid_command_name(name) && !is_builtin_command(name) {
             names.push(name.clone());
         }
     }
@@ -147,7 +144,7 @@ fn load_provider_commands(
             .pointer("/cliProjection/topLevel")
             .and_then(serde_json::Value::as_str)
             && valid_command_name(name)
-            && !BUILTIN_COMMANDS.contains(&name)
+            && !is_builtin_command(name)
         {
             names.push(name.to_owned());
         }

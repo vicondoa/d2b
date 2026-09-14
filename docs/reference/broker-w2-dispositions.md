@@ -1,5 +1,11 @@
 # Broker request dispositions
 
+This table seeded the committed broker operation rows: its dispositions are
+carried into [`policy/broker-operations.json`](./policy/broker-operations.json),
+whose generated
+[triage view](./broker-operation-triage.md) is the current inventory. The table
+is kept as the historical triage input.
+
 This table tracks the broker request dispositions for the current
 `OperationAuthz.operation` enum plus the daemon-only `Hello`
 handshake. Current broker behavior is described in

@@ -6,7 +6,6 @@
 #![allow(missing_docs)]
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -21,20 +20,10 @@ pub const CTAPHID_REPORT_SIZE: usize = 64;
 
 /// CTAPHID initialization command (CMD byte with continuation-bit set).
 pub const CTAPHID_INIT: u8 = 0x86;
-/// CTAPHID PING command.
-pub const CTAPHID_PING: u8 = 0x81;
 /// CTAPHID CANCEL command (client requests cancel of in-progress op).
 pub const CTAPHID_CANCEL: u8 = 0x91;
 /// CTAPHID ERROR command.
 pub const CTAPHID_ERROR: u8 = 0xBF;
-/// CTAPHID CBOR command (CTAP2 CBOR messages).
-pub const CTAPHID_CBOR: u8 = 0x90;
-/// CTAPHID MSG command (U2F/CTAP1 messages).
-pub const CTAPHID_MSG: u8 = 0x83;
-/// CTAPHID WINK command.
-pub const CTAPHID_WINK: u8 = 0x88;
-/// CTAPHID KEEPALIVE command.
-pub const CTAPHID_KEEPALIVE: u8 = 0xBB;
 
 /// Broadcast CID used in CTAPHID_INIT requests.
 pub const CTAPHID_BROADCAST_CID: u32 = 0xFFFF_FFFF;
@@ -44,8 +33,6 @@ pub const CTAPHID_INIT_PKT_BIT: u8 = 0x80;
 pub const CTAPHID_ERR_CHANNEL_BUSY: u8 = 0x06;
 /// CTAPHID ERR_INVALID_COMMAND error code.
 pub const CTAPHID_ERR_INVALID_CMD: u8 = 0x01;
-/// CTAPHID ERR_INVALID_SEQ error code.
-pub const CTAPHID_ERR_INVALID_SEQ: u8 = 0x04;
 
 /// Active-ceremony timeout: how long a single VM may hold the
 /// physical-key lease before it is force-expired.
@@ -359,37 +346,6 @@ impl SecurityKeyState {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Framing over the per-VM relay stream
-// ---------------------------------------------------------------------------
-
-/// Read a single 64-byte CTAPHID report from a length-prefixed stream.
-///
-/// The per-VM relay transport uses a 4-byte little-endian length
-/// prefix so partial reads are handled cleanly; the length must be
-/// exactly [`CTAPHID_REPORT_SIZE`].
-pub fn recv_report<R: Read>(stream: &mut R) -> std::io::Result<CtaphidReport> {
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf)?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    if len != CTAPHID_REPORT_SIZE {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("expected {CTAPHID_REPORT_SIZE}-byte CTAPHID report, got {len}"),
-        ));
-    }
-    let mut report = [0u8; CTAPHID_REPORT_SIZE];
-    stream.read_exact(&mut report)?;
-    Ok(report)
-}
-
-/// Write a single 64-byte CTAPHID report to a length-prefixed stream.
-pub fn send_report<W: Write>(stream: &mut W, report: &CtaphidReport) -> std::io::Result<()> {
-    stream.write_all(&(CTAPHID_REPORT_SIZE as u32).to_le_bytes())?;
-    stream.write_all(report)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,16 +388,5 @@ mod tests {
         assert!(state.try_acquire_lease("vm-b").is_none());
         state.release_lease("vm-a", lease);
         assert!(state.try_acquire_lease("vm-b").is_some());
-    }
-
-    #[test]
-    fn framed_reports_round_trip() {
-        let report = build_error_report(7, CTAPHID_ERR_CHANNEL_BUSY);
-        let mut wire = Vec::new();
-        send_report(&mut wire, &report).expect("frame report");
-        assert_eq!(
-            recv_report(&mut wire.as_slice()).expect("read report"),
-            report
-        );
     }
 }

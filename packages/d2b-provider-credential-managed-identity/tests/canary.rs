@@ -1,16 +1,18 @@
 mod common;
 
+use std::collections::BTreeMap;
+
 use d2b_contracts_provider::v3::credential::{
     CredentialInteractionState, CredentialLeaseHandle, CredentialLeaseStatus, CredentialMethod,
     CredentialRequest, CredentialResponse, CredentialServiceErrorCode, CredentialSourceVersion,
     CredentialStatus, PlacementBinding, encode_outer,
 };
-use d2b_contracts_resource::v3::ResourceRef;
-use d2b_provider_credential_managed_identity::{
-    ManagedIdentityAuditOperation, ManagedIdentityAuditOutcome, ManagedIdentityAuditRecord,
-    ManagedIdentityTelemetryFrame, ManagedIdentityTelemetryOperation,
-    ManagedIdentityTelemetryOutcome, TelemetryField,
+use d2b_contracts_provider::v3::credential_controller::{
+    CredentialAuditDigest, CredentialAuditOperation, CredentialAuditOutcome, CredentialAuditRecord,
+    CredentialProviderKind, CredentialTelemetryField, CredentialTelemetryFrame,
+    CredentialTelemetryOperation, CredentialTelemetryOutcome,
 };
+use d2b_contracts_resource::v3::ResourceRef;
 
 use common::{ProviderHarness, admitted, setup};
 
@@ -129,31 +131,51 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
         CredentialServiceErrorCode::InvariantFailure
     );
     let audit_digest = CredentialLeaseHandle::parse(&credential_digest).unwrap();
-    let typed_audit = ManagedIdentityAuditRecord::new(
-        audit_digest.as_opaque_str(),
-        ManagedIdentityAuditOperation::AcquireToken,
-        ManagedIdentityAuditOutcome::Success,
+    let typed_audit = CredentialAuditRecord::controller_event(
+        CredentialProviderKind::ManagedIdentity,
+        "system",
+        CredentialAuditDigest::parse(audit_digest.as_opaque_str()).unwrap(),
+        CredentialAuditOperation::AcquireToken,
+        CredentialAuditOutcome::Success,
         1,
+        None,
+        None,
     )
     .unwrap();
-    let audit_error = ManagedIdentityAuditRecord::new(
-        &credential_ref,
-        ManagedIdentityAuditOperation::AcquireToken,
-        ManagedIdentityAuditOutcome::Success,
-        1,
-    )
-    .unwrap_err();
-    let telemetry = ManagedIdentityTelemetryFrame::new(
+    let audit_error = CredentialAuditDigest::parse(&credential_ref)
+        .and_then(|digest| {
+            CredentialAuditRecord::controller_event(
+                CredentialProviderKind::ManagedIdentity,
+                "system",
+                digest,
+                CredentialAuditOperation::AcquireToken,
+                CredentialAuditOutcome::Success,
+                1,
+                None,
+                None,
+            )
+        })
+        .unwrap_err();
+    let telemetry = CredentialTelemetryFrame::new(
+        CredentialProviderKind::ManagedIdentity,
         "dev",
-        ManagedIdentityTelemetryOperation::AcquireToken,
-        ManagedIdentityTelemetryOutcome::Success,
+        CredentialTelemetryOperation::AcquireToken,
+        CredentialTelemetryOutcome::Success,
         PlacementBinding::GuestAgent,
-    );
+        1,
+        env!("CARGO_PKG_VERSION"),
+    )
+    .unwrap();
+    let telemetry_metric_map = telemetry
+        .metric_labels()
+        .iter()
+        .map(|field| (field.key, field.value.as_str()))
+        .collect::<BTreeMap<_, _>>();
     assert!(
-        ManagedIdentityTelemetryFrame::validate_collector_fields(telemetry.all_fields()).is_ok()
+        CredentialTelemetryFrame::validate_collector_fields(telemetry.all_fields()).is_ok()
     );
     let telemetry_error =
-        ManagedIdentityTelemetryFrame::validate_collector_fields([TelemetryField {
+        CredentialTelemetryFrame::validate_collector_fields([CredentialTelemetryField {
             key: "outcome",
             value: credential_name.clone(),
         }])
@@ -182,7 +204,7 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
         format!("{:?}", telemetry.resource_attributes()),
         format!("{:?}", telemetry.span_attributes()),
         format!("{:?}", telemetry.metric_labels()),
-        format!("{:?}", telemetry.metric_map()),
+        format!("{telemetry_metric_map:?}"),
         format!("{telemetry_error:?}"),
         telemetry_error.to_string(),
     ];

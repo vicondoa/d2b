@@ -2,7 +2,6 @@
 
 pub mod audit;
 pub mod fallback;
-pub mod fd;
 pub mod framing;
 pub mod host;
 pub mod niri;

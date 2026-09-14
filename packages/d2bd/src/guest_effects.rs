@@ -31,18 +31,18 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_resource_runtime::context::{LookupPlane, RowLookup};
 use d2b_resource_runtime::identity::ResourceKey;
-use d2b_provider_runtime_azure_container_apps as aca_runtime;
-use d2b_provider_runtime_azure_virtual_machine as azure_vm_runtime;
-use d2b_provider_runtime_qemu_media as qemu_media_runtime;
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-
-use crate::ServerState;
-use crate::guest_driver::{
+use d2b_provider_guest::{
     GuestChildObservation, GuestDriverEffects, GuestEffectError, GuestEffectOutcome,
     GuestEffectPhase, GuestEffectRequest, GuestFinalizeStage, GuestKind,
     declared_dependency_refs, view_phase,
 };
+use d2b_provider_guest_azure_container_apps as aca_runtime;
+use d2b_provider_guest_azure_virtual_machine as azure_vm_runtime;
+use d2b_provider_guest_qemu_media as qemu_media_runtime;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+use crate::ServerState;
 use crate::resource_plane_v3::ResourcePlaneV3;
 use crate::resource_runtime::ZoneResourceRuntime;
 
@@ -671,7 +671,7 @@ impl ProductionGuestDriverEffects {
                 }
             }
         };
-        let uid = match crate::guest_driver::resource_uid(&view.uid) {
+        let uid = match d2b_provider_guest::resource_uid(&view.uid) {
             Ok(uid) => uid,
             Err(_) => {
                 return RowLookup::Error {
@@ -800,7 +800,7 @@ impl ProductionGuestDriverEffects {
         }
         if request.key.zone != self.zone.as_str()
             || request.controller_generation != self.controller_generation
-            || request.key.type_name != crate::guest_driver::GUEST_TYPE_NAME
+            || request.key.type_name != d2b_provider_guest::GUEST_TYPE_NAME
         {
             return Err(GuestEffectError::InvalidResource);
         }
@@ -827,7 +827,7 @@ impl ProductionGuestDriverEffects {
             .pointer("/spec/provider/settings")
             .cloned()
             .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-        serde_json::from_value::<d2b_provider_runtime_qemu_media::GuestProviderSpecSettings>(
+        serde_json::from_value::<d2b_provider_guest_qemu_media::GuestProviderSpecSettings>(
             settings,
         )
         .map(|_| ())
@@ -836,7 +836,7 @@ impl ProductionGuestDriverEffects {
 
     fn validate_azure_vm_guest(value: &Value) -> Result<(), GuestEffectError> {
         let settings = Self::azure_vm_guest_settings_value(value)?;
-        serde_json::from_value::<d2b_provider_runtime_azure_virtual_machine::AzureVmGuestSettings>(
+        serde_json::from_value::<d2b_provider_guest_azure_virtual_machine::AzureVmGuestSettings>(
             settings,
         )
         .map(|_| ())
@@ -963,7 +963,7 @@ impl ProductionGuestDriverEffects {
             .map_err(|_| GuestEffectError::InvalidResource)?;
         let plane = self.plane()?;
         {
-            use crate::process_driver::CommittedProviderIdentitySource;
+            use d2b_provider_process::CommittedProviderIdentitySource;
             let source = plane.registry().as_ref() as &dyn CommittedProviderIdentitySource;
             if source.committed_provider_identity(&provider_ref).is_none() {
                 return Err(GuestEffectError::Unavailable);
@@ -1213,7 +1213,7 @@ impl ProductionGuestDriverEffects {
         provider_ref: &ResourceRef,
     ) -> Result<ResourceGeneration, GuestEffectError> {
         let plane = self.plane()?;
-        use crate::process_driver::CommittedProviderIdentitySource;
+        use d2b_provider_process::CommittedProviderIdentitySource;
         let source = plane.registry().as_ref() as &dyn CommittedProviderIdentitySource;
         source
             .committed_provider_identity(provider_ref)

@@ -51,13 +51,139 @@ use sha2::{Digest, Sha256};
 use crate::ServerState;
 use crate::resource_plane_v3::ResourcePlaneV3;
 use crate::resource_runtime::{ASSIGNMENT_EPOCH, ZoneResourceRuntime};
-use crate::shared_provider_driver::{
-    SharedProviderResourceState,
-    HOST_REF, SecurityKeyComponent, SharedProviderDriverEffects, SharedProviderEffectError,
-    SharedProviderEffectOutcome, SharedProviderEffectPhase, SharedProviderEffectRequest,
-    SharedProviderFinalize, SharedProviderKind, UsbipComponent,
+use d2b_provider_device::{DeviceComponent, DeviceResourceState};
+use d2b_provider_device_security_key::SecurityKeyComponent;
+use d2b_provider_device_usbip::UsbipComponent;
+use d2b_provider_network_local::NetworkComponent;
+use d2b_provider_toolkit::{
+    HOST_REF, SharedProviderChildSurface, SharedProviderEffectError, SharedProviderEffectOutcome,
+    SharedProviderEffectPhase, SharedProviderEffectRequest, SharedProviderFinalize, key_ref,
+    resource_uid,
 };
-use crate::usbip_production::UsbipChildResourcePort;
+
+/// The daemon-side handler key of one shared-provider row.
+///
+/// Every row's identity (its ResourceType, Provider reference, controller
+/// reference, and dependency declaration) is owned by the family crate that
+/// declares it; this key only selects the handler the daemon implements, so
+/// the daemon and the declaring crate can never disagree on a string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SharedProviderKind {
+    Network,
+    UsbipDevice,
+    UsbipService,
+    UsbipBinding,
+    SecurityKeyDevice,
+    SecurityKeyService,
+    SecurityKeyBinding,
+    GpuDevice,
+}
+
+impl SharedProviderKind {
+    /// The Provider reference the row's spec must name.
+    const fn provider_ref(self) -> &'static str {
+        match self {
+            Self::Network => d2b_provider_network_local::NETWORK_PROVIDER_REF,
+            Self::UsbipDevice | Self::UsbipService | Self::UsbipBinding => {
+                d2b_provider_device_usbip::PROVIDER_REF
+            }
+            Self::SecurityKeyDevice | Self::SecurityKeyService | Self::SecurityKeyBinding => {
+                d2b_provider_device_security_key::PROVIDER_REF
+            }
+            Self::GpuDevice => d2b_provider_device_gpu::PROVIDER_REF,
+        }
+    }
+
+    /// The controller reference the row's effects bind.
+    const fn controller_ref(self) -> &'static str {
+        match self {
+            Self::Network => d2b_provider_network_local::NETWORK_CONTROLLER_REF,
+            Self::UsbipDevice => d2b_provider_device::USBIP_CONTROLLER_REF,
+            Self::UsbipService => d2b_provider_device_usbip::USBIP_SERVICE_CONTROLLER_REF,
+            Self::UsbipBinding => d2b_provider_device_usbip::USBIP_BINDING_CONTROLLER_REF,
+            Self::SecurityKeyDevice => d2b_provider_device::SECURITY_KEY_CONTROLLER_REF,
+            Self::SecurityKeyService => {
+                d2b_provider_device_security_key::SECURITY_KEY_SERVICE_CONTROLLER_REF
+            }
+            Self::SecurityKeyBinding => {
+                d2b_provider_device_security_key::SECURITY_KEY_BINDING_CONTROLLER_REF
+            }
+            Self::GpuDevice => d2b_provider_device::GPU_CONTROLLER_REF,
+        }
+    }
+
+    /// The dependency references one row declares (the declaring crate's own
+    /// declaration).
+    fn declared_dependency_refs(self, spec: &Value, metadata: &Value) -> Vec<ResourceRef> {
+        match self {
+            Self::Network => d2b_provider_network_local::declared_dependency_refs(
+                NetworkComponent::Network,
+                spec,
+                metadata,
+            ),
+            Self::UsbipDevice => {
+                d2b_provider_device::declared_dependency_refs(DeviceComponent::Usbip, spec, metadata)
+            }
+            Self::UsbipService => d2b_provider_device_usbip::declared_dependency_refs(
+                UsbipComponent::Service,
+                spec,
+                metadata,
+            ),
+            Self::UsbipBinding => d2b_provider_device_usbip::declared_dependency_refs(
+                UsbipComponent::Binding,
+                spec,
+                metadata,
+            ),
+            Self::SecurityKeyDevice => d2b_provider_device::declared_dependency_refs(
+                DeviceComponent::SecurityKey,
+                spec,
+                metadata,
+            ),
+            Self::SecurityKeyService => d2b_provider_device_security_key::declared_dependency_refs(
+                SecurityKeyComponent::Service,
+                spec,
+                metadata,
+            ),
+            Self::SecurityKeyBinding => d2b_provider_device_security_key::declared_dependency_refs(
+                SecurityKeyComponent::Binding,
+                spec,
+                metadata,
+            ),
+            Self::GpuDevice => {
+                d2b_provider_device::declared_dependency_refs(DeviceComponent::Gpu, spec, metadata)
+            }
+        }
+    }
+}
+
+/// The daemon-provided implementations of every shared family's effect port.
+///
+/// The plane registers each family's driver declaration with the port
+/// implementation here; one production adapter implements them all, so a
+/// family's effects keep sharing the daemon-side broker and runtime state.
+#[derive(Clone)]
+pub(crate) struct SharedProviderEffects {
+    /// The Network family's port.
+    pub(crate) network: Arc<dyn d2b_provider_network_local::NetworkDriverEffects>,
+    /// The USB Service/Binding family's port.
+    pub(crate) usbip: Arc<dyn d2b_provider_device_usbip::UsbipDriverEffects>,
+    /// The security-key Service/Binding family's port.
+    pub(crate) security_key: Arc<dyn d2b_provider_device_security_key::SecurityKeyDriverEffects>,
+    /// The Device family's port.
+    pub(crate) device: Arc<dyn d2b_provider_device::DeviceDriverEffects>,
+}
+
+impl SharedProviderEffects {
+    /// The production bundle: one adapter serves every family port.
+    pub(crate) fn production(effects: Arc<ProductionSharedProviderEffects>) -> Self {
+        Self {
+            network: effects.clone(),
+            usbip: effects.clone(),
+            security_key: effects.clone(),
+            device: effects,
+        }
+    }
+}
 
 /// Production composition adapter for the closed shared-provider family.
 ///
@@ -177,7 +303,7 @@ impl ProductionSharedProviderEffects {
             serde_json::from_slice::<Value>(&view.metadata)
                 .map_err(|_| SharedProviderEffectError::InvalidResource)?
         };
-        let uid = crate::shared_provider_driver::resource_uid(&view.uid)?;
+        let uid = resource_uid(&view.uid)?;
         let phase = view_phase(&view);
         Ok(Some(json!({
             "spec": spec,
@@ -200,11 +326,7 @@ impl ProductionSharedProviderEffects {
         kind: SharedProviderKind,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<bool, SharedProviderEffectError> {
-        for dependency in crate::shared_provider_driver::declared_dependency_refs(
-            kind,
-            &request.spec,
-            &request.metadata,
-        ) {
+        for dependency in kind.declared_dependency_refs(&request.spec, &request.metadata) {
             if !self.resource_ready(&dependency).await {
                 return Ok(false);
             }
@@ -803,7 +925,7 @@ impl ProductionSharedProviderEffects {
             .cloned()
             .ok_or(SharedProviderEffectError::Unavailable)?;
         let network_generation = request.generation;
-        let network_ref = crate::shared_provider_driver::key_ref(&request.target).to_canonical_string();
+        let network_ref = key_ref(&request.target).to_canonical_string();
         let mut guest_uids = Vec::new();
         let mut attachment_generation = network_generation.get();
         for attachment in spec.attachments() {
@@ -908,7 +1030,9 @@ impl ProductionSharedProviderEffects {
             .ok()
             .and_then(|plane| plane.clone())
             .ok_or(SharedProviderEffectError::Unavailable)?;
-        let occupancy = observe_host_network().map_err(|_| SharedProviderEffectError::Unavailable)?;
+        let occupancy = observe_host_network()
+            .await
+            .map_err(|_| SharedProviderEffectError::Unavailable)?;
         plane
             .network_admission_index()
             .lock()
@@ -1005,68 +1129,8 @@ impl ProductionSharedProviderEffects {
 
 /// The production USBIP port over the zone-wide authority ledger (old
 /// `SharedRunnerUsbipPort`).
-type SharedRunnerUsbipPort<'a> = d2b_provider_device_usbip::ProductionPort<
-    crate::usbip_production::DaemonUsbipDispatcher<'a, SharedRunnerUsbipChildren>,
->;
-
-/// Fail-closed child port for the USBIP dispatcher.
-///
-/// The only production path that builds this dispatcher is the USBIP Service
-/// reconcile (`usbip_service_port` below), which drives
-/// `ServiceLifecycle::activate` and never calls the attach seams below. Those
-/// seams belong to `BindingLifecycle`, and no production path constructs a
-/// `BindingLifecycle`: it exists only in `d2b-provider-device-usbip`'s own
-/// tests. The v3 Binding realizes its attach through the declared child
-/// resources instead - `d2b_provider_device_usbip::binding_child_resources`
-/// yields the Guest `Process/...guest-proxy` and its `Endpoint`, which the
-/// shared provider driver commits as owner-scoped child rows of the Binding
-/// and the Process controller launches and owns.
-///
-/// So these legacy attach seams have no live consumer (U17 site 5) and stay
-/// fail-closed rather than pretending to realize a child: the attach Process
-/// row is the Binding-owned `Process/...guest-proxy` child above, never a
-/// spawn from this port.
-struct SharedRunnerUsbipChildren;
-
-impl UsbipChildResourcePort for SharedRunnerUsbipChildren {
-    fn ensure_attach_process(
-        &mut self,
-        _binding: &d2b_provider_device_usbip::BindingIdentity,
-        _proxy: &d2b_provider_device_usbip::BindingProxyLease,
-    ) -> Result<
-        d2b_provider_device_usbip::AttachProcessIdentity,
-        d2b_provider_device_usbip::BindingLifecycleError,
-    > {
-        Err(d2b_provider_device_usbip::BindingLifecycleError::Transient)
-    }
-
-    fn observe_attach_process(
-        &mut self,
-        _binding: &d2b_provider_device_usbip::BindingIdentity,
-        _identity: &d2b_provider_device_usbip::AttachProcessIdentity,
-    ) -> Result<
-        d2b_provider_device_usbip::AttachmentObservation,
-        d2b_provider_device_usbip::BindingLifecycleError,
-    > {
-        Err(d2b_provider_device_usbip::BindingLifecycleError::Transient)
-    }
-
-    fn delete_guest_endpoint(
-        &mut self,
-        _binding: &d2b_provider_device_usbip::BindingIdentity,
-        _proxy: &d2b_provider_device_usbip::BindingProxyLease,
-    ) -> Result<(), d2b_provider_device_usbip::BindingLifecycleError> {
-        Err(d2b_provider_device_usbip::BindingLifecycleError::Transient)
-    }
-
-    fn delete_attach_process(
-        &mut self,
-        _binding: &d2b_provider_device_usbip::BindingIdentity,
-        _identity: &d2b_provider_device_usbip::AttachProcessIdentity,
-    ) -> Result<(), d2b_provider_device_usbip::BindingLifecycleError> {
-        Err(d2b_provider_device_usbip::BindingLifecycleError::Transient)
-    }
-}
+type SharedRunnerUsbipPort<'a> =
+    d2b_provider_device_usbip::ProductionPort<crate::usbip_production::DaemonUsbipDispatcher<'a>>;
 
 impl ProductionSharedProviderEffects {
     /// Old `usbip_service_port`: the broker-backed dispatcher for one USBIP
@@ -1128,7 +1192,6 @@ impl ProductionSharedProviderEffects {
             &self.state,
             binding_context,
             Arc::clone(&self.usbip_ledger),
-            SharedRunnerUsbipChildren,
         )
         .into_port();
         let opted_in = request.spec.pointer("/mode").and_then(Value::as_str) == Some("authority");
@@ -1157,10 +1220,10 @@ impl ProductionSharedProviderEffects {
 struct DaemonGpuLifecyclePort<'a> {
     /// Per-resource Provider state owned by the calling driver (old
     /// zone-wide maps, now per-resource).
-    state_maps: &'a SharedProviderResourceState,
+    state_maps: &'a DeviceResourceState,
     runtime: Arc<ZoneResourceRuntime>,
     /// Manager-routed child surface of the requiring Device.
-    children: &'a dyn crate::shared_provider_driver::SharedProviderChildSurface,
+    children: &'a dyn SharedProviderChildSurface,
     zone: String,
     device_ref: ResourceRef,
     device_uid: ResourceUid,
@@ -1710,8 +1773,8 @@ impl ProductionSharedProviderEffects {
 // Effects
 // ---------------------------------------------------------------------------
 
-#[async_trait]
-impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
+impl ProductionSharedProviderEffects {
+    /// Reconcile one Network row through the Network-local controller.
     async fn reconcile_network(
         &self,
         request: &SharedProviderEffectRequest<'_>,
@@ -1725,7 +1788,8 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
             ));
         }
         let spec = self.network_spec(request)?;
-        let resolver = crate::load_bundle_resolver(&self.state)
+        let resolver = crate::load_bundle_resolver_on_worker(&self.state)
+            .await
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let runtime = self.runtime()?;
         let admission = self
@@ -1734,7 +1798,7 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
         let fence = self
             .network_content_fence(SharedProviderKind::Network, &runtime, request, &admission)
             .await?;
-        let owner_ref = crate::shared_provider_driver::key_ref(&request.target).clone();
+        let owner_ref = key_ref(&request.target).clone();
         let children = NetworkChildPort::new(self, request, owner_ref, request.uid.clone(), fence);
         let readiness = children
             .readiness()
@@ -1773,13 +1837,18 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
         }
     }
 
+    /// Re-register the plane's per-resource Volume anchors after the driver
+    /// committed a Volume or VolumeBinding child (the Network family's
+    /// refresh hook).
     async fn refresh_volume_anchors(&self) {
         self.reload_volume_anchors().await;
     }
 
+    /// Reconcile one TPM Device through the persistent TPM controller.
     async fn reconcile_tpm(
         &self,
         request: &SharedProviderEffectRequest<'_>,
+        state: &DeviceResourceState,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
         let execution_ref = request
             .spec
@@ -1790,13 +1859,13 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
         let holder = request.owner_ref()?;
         if holder.resource_type().as_str() != "Guest" {
             tracing::warn!(
-                device = %crate::shared_provider_driver::key_ref(&request.target).to_canonical_string(),
+                device = %key_ref(&request.target).to_canonical_string(),
                 owner = %holder.to_canonical_string(),
                 "TPM device reconcile refused: the Device is not owned by a Guest",
             );
             return Err(SharedProviderEffectError::InvalidResource);
         }
-        let device_ref = crate::shared_provider_driver::key_ref(&request.target).clone();
+        let device_ref = key_ref(&request.target).clone();
         let runtime = self.runtime().inspect_err(|_| {
             tracing::warn!(
                 device = %device_ref.to_canonical_string(),
@@ -1822,16 +1891,14 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
                 );
                 SharedProviderEffectError::Unavailable
             })?;
-        let mut controllers = request
-            .state
-            .tpm_controllers
+        let mut controllers = state.tpm_controllers
             .lock()
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let mut controller = match controllers.remove(&request.uid) {
             Some(controller) => controller,
             None => d2b_provider_device_tpm::TpmResourceController::new(
                 request.uid.clone(),
-                crate::shared_provider_driver::key_ref(&request.target).clone(),
+                key_ref(&request.target).clone(),
                 execution_ref.clone(),
             )
             .map_err(|_| SharedProviderEffectError::InvalidResource)?,
@@ -1843,7 +1910,7 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
             decision,
             crate::tpm_effect_port::AdmittedTpmDevice::from_row(
                 request.uid.clone(),
-                crate::shared_provider_driver::key_ref(&request.target).clone(),
+                key_ref(&request.target).clone(),
                 self.zone.as_str(),
                 execution_ref,
                 request.operation_id.clone(),
@@ -1857,7 +1924,7 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
         .map_err(|error| {
             tracing::warn!(
                 error = ?error,
-                device = %crate::shared_provider_driver::key_ref(&request.target).to_canonical_string(),
+                device = %key_ref(&request.target).to_canonical_string(),
                 "TPM device controller reconcile failed",
             );
             SharedProviderEffectError::Unavailable
@@ -1889,52 +1956,63 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
         }
     }
 
-    async fn reconcile_usbip(
+    /// Reconcile one USBIP Device row: Ready once a Service for the backing
+    /// Device is live.
+    async fn reconcile_usbip_device(
         &self,
-        component: UsbipComponent,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
         if !self
-            .dependencies_ready(
-                match component {
-                    UsbipComponent::Device => SharedProviderKind::UsbipDevice,
-                    UsbipComponent::Service => SharedProviderKind::UsbipService,
-                    UsbipComponent::Binding => SharedProviderKind::UsbipBinding,
-                },
-                request,
-            )
+            .dependencies_ready(SharedProviderKind::UsbipDevice, request)
             .await?
         {
             return Ok(SharedProviderEffectOutcome::phase(
                 SharedProviderEffectPhase::Pending,
             ));
         }
+        let runtime = self.runtime()?;
+        let services = runtime
+            .committed_resources_of_type(
+                d2b_provider_device_usbip::USB_SERVICE_RESOURCE_TYPE,
+            )
+            .await
+            .map_err(|_| SharedProviderEffectError::Unavailable)?;
+        let device_ref = key_ref(&request.target).to_canonical_string();
+        let ready = services.iter().any(|service| {
+            service.pointer("/spec/providerRef").and_then(Value::as_str)
+                == Some(d2b_provider_device_usbip::PROVIDER_REF)
+                && service
+                    .pointer("/spec/backingDeviceRef")
+                    .and_then(Value::as_str)
+                    == Some(device_ref.as_str())
+                && service.pointer("/status/phase").and_then(Value::as_str)
+                    == Some("Ready")
+        });
+        Ok(SharedProviderEffectOutcome::phase(if ready {
+            SharedProviderEffectPhase::Ready
+        } else {
+            SharedProviderEffectPhase::Pending
+        }))
+    
+    }
+
+    /// Reconcile one USBIP Service or Binding row through its typed
+    /// lifecycle controller.
+    async fn reconcile_usbip(
+        &self,
+        component: UsbipComponent,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
+        let kind = match component {
+            UsbipComponent::Service => SharedProviderKind::UsbipService,
+            UsbipComponent::Binding => SharedProviderKind::UsbipBinding,
+        };
+        if !self.dependencies_ready(kind, request).await? {
+            return Ok(SharedProviderEffectOutcome::phase(
+                SharedProviderEffectPhase::Pending,
+            ));
+        }
         match component {
-            UsbipComponent::Device => {
-                let runtime = self.runtime()?;
-                let services = runtime
-                    .committed_resources_of_type(
-                        d2b_provider_device_usbip::USB_SERVICE_RESOURCE_TYPE,
-                    )
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                let device_ref = crate::shared_provider_driver::key_ref(&request.target).to_canonical_string();
-                let ready = services.iter().any(|service| {
-                    service.pointer("/spec/providerRef").and_then(Value::as_str)
-                        == Some(d2b_provider_device_usbip::PROVIDER_REF)
-                        && service
-                            .pointer("/spec/backingDeviceRef")
-                            .and_then(Value::as_str)
-                            == Some(device_ref.as_str())
-                        && service.pointer("/status/phase").and_then(Value::as_str)
-                            == Some("Ready")
-                });
-                Ok(SharedProviderEffectOutcome::phase(if ready {
-                    SharedProviderEffectPhase::Ready
-                } else {
-                    SharedProviderEffectPhase::Pending
-                }))
-            }
             UsbipComponent::Service => {
                 if self
                     .usbip_services
@@ -2038,14 +2116,14 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
                 .map_err(|_| SharedProviderEffectError::InvalidResource)?;
                 let mut controller =
                     d2b_provider_device_usbip::UsbipBindingController::new_admitted(
-                        &crate::shared_provider_driver::key_ref(&request.target),
+                        &key_ref(&request.target),
                         &service_ref,
                         &guest_ref,
                         admission,
                     )
                     .map_err(|_| SharedProviderEffectError::InvalidResource)?;
                 let desired = d2b_provider_device_usbip::binding_child_resources(
-                    &crate::shared_provider_driver::key_ref(&request.target),
+                    &key_ref(&request.target),
                     &service_ref,
                     &guest_ref,
                 )
@@ -2071,13 +2149,42 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
         }
     }
 
+    /// Reconcile one security-key Device row: Ready once the Device's own
+    /// status projection reports the key present and confirmed.
+    async fn reconcile_security_key_device(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
+        if !self
+            .dependencies_ready(SharedProviderKind::SecurityKeyDevice, request)
+            .await?
+        {
+            return Ok(SharedProviderEffectOutcome::phase(
+                SharedProviderEffectPhase::Pending,
+            ));
+        }
+        let projection = request.status.clone().unwrap_or_else(|| json!({}));
+        let admitted = projection.get("devicePresent").and_then(Value::as_bool) == Some(true)
+            && projection.get("fidoConfirmed").and_then(Value::as_bool) == Some(true);
+        Ok(SharedProviderEffectOutcome::projection(
+            if admitted {
+                SharedProviderEffectPhase::Ready
+            } else {
+                SharedProviderEffectPhase::Pending
+            },
+            projection,
+        ))
+    
+    }
+
+    /// Reconcile one security-key Service or Binding row through its
+    /// typed lifecycle controller.
     async fn reconcile_security_key(
         &self,
         component: SecurityKeyComponent,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
         let kind = match component {
-            SecurityKeyComponent::Device => SharedProviderKind::SecurityKeyDevice,
             SecurityKeyComponent::Service => SharedProviderKind::SecurityKeyService,
             SecurityKeyComponent::Binding => SharedProviderKind::SecurityKeyBinding,
         };
@@ -2087,19 +2194,6 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
             ));
         }
         match component {
-            SecurityKeyComponent::Device => {
-                let projection = request.status.clone().unwrap_or_else(|| json!({}));
-                let admitted = projection.get("devicePresent").and_then(Value::as_bool) == Some(true)
-                    && projection.get("fidoConfirmed").and_then(Value::as_bool) == Some(true);
-                Ok(SharedProviderEffectOutcome::projection(
-                    if admitted {
-                        SharedProviderEffectPhase::Ready
-                    } else {
-                        SharedProviderEffectPhase::Pending
-                    },
-                    projection,
-                ))
-            }
             SecurityKeyComponent::Service => {
                 let runtime = self.runtime()?;
                 let mode = request
@@ -2249,14 +2343,14 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
                     .and_then(|value| ResourceRef::parse(value).ok())
                 {
                     d2b_provider_device_security_key::SecurityKeyController::child_resources_for_user(
-                        &crate::shared_provider_driver::key_ref(&request.target),
+                        &key_ref(&request.target),
                         &service_ref,
                         &target_ref,
                         &user_ref,
                     )
                 } else {
                     d2b_provider_device_security_key::SecurityKeyController::child_resources(
-                        &crate::shared_provider_driver::key_ref(&request.target),
+                        &key_ref(&request.target),
                         &service_ref,
                         &target_ref,
                     )
@@ -2274,9 +2368,11 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
         }
     }
 
+    /// Reconcile one GPU Device through the authority-fenced lifecycle.
     async fn reconcile_gpu(
         &self,
         request: &SharedProviderEffectRequest<'_>,
+        state: &DeviceResourceState,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
         if !self
             .dependencies_ready(SharedProviderKind::GpuDevice, request)
@@ -2287,9 +2383,7 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
             ));
         }
         let (runtime, admission, tokens, settings, holder_ref) = self.gpu_admission(request).await?;
-        let mut controllers = request
-            .state
-            .gpu_controllers
+        let mut controllers = state.gpu_controllers
             .lock()
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let mut controller = match controllers.remove(&request.uid) {
@@ -2312,12 +2406,12 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
             runtime,
             children: request.children,
             zone: self.zone.as_str().to_owned(),
-            device_ref: crate::shared_provider_driver::key_ref(&request.target).clone(),
+            device_ref: key_ref(&request.target).clone(),
             device_uid: request.uid.clone(),
             holder_ref,
             generation: request.generation,
             operation_id: request.operation_id.clone(),
-            state_maps: request.state,
+            state_maps: state,
         };
         let result = controller
             .reconcile_lifecycle(&mut port)
@@ -2334,103 +2428,151 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
         result.map(SharedProviderEffectOutcome::phase)
     }
 
-    async fn finalize(
+    /// The Network row's teardown stage (the staged fabric finalizer).
+    async fn finalize_network_row(
         &self,
-        kind: SharedProviderKind,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        match kind {
-            SharedProviderKind::Network => self.finalize_network(request).await,
-            SharedProviderKind::TpmDevice => self.finalize_tpm(request).await,
-            SharedProviderKind::UsbipService => self.finalize_usbip_service(request).await,
-            SharedProviderKind::UsbipDevice => {
-                let device_ref = crate::shared_provider_driver::key_ref(&request.target).to_canonical_string();
-                let runtime = self.runtime()?;
-                let children = runtime
-                    .committed_resources_of_type(
-                        d2b_provider_device_usbip::USB_SERVICE_RESOURCE_TYPE,
-                    )
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                if children.iter().any(|child| {
-                    child
-                        .pointer("/spec/backingDeviceRef")
-                        .and_then(Value::as_str)
-                        == Some(device_ref.as_str())
-                }) {
-                    return Ok(SharedProviderFinalize::Pending);
-                }
-                Ok(SharedProviderFinalize::Complete)
-            }
-            SharedProviderKind::UsbipBinding => {
-                let service_ref = ResourceRef::parse(
-                    request
-                        .spec
-                        .pointer("/serviceRef")
-                        .and_then(Value::as_str)
-                        .ok_or(SharedProviderEffectError::InvalidResource)?,
-                )
-                .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-                let guest_ref = ResourceRef::parse(
-                    request
-                        .spec
-                        .pointer("/guestRef")
-                        .and_then(Value::as_str)
-                        .ok_or(SharedProviderEffectError::InvalidResource)?,
-                )
-                .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-                let mut controller = d2b_provider_device_usbip::UsbipBindingController::new(
-                    &crate::shared_provider_driver::key_ref(&request.target),
-                    &service_ref,
-                    &guest_ref,
-                )
-                .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-                controller.finalize();
-                Ok(SharedProviderFinalize::Complete)
-            }
-            SharedProviderKind::SecurityKeyService => {
-                let runtime = self.runtime()?;
-                let service_ref = crate::shared_provider_driver::key_ref(&request.target).to_canonical_string();
-                let bindings = runtime
-                    .committed_resources_of_type(
-                        d2b_provider_device_security_key::SECURITY_KEY_BINDING_RESOURCE_TYPE,
-                    )
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                if bindings.iter().any(|binding| {
-                    binding.pointer("/spec/serviceRef").and_then(Value::as_str)
-                        == Some(service_ref.as_str())
-                }) {
-                    return Ok(SharedProviderFinalize::Pending);
-                }
-                Ok(SharedProviderFinalize::Complete)
-            }
-            SharedProviderKind::SecurityKeyDevice => {
-                let runtime = self.runtime()?;
-                let device_ref = crate::shared_provider_driver::key_ref(&request.target).to_canonical_string();
-                let services = runtime
-                    .committed_resources_of_type(
-                        d2b_provider_device_security_key::SECURITY_KEY_SERVICE_RESOURCE_TYPE,
-                    )
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                if services.iter().any(|service| {
-                    service
-                        .pointer("/spec/provider/settings/deviceRef")
-                        .and_then(Value::as_str)
-                        == Some(device_ref.as_str())
-                        || service
-                            .pointer("/metadata/ownerRef")
-                            .and_then(Value::as_str)
-                            == Some(device_ref.as_str())
-                }) {
-                    return Ok(SharedProviderFinalize::Pending);
-                }
-                Ok(SharedProviderFinalize::Complete)
-            }
-            SharedProviderKind::SecurityKeyBinding => Ok(SharedProviderFinalize::Complete),
-            SharedProviderKind::GpuDevice => self.finalize_gpu(request).await,
+        self.finalize_network(request).await
+    }
+
+    /// The USBIP Service row's teardown stage.
+    async fn finalize_usbip_service_row(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        self.finalize_usbip_service(request).await
+    }
+
+    /// The USBIP Binding row's teardown stage.
+    async fn finalize_usbip_binding(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        let service_ref = ResourceRef::parse(
+            request
+                .spec
+                .pointer("/serviceRef")
+                .and_then(Value::as_str)
+                .ok_or(SharedProviderEffectError::InvalidResource)?,
+        )
+        .map_err(|_| SharedProviderEffectError::InvalidResource)?;
+        let guest_ref = ResourceRef::parse(
+            request
+                .spec
+                .pointer("/guestRef")
+                .and_then(Value::as_str)
+                .ok_or(SharedProviderEffectError::InvalidResource)?,
+        )
+        .map_err(|_| SharedProviderEffectError::InvalidResource)?;
+        let mut controller = d2b_provider_device_usbip::UsbipBindingController::new(
+            &key_ref(&request.target),
+            &service_ref,
+            &guest_ref,
+        )
+        .map_err(|_| SharedProviderEffectError::InvalidResource)?;
+        controller.finalize();
+        Ok(SharedProviderFinalize::Complete)
+    }
+
+    /// The USBIP Device row's teardown stage: no Service may still reference
+    /// the backing Device.
+    async fn finalize_usbip_device(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        let device_ref = key_ref(&request.target).to_canonical_string();
+        let runtime = self.runtime()?;
+        let children = runtime
+            .committed_resources_of_type(d2b_provider_device_usbip::USB_SERVICE_RESOURCE_TYPE)
+            .await
+            .map_err(|_| SharedProviderEffectError::Unavailable)?;
+        if children.iter().any(|child| {
+            child
+                .pointer("/spec/backingDeviceRef")
+                .and_then(Value::as_str)
+                == Some(device_ref.as_str())
+        }) {
+            return Ok(SharedProviderFinalize::Pending);
         }
+        Ok(SharedProviderFinalize::Complete)
+    }
+
+    /// The security-key Service row's teardown stage: no Binding may still
+    /// reference it.
+    async fn finalize_security_key_service(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        let runtime = self.runtime()?;
+        let service_ref = key_ref(&request.target).to_canonical_string();
+        let bindings = runtime
+            .committed_resources_of_type(
+                d2b_provider_device_security_key::SECURITY_KEY_BINDING_RESOURCE_TYPE,
+            )
+            .await
+            .map_err(|_| SharedProviderEffectError::Unavailable)?;
+        if bindings.iter().any(|binding| {
+            binding.pointer("/spec/serviceRef").and_then(Value::as_str) == Some(service_ref.as_str())
+        }) {
+            return Ok(SharedProviderFinalize::Pending);
+        }
+        Ok(SharedProviderFinalize::Complete)
+    }
+
+    /// The security-key Device row's teardown stage: no Service may still
+    /// reference the Device.
+    async fn finalize_security_key_device(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        let runtime = self.runtime()?;
+        let device_ref = key_ref(&request.target).to_canonical_string();
+        let services = runtime
+            .committed_resources_of_type(
+                d2b_provider_device_security_key::SECURITY_KEY_SERVICE_RESOURCE_TYPE,
+            )
+            .await
+            .map_err(|_| SharedProviderEffectError::Unavailable)?;
+        if services.iter().any(|service| {
+            service
+                .pointer("/spec/provider/settings/deviceRef")
+                .and_then(Value::as_str)
+                == Some(device_ref.as_str())
+                || service
+                    .pointer("/metadata/ownerRef")
+                    .and_then(Value::as_str)
+                    == Some(device_ref.as_str())
+        }) {
+            return Ok(SharedProviderFinalize::Pending);
+        }
+        Ok(SharedProviderFinalize::Complete)
+    }
+
+    /// The security-key Binding row's teardown stage.
+    async fn finalize_security_key_binding(
+        &self,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        Ok(SharedProviderFinalize::Complete)
+    }
+
+    /// The TPM Device row's teardown stage.
+    async fn finalize_tpm_row(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+        state: &DeviceResourceState,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        self.finalize_tpm(request, state).await
+    }
+
+    /// The GPU Device row's teardown stage.
+    async fn finalize_gpu_row(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+        state: &DeviceResourceState,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        self.finalize_gpu(request, state).await
     }
 }
 
@@ -2443,7 +2585,7 @@ impl ProductionSharedProviderEffects {
         zone: &ZoneId,
     ) -> Result<bool, SharedProviderEffectError> {
         for intent in desired.iter() {
-            if *intent.owner_ref() != crate::shared_provider_driver::key_ref(owner) || zone.as_str() != self.zone.as_str() {
+            if *intent.owner_ref() != key_ref(owner) || zone.as_str() != self.zone.as_str() {
                 return Err(SharedProviderEffectError::InvalidResource);
             }
             if !self.resource_ready(intent.resource_ref()).await {
@@ -2458,7 +2600,8 @@ impl ProductionSharedProviderEffects {
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         let spec = self.network_spec(request)?;
-        let resolver = crate::load_bundle_resolver(&self.state)
+        let resolver = crate::load_bundle_resolver_on_worker(&self.state)
+            .await
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let runtime = self.runtime()?;
         let admission = self
@@ -2467,7 +2610,7 @@ impl ProductionSharedProviderEffects {
         let fence = self
             .network_content_fence(SharedProviderKind::Network, &runtime, request, &admission)
             .await?;
-        let owner_ref = crate::shared_provider_driver::key_ref(&request.target).clone();
+        let owner_ref = key_ref(&request.target).clone();
         let children = NetworkChildPort::new(self, request, owner_ref, request.uid.clone(), fence);
         let volume = children
             .current(&children.volume_ref)
@@ -2571,6 +2714,7 @@ impl ProductionSharedProviderEffects {
     async fn finalize_tpm(
         &self,
         request: &SharedProviderEffectRequest<'_>,
+        state: &DeviceResourceState,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         let holder = request.owner_ref()?;
         if holder.resource_type().as_str() != "Guest" {
@@ -2588,16 +2732,14 @@ impl ProductionSharedProviderEffects {
         let decision = runtime
             .tpm_device_is_admitted(
                 &request.uid,
-                &crate::shared_provider_driver::key_ref(&request.target),
+                &key_ref(&request.target),
                 vm_id.as_str(),
                 &request.operation_id,
                 None,
             )
             .await
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let mut controllers = request
-            .state
-            .tpm_controllers
+        let mut controllers = state.tpm_controllers
             .lock()
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let mut controller = controllers
@@ -2610,7 +2752,7 @@ impl ProductionSharedProviderEffects {
             decision,
             crate::tpm_effect_port::AdmittedTpmDevice::from_row(
                 request.uid.clone(),
-                crate::shared_provider_driver::key_ref(&request.target).clone(),
+                key_ref(&request.target).clone(),
                 self.zone.as_str(),
                 execution_ref,
                 request.operation_id.clone(),
@@ -2627,7 +2769,7 @@ impl ProductionSharedProviderEffects {
                 controllers.insert(request.uid.clone(), controller);
                 tracing::warn!(
                     error = ?error,
-                    device = %crate::shared_provider_driver::key_ref(&request.target).to_canonical_string(),
+                    device = %key_ref(&request.target).to_canonical_string(),
                     "TPM device controller finalize failed",
                 );
                 Err(SharedProviderEffectError::Unavailable)
@@ -2640,7 +2782,7 @@ impl ProductionSharedProviderEffects {
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         let runtime = self.runtime()?;
-        let service_ref = crate::shared_provider_driver::key_ref(&request.target).to_canonical_string();
+        let service_ref = key_ref(&request.target).to_canonical_string();
         let bindings = runtime
             .committed_resources_of_type(d2b_provider_device_usbip::USB_BINDING_RESOURCE_TYPE)
             .await
@@ -2676,10 +2818,9 @@ impl ProductionSharedProviderEffects {
     async fn finalize_gpu(
         &self,
         request: &SharedProviderEffectRequest<'_>,
+        state: &DeviceResourceState,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        let mut controllers = request
-            .state
-            .gpu_controllers
+        let mut controllers = state.gpu_controllers
             .lock()
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let admission = controllers
@@ -2694,17 +2835,17 @@ impl ProductionSharedProviderEffects {
             runtime,
             children: request.children,
             zone: self.zone.as_str().to_owned(),
-            device_ref: crate::shared_provider_driver::key_ref(&request.target).clone(),
+            device_ref: key_ref(&request.target).clone(),
             device_uid: request.uid.clone(),
             holder_ref: admission.owner().holder_ref().clone(),
             generation: admission.owner().generation(),
             operation_id: request.operation_id.clone(),
-            state_maps: request.state,
+            state_maps: state,
         };
         let result = controller.finalize_lifecycle(&mut port).map_err(|error| {
             tracing::debug!(
                 error = ?error,
-                device = %crate::shared_provider_driver::key_ref(&request.target).to_canonical_string(),
+                device = %key_ref(&request.target).to_canonical_string(),
                 "GPU lifecycle finalize failed",
             );
             SharedProviderEffectError::Unavailable
@@ -2716,6 +2857,116 @@ impl ProductionSharedProviderEffects {
                 Err(error)
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Family effect ports: the daemon implements each declared family's port; the
+// drivers live in the family crates.
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl d2b_provider_network_local::NetworkDriverEffects for ProductionSharedProviderEffects {
+    async fn reconcile_network(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
+        ProductionSharedProviderEffects::reconcile_network(self, request).await
+    }
+
+    async fn finalize(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        self.finalize_network_row(request).await
+    }
+
+    async fn refresh_volume_anchors(&self) {
+        self.refresh_volume_anchors().await;
+    }
+}
+
+#[async_trait]
+impl d2b_provider_device_usbip::UsbipDriverEffects for ProductionSharedProviderEffects {
+    async fn reconcile_usbip(
+        &self,
+        component: UsbipComponent,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
+        ProductionSharedProviderEffects::reconcile_usbip(self, component, request).await
+    }
+
+    async fn finalize(
+        &self,
+        component: UsbipComponent,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        match component {
+            UsbipComponent::Service => self.finalize_usbip_service_row(request).await,
+            UsbipComponent::Binding => self.finalize_usbip_binding(request).await,
+        }
+    }
+}
+
+#[async_trait]
+impl d2b_provider_device_security_key::SecurityKeyDriverEffects
+    for ProductionSharedProviderEffects
+{
+    async fn reconcile_security_key(
+        &self,
+        component: SecurityKeyComponent,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
+        ProductionSharedProviderEffects::reconcile_security_key(self, component, request).await
+    }
+
+    async fn finalize(
+        &self,
+        component: SecurityKeyComponent,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        match component {
+            SecurityKeyComponent::Service => self.finalize_security_key_service(request).await,
+            SecurityKeyComponent::Binding => self.finalize_security_key_binding(request).await,
+        }
+    }
+}
+
+#[async_trait]
+impl d2b_provider_device::DeviceDriverEffects for ProductionSharedProviderEffects {
+    async fn reconcile_device(
+        &self,
+        component: DeviceComponent,
+        request: &SharedProviderEffectRequest<'_>,
+        state: &DeviceResourceState,
+    ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
+        match component {
+            DeviceComponent::Tpm => self.reconcile_tpm(request, state).await,
+            DeviceComponent::Usbip => self.reconcile_usbip_device(request).await,
+            DeviceComponent::SecurityKey => self.reconcile_security_key_device(request).await,
+            DeviceComponent::Gpu => self.reconcile_gpu(request, state).await,
+        }
+    }
+
+    async fn finalize_device(
+        &self,
+        component: DeviceComponent,
+        request: &SharedProviderEffectRequest<'_>,
+        state: &DeviceResourceState,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        match component {
+            DeviceComponent::Tpm => self.finalize_tpm_row(request, state).await,
+            DeviceComponent::Usbip => self.finalize_usbip_device(request).await,
+            DeviceComponent::SecurityKey => self.finalize_security_key_device(request).await,
+            DeviceComponent::Gpu => self.finalize_gpu_row(request, state).await,
+        }
+    }
+
+    /// The TPM controller creates the device's state Volume through the child
+    /// surface, so the plane's anchor cache has to be re-read or that Volume
+    /// resolves as `volume-anchor` and the Device never leaves reconcile.
+    async fn refresh_volume_anchors(&self) {
+        self.refresh_volume_anchors().await;
     }
 }
 

@@ -3,28 +3,23 @@
 use std::time::Duration;
 
 use d2b_contracts_provider::v3::SpecifiedProviderMethod;
-use d2b_contracts_resource::v3::ZoneRevision;
 use d2b_contracts_resource::v3::identity::{
     AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
     ServiceName, SessionBinding, SessionPurpose, TranscriptHash, TransportBinding,
 };
 use d2b_contracts_resource::v3::{
-    ConfigurationGeneration, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName,
-    ResourceUid, SchemaFingerprint,
+    ConfigurationGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint,
 };
 use d2b_contracts_zone_session::v3::{
-    component_session::{OperationClass, OperationId},
+    component_session::OperationId,
     zone_routing::{ZoneLabelId, ZonePath},
 };
 use d2b_provider::{
-    AdmissionOptions, CancellationToken, ForwardTarget,
-    ProviderCapabilitySet, ProviderClass, ProviderDescriptor, ProviderForwardRequest,
+    AdmissionOptions, CancellationToken, ProviderCapabilitySet, ProviderClass, ProviderDescriptor,
     ProviderImplementationId, ProviderMethodName, ProviderRegistry, ProviderRegistryBuilder,
     ProviderRegistryManager, ProviderRuntimeError, RegistryBuildError, RegistryDrainPolicy,
-    RegistryLifecycle, RegistryLimits, SessionIdentity, ZoneRouteFailClosedReason,
-    admit_provider_forward,
+    RegistryLifecycle, RegistryLimits, SessionIdentity,
 };
-use d2b_zone_routing::engine::{ZoneRouteAdmission, ZoneRouteAdmissionExpectation};
 
 const DIGEST: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 const UID: &str = "123e4567-e89b-42d3-a456-426614174000";
@@ -477,142 +472,6 @@ async fn publish_refuses_a_stale_generation_and_a_foreign_zone() {
     assert_eq!(manager.current().lifecycle(), RegistryLifecycle::Accepting);
 }
 
-fn forward_request(zone_path: &ZonePath, hops: u32) -> ProviderForwardRequest {
-    let request = ProviderForwardRequest::new(
-        identity(zone_path, "runtime-a"),
-        ForwardTarget::named(
-            ResourceTypeName::parse("Process").expect("standard type"),
-            ResourceName::parse("worker").expect("valid name"),
-        ),
-        ZoneLabelId::parse("payments").expect("valid label"),
-        hops,
-    );
-    request.with_admissions(
-        route_admission(zone_path, OperationClass::Invoke, "get"),
-        route_admission(zone_path, OperationClass::Relay, "relay"),
-    )
-}
-
-fn route_admission(
-    zone_path: &ZonePath,
-    verb: OperationClass,
-    capability: &str,
-) -> ZoneRouteAdmission {
-    let child = ZonePath::new(vec![
-        ZoneLabelId::parse("payments").expect("valid label"),
-        zone_path.labels()[0].clone(),
-    ])
-    .expect("valid child path");
-    let edge = d2b_contracts_zone_session::v3::zone_routing::ZoneTreeEdge::new(
-        zone_path.clone(),
-        child.clone(),
-    )
-    .expect("direct edge");
-    let expectation = ZoneRouteAdmissionExpectation::new(
-        ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("valid link UID"),
-        edge,
-        d2b_contracts_zone_session::v3::zone_routing::ZoneLinkControllerGeneration::parse(
-            "controller-1",
-        )
-        .expect("valid controller generation"),
-        ReconnectGeneration::new(7).expect("valid reconnect generation"),
-        ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("valid source UID"),
-        ResourceUid::parse("33333333-3333-4333-8333-333333333333").expect("valid target UID"),
-        OperationId::new(vec![0x11; 16]).expect("valid operation ID"),
-        verb,
-        d2b_contracts_zone_session::v3::zone_routing::ZoneRouteCapability::parse(capability)
-            .expect("valid capability"),
-        ZoneRevision::new(9),
-    )
-    .expect("valid route admission expectation")
-    .for_zones(zone_path.clone(), child);
-    ZoneRouteAdmission::for_test(expectation, 1_500, 4_000)
-}
-
-// A Provider states where it wants to go. It never states that it may relay:
-// forwarding is admitted only by the two runtime-issued route admissions.
-#[test]
-fn a_provider_cannot_self_assert_relay() {
-    let work = zone(&["work"]);
-    let request = ProviderForwardRequest::new(
-        identity(&work, "runtime-a"),
-        ForwardTarget::named(
-            ResourceTypeName::parse("Process").expect("standard type"),
-            ResourceName::parse("worker").expect("valid name"),
-        ),
-        ZoneLabelId::parse("payments").expect("valid label"),
-        4,
-    );
-
-    assert_eq!(
-        admit_provider_forward(&request).err(),
-        Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
-    );
-
-    // A Provider that publishes a method literally named `relay` still gets no
-    // relay grant: capability publication is not authorization.
-    let mut builder = ProviderRegistryBuilder::new(work.clone(), generation(1));
-    builder
-        .register_instance(descriptor(&work, "runtime-a", 1, &["relay"]), "a")
-        .expect("descriptor registers");
-    let registry = builder.finish().expect("registry seals");
-    registry
-        .admit(admission(&work, "runtime-a", "relay"))
-        .expect("the provider may invoke its own method named relay");
-    assert_eq!(
-        admit_provider_forward(&request).err(),
-        Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
-    );
-}
-
-#[test]
-fn each_forward_requires_relay_plus_the_target_verb() {
-    let work = zone(&["work"]);
-    let request = forward_request(&work, 4);
-
-    let forwarded =
-        admit_provider_forward(&request).expect("both independent admissions admit the hop");
-    assert_eq!(forwarded.forwarded_remaining_hops(), 3);
-    assert_eq!(forwarded.target(), request.target());
-    assert_eq!(forwarded.next_hop(), request.next_hop());
-}
-
-#[test]
-fn every_hop_re_evaluates_both_grants_and_the_budget() {
-    let work = zone(&["work"]);
-    let mut remaining = 2;
-    for _ in 0..2 {
-        let request = forward_request(&work, remaining);
-        remaining = admit_provider_forward(&request)
-            .expect("hop admits")
-            .forwarded_remaining_hops();
-    }
-    assert_eq!(remaining, 0);
-    assert_eq!(
-        admit_provider_forward(&forward_request(&work, remaining)).err(),
-        Some(ZoneRouteFailClosedReason::HopLimitExceeded)
-    );
-}
-
-#[test]
-fn a_disconnected_uplink_and_an_attachment_offer_fail_closed() {
-    let work = zone(&["work"]);
-    let disconnected = ProviderForwardRequest::new(
-        identity(&work, "runtime-a"),
-        ForwardTarget::nameless(ResourceTypeName::parse("Process").expect("standard type")),
-        ZoneLabelId::parse("payments").expect("valid label"),
-        4,
-    );
-    assert_eq!(
-        admit_provider_forward(&disconnected).err(),
-        Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
-    );
-    assert_eq!(
-        admit_provider_forward(&forward_request(&work, 4).with_attachment_offer(true),).err(),
-        Some(ZoneRouteFailClosedReason::AttachmentNotPermittedOverZoneLink)
-    );
-}
-
 #[test]
 fn redacted_debug_surfaces_leak_no_identity_or_target() {
     let work = zone(&["work"]);
@@ -623,11 +482,6 @@ fn redacted_debug_surfaces_leak_no_identity_or_target() {
     let rendered = format!("{descriptor:?}");
     assert!(!rendered.contains("runtime-a"));
     assert!(!rendered.contains("work"));
-
-    let request = forward_request(&work, 4);
-    let rendered = format!("{request:?}");
-    assert!(!rendered.contains("worker"));
-    assert!(!rendered.contains("payments"));
 }
 
 #[test]

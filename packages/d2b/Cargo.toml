@@ -15,6 +15,7 @@ nix = { version = "0.29", default-features = false, features = ["socket", "user"
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
+d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-provider-config-nixos = { path = "../d2b-provider-config-nixos", version = "0.0.0-bootstrap" }
@@ -25,6 +26,13 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2 = { workspace = true }
+# The CLI's transport is async. `rt` owns the process runtime, `net` arms its
+# I/O driver (the readiness registration `CliSocket` and the duplicated-stdin
+# terminal reader use), `time` bounds every transport wait and the stdin
+# backpressure sleep, `sync` carries the stream's round-trip guard and the
+# signal waiter's notify, and `macros` provides the terminal loop's `select!`.
+# No scheduling feature beyond the single-threaded `rt` is used.
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 
 [dev-dependencies]
 tempfile = "3"

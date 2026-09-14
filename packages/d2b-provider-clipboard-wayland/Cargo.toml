@@ -33,7 +33,3 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 [[bin]]
 name = "d2b-clipd"
 path = "src/bin/d2b-clipd.rs"
-
-[[bin]]
-name = "d2b-clip-debug"
-path = "src/bin/d2b-clip-debug.rs"

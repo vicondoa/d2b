@@ -3,8 +3,8 @@
 //! Tracks what audio and console enforcement mechanisms a given runtime
 //! provider supports. Callers use these descriptors to select the correct
 //! enforcement path before dispatching an audio or console op. Types are kept
-//! separate from [`crate::audio_policy`] so the policy state module stays
-//! focused on the per-VM on-disk state contract.
+//! separate from the audio provider's policy-state module so it stays focused
+//! on the per-VM on-disk state contract.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

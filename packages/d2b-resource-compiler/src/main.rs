@@ -16,13 +16,13 @@ use std::{
 
 use d2b_contracts_provider::v3::{ArtifactDigest, ProviderManifest, semantic_services::catalog};
 use d2b_contracts_resource::v3::{
-    ArtifactId, CanonicalJsonValue, NIXOS_GENERATION_RESOURCE_TYPE, ResourceUid,
+    ArtifactId, CanonicalJsonValue, ResourceUid, V3_CONVERTED_RESOURCE_TYPES,
     canonical_json_bytes, framed_canonical_digest, identity::STANDARD_RESOURCE_TYPES,
     is_canonical_digest, resource::RESOURCE_API_VERSION,
 };
 use d2b_contracts_zone_session::v3::resource_bundle::ProcessTemplateBinding;
 use d2b_resource_compiler::{
-    ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys,
+    ArtifactCatalogEntry, BootstrapBoundary, CatalogDigests, Diagnostic, StaticPublisherKeys,
     VerifiedProviderArtifact, compile_linux_artifact, project_static_controller_processes,
     resource_sort_key,
 };
@@ -35,11 +35,6 @@ const MAX_DIAGNOSTIC_BYTES: usize = d2b_resource_compiler::MAX_DIAGNOSTIC_BYTES;
 const MAX_RESOURCES: usize = 4096;
 const MAX_RESOURCE_BYTES: usize = 512 * 1024;
 const MAX_SCHEMA_BYTES: usize = 8 * 1024 * 1024;
-const ADDITIONAL_RESOURCE_TYPES: &[&str] = &[
-    NIXOS_GENERATION_RESOURCE_TYPE,
-    "display-wayland.d2bus.org.WaylandPolicy",
-    "display-wayland.d2bus.org.WaylandSession",
-];
 
 fn resource_schema_filename(resource_type: &str) -> String {
     if STANDARD_RESOURCE_TYPES.contains(&resource_type) {
@@ -80,9 +75,14 @@ fn qualified_resource_type_parts(resource_type: &str) -> Option<(&str, &str)> {
     Some((namespace, type_segment))
 }
 
+/// Whether the compiler recognizes one resource type.
+///
+/// The registry is the authority: a type the converted-resource registry
+/// carries is a type the compiler addresses, and a qualified semantic type
+/// enters through the projection catalog that declares it rather than
+/// through a list kept here.
 fn valid_resource_type(resource_type: &str) -> bool {
-    STANDARD_RESOURCE_TYPES.contains(&resource_type)
-        || ADDITIONAL_RESOURCE_TYPES.contains(&resource_type)
+    V3_CONVERTED_RESOURCE_TYPES.contains(&resource_type)
         || (qualified_resource_type_parts(resource_type).is_some()
             && catalog().iter().any(|pair| {
                 pair.service().resource_type().as_str() == resource_type
@@ -150,6 +150,10 @@ struct CompileInput {
     expected_content_hash: Option<String>,
     #[serde(default)]
     strict_secrets: bool,
+    /// The declared system Providers a reference may name without a bundle
+    /// row: the bootstrap boundary the provider catalog declares.
+    #[serde(default)]
+    system_provider_names: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -297,7 +301,8 @@ fn compile(
     }
 
     let artifact_catalog_digest = verify_artifact_catalog(&input)?;
-    let compiled_providers = compile_providers(&input)?;
+    let bootstrap = BootstrapBoundary::new(input.system_provider_names.clone());
+    let compiled_providers = compile_providers(&input, &bootstrap)?;
     check_provider_resource_admission(&input, &compiled_providers)?;
     check_resource_type_collisions(&compiled_providers)?;
     validate_resources(&input, strict_secrets)?;
@@ -320,6 +325,7 @@ fn compile(
     let projection = project_static_controller_processes(
         &input.zone,
         &input.resources,
+        &bootstrap,
         compiled_providers.iter().map(|provider| &provider.verified),
     )
     .map_err(|error| {
@@ -462,7 +468,10 @@ fn verify_artifact_catalog(input: &CompileInput) -> Result<String, CliError> {
     Ok(actual.to_owned())
 }
 
-fn compile_providers(input: &CompileInput) -> Result<Vec<CompiledProvider>, CliError> {
+fn compile_providers(
+    input: &CompileInput,
+    bootstrap: &BootstrapBoundary,
+) -> Result<Vec<CompiledProvider>, CliError> {
     let mut providers = Vec::new();
     for provider in &input.providers {
         let artifact_id = ArtifactId::parse(provider.artifact_id.clone()).map_err(|_| {
@@ -501,7 +510,7 @@ fn compile_providers(input: &CompileInput) -> Result<Vec<CompiledProvider>, CliE
             provider.signature_id.clone(),
             signing_key,
         );
-        let compiled = compile_linux_artifact(&entry, &keys).map_err(CliError::from)?;
+        let compiled = compile_linux_artifact(&entry, &keys, bootstrap).map_err(CliError::from)?;
         let verified =
             VerifiedProviderArtifact::new(artifact_id, provider.store_path.clone(), compiled);
         providers.push(CompiledProvider {
@@ -836,6 +845,7 @@ fn validate_resources(input: &CompileInput, strict_secrets: bool) -> Result<(), 
             resource,
             &schema,
             &identities,
+            &input.system_provider_names,
             &format!("{resource_type}/{name}"),
             index,
         )?;
@@ -847,6 +857,7 @@ fn validate_resource_references(
     resource: &Value,
     schema: &Value,
     identities: &BTreeSet<(String, String)>,
+    system_provider_names: &[String],
     path: &str,
     index: usize,
 ) -> Result<(), CliError> {
@@ -860,6 +871,7 @@ fn validate_resource_references(
         schema: &Value,
         path: &str,
         identities: &BTreeSet<(String, String)>,
+        system_provider_names: &[String],
         depth: usize,
         steps: &mut usize,
         active_refs: &mut BTreeSet<String>,
@@ -875,7 +887,7 @@ fn validate_resource_references(
         }
 
         if schema_is_resource_ref(root, schema) {
-            validate_resource_ref_value(value, schema, identities, path)?;
+            validate_resource_ref_value(value, schema, identities, system_provider_names, path)?;
         }
 
         if let Some(branches) = schema.get("allOf").and_then(Value::as_array) {
@@ -886,6 +898,7 @@ fn validate_resource_references(
                     branch,
                     path,
                     identities,
+                    system_provider_names,
                     depth + 1,
                     steps,
                     active_refs,
@@ -902,6 +915,7 @@ fn validate_resource_references(
                             branch,
                             path,
                             identities,
+                            system_provider_names,
                             depth + 1,
                             steps,
                             active_refs,
@@ -925,6 +939,7 @@ fn validate_resource_references(
                 definition,
                 path,
                 identities,
+                system_provider_names,
                 depth + 1,
                 steps,
                 active_refs,
@@ -953,6 +968,7 @@ fn validate_resource_references(
                             child_schema,
                             &format!("{path}.{key}"),
                             identities,
+                            system_provider_names,
                             depth + 1,
                             steps,
                             active_refs,
@@ -969,6 +985,7 @@ fn validate_resource_references(
                             item_schema,
                             &format!("{path}.{index}"),
                             identities,
+                            system_provider_names,
                             depth + 1,
                             steps,
                             active_refs,
@@ -989,6 +1006,7 @@ fn validate_resource_references(
         schema,
         &format!("{path}[{index}]"),
         identities,
+        system_provider_names,
         0,
         &mut steps,
         &mut active_refs,
@@ -1028,6 +1046,7 @@ fn validate_resource_ref_value(
     value: &Value,
     schema: &Value,
     identities: &BTreeSet<(String, String)>,
+    system_provider_names: &[String],
     path: &str,
 ) -> Result<(), CliError> {
     let Some(reference) = value.as_str() else {
@@ -1075,7 +1094,7 @@ fn validate_resource_ref_value(
     }
     if reference_scope == "same-zone"
         && !identities.contains(&(resource_type.to_owned(), resource_name.to_owned()))
-        && !is_bootstrap_external_reference(resource_type, resource_name)
+        && !is_bootstrap_external_reference(system_provider_names, resource_type, resource_name)
     {
         return Err(CliError::new(
             "resource-compiler-reference-invalid",
@@ -1085,8 +1104,16 @@ fn validate_resource_ref_value(
     Ok(())
 }
 
-fn is_bootstrap_external_reference(resource_type: &str, resource_name: &str) -> bool {
-    resource_type == "Provider" && matches!(resource_name, "system-core" | "system-minijail")
+/// Whether a reference names one of the declared bootstrap Providers.
+fn is_bootstrap_external_reference(
+    system_provider_names: &[String],
+    resource_type: &str,
+    resource_name: &str,
+) -> bool {
+    resource_type == "Provider"
+        && system_provider_names
+            .iter()
+            .any(|name| name.as_str() == resource_name)
 }
 
 fn schema_shape_matches(schema: &Value, value: &Value) -> bool {
@@ -1991,6 +2018,14 @@ fn parse_digest(value: &str) -> Result<ArtifactDigest, CliError> {
     })
 }
 
+/// Whether one resource carries inline secret-shaped material.
+///
+/// The policy is a key and value heuristic because no declaration carries the
+/// shape yet: no resource schema marks a property `writeOnly`, so there is no
+/// declared secret surface to read. The declared shape exists for operation
+/// payloads (a `writeOnly` property carries no default/enum/const/examples);
+/// when the resource schemas grow the same marker, this policy moves onto it
+/// and the key list below disappears.
 fn contains_secret_shape(value: &Value) -> bool {
     if value
         .get("type")
@@ -2187,6 +2222,7 @@ mod tests {
             &json!("audio.d2bus.org.AudioService/audio"),
             &schema,
             &identities,
+            &[],
             "binding.serviceRef",
         )
         .unwrap();
@@ -2195,6 +2231,7 @@ mod tests {
                 &json!("audio.d2bus.org.AudioService/missing"),
                 &schema,
                 &identities,
+                &[],
                 "binding.serviceRef",
             )
             .is_err()
@@ -2204,6 +2241,7 @@ mod tests {
                 &json!("Provider/audio"),
                 &schema,
                 &identities,
+                &[],
                 "binding.serviceRef",
             )
             .is_err()
@@ -2279,7 +2317,7 @@ mod tests {
             ),
         ] {
             let schema = generic_ref_test_schema(&allowed);
-            validate_resource_ref_value(&json!(reference), &schema, &identities, "fixture.ref")
+            validate_resource_ref_value(&json!(reference), &schema, &identities, &[], "fixture.ref")
                 .unwrap();
         }
     }
@@ -2358,6 +2396,7 @@ mod tests {
             schema_root: Some(schema_root()),
             expected_content_hash: None,
             strict_secrets: false,
+            system_provider_names: Vec::new(),
         };
         validate_resources(&input, false).unwrap();
     }
@@ -2466,6 +2505,7 @@ mod tests {
             schema_root: Some(schema_root()),
             expected_content_hash: None,
             strict_secrets: false,
+            system_provider_names: vec!["system-core".to_owned(), "system-minijail".to_owned()],
         };
         validate_resources(&input, false).unwrap();
     }

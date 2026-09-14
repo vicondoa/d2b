@@ -4,7 +4,6 @@ use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use serde::Serialize;
 
 use crate::resource_effect::{TpmResourceEffectError, TpmResourceEffectPort};
-use crate::status::{TpmMarkerStatus, TpmStatusReport};
 
 /// Default descriptor repair interval.
 pub const TPM_REPAIR_INTERVAL_SECS: u64 = 30;
@@ -124,7 +123,6 @@ pub struct TpmResourceController {
     process_ref: Option<ResourceRef>,
     flush_ref: Option<ResourceRef>,
     endpoint_ref: Option<ResourceRef>,
-    marker_status: TpmMarkerStatus,
     last_error: Option<TpmResourceEffectError>,
     needs_state_verification: bool,
 }
@@ -166,83 +164,9 @@ impl TpmResourceController {
             process_ref: None,
             flush_ref: None,
             endpoint_ref: None,
-            marker_status: TpmMarkerStatus::NeverProvisioned,
             last_error: None,
             needs_state_verification: true,
         })
-    }
-
-    /// Rehydrate a controller from its bounded persisted status evidence.
-    pub fn from_status(
-        device_uid: ResourceUid,
-        device_ref: ResourceRef,
-        execution_ref: ResourceRef,
-        status: &TpmStatusReport,
-    ) -> Result<Self, TpmResourceControllerError> {
-        let device = device_ref.to_canonical_string();
-        let mut controller = Self::new(device_uid, device_ref, execution_ref)?;
-        if matches!(
-            status.marker_status,
-            TpmMarkerStatus::Missing
-                | TpmMarkerStatus::Replaced
-                | TpmMarkerStatus::Tampered
-        ) {
-            tracing::warn!(
-                device = %device,
-                marker_status = ?status.marker_status,
-                reason = "persisted marker evidence is Missing, Replaced, or Tampered",
-                "tpm resource controller rehydration refused",
-            );
-            return Err(TpmResourceControllerError::Effect(
-                TpmResourceEffectError::StateIntegrity,
-            ));
-        }
-        if status.state_volume_ref.is_none()
-            && (status.swtpm_process_ref.is_some()
-                || status.last_flush_ref.is_some()
-                || status.tpm_endpoint_ref.is_some())
-        {
-            tracing::warn!(
-                device = %device,
-                reason = "child references exist without a state volume reference",
-                "tpm resource controller rehydration refused",
-            );
-            return Err(TpmResourceControllerError::Effect(
-                TpmResourceEffectError::StateIntegrity,
-            ));
-        }
-        for (reference, expected_type) in [
-            (status.state_volume_ref.as_ref(), "Volume"),
-            (status.swtpm_process_ref.as_ref(), "Process"),
-            (status.last_flush_ref.as_ref(), "EphemeralProcess"),
-            (status.tpm_endpoint_ref.as_ref(), "Endpoint"),
-        ] {
-            if reference
-                .is_some_and(|reference| reference.resource_type().as_str() != expected_type)
-            {
-                tracing::warn!(
-                    device = %device,
-                    expected_type,
-                    reason = "persisted reference has the wrong resource type",
-                    "tpm resource controller rehydration refused",
-                );
-                return Err(TpmResourceControllerError::Effect(
-                    TpmResourceEffectError::StateIntegrity,
-                ));
-            }
-        }
-        controller.phase = status.phase;
-        controller.volume_ref = status.state_volume_ref.clone();
-        controller.process_ref = status.swtpm_process_ref.clone();
-        controller.flush_ref = status.last_flush_ref.clone();
-        controller.endpoint_ref = status.tpm_endpoint_ref.clone();
-        controller.marker_status = status.marker_status;
-        controller.last_error = if status.phase == TpmResourcePhase::Failed {
-            Some(TpmResourceEffectError::EffectRejected)
-        } else {
-            None
-        };
-        Ok(controller)
     }
 
     /// Return the current lifecycle phase.
@@ -258,19 +182,6 @@ impl TpmResourceController {
     /// Borrow the observed TPM Endpoint, when ready.
     pub const fn endpoint_ref(&self) -> Option<&ResourceRef> {
         self.endpoint_ref.as_ref()
-    }
-
-    /// Return the durable, redacted status projection retained for restart.
-    pub fn status(&self) -> TpmStatusReport {
-        TpmStatusReport {
-            phase: self.phase,
-            state_volume_ref: self.volume_ref.clone(),
-            swtpm_process_ref: self.process_ref.clone(),
-            last_flush_ref: self.flush_ref.clone(),
-            tpm_endpoint_ref: self.endpoint_ref.clone(),
-            marker_status: self.marker_status,
-            condition: self.last_error.map(TpmResourceEffectError::code),
-        }
     }
 
     /// Reconciliation creates the Volume, completes the mandatory pre-start
@@ -315,7 +226,6 @@ impl TpmResourceController {
             {
                 return self.effect_failed(TpmResourceEffectError::StateIntegrity);
             }
-            self.marker_status = TpmMarkerStatus::Verified;
             self.volume_ref = Some(volume.clone());
             self.needs_state_verification = false;
             volume
@@ -418,9 +328,6 @@ impl TpmResourceController {
             "tpm resource reconcile effect failed",
         );
         self.last_error = Some(error);
-        if error == TpmResourceEffectError::StateIntegrity {
-            self.marker_status = TpmMarkerStatus::Tampered;
-        }
         self.phase = if error == TpmResourceEffectError::Transient {
             TpmResourcePhase::Degraded
         } else {

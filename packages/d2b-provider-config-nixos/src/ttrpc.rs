@@ -9,6 +9,7 @@ use std::{
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
+use tokio::sync::Semaphore;
 
 use crate::{
     ConfigCaller, ConfigError, ConfigOperation, ConfigService, ConfigServiceDescriptor,
@@ -214,6 +215,54 @@ impl ConfigNixosClient {
     }
 }
 
+/// Ceiling on concurrent blocking config dispatches.
+///
+/// The Guest read walks the working-copy path with `O_NOFOLLOW` and reads the
+/// document through `rustix`; that kernel path has no async form, so a
+/// dispatch runs on the shared blocking pool. This ceiling bounds how many
+/// pool threads the service can occupy at once.
+const MAX_BLOCKING_DISPATCHES: usize = 4;
+
+/// The process-wide blocking-dispatch ceiling.
+static BLOCKING_DISPATCH_LIMIT: Semaphore = Semaphore::const_new(MAX_BLOCKING_DISPATCHES);
+
+/// Dispatch one operation on the bounded blocking worker.
+///
+/// The backend read is a synchronous kernel path, so it must not run on the
+/// runtime worker that polls this service: a blocked worker stalls every other
+/// task sharing it.
+async fn dispatch_on_blocking_worker(
+    backend: Arc<dyn ConfigServiceBackend>,
+    operation: ConfigOperation,
+    payload: Value,
+) -> Result<Value, ttrpc::Error> {
+    let permit = BLOCKING_DISPATCH_LIMIT
+        .acquire()
+        .await
+        .map_err(|_| rpc_error(ConfigError::Unavailable))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        backend.dispatch(operation, payload)
+    })
+    .await
+    .map_err(|error| {
+        tracing::warn!(
+            operation = operation.as_str(),
+            %error,
+            "config-nixos service dispatch task failed",
+        );
+        rpc_error(ConfigError::Unavailable)
+    })?
+    .map_err(|error| {
+        tracing::warn!(
+            operation = operation.as_str(),
+            %error,
+            "config-nixos service dispatch failed",
+        );
+        rpc_error(error)
+    })
+}
+
 struct ConfigMethod {
     backend: Arc<dyn ConfigServiceBackend>,
     operation: ConfigOperation,
@@ -243,14 +292,8 @@ impl ttrpc::r#async::MethodHandler for ConfigMethod {
             );
             return Err(rpc_error(error));
         }
-        let value = self.backend.dispatch(self.operation, payload).map_err(|error| {
-            tracing::warn!(
-                operation = self.operation.as_str(),
-                %error,
-                "config-nixos service dispatch failed",
-            );
-            rpc_error(error)
-        })?;
+        let value =
+            dispatch_on_blocking_worker(Arc::clone(&self.backend), self.operation, payload).await?;
         let mut response = ttrpc::Response::new();
         response.set_status(ttrpc::get_status(ttrpc::Code::OK, ""));
         response.payload = serde_json::to_vec(&value).map_err(|error| {
@@ -378,4 +421,89 @@ fn read_bounded_file(path: &Path) -> Result<Vec<u8>, ConfigError> {
         bytes.extend_from_slice(&chunk[..count]);
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+    use std::time::Duration;
+
+    /// A backend whose dispatch parks until the test releases it.
+    struct ParkingBackend {
+        started: tokio::sync::mpsc::UnboundedSender<()>,
+        release: std::sync::Mutex<Option<Receiver<()>>>,
+    }
+
+    impl ConfigServiceBackend for ParkingBackend {
+        fn dispatch(
+            &self,
+            _operation: ConfigOperation,
+            _payload: Value,
+        ) -> Result<Value, ConfigError> {
+            let _ = self.started.send(());
+            let release = self
+                .release
+                .lock()
+                .expect("release lock")
+                .take()
+                .expect("release receiver");
+            match release.recv_timeout(Duration::from_secs(5)) {
+                Ok(()) => Ok(Value::Null),
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
+                    Err(ConfigError::Unavailable)
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_blocking_backend_dispatch_does_not_occupy_the_polling_worker() {
+        // Drive the registered service handler, not the helper behind it. On
+        // the single-threaded runtime below the release can only be delivered
+        // while the backend is parked if the handler left its polling worker
+        // free: an inline `backend.dispatch` would stall the only worker and
+        // the handler would answer the parked call with an error.
+        let (started, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (release, release_rx) = channel();
+        let services = create_ttrpc_services(Arc::new(ParkingBackend {
+            started,
+            release: std::sync::Mutex::new(Some(release_rx)),
+        }));
+        let handler = services
+            .get(&format!("{SERVICE_PACKAGE}.{SERVICE_NAME}"))
+            .expect("config-nixos service is registered")
+            .methods
+            .get("ReadGuestConfig")
+            .expect("guest read handler is registered");
+        let payload = ConfigSyncRequest::new(
+            ResourceRef::parse("Guest/parked-dispatch").expect("guest reference"),
+        )
+        .expect("config sync request");
+        let request = ttrpc::Request {
+            service: format!("{SERVICE_PACKAGE}.{SERVICE_NAME}"),
+            method: "ReadGuestConfig".to_owned(),
+            payload: serde_json::to_vec(&payload).expect("request encoding"),
+            ..Default::default()
+        };
+        let context = ttrpc::r#async::TtrpcContext {
+            mh: ttrpc::proto::MessageHeader::new_request(1, 0),
+            metadata: HashMap::new(),
+            timeout_nano: 0,
+        };
+        let handled = ttrpc::r#async::MethodHandler::handler(handler.as_ref(), context, request);
+        tokio::pin!(handled);
+        tokio::select! {
+            completed = &mut handled => {
+                panic!("handler completed before the backend parked: {completed:?}");
+            }
+            Some(()) = started_rx.recv() => {}
+        }
+        release.send(()).expect("release parked dispatch");
+        let response = handled.await.expect("handler answer");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&response.payload).expect("response payload"),
+            Value::Null,
+        );
+    }
 }

@@ -411,6 +411,32 @@ impl fmt::Debug for VerifiedProviderArtifact {
     }
 }
 
+/// The declared bootstrap boundary.
+///
+/// The Provider catalog declares its fixed bootstrap rows
+/// (`fixedBootstrapProviderIds`); the compiler input carries exactly that list
+/// as `systemProviderNames`. A bootstrap Provider keeps its components in
+/// process: its artifact is never projected into ordinary Process rows, and
+/// only a bootstrap artifact may declare an in-process bootstrap component.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BootstrapBoundary {
+    providers: BTreeSet<String>,
+}
+
+impl BootstrapBoundary {
+    /// Build the boundary from the declared bootstrap Provider IDs.
+    pub fn new(providers: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            providers: providers.into_iter().collect(),
+        }
+    }
+
+    /// Whether the declaration carries the Provider as a fixed bootstrap row.
+    pub fn admits(&self, provider: &str) -> bool {
+        self.providers.contains(provider)
+    }
+}
+
 /// Static controller resources and their private executable bindings.
 #[derive(Clone, PartialEq, Eq)]
 pub struct StaticControllerProjection {
@@ -505,10 +531,12 @@ impl std::error::Error for StaticControllerProjectionError {}
 ///
 /// The caller supplies only artifacts whose manifests have already passed the
 /// signature, canonicality, and executable-set checks in [`compile_artifact`].
-/// Bootstrap components remain in-process exceptions and are not projected.
+/// The [`BootstrapBoundary`] the Provider catalog declares names the
+/// components that remain in-process exceptions and are not projected.
 pub fn project_static_controller_processes<'a, I>(
     zone: &str,
     resources: &[serde_json::Value],
+    bootstrap: &BootstrapBoundary,
     verified_artifacts: I,
 ) -> Result<StaticControllerProjection, StaticControllerProjectionError>
 where
@@ -569,7 +597,7 @@ where
         {
             return Err(StaticControllerProjectionError::VerifiedProviderMissing);
         }
-        if matches!(artifact_id, "system-core" | "system-minijail") {
+        if bootstrap.admits(artifact_id) {
             continue;
         }
         let launchable_controllers = artifact
@@ -697,15 +725,7 @@ where
         &mut templates,
     )?;
 
-    append_device_tpm_worker_templates(
-        &zone_id,
-        resources,
-        &artifacts,
-        &mut generated_identities,
-        &mut templates,
-    )?;
-
-    append_device_gpu_worker_templates(
+    append_device_worker_templates(
         &zone_id,
         resources,
         &artifacts,
@@ -846,10 +866,18 @@ fn resource_identity(resource: &serde_json::Value) -> Option<(String, String)> {
 }
 
 /// Emit the signed `virtiofsd-worker` serving template when the Zone
-/// carries a volume-virtiofs Provider whose artifact contains the
-/// `virtiofsd` binary. The binding runner mints binding-owned worker
-/// Processes declaring this template; the launch path resolves them to
-/// this digest-pinned binary through the Provider component lookup.
+/// carries the serving Provider whose artifact contains the `virtiofsd`
+/// binary. The binding runner mints binding-owned worker Processes declaring
+/// this template; the launch path resolves them to this digest-pinned binary
+/// through the Provider component lookup.
+///
+/// The provider reference and the template are core's declared pair
+/// ([`d2b_core::bundle_resolver::SERVING_WORKER_PROVIDER_REF`] and
+/// [`d2b_core::bundle_resolver::SERVING_WORKER_TEMPLATE`], the one spelling
+/// `TemplateIntentShape::of` classifies with), so the compiler cannot drift
+/// from the mint. The executable name is the artifact's own: it stays pinned
+/// here because no declared row carries the serving worker - the binding
+/// runner mints the row, not the provider's projection.
 fn append_virtiofsd_worker_templates<'a>(
     zone: &ZoneId,
     resources: &[serde_json::Value],
@@ -857,6 +885,8 @@ fn append_virtiofsd_worker_templates<'a>(
     generated_identities: &mut BTreeSet<(String, String)>,
     templates: &mut Vec<ProcessTemplateBinding>,
 ) -> Result<(), StaticControllerProjectionError> {
+    let provider_ref = ResourceRef::parse(d2b_core::bundle_resolver::SERVING_WORKER_PROVIDER_REF)
+        .map_err(|_| StaticControllerProjectionError::InvalidProviderResource)?;
     let Some(provider) = resources.iter().find(|resource| {
         resource.get("type").and_then(Value::as_str) == Some("Provider")
             && resource
@@ -868,12 +898,10 @@ fn append_virtiofsd_worker_templates<'a>(
                 .get("metadata")
                 .and_then(|metadata| metadata.get("name"))
                 .and_then(Value::as_str)
-                == Some("volume-virtiofs")
+                == Some(provider_ref.name().as_str())
     }) else {
         return Ok(());
     };
-    let provider_ref = ResourceRef::parse("Provider/volume-virtiofs")
-        .map_err(|_| StaticControllerProjectionError::InvalidProviderResource)?;
     let artifact_id = provider
         .get("spec")
         .and_then(|spec| spec.get("artifactId"))
@@ -888,7 +916,7 @@ fn append_virtiofsd_worker_templates<'a>(
     else {
         return Ok(());
     };
-    let template = BoundedToken::parse("virtiofsd-worker")
+    let template = BoundedToken::parse(d2b_core::bundle_resolver::SERVING_WORKER_TEMPLATE)
         .map_err(|_| StaticControllerProjectionError::InvalidTemplate)?;
     let execution_ref = provider
         .get("spec")
@@ -935,18 +963,20 @@ fn append_virtiofsd_worker_templates<'a>(
     Ok(())
 }
 
-/// Emit the signed Device-owned worker templates one Device Provider
-/// projects into this Zone.
+/// Emit the signed Device-owned worker templates the declared rows name.
 ///
-/// The provider's Nix projection declares the worker rows - `Process/swtpm-<device>`
-/// and `EphemeralProcess/swtpm-flush-<device>` for `device-tpm`,
-/// `Process/gpu-<device>` and `Process/video-<device>` for `device-gpu` -
-/// owned by the Device that claims them. This arm binds each declared row to
-/// the provider artifact's digest-pinned worker executable and to the closed
-/// sandbox posture the broker enforces for that template
-/// ([`d2b_core::bundle_resolver::device_worker_posture`]), so a declared row
-/// whose sandbox disagrees with its template is refused here, at compile
-/// time, instead of failing at spawn.
+/// A Device Provider's Nix projection declares the worker rows one Device
+/// claims - `Process/swtpm-<device>` and `EphemeralProcess/swtpm-flush-<device>`
+/// for `device-tpm`, `Process/gpu-<device>` and `Process/video-<device>` for
+/// `device-gpu` - each carrying the row's `template` and an `ownerRef` to the
+/// claiming Device. The declared row is the authority this pass reads: the
+/// owner Device's declared `spec.providerRef` names the Device Provider, whose
+/// artifact must enumerate the executable the closed posture for
+/// (`providerRef`, `template`) pins
+/// ([`d2b_core::bundle_resolver::device_worker_posture`]), and a declared row
+/// whose sandbox disagrees with that posture is refused here, at compile time,
+/// instead of failing at spawn. No arm here names a Device family, so a new
+/// Device Provider declaring the same row shape is bound without an edit.
 ///
 /// The binding stays non-dynamic: the declared row, not a synthetic template
 /// ref, is the launch identity (`Process/swtpm-<device>` names exactly one
@@ -964,33 +994,7 @@ fn append_device_worker_templates<'a>(
     artifacts: &BTreeMap<String, &'a VerifiedProviderArtifact>,
     generated_identities: &mut BTreeSet<(String, String)>,
     templates: &mut Vec<ProcessTemplateBinding>,
-    provider_name: &str,
 ) -> Result<(), StaticControllerProjectionError> {
-    let provider_ref = ResourceRef::parse(&format!("Provider/{provider_name}"))
-        .map_err(|_| StaticControllerProjectionError::InvalidProviderResource)?;
-    let Some(provider) = resources.iter().find(|resource| {
-        resource.get("type").and_then(Value::as_str) == Some("Provider")
-            && resource
-                .get("metadata")
-                .and_then(|metadata| metadata.get("zone"))
-                .and_then(Value::as_str)
-                == Some(zone.as_str())
-            && resource
-                .get("metadata")
-                .and_then(|metadata| metadata.get("name"))
-                .and_then(Value::as_str)
-                == Some(provider_name)
-    }) else {
-        return Ok(());
-    };
-    let artifact_id = provider
-        .get("spec")
-        .and_then(|spec| spec.get("artifactId"))
-        .and_then(Value::as_str)
-        .ok_or(StaticControllerProjectionError::InvalidProviderResource)?;
-    let Some(artifact) = artifacts.get(artifact_id) else {
-        return Ok(());
-    };
     for row in resources {
         let Some(resource_type) = row.get("type").and_then(Value::as_str) else {
             continue;
@@ -1013,9 +1017,10 @@ fn append_device_worker_templates<'a>(
         {
             continue;
         }
-        // Only rows whose owning Device is served by this Provider are ours;
-        // every other declared Process row belongs to another provider's
-        // projection (or to a plain declared row) and is not ours to bind.
+        // Only rows whose owning Device is served by a Device Provider in
+        // this Zone are ours; every other declared Process row belongs to
+        // another provider's projection (or to a plain declared row) and is
+        // not ours to bind.
         let Some(owner_ref) = row
             .get("metadata")
             .and_then(|metadata| metadata.get("ownerRef"))
@@ -1025,21 +1030,52 @@ fn append_device_worker_templates<'a>(
         else {
             continue;
         };
-        if !resources.iter().any(|candidate| {
-            candidate.get("type").and_then(Value::as_str) == Some("Device")
+        let Some(provider_ref) = resources.iter().find_map(|candidate| {
+            if candidate.get("type").and_then(Value::as_str) != Some("Device")
+                || candidate
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("name"))
+                    .and_then(Value::as_str)
+                    != Some(owner_ref.name().as_str())
+                || candidate
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("zone"))
+                    .and_then(Value::as_str)
+                    != Some(zone.as_str())
+            {
+                return None;
+            }
+            candidate
+                .get("spec")
+                .and_then(|spec| spec.get("providerRef"))
+                .and_then(Value::as_str)
+                .and_then(|reference| ResourceRef::parse(reference).ok())
+        }) else {
+            continue;
+        };
+        let Some(provider) = resources.iter().find(|candidate| {
+            candidate.get("type").and_then(Value::as_str) == Some("Provider")
+                && candidate
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("zone"))
+                    .and_then(Value::as_str)
+                    == Some(zone.as_str())
                 && candidate
                     .get("metadata")
                     .and_then(|metadata| metadata.get("name"))
                     .and_then(Value::as_str)
-                    == Some(owner_ref.name().as_str())
-                && candidate
-                    .get("spec")
-                    .and_then(|spec| spec.get("providerRef"))
-                    .and_then(Value::as_str)
-                    == Some(provider_ref.to_canonical_string().as_str())
-        }) {
+                    == Some(provider_ref.name().as_str())
+        }) else {
             continue;
-        }
+        };
+        let artifact_id = provider
+            .get("spec")
+            .and_then(|spec| spec.get("artifactId"))
+            .and_then(Value::as_str)
+            .ok_or(StaticControllerProjectionError::InvalidProviderResource)?;
+        let Some(artifact) = artifacts.get(artifact_id) else {
+            continue;
+        };
         let spec = row.get("spec").ok_or(StaticControllerProjectionError::DeviceWorkerRowInvalid)?;
         let Some(template) = spec.get("template").and_then(Value::as_str) else {
             continue;
@@ -1102,42 +1138,6 @@ fn append_device_worker_templates<'a>(
         );
     }
     Ok(())
-}
-
-/// Emit the `device-tpm` worker templates declared in this Zone.
-fn append_device_tpm_worker_templates<'a>(
-    zone: &ZoneId,
-    resources: &[serde_json::Value],
-    artifacts: &BTreeMap<String, &'a VerifiedProviderArtifact>,
-    generated_identities: &mut BTreeSet<(String, String)>,
-    templates: &mut Vec<ProcessTemplateBinding>,
-) -> Result<(), StaticControllerProjectionError> {
-    append_device_worker_templates(
-        zone,
-        resources,
-        artifacts,
-        generated_identities,
-        templates,
-        "device-tpm",
-    )
-}
-
-/// Emit the `device-gpu` worker templates declared in this Zone.
-fn append_device_gpu_worker_templates<'a>(
-    zone: &ZoneId,
-    resources: &[serde_json::Value],
-    artifacts: &BTreeMap<String, &'a VerifiedProviderArtifact>,
-    generated_identities: &mut BTreeSet<(String, String)>,
-    templates: &mut Vec<ProcessTemplateBinding>,
-) -> Result<(), StaticControllerProjectionError> {
-    append_device_worker_templates(
-        zone,
-        resources,
-        artifacts,
-        generated_identities,
-        templates,
-        "device-gpu",
-    )
 }
 
 /// Whether one declared worker row carries exactly the posture its template
@@ -1306,16 +1306,19 @@ fn static_controller_resource(
 /// The method reads the detached signature and manifest before any other
 /// artifact file, verifies the publisher signature, validates canonical bytes,
 /// closes the metadata directory, and then validates the executable set.
+/// `bootstrap` is the declared bootstrap boundary an in-process bootstrap
+/// component is admitted against.
 pub fn compile_artifact<A, R>(
     entry: &ArtifactCatalogEntry,
     anchor: &A,
     keys: &R,
+    bootstrap: &BootstrapBoundary,
 ) -> Result<CompiledArtifact, Diagnostic>
 where
     A: AnchoredDir,
     R: PublisherKeyResolver,
 {
-    compile_inner(entry, anchor, keys)
+    compile_inner(entry, anchor, keys, bootstrap)
 }
 
 /// Alias with the resource-plane name used by the Phase 2 work item.
@@ -1323,12 +1326,13 @@ pub fn compile_provider_artifact<A, R>(
     entry: &ArtifactCatalogEntry,
     anchor: &A,
     keys: &R,
+    bootstrap: &BootstrapBoundary,
 ) -> Result<CompiledArtifact, Diagnostic>
 where
     A: AnchoredDir,
     R: PublisherKeyResolver,
 {
-    compile_artifact(entry, anchor, keys)
+    compile_artifact(entry, anchor, keys, bootstrap)
 }
 
 /// Open the selected output with the production Linux adapter and compile it.
@@ -1336,6 +1340,7 @@ where
 pub fn compile_linux_artifact<R>(
     entry: &ArtifactCatalogEntry,
     keys: &R,
+    bootstrap: &BootstrapBoundary,
 ) -> Result<CompiledArtifact, Diagnostic>
 where
     R: PublisherKeyResolver,
@@ -1361,7 +1366,7 @@ where
                 ),
             ),
         })?;
-    compile_artifact(entry, &anchor, keys)
+    compile_artifact(entry, &anchor, keys, bootstrap)
 }
 
 /// Compute a raw SHA-256 artifact digest in the contract spelling.
@@ -1418,6 +1423,7 @@ fn compile_inner<A, R>(
     entry: &ArtifactCatalogEntry,
     anchor: &A,
     keys: &R,
+    bootstrap: &BootstrapBoundary,
 ) -> Result<CompiledArtifact, Diagnostic>
 where
     A: AnchoredDir,
@@ -1562,7 +1568,7 @@ where
     })?;
     let declared_executables = declared_executable_digests(entry, &raw_manifest)?;
     let (executable_digests, executable_exists) =
-        validate_executables(entry, anchor, &manifest, declared_executables)?;
+        validate_executables(entry, anchor, &manifest, declared_executables, bootstrap)?;
 
     if executable_exists
         != manifest
@@ -1810,6 +1816,7 @@ fn validate_executables<A: AnchoredDir>(
     anchor: &A,
     manifest: &ProviderManifest,
     declared: Option<BTreeMap<String, ArtifactDigest>>,
+    bootstrap: &BootstrapBoundary,
 ) -> Result<(BTreeMap<String, ArtifactDigest>, bool), Diagnostic> {
     let bin_entries = match anchor.entries(LayoutDir::new(EXECUTABLE_DIR)) {
         Ok(entries) => Some(entries),
@@ -1828,7 +1835,7 @@ fn validate_executables<A: AnchoredDir>(
             .count();
         for component in manifest.components() {
             if let ComponentExecution::InProcessBootstrap = component.execution()
-                && !is_bootstrap_artifact(entry)
+                && !bootstrap.admits(entry.artifact_id().as_str())
             {
                 return Err(component_execution_invalid(
                     entry,
@@ -1847,7 +1854,13 @@ fn validate_executables<A: AnchoredDir>(
                 ),
             ));
         }
-        ensure_component_refs(entry, manifest, &BTreeSet::new(), declared.as_ref())?;
+        ensure_component_refs(
+            entry,
+            manifest,
+            &BTreeSet::new(),
+            declared.as_ref(),
+            bootstrap,
+        )?;
         if let Some(ref declared) = declared
             && !declared.is_empty()
         {
@@ -1867,7 +1880,7 @@ fn validate_executables<A: AnchoredDir>(
         .count();
     for component in manifest.components() {
         if let ComponentExecution::InProcessBootstrap = component.execution()
-            && !is_bootstrap_artifact(entry)
+            && !bootstrap.admits(entry.artifact_id().as_str())
         {
             return Err(component_execution_invalid(
                 entry,
@@ -1972,7 +1985,7 @@ fn validate_executables<A: AnchoredDir>(
             }
         }
     }
-    ensure_component_refs(entry, manifest, &names, declared.as_ref())?;
+    ensure_component_refs(entry, manifest, &names, declared.as_ref(), bootstrap)?;
     Ok((actual, true))
 }
 
@@ -1981,6 +1994,7 @@ fn ensure_component_refs(
     manifest: &ProviderManifest,
     actual_names: &BTreeSet<String>,
     declared: Option<&BTreeMap<String, ArtifactDigest>>,
+    bootstrap: &BootstrapBoundary,
 ) -> Result<(), Diagnostic> {
     for component in manifest.components() {
         match component.execution() {
@@ -1999,7 +2013,9 @@ fn ensure_component_refs(
                     ));
                 }
             }
-            ComponentExecution::InProcessBootstrap if !is_bootstrap_artifact(entry) => {
+            ComponentExecution::InProcessBootstrap
+                if !bootstrap.admits(entry.artifact_id().as_str()) =>
+            {
                 return Err(component_execution_invalid(
                     entry,
                     component.component_id().as_str(),
@@ -2248,13 +2264,6 @@ fn component_execution_invalid(entry: &ArtifactCatalogEntry, component_id: &str)
             artifact_name(entry),
             safe_label(component_id)
         ),
-    )
-}
-
-fn is_bootstrap_artifact(entry: &ArtifactCatalogEntry) -> bool {
-    matches!(
-        entry.artifact_id().as_str(),
-        "system-core" | "system-minijail"
     )
 }
 

@@ -1,0 +1,2975 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "operation": "Hello",
+      "wireVariant": "Hello",
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "transport handshake: the first frame on the private socket, answered from the broker's own capability table, with no host effect and no resource family behind it",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": true,
+      "disposition": "callable-read-only",
+      "dispositionTarget": "live read-only callable",
+      "authz": {
+        "subject": "handshake",
+        "scope": "global",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "Hello"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ExportBrokerAudit",
+      "wireVariant": "ExportBrokerAudit",
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "broker self-audit: the broker reads its own append-only audit log, so the effect is the broker's record keeping rather than a family effect",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": true,
+      "disposition": "callable-read-only",
+      "dispositionTarget": "live read-only callable",
+      "authz": {
+        "subject": "broker-admin",
+        "scope": "global",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ExportBrokerAudit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "OpenPidfd",
+      "wireVariant": "OpenPidfd",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "pidfd",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "OpenPidfd"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "OpenPeerPidfdFromAcceptedSocket",
+      "wireVariant": "OpenPeerPidfdFromAcceptedSocket",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "callable-read-only",
+      "dispositionTarget": "live read-only callable",
+      "authz": {
+        "subject": "pidfd",
+        "scope": "accepted Unix socket",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "OpenPeerPidfdFromAcceptedSocket"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ObserveRunner",
+      "wireVariant": "ObserveRunner",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ObserveRunner"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "StartSystemdUnit",
+      "wireVariant": "StartSystemdUnit",
+      "owner": "family",
+      "family": "process-systemd",
+      "declaringProvider": "d2b-provider-process-systemd",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "systemd-unit",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SystemdUnit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "CheckSystemdUserManager",
+      "wireVariant": "CheckSystemdUserManager",
+      "owner": "family",
+      "family": "process-systemd",
+      "declaringProvider": "d2b-provider-process-systemd",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "systemd-user-manager",
+        "scope": "per-user",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SystemdUnit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ObserveSystemdUnit",
+      "wireVariant": "ObserveSystemdUnit",
+      "owner": "family",
+      "family": "process-systemd",
+      "declaringProvider": "d2b-provider-process-systemd",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "systemd-unit",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SystemdUnit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "OpenSystemdUnitPidfd",
+      "wireVariant": "OpenSystemdUnitPidfd",
+      "owner": "family",
+      "family": "process-systemd",
+      "declaringProvider": "d2b-provider-process-systemd",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "systemd-unit-pidfd",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SystemdUnit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "StopSystemdUnit",
+      "wireVariant": "StopSystemdUnit",
+      "owner": "family",
+      "family": "process-systemd",
+      "declaringProvider": "d2b-provider-process-systemd",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "systemd-unit",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SystemdUnit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "PollChildReaped",
+      "wireVariant": "PollChildReaped",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "global",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "PrepareRuntimeDir",
+      "wireVariant": "PrepareRuntimeDir",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "fs",
+        "scope": "global/per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "PrepareRuntimeDir"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "PrepareStateDir",
+      "wireVariant": "PrepareStateDir",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "fs",
+        "scope": "global/per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "PrepareStateDir",
+          "PrepareSwtpmDir"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "SetupMountNamespace",
+      "wireVariant": "SetupMountNamespace",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "mount/store",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SetupMountNamespace"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "CgroupKill",
+      "wireVariant": "CgroupKill",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "cgroup",
+        "scope": "per-VM/role leaf",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "CgroupKill"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "SignalRunner",
+      "wireVariant": "SignalRunner",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SignalRunner"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "DeregisterRunnerPidfd",
+      "wireVariant": "DeregisterRunnerPidfd",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2b-launcher",
+          "d2b-admin"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "DeregisterRunnerPidfd"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "SpawnRunner",
+      "wireVariant": "SpawnRunner",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "vm-runner",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SpawnRunner",
+          "PrepareSwtpmDir"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ApplyHostGenerationHandoff",
+      "wireVariant": "ApplyHostGenerationHandoff",
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "broker-owned host effect: the handoff runs in the broker against the broker's own helper path and state dir, the activation family requests it through its effect port, so no declaring crate holds the handler",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "host-generation",
+        "scope": "global",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ApplyHostGenerationHandoff"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ApplyNftables",
+      "wireVariant": "ApplyNftables",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network-host",
+        "scope": "global/per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ApplyNftables"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ApplyNftablesProjection",
+      "wireVariant": "ApplyNftablesProjection",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network-host",
+        "scope": "global/per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ApplyNftablesProjection"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ApplyNmUnmanaged",
+      "wireVariant": "ApplyNmUnmanaged",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network-host",
+        "scope": "global/per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ApplyNmUnmanaged"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ApplyRoute",
+      "wireVariant": "ApplyRoute",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network-host",
+        "scope": "global/per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ApplyRoute"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ApplySysctl",
+      "wireVariant": "ApplySysctl",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network-host",
+        "scope": "global/per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ApplySysctl"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "CreateOrReconcileUsersGroups",
+      "wireVariant": "CreateOrReconcileUsersGroups",
+      "owner": "family",
+      "family": "user",
+      "declaringProvider": "d2b-provider-user",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": true,
+      "disposition": "stubbed-unimplemented",
+      "dispositionTarget": "bootstrap-only",
+      "authz": {
+        "subject": "account",
+        "scope": "global/per-role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "CreateBridge",
+      "wireVariant": "CreateBridge",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "CreateBridge"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "DeleteBridge",
+      "wireVariant": "DeleteBridge",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "DeleteBridge"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "CreatePersistentTap",
+      "wireVariant": "CreatePersistentTap",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-env/VM/TAP",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "CreatePersistentTap"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "DeletePersistentTap",
+      "wireVariant": "DeletePersistentTap",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-env/VM/TAP",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "DeletePersistentTap"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "CreateTapFd",
+      "wireVariant": "CreateTapFd",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-env/VM/TAP",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "CreateTapFd"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "DelegateCgroupV2",
+      "wireVariant": "DelegateCgroupV2",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "cgroup",
+        "scope": "global/per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "DelegateCgroupV2"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "InjectSecretById",
+      "wireVariant": "InjectSecretById",
+      "owner": "family",
+      "family": "credential",
+      "declaringProvider": "d2b-provider-credential",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": true,
+      "disposition": "stubbed-unimplemented",
+      "dispositionTarget": "future work",
+      "authz": {
+        "subject": "secret/key",
+        "scope": "per-VM/key",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "ReadWrite",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "LaunchMinijailChild",
+      "wireVariant": "LaunchMinijailChild",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": true,
+      "disposition": "stubbed-unimplemented",
+      "dispositionTarget": "future work",
+      "authz": {
+        "subject": "process",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ModprobeIfAllowed",
+      "wireVariant": "ModprobeIfAllowed",
+      "owner": "family",
+      "family": "device",
+      "declaringProvider": "d2b-provider-device",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "kernel-module",
+        "scope": "global/feature",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ModprobeIfAllowed"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "OpenCgroupDir",
+      "wireVariant": "OpenCgroupDir",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "cgroup",
+        "scope": "global/per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "OpenCgroupDir"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "OpenDevice",
+      "wireVariant": "OpenDevice",
+      "owner": "family",
+      "family": "device",
+      "declaringProvider": "d2b-provider-device",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "device",
+        "scope": "per-role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "OpenDevice"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "OpenFuse",
+      "wireVariant": "OpenFuse",
+      "owner": "family",
+      "family": "device",
+      "declaringProvider": "d2b-provider-device",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "device",
+        "scope": "per-role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "OpenFuse"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "OpenHidrawSecurityKey",
+      "wireVariant": "OpenHidrawSecurityKey",
+      "owner": "family",
+      "family": "device-security-key",
+      "declaringProvider": "d2b-provider-device-security-key",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "security-key",
+        "scope": "per-VM/per-selector",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "OpenHidrawSecurityKey"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "OpenKvm",
+      "wireVariant": "OpenKvm",
+      "owner": "family",
+      "family": "device",
+      "declaringProvider": "d2b-provider-device",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "device",
+        "scope": "per-role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "OpenKvm"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "QemuMediaEnroll",
+      "wireVariant": "QemuMediaEnroll",
+      "owner": "family",
+      "family": "guest",
+      "declaringProvider": "d2b-provider-guest-qemu-media",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "qemu-media registry",
+        "scope": "per-VM/per-media-ref",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "RedactedOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "QemuMediaEnroll"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "QemuMediaRefreshRegistry",
+      "wireVariant": "QemuMediaRefreshRegistry",
+      "owner": "family",
+      "family": "guest",
+      "declaringProvider": "d2b-provider-guest-qemu-media",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "qemu-media redacted registry",
+        "scope": "host",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "RedactedOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "QemuMediaRefreshRegistry"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "QemuMediaBoot",
+      "wireVariant": "QemuMediaBoot",
+      "owner": "family",
+      "family": "guest",
+      "declaringProvider": "d2b-provider-guest-qemu-media",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "qemu-media boot media",
+        "scope": "per-VM/per-media-ref",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "RedactedOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "QemuMediaBoot"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "QemuMediaSystemPowerdown",
+      "wireVariant": "QemuMediaSystemPowerdown",
+      "owner": "family",
+      "family": "guest",
+      "declaringProvider": "d2b-provider-guest-qemu-media",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "qemu-media lifecycle",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "RedactedOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "QemuMediaSystemPowerdown"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "QemuMediaQueryStatus",
+      "wireVariant": "QemuMediaQueryStatus",
+      "owner": "family",
+      "family": "guest",
+      "declaringProvider": "d2b-provider-guest-qemu-media",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "qemu-media lifecycle status",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "RedactedOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Errors"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "errors"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "QemuMediaQuit",
+      "wireVariant": "QemuMediaQuit",
+      "owner": "family",
+      "family": "guest",
+      "declaringProvider": "d2b-provider-guest-qemu-media",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "qemu-media lifecycle",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "RedactedOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "QemuMediaQuit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "QemuMediaAttach",
+      "wireVariant": "QemuMediaAttach",
+      "owner": "family",
+      "family": "guest",
+      "declaringProvider": "d2b-provider-guest-qemu-media",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "qemu-media hotplug",
+        "scope": "per-VM/per-media-ref",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "RedactedOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "QemuMediaAttach"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "QemuMediaDetach",
+      "wireVariant": "QemuMediaDetach",
+      "owner": "family",
+      "family": "guest",
+      "declaringProvider": "d2b-provider-guest-qemu-media",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "qemu-media hotplug",
+        "scope": "per-VM/per-media-ref",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "RedactedOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "QemuMediaDetach"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ConsumeLifecycleLease",
+      "wireVariant": "ConsumeLifecycleLease",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "untriaged",
+      "dispositionTarget": "broker-generic row",
+      "authz": {
+        "subject": "lifecycle",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ConsumeLifecycleLease"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "inspect-process-family",
+      "owner": "family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "callable-read-only",
+      "dispositionTarget": "live read-only callable",
+      "authz": {
+        "subject": "process",
+        "scope": "per-type",
+        "allowedGroups": [
+          "d2bd",
+          "d2b-admin"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes",
+        "join": [
+          "resourceType"
+        ]
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "resourceType": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "resourceType"
+          ]
+        }
+      }
+    },
+    {
+      "operation": "PipeWireAudio",
+      "wireVariant": "PipeWireAudio",
+      "owner": "family",
+      "family": "audio",
+      "declaringProvider": "d2b-provider-audio-service",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "audio",
+        "scope": "per-VM/role/channel",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "PipeWireAudio"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "OpenVhostNet",
+      "wireVariant": "OpenVhostNet",
+      "owner": "family",
+      "family": "device",
+      "declaringProvider": "d2b-provider-device",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "device",
+        "scope": "per-role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "OpenVhostNet"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "MigrateLegacySwtpmState",
+      "wireVariant": "MigrateLegacySwtpmState",
+      "owner": "family",
+      "family": "device-tpm",
+      "declaringProvider": "d2b-provider-device-tpm",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "fs",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "MigrateLegacySwtpmState"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ReconcileStorageScope",
+      "wireVariant": "ReconcileStorageScope",
+      "owner": "family",
+      "family": "volume-binding",
+      "declaringProvider": "d2b-provider-volume-binding",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "fs",
+        "scope": "global/per-VM/per-role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ReconcileStorageScope"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ValidateLockSpec",
+      "wireVariant": "ValidateLockSpec",
+      "owner": "family",
+      "family": "volume-binding",
+      "declaringProvider": "d2b-provider-volume-binding",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "lock",
+        "scope": "global/per-VM/per-role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ValidateLockSpec"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "PrepareStoreView",
+      "wireVariant": "PrepareStoreView",
+      "owner": "family",
+      "family": "volume",
+      "declaringProvider": "d2b-provider-volume-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "mount/store",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "PrepareStoreView"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "StoreSync",
+      "wireVariant": "StoreSync",
+      "owner": "family",
+      "family": "volume",
+      "declaringProvider": "d2b-provider-volume-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "store",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "StoreSync"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "StoreVerify",
+      "wireVariant": "StoreVerify",
+      "owner": "family",
+      "family": "volume",
+      "declaringProvider": "d2b-provider-volume-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "store",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "StoreVerify",
+          "StoreSync"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "ReadSecretById",
+      "wireVariant": "ReadSecretById",
+      "owner": "family",
+      "family": "credential",
+      "declaringProvider": "d2b-provider-credential",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": true,
+      "disposition": "stubbed-unimplemented",
+      "dispositionTarget": "future work",
+      "authz": {
+        "subject": "secret/key",
+        "scope": "per-VM/key",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "ReadWrite",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "RotateSecretById",
+      "wireVariant": "RotateSecretById",
+      "owner": "family",
+      "family": "credential",
+      "declaringProvider": "d2b-provider-credential",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": true,
+      "disposition": "stubbed-unimplemented",
+      "dispositionTarget": "future work",
+      "authz": {
+        "subject": "secret/key",
+        "scope": "per-VM/key",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "ReadWrite",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "RunHostInstall",
+      "wireVariant": "RunHostInstall",
+      "owner": "family",
+      "family": "host",
+      "declaringProvider": "d2b-provider-host",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "installer",
+        "scope": "global",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "RunHostInstall"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "RunMigrate",
+      "wireVariant": "RunMigrate",
+      "owner": "family",
+      "family": "host",
+      "declaringProvider": "d2b-provider-host",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "installer",
+        "scope": "global",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "RunMigrate"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "RunActivation",
+      "wireVariant": "RunActivation",
+      "owner": "family",
+      "family": "activation",
+      "declaringProvider": "d2b-provider-activation-nixos",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "VM",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "RunActivation"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "RunGc",
+      "wireVariant": "RunGc",
+      "owner": "family",
+      "family": "volume",
+      "declaringProvider": "d2b-provider-volume-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "VM/global",
+        "scope": "per-VM/global",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "RunGc"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "RunKeysRotate",
+      "wireVariant": "RunKeysRotate",
+      "owner": "family",
+      "family": "host",
+      "declaringProvider": "d2b-provider-host",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "key",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "ReadWrite",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "RunKeysRotate"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "RunHostKeyTrust",
+      "wireVariant": "RunHostKeyTrust",
+      "owner": "family",
+      "family": "host",
+      "declaringProvider": "d2b-provider-host",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "key/known-host",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "HostKeyMetadata",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "RunHostKeyTrust"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "RunRotateKnownHost",
+      "wireVariant": "RunRotateKnownHost",
+      "owner": "family",
+      "family": "host",
+      "declaringProvider": "d2b-provider-host",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "key/known-host",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "HostKeyMetadata",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "RunRotateKnownHost"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "SetBridgePortFlags",
+      "wireVariant": "SetBridgePortFlags",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-env/VM/TAP",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SetBridgePortFlags"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "UpdateHostsFile",
+      "wireVariant": "UpdateHostsFile",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "name-resolution",
+        "scope": "global",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "UpdateHostsFile"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "UsbipBind",
+      "wireVariant": "UsbipBind",
+      "owner": "family",
+      "family": "device-usbip",
+      "declaringProvider": "d2b-provider-device-usbip",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "USBIP",
+        "scope": "per-busid/env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "RedactedOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "UsbipBind",
+          "UsbSerialCorrelationKeyRotate"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "UsbipBindFirewallRule",
+      "wireVariant": "UsbipBindFirewallRule",
+      "owner": "family",
+      "family": "device-usbip",
+      "declaringProvider": "d2b-provider-device-usbip",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "USBIP firewall",
+        "scope": "per-busid",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "UsbipBindFirewallRule"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "UsbipProxyReconcile",
+      "wireVariant": "UsbipProxyReconcile",
+      "owner": "family",
+      "family": "device-usbip",
+      "declaringProvider": "d2b-provider-device-usbip",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "USBIP",
+        "scope": "per-busid/env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "UsbipProxyReconcile"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "UsbipUnbind",
+      "wireVariant": "UsbipUnbind",
+      "owner": "family",
+      "family": "device-usbip",
+      "declaringProvider": "d2b-provider-device-usbip",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "USBIP",
+        "scope": "per-busid/env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "UsbipUnbind"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "UsbipExplicitBind",
+      "wireVariant": "UsbipExplicitBind",
+      "owner": "family",
+      "family": "device-usbip",
+      "declaringProvider": "d2b-provider-device-usbip",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "USBIP explicit attach",
+        "scope": "per-busid/env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "UsbipExplicitBind",
+          "UsbSerialCorrelationKeyRotate"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "UsbipExplicitFirewallRule",
+      "wireVariant": "UsbipExplicitFirewallRule",
+      "owner": "family",
+      "family": "device-usbip",
+      "declaringProvider": "d2b-provider-device-usbip",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "USBIP explicit attach firewall",
+        "scope": "per-busid/env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "UsbipExplicitFirewallRule"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "SeedDnsmasqLease",
+      "wireVariant": "SeedDnsmasqLease",
+      "owner": "family",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-VM/env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SeedDnsmasqLease"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "BindMountFromHardlinkFarm",
+      "wireVariant": "BindMountFromHardlinkFarm",
+      "owner": "family",
+      "family": "volume",
+      "declaringProvider": "d2b-provider-volume-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "mount/store",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "BindMountFromHardlinkFarm"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "OwnershipMatrixCheck",
+      "wireVariant": "OwnershipMatrixCheck",
+      "owner": "family",
+      "family": "volume",
+      "declaringProvider": "d2b-provider-volume-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "stubbed-unimplemented",
+      "dispositionTarget": "future work",
+      "authz": {
+        "subject": "host",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "SshHostKeyPreflight",
+      "wireVariant": "SshHostKeyPreflight",
+      "owner": "family",
+      "family": "device-security-key",
+      "declaringProvider": "d2b-provider-device-security-key",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "stubbed-unimplemented",
+      "dispositionTarget": "future work",
+      "authz": {
+        "subject": "ssh-host-key",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "DiskInit",
+      "wireVariant": "DiskInit",
+      "owner": "family",
+      "family": "volume",
+      "declaringProvider": "d2b-provider-volume-local",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "disk",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "DiskInit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "SecurityKeyOpenDevice",
+      "wireVariant": "SecurityKeyOpenDevice",
+      "owner": "family",
+      "family": "device-security-key",
+      "declaringProvider": "d2b-provider-device-security-key",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "stubbed-unimplemented",
+      "dispositionTarget": "future work",
+      "authz": {
+        "subject": "security-key/hidraw",
+        "scope": "per-device-label",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "SecurityKeyApplyUdevRules",
+      "wireVariant": "SecurityKeyApplyUdevRules",
+      "owner": "family",
+      "family": "device-security-key",
+      "declaringProvider": "d2b-provider-device-security-key",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "stubbed-unimplemented",
+      "dispositionTarget": "future work",
+      "authz": {
+        "subject": "security-key/udev",
+        "scope": "host",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    },
+    {
+      "operation": "PrepareSwtpmDir",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "broker pre-spawn step: the broker provisions and hardens the per-VM swtpm state dir from its SpawnRunner step before the child starts, and the row carries that record shape only",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "compile-time-only",
+      "dispositionTarget": "broker `SpawnRunner` side-effect",
+      "authz": {
+        "subject": "fs",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "PrepareSwtpmDir"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      }
+    }
+  ]
+}

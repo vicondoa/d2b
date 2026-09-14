@@ -12,7 +12,7 @@ use std::{
     os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
     path::PathBuf,
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, LazyLock, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
@@ -47,9 +47,9 @@ use d2b_contracts_zone_session::v3::component_session::{
     Locality as TransportLocality, MAX_LOGICAL_MESSAGE_BYTES, NoiseProfile, PurposeClass,
     ServicePackage, TransportBinding, TransportClass,
 };
-use d2b_process::ProcessLaunchEffectPort;
+use d2b_provider_process::ProcessLaunchEffectPort;
 #[cfg(test)]
-use d2b_process::{
+use d2b_provider_process::{
     CompiledDigests, IdentityBinding, LaunchTicket as ProcessLaunchTicket, OperationBinding,
     StopClass,
 };
@@ -5432,7 +5432,7 @@ where
             Ok(accepted) => accepted,
             Err(rustix::io::Errno::INTR) => continue,
             Err(rustix::io::Errno::AGAIN) => {
-                thread::sleep(Duration::from_millis(10));
+                wait_for_listener_ready(listener.as_fd());
                 continue;
             }
             Err(error) => {
@@ -5482,6 +5482,21 @@ where
 }
 
 const MAX_INTERACTION_HANDLERS: usize = 64;
+
+/// How long an accept loop parks when its non-blocking listener has nothing
+/// pending: long enough not to spin on the socket, short enough that a stop
+/// request is observed without waiting for the next connection.
+const ACCEPT_PARK: Duration = Duration::from_millis(50);
+
+/// Park in the kernel until the listener has work or [`ACCEPT_PARK`] expires.
+///
+/// The loop's listener is non-blocking so `stop` is never held behind an idle
+/// socket; parking here is what keeps that from becoming a poll loop.
+fn wait_for_listener_ready(listener: std::os::fd::BorrowedFd<'_>) {
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+    let mut fds = [PollFd::new(listener, PollFlags::POLLIN)];
+    let _ = poll(&mut fds, PollTimeout::try_from(ACCEPT_PARK).unwrap_or(PollTimeout::MAX));
+}
 
 fn reserve_interaction_handler(active_handlers: &AtomicUsize) -> bool {
     let mut active = active_handlers.load(Ordering::Acquire);
@@ -5661,6 +5676,18 @@ where
         } else {
             Vec::new()
         };
+        // Residual, recorded rather than half-fixed: this session's request
+        // dispatch holds the *global* runtime-set lock across its awaits, so
+        // another Zone's session (and the VM-start display reconcile) waits
+        // behind it. Removing the hold means the set must hand out a per-Zone
+        // handle (`BTreeMap<String, Arc<AsyncMutex<InteractionComposition>>>`)
+        // so the outer lock is taken only to clone that handle - which also
+        // moves `reconcile_committed_display_for_vm_start` and
+        // `component_session_driver_for_target` off their synchronous seats,
+        // and the latter's documented rule is that a contended lock is never
+        // reported as an absent source. That is a design change to the
+        // interaction runtime's ownership, not a seat swap, and it needs its
+        // own concurrency test.
         let mut guard = runtime.lock().await;
         let composition = guard
             .as_mut()
@@ -5855,7 +5882,7 @@ fn process_ticket_for_session(
 fn configuration_digest(
     binding: &DisplayLaunchBinding,
     label: &[u8],
-) -> d2b_process::ConfigurationDigest {
+) -> d2b_provider_process::ConfigurationDigest {
     let mut digest = Sha256::new();
     digest.update(b"d2bd-display-config-v1");
     digest.update(label);
@@ -5863,7 +5890,7 @@ fn configuration_digest(
     digest.update(binding.policy_digest());
     digest.update(binding.policy_generation().to_be_bytes());
     digest.update(binding.teardown_generation().to_be_bytes());
-    d2b_process::ConfigurationDigest::from_bytes(digest.finalize().into())
+    d2b_provider_process::ConfigurationDigest::from_bytes(digest.finalize().into())
 }
 
 #[cfg(test)]
@@ -6296,23 +6323,48 @@ fn update_display_policy_annotation(
     Ok(value.to_canonical_bytes())
 }
 
+/// Bounded admission for the daemon-owned provider effect seats.
+///
+/// A provider effect port is a synchronous seat that drives async work, so
+/// every call hands its future to the blocking pool and waits for the result.
+/// Two things bound that: at most [`MAX_INFLIGHT_EFFECTS`] effects are in
+/// flight at once - a call beyond the cap is refused with
+/// [`WorkerEffectError::WorkerUnavailable`] instead of queueing an unbounded
+/// backlog - and the work runs on the pool rather than on a thread and a
+/// runtime built for the call. This is the same admission shape the public
+/// accept loop admits connections with
+/// ([`d2bd_runtime::concurrency::ConnSemaphore`]).
+const MAX_INFLIGHT_EFFECTS: usize = 64;
+
+static EFFECT_ADMISSION: LazyLock<d2bd_runtime::concurrency::ConnSemaphore> =
+    LazyLock::new(|| d2bd_runtime::concurrency::ConnSemaphore::new(MAX_INFLIGHT_EFFECTS));
+
 fn run_effect<T, F, Fut>(operation: F) -> Result<T, WorkerEffectError>
 where
     T: Send + 'static,
     F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = Result<T, WorkerEffectError>> + Send + 'static,
 {
-    thread::Builder::new()
-        .name("d2bd-provider-effect".to_owned())
-        .spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|_| WorkerEffectError::WorkerUnavailable)?
-                .block_on(operation())
-        })
-        .map_err(|_| WorkerEffectError::WorkerUnavailable)?
-        .join()
+    let permit = EFFECT_ADMISSION
+        .try_acquire()
+        .ok_or(WorkerEffectError::WorkerUnavailable)?;
+    // No runtime to hand the effect to: drive it on the process-wide fallback
+    // runtime (the seat `block_on_future` names) instead of building one for
+    // this call.
+    if tokio::runtime::Handle::try_current().is_err() {
+        let _permit = permit;
+        return crate::block_on_future(operation());
+    }
+    let (done, outcome) = std::sync::mpsc::sync_channel(1);
+    tokio::task::spawn_blocking(move || {
+        // The permit is held for the whole effect, so the cap counts calls
+        // that are actually running rather than calls that have been handed
+        // off.
+        let _permit = permit;
+        let _ = done.send(crate::block_on_future(operation()));
+    });
+    outcome
+        .recv()
         .map_err(|_| WorkerEffectError::WorkerUnavailable)?
 }
 
@@ -6321,7 +6373,7 @@ mod tests {
     use super::*;
     use d2b_contracts_resource::v3::ResourceGeneration;
     use d2b_contracts_zone_session::v3::component_session::RequestId;
-    use d2b_process::{
+    use d2b_provider_process::{
         BackendLaunch, BackendObservation, ObservedIdentity, ProcessEffectBackend,
         ProcessEffectError, ProcessRequest, ProcessStopClass, WaitReapOwner,
     };
@@ -8365,6 +8417,26 @@ mod tests {
             active_handlers.load(Ordering::Acquire),
             MAX_INTERACTION_HANDLERS
         );
+    }
+
+    /// A provider effect past the admission cap is refused instead of being
+    /// handed another thread, and a released slot is usable again.
+    #[test]
+    fn effects_past_the_admission_cap_are_refused() {
+        let held: Vec<_> = (0..MAX_INFLIGHT_EFFECTS)
+            .map(|_| {
+                EFFECT_ADMISSION
+                    .try_acquire()
+                    .expect("a slot inside the cap")
+            })
+            .collect();
+        assert_eq!(
+            run_effect(|| async { Ok::<(), WorkerEffectError>(()) }).expect_err("past the cap"),
+            WorkerEffectError::WorkerUnavailable
+        );
+        drop(held);
+        run_effect(|| async { Ok::<(), WorkerEffectError>(()) })
+            .expect("a released slot admits the next effect");
     }
 
     #[test]

@@ -90,18 +90,6 @@ rust_test(
 )
 
 rust_test(
-    name = "reconnect_backoff",
-    srcs = [
-        "tests/reconnect_backoff.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_provider_transport_azure_relay",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "transport_credentials",
     srcs = [
         "tests/transport_credentials.rs",

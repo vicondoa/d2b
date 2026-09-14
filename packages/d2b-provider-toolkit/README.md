@@ -1,7 +1,10 @@
 # `d2b-provider-toolkit`
 
-The Provider authoring toolkit: a Provider-neutral common library that declares
-no Provider identity of its own.
+The Provider authoring framework: a Provider-neutral common library that
+declares no Provider identity of its own. A Provider implements `ProviderBase`,
+states its entrypoint facts, and calls `toolkit::run`; the bootstrap,
+readiness, admission, plane attach, startup order, service loop, operation
+envelope, audit ring, drain ordering, and test harness are toolkit-owned.
 
 Because it is a common library rather than a Provider, the per-Provider
 sections below are answered from that position rather than left as
@@ -17,9 +20,19 @@ Provider identity or become a hidden multi-Provider composition binary.
 
 ## Config schema
 
-None. It offers the redaction, audit, dispatch, conformance, and fake-port
-helpers a Provider crate would otherwise re-derive, and reads no configuration
-of its own.
+None. It reads no configuration of its own.
+
+## Layout
+
+| Module | Owns |
+|--------|------|
+| `declaration` | the declaration vocabulary (`DriverDescriptor`, `ChildCreation`, `ProviderDeclaration`, services, startup steps) and the canonical manifest and root-schema emitters |
+| `base` | `ProviderBase`, `run`/`run_guest`, the lifecycle driver, the derived startup order, and the supervised fd 10 bootstrap |
+| `server` | the authenticated service loop: frame codec, bounded dispatch adapter, readiness handshake, drain |
+| `operations` | the envelope-side types and the envelope that dispatches to a declared handler |
+| `plane` | the zone-plane handle, the child-creation fence, the drain deadline, and the cause-carrying reconcile seam |
+| `audit` | the bounded audit ring and the redaction wrapper |
+| `testing` | `TestHarness`, the fakes, `FaultPlan`, the deterministic clock, and the conformance kit |
 
 ## Exported resource types
 
@@ -46,7 +59,7 @@ binding.
 ## Security posture
 
 No privileged mutation, no broker, D-Bus, or systemd socket, no host path
-resolution, no process spawn, and no direct-effect escape. The `fakes` module
+resolution, no process spawn, and no direct-effect escape. The `testing` module
 is hermetic by construction: its supervisor records a launch intent and never
 spawns, its effect port records an intent and mutates nothing, and its bus
 resolves one declared dependency alias without ever handing back its binding
@@ -62,8 +75,12 @@ record, or metric label.
 ## Build and test
 
 ```bash
-bazel test //packages/d2b-provider-toolkit:d2b_provider_toolkit_test
+cargo test -p d2b-provider-toolkit
 ```
+
+`tests/harness.rs` drives the five standard test kinds over a fake-port
+Provider; `tests/conformance.rs`, `tests/fake_provider.rs`, and
+`tests/malicious_provider.rs` keep the crate's own fences honest.
 
 Heavier container, Host, Guest, and cross-process fixtures live in
 `integration/`; everything under `src/` and `tests/` is fast, in-process, and

@@ -500,8 +500,6 @@ pub enum OperationFields {
     Hello {
         client_version: String,
     },
-    ResourceActivationAudit {},
-    ValidateBundle {},
     ExportBrokerAudit {
         since: Option<String>,
         filter: Option<String>,
@@ -868,8 +866,6 @@ impl OperationFields {
             "Hello" => parse_fields!(value => Hello {
                 client_version: String,
             }),
-            "ResourceActivationAudit" => parse_fields!(value => ResourceActivationAudit {}),
-            "ValidateBundle" => parse_fields!(value => ValidateBundle {}),
             "ExportBrokerAudit" => parse_fields!(value => ExportBrokerAudit {
                 since: Option<String>,
                 filter: Option<String>,
@@ -1557,11 +1553,6 @@ mod tests {
         OperationFields::Hello {
             client_version: "1.2.3".to_owned(),
         }
-    );
-    roundtrip_test!(
-        validate_bundle_round_trip,
-        "ValidateBundle",
-        OperationFields::ValidateBundle {}
     );
     roundtrip_test!(
         export_broker_audit_round_trip,

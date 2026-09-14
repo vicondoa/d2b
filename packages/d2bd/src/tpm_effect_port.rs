@@ -42,7 +42,7 @@ use d2b_resource_runtime::manager::ResourceView;
 use serde_json::Value;
 
 use crate::provider_effects::{GuestLifecycleOperation, LifecycleAuthorization};
-use crate::shared_provider_driver::SharedProviderChildSurface;
+use d2b_provider_toolkit::SharedProviderChildSurface;
 
 fn map_legacy_migration_outcome(
     outcome: d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome,
@@ -89,10 +89,11 @@ fn gate_declared_phase(phase: Option<&'static str>) -> Result<(), TpmResourceEff
 /// publishes the runtime's ready classification whatever the one-shot
 /// outcome was, so the outcome - and only the outcome - rides the row's
 /// status projection (`{"ephemeral": {"state": ..., "code": ...}}`,
-/// `process_driver.rs::publish_ephemeral_outcome`). A row that has not
-/// published one yet is retryable (the flush is still in flight); a failed
-/// outcome is the flush's own failure and fails the device path closed; an
-/// unreadable projection is refused rather than read as success.
+/// `ProcessDriver::publish_ephemeral_outcome` in `d2b-provider-process`). A
+/// row that has not published one yet is retryable (the flush is still in
+/// flight); a failed outcome is the flush's own failure and fails the device
+/// path closed; an unreadable projection is refused rather than read as
+/// success.
 fn gate_flush_outcome(view: &ResourceView) -> Result<(), TpmResourceEffectError> {
     let Some(projection) = view.observed_status_projection() else {
         return Err(TpmResourceEffectError::Transient);
@@ -545,25 +546,6 @@ pub(crate) struct AdmittedTpmDevice {
 }
 
 impl AdmittedTpmDevice {
-    /// One Device admitted from an already issued Guest lifecycle lease (the
-    /// public peer path, retained by the legacy dispatch simulation).
-    #[cfg(test)]
-    pub(crate) fn new(
-        device_uid: ResourceUid,
-        device_ref: ResourceRef,
-        zone: impl Into<String>,
-        execution_ref: ResourceRef,
-        lifecycle_authorization: LifecycleAuthorization,
-    ) -> Self {
-        Self {
-            device_uid,
-            device_ref,
-            zone: zone.into(),
-            execution_ref,
-            lifecycle_admission: TpmLifecycleAdmission::Issued(lifecycle_authorization),
-        }
-    }
-
     /// One Device reconciled from its own row: the owning Guest's lifecycle
     /// admission is resolved when the pass reaches the launchable row.
     pub(crate) fn from_row(
@@ -657,39 +639,6 @@ pub(crate) fn finalize_device_tpm_controller(
         children,
     );
     crate::block_on_future(controller.finalize(&resource_effect))
-}
-
-/// Fail-closed child surface for callers that hold no manager context.
-///
-/// The retained legacy dispatch simulation
-/// (`composition::dispatch_device_tpm_reconcile`) runs outside a driver and
-/// cannot realize Device-owned rows; it refuses instead of re-introducing a
-/// spawn. The v3 path is the SharedProvider driver's `reconcile_tpm` effect,
-/// which passes its own [`SharedProviderChildSurface`].
-#[cfg(test)]
-pub(crate) struct NoManagerChildSurface;
-
-#[cfg(test)]
-#[async_trait::async_trait]
-impl SharedProviderChildSurface for NoManagerChildSurface {
-    async fn ensure(
-        &self,
-        _child: ChildEnsure,
-    ) -> Result<d2b_resource_runtime::spec_store::EnsureOutcome, crate::shared_provider_driver::SharedProviderEffectError>
-    {
-        Err(crate::shared_provider_driver::SharedProviderEffectError::Unavailable)
-    }
-
-    async fn delete(&self, _key: &ResourceKey) -> Result<(), crate::shared_provider_driver::SharedProviderEffectError> {
-        Err(crate::shared_provider_driver::SharedProviderEffectError::Unavailable)
-    }
-
-    async fn view(
-        &self,
-        _key: &ResourceKey,
-    ) -> Result<Option<ResourceView>, crate::shared_provider_driver::SharedProviderEffectError> {
-        Err(crate::shared_provider_driver::SharedProviderEffectError::Unavailable)
-    }
 }
 
 #[cfg(test)]
@@ -842,7 +791,7 @@ mod tests {
         async fn ensure(
             &self,
             child: ChildEnsure,
-        ) -> Result<EnsureOutcome, crate::shared_provider_driver::SharedProviderEffectError> {
+        ) -> Result<EnsureOutcome, d2b_provider_toolkit::SharedProviderEffectError> {
             self.rows
                 .lock()
                 .expect("rows")
@@ -851,7 +800,7 @@ mod tests {
             Ok(EnsureOutcome::Created(stored_row(&child)))
         }
 
-        async fn delete(&self, key: &ResourceKey) -> Result<(), crate::shared_provider_driver::SharedProviderEffectError> {
+        async fn delete(&self, key: &ResourceKey) -> Result<(), d2b_provider_toolkit::SharedProviderEffectError> {
             self.rows
                 .lock()
                 .expect("rows")
@@ -863,7 +812,7 @@ mod tests {
         async fn view(
             &self,
             key: &ResourceKey,
-        ) -> Result<Option<ResourceView>, crate::shared_provider_driver::SharedProviderEffectError> {
+        ) -> Result<Option<ResourceView>, d2b_provider_toolkit::SharedProviderEffectError> {
             Ok(self
                 .rows
                 .lock()

@@ -112,9 +112,10 @@ grant.
 ## State and telemetry
 
 Public status names an entry only by digest. No host path, source policy
-ID, ACL value, numeric UID or GID, or socket path is public. Audit and
-telemetry carry the same redaction: an entry is identified by digest and an
-outcome by a closed reason token, never by a path or a resolved root.
+ID, ACL value, numeric UID or GID, or socket path is public, and a condition
+carries a closed reason token instead of a path or a resolved root. This
+crate authors no audit event and no metric: the broker is the audit owner
+and the status projection is the only Provider-authored record.
 
 Persistent and cache-class Volumes use an identity-bound marker under a
 broker-maintained root outside the Volume tree. If that marker survives while
@@ -128,11 +129,6 @@ check, and the durable temporary-write, file-sync, replace, parent-sync
 sequence. Payload digest validation currently fails closed until the shared v3
 contract freezes a Provider-state digest domain.
 
-Audit events use the closed `volume-*` event set and carry no content, path,
-credential, or process fields. Metrics are the six `d2b_volume_state_*`
-instruments and use only closed provider, schema-class, outcome, and trigger
-labels. Zone identity appears only as the `d2b.zone` OTEL Resource attribute.
-
 The Provider itself declares no payload state Volume. Its bounded controller
 observations remain in resource status and the core Operation ledger, avoiding
 a bootstrap storage cycle.
@@ -141,8 +137,8 @@ a bootstrap storage cycle.
 
 | Path | Contents |
 | --- | --- |
-| `src/` | controller, source/quota/ACL admission, binding intents, layout engine, views, store-view mode, storage lifecycle diagnostics, TPM state mode, effect ports, colocated unit tests |
-| `tests/` | hermetic layout, view, sharing, store-view, TPM, and status-redaction conformance |
+| `src/` | controller, source/quota/ACL admission, binding intents, layout engine, views, store-view marker evidence, storage lifecycle diagnostics, effect ports, colocated unit tests |
+| `tests/` | hermetic layout, view, sharing, lock, marker, state, and status-redaction conformance |
 | `integration/` | heavier Host-path and store-view filesystem fixtures |
 
 ## Build and test

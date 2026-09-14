@@ -3,6 +3,12 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
 
+filegroup(
+    name = "generated_broker_operation_profiles",
+    srcs = ["src/generated/broker_operation_profiles.rs"],
+    visibility = ["//visibility:public"],
+)
+
 d2b_contracts_broker_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 filegroup(

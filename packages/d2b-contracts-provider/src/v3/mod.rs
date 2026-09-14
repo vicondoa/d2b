@@ -2,6 +2,7 @@
 
 pub mod credential;
 pub mod credential_controller;
+pub mod generated;
 pub mod provider;
 pub mod provider_registry;
 pub mod semantic_services;

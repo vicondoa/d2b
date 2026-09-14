@@ -11,20 +11,16 @@ let
   cfg = config.d2b;
   resourceModel = import ./resources.nix { inherit lib; };
   resourceBundle = import ./resources-bundle.nix { inherit lib; };
+  vocabulary = import ./generated/resource-inventories.nix;
+  # The committed schema artifact of one ResourceType: a standard type's
+  # artifact is the generated pointer, a qualified Provider type's is named by
+  # its own type string.
   coreSchemaFileName = resourceType:
-    if builtins.elem resourceType resourceModel.standardResourceTypes
-    then "core.d2bus.org_${resourceType}.schema.json"
-    else "${resourceType}.schema.json";
+    vocabulary.coreSchemaPointers.${resourceType} or "${resourceType}.schema.json";
 
-  controlTypes = [
-    "Zone"
-    "ZoneLink"
-    "Provider"
-    "Role"
-    "RoleBinding"
-    "Quota"
-    "EmergencyPolicy"
-  ];
+  # The ResourceTypes this projection owns, generated from the same
+  # declaration the compiler folds.
+  controlTypes = vocabulary.controlTypes;
   resourceNamePattern = "^[a-z][a-z0-9-]{0,62}$";
   resourceRefPattern =
     "^([A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$";

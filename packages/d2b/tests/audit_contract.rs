@@ -286,6 +286,42 @@ fn audit_admin_rejected_against_live_daemon_without_fallback() {
     );
 }
 
+#[test]
+fn audit_names_a_stalled_daemon_as_a_bounded_deadline() {
+    // The audit path used to have no timeout at all: a daemon that accepted
+    // the connection and then went silent parked the CLI in `recv` forever.
+    // The command's deadline must now surface as a named refusal.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sock = tmp.path().join("stalled.sock");
+    let handle = spawn_stalled_audit_mock(&sock);
+
+    let started = std::time::Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
+        .args(["audit", "--human", "--deadline", "1s"])
+        .env("D2B_PUBLIC_SOCKET", &sock)
+        .output()
+        .expect("spawn d2b audit --human (stalled mock daemon)");
+    let elapsed = started.elapsed();
+
+    handle.join().expect("stalled mock daemon thread");
+
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "audit against a silent daemon exits 1; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("deadline-exceeded"),
+        "a stalled audit receive must name the deadline class; stderr:\n{stderr}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "audit must not park on a silent daemon; took {elapsed:?}"
+    );
+}
+
 // --- in-process SOCK_SEQPACKET mock daemon ---------------------------------
 
 /// Spawn a one-shot mock daemon that performs the audit handshake and returns
@@ -302,6 +338,56 @@ fn spawn_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
             "complete": true,
         }),
     )
+}
+
+/// A mock daemon that completes the handshake, receives the audit request, and
+/// then answers nothing until the client gives up. This is the stall the
+/// audit's deadline bound exists for.
+fn spawn_stalled_audit_mock(path: &Path) -> std::thread::JoinHandle<()> {
+    use nix::sys::socket::{
+        AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
+    };
+
+    let _ = std::fs::remove_file(path);
+    let listener = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::empty(),
+        None,
+    )
+    .expect("seqpacket socket");
+    let addr = UnixAddr::new(path.as_os_str().as_bytes()).expect("unix addr");
+    bind(listener.as_raw_fd(), &addr).expect("bind stalled mock sock");
+    listen(&listener, Backlog::new(1).unwrap()).expect("listen stalled mock sock");
+
+    std::thread::spawn(move || {
+        let conn = accept(listener.as_raw_fd()).expect("accept");
+        let hello = recv_frame(conn);
+        assert_eq!(hello["type"], "hello", "expected hello frame, got {hello}");
+        send_frame(
+            conn,
+            &serde_json::json!({
+                "type": "helloOk",
+                "serverVersion": "0.4.0",
+                "selectedVersion": "0.4.0",
+                "capabilities": ["typed-errors", "export-broker-audit"],
+            }),
+        );
+        let req = recv_frame(conn);
+        assert_eq!(req["type"], "audit", "expected audit frame, got {req}");
+        // Hold the connection open without answering, and return once the
+        // client closes it (read returns 0 at EOF).
+        let mut byte = [0_u8; 1];
+        loop {
+            match nix::unistd::read(conn, &mut byte) {
+                Ok(0) => break,
+                Ok(_) => continue,
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(error) => panic!("stalled mock read: {error}"),
+            }
+        }
+        let _ = nix::unistd::close(conn);
+    })
 }
 
 fn spawn_single_audit_response_mock(path: &Path, response: Value) -> std::thread::JoinHandle<()> {

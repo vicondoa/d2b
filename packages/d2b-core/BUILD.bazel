@@ -5,6 +5,12 @@ exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
 
+filegroup(
+    name = "generated_broker_operation_authz",
+    srcs = ["src/generated/broker_operation_authz.rs"],
+    visibility = ["//visibility:public"],
+)
+
 d2b_core_srcs = glob(["src/**/*.rs"])
 
 rust_library(
@@ -263,6 +269,30 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_core",
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "loader_worker",
+    srcs = ["tests/loader_worker.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "loader_worker_panic",
+    srcs = ["tests/loader_worker_panic.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(

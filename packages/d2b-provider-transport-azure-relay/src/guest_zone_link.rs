@@ -345,7 +345,6 @@ fn digest_hex(digest: &[u8; 32]) -> String {
 mod tests {
     use super::*;
     use crate::{RelayCredentialMaterial, RelaySecret};
-    use crate::guest_credential::GatewayCredential;
     use async_trait::async_trait;
     use std::fs;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -377,9 +376,8 @@ mod tests {
 
     fn sealed_runtime(dir: &Path) -> GatewayGuestZoneLinkRuntime {
         let credential_path = dir.join("credential.sealed.json");
-        let seal_key =
-            SealingKey::from_bytes([7_u8; crate::guest_credential::GATEWAY_SEAL_KEY_LEN]);
-        GatewayCredential::enroll_sealed(
+        let seal_key = crate::guest_credential::sealing_key();
+        crate::guest_credential::seal_envelope_for_test(
             &credential_path,
             &seal_key,
             crate::guest_credential::GatewayCredentialMaterial {
@@ -388,14 +386,14 @@ mod tests {
                 send_key_name: "gateway-send".to_owned(),
                 send_key: "send-secret".to_owned(),
             },
-            crate::guest_credential::CredentialEnvelopeMeta::first(None),
             1,
+            None,
         )
         .expect("sealed credential");
         let seal_key_path = dir.join("seal.key");
         fs::write(
             &seal_key_path,
-            [7_u8; crate::guest_credential::GATEWAY_SEAL_KEY_LEN],
+            crate::guest_credential::sealing_key_bytes(),
         )
         .expect("seal key");
         fs::set_permissions(&seal_key_path, fs::Permissions::from_mode(0o600))

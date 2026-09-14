@@ -1,10 +1,18 @@
-//! Fixed core-controller handlers and pure reconciliation policy.
+//! Non-resource controller-session machinery: the assignment transport, the
+//! per-Zone coordinator, the legacy-state migration receipts, the fixed
+//! handler catalog, and the generic owner-child reconciliation Core owns for
+//! every declaring family.
 //!
 //! The store-routing half of this crate (the registered-API adapter, the
 //! configuration/cleanup generations, the watch/hint admission queue, and the
 //! durable store metadata) was deleted with the persistent-database control
-//! model. What remains are the domain modules the converted drivers and the
-//! daemon import.
+//! model. The resource-domain modules left with the types they belong to:
+//! `zone_status` moved to `d2b-provider-zone`, `zone_links`/`zonelink` to
+//! `d2b-provider-zone-link`, `rbac` to `d2b-provider-role`, and `providers`
+//! to `d2b-provider-provider`. The Host-global authority index and its
+//! durable operation adapter stay here with the coordinator they serve: they
+//! arbitrate every scarce-resource class the session admits, not one type's
+//! rows.
 
 // `main.rs` is a library module here, not a binary crate root; the crate turns
 // off binary auto-discovery so cargo does not claim it as one. The lint that
@@ -21,11 +29,6 @@ pub mod coordinator;
 pub mod main;
 pub mod migration;
 pub mod owner_reconcile;
-pub mod providers;
-pub mod rbac;
-pub mod zone_links;
-pub mod zone_status;
-pub mod zonelink;
 
 pub use binding_children::{
     BindingChildMaterializationError, BindingChildReconciler, BindingChildResource,
@@ -53,5 +56,3 @@ pub use owner_reconcile::{
     OwnerChildIdentity, OwnerGraph, OwnerGraphError, OwnerIndex, OwnerLimits, OwnerMutation,
     OwnerReconcileError, OwnerReconcilePlan, OwnerTrigger, ProcessSchedulingClass, TeardownPlan,
 };
-pub use providers::{CoreReconcileError, fixed_system_core_handlers_ready, provider_observation};
-pub use zone_status::{SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput};

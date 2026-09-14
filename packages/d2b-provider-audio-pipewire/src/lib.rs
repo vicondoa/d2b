@@ -3,9 +3,6 @@
 #![deny(missing_docs)]
 
 pub mod argv;
-#[allow(missing_docs)]
-pub mod audio_argv;
-mod audio_policy;
 pub mod authority;
 pub mod controller;
 pub mod manifest;
@@ -16,7 +13,7 @@ pub mod state;
 pub mod telemetry;
 
 pub use argv::{AudioComponentTemplate, AudioTemplateError, RenderedAudioTemplate};
-pub use audio_policy::{
+pub use d2b_contracts::audio::{
     AudioGrant, AudioPolicyError, AudioPolicyState, LevelPercent, LevelPercentError,
     parse_audio_state,
 };
@@ -28,8 +25,7 @@ pub use controller::{
     AudioArbitrationState, AudioBindingChannels, AudioBindingController, AudioBindingPhase,
     AudioBindingStatus, AudioControllerError, AudioEnforcementPosture, AudioLastSetApplied,
     AudioMicrophoneStatus, AudioReconcileResult, AudioReconcileResultWithChildren,
-    AudioRunnerContract, AudioSpeakerStatus, AUDIO_BINDING_FINALIZER, AUDIO_REPAIR_INTERVAL_SECS,
-    AUDIO_SERVICE_FINALIZER, audio_runner_contract, register_service,
+    AudioSpeakerStatus, AUDIO_REPAIR_INTERVAL_SECS, register_service,
 };
 pub use manifest::AudioManifest;
 pub use mediator::{
@@ -38,7 +34,7 @@ pub use mediator::{
 };
 pub use resource_type::{
     AudioAdmissionError, AudioBindingSpec, AudioGrants, AudioServiceRole, AudioServiceSpec,
-    ProviderExtension, validate_audio_binding, validate_audio_binding_in_zone,
+    PROVIDER_REF, ProviderExtension, validate_audio_binding, validate_audio_binding_in_zone,
     validate_audio_service,
 };
 pub use state::{

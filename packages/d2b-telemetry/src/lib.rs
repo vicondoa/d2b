@@ -20,8 +20,9 @@ pub use emitter::{
     Signal,
 };
 pub use metric_label_policy::{
-    FORBIDDEN_LABEL_KEYS, FORBIDDEN_LABEL_SUFFIXES, IdentityCanaries, LabelDescriptor,
-    MetricDescriptor, MetricPolicyError, OTEL_RESOURCE_ATTRIBUTES, allowed_values,
+    API_VERBS, BROKER_OPERATION_VALUES, FORBIDDEN_LABEL_KEYS, FORBIDDEN_LABEL_SUFFIXES,
+    IdentityCanaries, LabelDescriptor, METRIC_LABEL_POLICY, MetricDescriptor, MetricPolicyError,
+    OTEL_RESOURCE_ATTRIBUTES, PROCESS_PROVIDERS, RESOURCE_TYPE_VALUES, allowed_values,
     canonical_descriptor, validate_data_point, validate_descriptor, validate_label_key,
     validate_labels, validate_resource_attributes,
 };

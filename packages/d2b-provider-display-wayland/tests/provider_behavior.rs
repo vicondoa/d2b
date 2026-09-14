@@ -1,10 +1,7 @@
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_display_wayland::{
-    DisplayAuditKind, DisplayAuditOutcome, DisplayController, DisplayIdentity,
-    DisplayLabelPosition, DisplayProviderDescriptor, DisplayTelemetryField, DisplayTelemetryFrame,
-    DisplayUserPortal, FilterInput, Phase, PolicyWarning, PrincipalPool, ProcessObservation,
-    ProxyReadinessFailure, ProxyReadinessStage, ProxyReadinessState, WaylandPolicy,
-    WaylandPolicySnapshot, WaylandSessionSpec,
+    DisplayController, DisplayIdentity, DisplayLabelPosition, FilterInput, Phase, PolicyWarning,
+    PrincipalPool, ProcessObservation, WaylandPolicy, WaylandPolicySnapshot, WaylandSessionSpec,
 };
 
 fn refs() -> (ResourceRef, ResourceRef, ResourceRef, ResourceRef) {
@@ -183,41 +180,12 @@ fn dmabuf_rules_are_compiled_and_digest_bound() {
 
 #[test]
 fn principal_pool_is_opaque_and_fails_closed_when_exhausted() {
-    let mut pool = PrincipalPool::new(["corp-vm"], 1).unwrap();
-    assert_eq!(
-        PrincipalPool::principal_for("dev", "corp-vm"),
-        "d2b-wlp-e57e8feb6155"
-    );
+    let mut pool = PrincipalPool::new(1).unwrap();
     let lease = pool.acquire_dynamic().unwrap();
     assert!(pool.acquire_dynamic().is_err());
     assert!(format!("{lease:?}").contains("REDACTED"));
     pool.release(lease).unwrap();
     assert!(pool.acquire_dynamic().is_ok());
-}
-
-#[test]
-fn readiness_event_is_bounded_and_path_free() {
-    let event = d2b_provider_display_wayland::ProxyReadinessEvent::failed(
-        ProxyReadinessStage::Upstream,
-        ProxyReadinessFailure::UpstreamUnavailable,
-    );
-    let json = serde_json::to_string(&event).unwrap();
-    assert_eq!(event.state, ProxyReadinessState::Failed);
-    assert!(!json.contains("socket"));
-    assert!(!json.contains("path"));
-    assert!(json.contains("upstream-unavailable"));
-}
-
-#[test]
-fn display_descriptor_is_status_first_and_publishes_typed_services() {
-    let descriptor = DisplayProviderDescriptor::default();
-    assert!(descriptor.validate().is_ok());
-    assert!(!descriptor.provider_state_volume);
-    assert!(
-        descriptor
-            .service_packages()
-            .contains(&"d2b.display.host-clipboard.v3")
-    );
 }
 
 #[test]
@@ -415,53 +383,11 @@ fn distinct_authenticated_sessions_do_not_share_display_principals() {
 }
 
 #[test]
-fn portal_is_same_uid_and_finalizer_is_fail_closed() {
-    let user = ResourceRef::parse("User/alice").unwrap();
-    let portal = DisplayUserPortal::new(user.clone(), 1000, 1).unwrap();
-    assert_eq!(portal.active_sessions(), 0);
-    assert!(DisplayUserPortal::new(ResourceRef::parse("Guest/work").unwrap(), 1000, 1).is_err());
+fn finalizer_is_fail_closed() {
     assert_eq!(
         d2b_provider_display_wayland::DisplayController::finalizer(),
         "display-wayland.d2bus.org/proxy-stopped"
     );
-}
-
-#[test]
-fn audit_and_telemetry_reject_identity_bearing_surfaces() {
-    let marker = "window-title-canary";
-    let record = d2b_provider_display_wayland::DisplayAuditRecord::new(
-        DisplayAuditKind::ProxyStarted,
-        DisplayAuditOutcome::Success,
-        "dev",
-        marker,
-        "alice",
-        "operation-1",
-    );
-    assert!(!record.to_wire_record().contains(marker));
-    let frame =
-        DisplayTelemetryFrame::new("dev", d2b_provider_display_wayland::MetricOutcome::Success);
-    assert!(
-        DisplayTelemetryFrame::validate_collector_fields(frame.metric_labels().to_vec()).is_ok()
-    );
-    assert!(
-        DisplayTelemetryFrame::validate_collector_fields([DisplayTelemetryField {
-            key: "window_title",
-            value: marker.to_owned(),
-        }])
-        .is_err()
-    );
-    let warning = d2b_provider_display_wayland::DisplayAuditRecord::new(
-        DisplayAuditKind::PolicyAdvisory,
-        DisplayAuditOutcome::Denied,
-        "dev",
-        "resource",
-        "alice",
-        "operation-1",
-    )
-    .with_warning("bad\nwarning", "interface=bad\n");
-    let wire = warning.to_wire_record();
-    assert!(!wire.contains('\n'));
-    assert!(!wire.contains(":interface=bad"));
 }
 
 #[test]

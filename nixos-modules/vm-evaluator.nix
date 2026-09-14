@@ -92,10 +92,6 @@ let
     , vsockSocket ? "${stateDir}/vsock.sock"
     , componentSessionEnable ? true
     , guestConfigPath ? null
-    , shellEnable ? false
-    , shellDefaultName ? "default"
-    , shellMaxSessions ? 1
-    , shellMaxAttached ? 1
     }:
     let
       cid =
@@ -113,12 +109,6 @@ let
         d2b.componentSession = {
           enable = componentSessionEnable;
           inherit guestConfigPath zone;
-          shell = {
-            enable = shellEnable;
-            defaultName = shellDefaultName;
-            maxSessions = shellMaxSessions;
-            maxAttached = shellMaxAttached;
-          };
         };
         microvm.vsock.cid = lib.mkDefault cid;
         microvm.vsock.socket = lib.mkDefault vsockSocket;
