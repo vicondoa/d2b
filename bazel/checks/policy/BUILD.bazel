@@ -1,4 +1,17 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 package(default_visibility = ["//visibility:public"])
+
+sh_test(
+    name = "provider_crate_layout",
+    srcs = ["//:tests/tools/provider-crate-layout-check.sh"],
+    data = ["//packages/xtask:xtask"],
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
 
 test_suite(
     name = "source_hygiene",
@@ -66,6 +79,7 @@ test_suite(
         ":changelog",
         ":drift",
         ":policy",
+        ":provider_crate_layout",
         "//packages/xtask:pr_workflow",
         "//packages/xtask:repository_contract",
     ],
