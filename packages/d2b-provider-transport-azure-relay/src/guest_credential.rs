@@ -695,7 +695,14 @@ pub(crate) fn seal_envelope_for_test(
         }))
         .map_err(|_| CredentialError::Malformed)?,
     );
-    let nonce = [0_u8; GATEWAY_CREDENTIAL_NONCE_LEN];
+    // A nonce reused under one key breaks ChaCha20-Poly1305 outright, so it is
+    // drawn fresh for every envelope. The loader reads it back from the file,
+    // which is why the envelope carries it.
+    use std::io::Read;
+    let mut nonce = [0_u8; GATEWAY_CREDENTIAL_NONCE_LEN];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut nonce))
+        .map_err(|_| CredentialError::Crypto)?;
     let aad = credential_aad(generation, not_after);
     let ciphertext = cipher(sealing_key)
         .encrypt(
