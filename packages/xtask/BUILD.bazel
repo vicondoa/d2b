@@ -402,7 +402,7 @@ rust_test(
 
 rust_test(
     name = "xtask_test",
-    compile_data = ["Cargo.toml"],
+    compile_data = ["Cargo.toml", "//:clippy.toml"],
     crate = ":xtask",
     data = [
         ":xtask",
@@ -428,7 +428,7 @@ rust_test(
 rust_test(
     name = "schema_reproducibility_test",
     args = ["schema_tests::"],
-    compile_data = ["Cargo.toml"],
+    compile_data = ["Cargo.toml", "//:clippy.toml"],
     crate = ":xtask",
     data = [
         ":xtask",
