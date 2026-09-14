@@ -60,6 +60,10 @@ impl TypedShellSessionTargetCache {
         self.entries.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub fn recency_len(&self) -> usize {
         self.recency.len()
     }

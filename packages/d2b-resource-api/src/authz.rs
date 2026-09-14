@@ -1246,8 +1246,6 @@ impl core::fmt::Debug for AuthorizationGrant {
 /// let _: AuthorizationLease = <() as Into<AuthorizationLease>>::into(());
 /// ```
 pub struct AuthorizationLease {
-    #[allow(dead_code)]
-    authority: Arc<LeaseAuthority>,
     subject_uid: ResourceUid,
     zone_uid: ResourceUid,
     object_uid: Option<ResourceUid>,
@@ -1257,8 +1255,6 @@ pub struct AuthorizationLease {
     provider_assignment_generation: Option<ResourceGeneration>,
     operation_id: String,
 }
-
-struct LeaseAuthority;
 
 impl core::fmt::Debug for AuthorizationLease {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1291,12 +1287,24 @@ const _: fn() = || {
     let _ = <AuthorizationLease as CapabilityMustNotImplementCloneCopyDefaultOrFrom<_>>::some_item;
 };
 
+/// The object an [`AuthorizationLease`] targets, with its generation when the
+/// admission evaluated a concrete resource body.
+///
+/// A small struct, not a tuple, because the uid and generation are
+/// independently optional: a delete precondition binds an expected uid with no
+/// body, so a lease can carry a uid without a generation (and an admission
+/// without a concrete target carries neither).
+#[derive(Debug)]
+pub(crate) struct AuthorizationLeaseTarget {
+    pub uid: Option<ResourceUid>,
+    pub generation: Option<ResourceGeneration>,
+}
+
 impl AuthorizationLease {
     pub(crate) fn issue(
         subject_uid: ResourceUid,
         zone_uid: ResourceUid,
-        object_uid: Option<ResourceUid>,
-        object_generation: Option<ResourceGeneration>,
+        target: AuthorizationLeaseTarget,
         operation: AdmittedVerb,
         policy_revision: u64,
         provider_assignment_generation: Option<ResourceGeneration>,
@@ -1310,11 +1318,10 @@ impl AuthorizationLease {
             return Err(AdmissionError::LeaseInvalid);
         }
         Ok(Self {
-            authority: Arc::new(LeaseAuthority),
             subject_uid,
             zone_uid,
-            object_uid,
-            object_generation,
+            object_uid: target.uid,
+            object_generation: target.generation,
             operation,
             policy_revision,
             provider_assignment_generation,
@@ -2316,8 +2323,10 @@ mod tests {
         let lease = AuthorizationLease::issue(
             subject_uid.clone(),
             zone_uid.clone(),
-            Some(object_uid.clone()),
-            Some(ResourceGeneration::new(4).unwrap()),
+            AuthorizationLeaseTarget {
+                uid: Some(object_uid.clone()),
+                generation: Some(ResourceGeneration::new(4).unwrap()),
+            },
             AdmittedVerb::UpdateSpec,
             7,
             Some(ResourceGeneration::new(9).unwrap()),

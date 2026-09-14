@@ -1318,10 +1318,10 @@ pub fn declared_dependency_refs(spec: &Value) -> Vec<ResourceRef> {
     fn walk(value: &Value, refs: &mut Vec<ResourceRef>) {
         match value {
             Value::String(value) => {
-                if let Ok(reference) = ResourceRef::parse(value) {
-                    if !refs.contains(&reference) {
-                        refs.push(reference);
-                    }
+                if let Ok(reference) = ResourceRef::parse(value)
+                    && !refs.contains(&reference)
+                {
+                    refs.push(reference);
                 }
             }
             Value::Array(values) => {

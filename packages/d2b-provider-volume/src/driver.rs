@@ -728,10 +728,8 @@ pub fn volume_descriptor(args: VolumeDriverArgs) -> DriverDescriptor {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, atomic::AtomicBool};
+    use std::sync::Arc;
 
-    use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
-    use d2b_contracts_resource::v3::volume::VolumeSpec;
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext,
         WatchId, WatchRegistration,
@@ -746,69 +744,9 @@ mod tests {
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
     use super::{VolumeDriverArgs, VolumeDriverFactory, volume_spec_decoder};
+    use crate::test_support::FakeLayoutEffects;
 
     // -- fakes ---------------------------------------------------------------
-
-    /// Scripted layout port: records every call in order.
-    struct FakeLayoutEffects {
-        calls: parking_lot::Mutex<Vec<&'static str>>,
-        ready: AtomicBool,
-        /// Report a Degraded/Pending layout instead of a Ready one.
-        degraded: AtomicBool,
-    }
-
-    impl FakeLayoutEffects {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: parking_lot::Mutex::new(Vec::new()),
-                ready: AtomicBool::new(false),
-                degraded: AtomicBool::new(false),
-            })
-        }
-
-        /// A port whose layout report stays Degraded/Pending (`Ok(false)`).
-        fn degraded() -> Arc<Self> {
-            let fake = Self::new();
-            fake.degraded.store(true, std::sync::atomic::Ordering::SeqCst);
-            fake
-        }
-
-        fn call_order(&self) -> Vec<&'static str> {
-            self.calls.lock().clone()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl super::VolumeDriverEffects for FakeLayoutEffects {
-        async fn ensure_layout(
-            &self,
-            _volume_uid: &ResourceUid,
-            _spec: &VolumeSpec,
-            _provider: Option<&serde_json::Value>,
-            _owner_ref: Option<&ResourceRef>,
-        ) -> Result<bool, String> {
-            self.calls.lock().push("ensure-layout");
-            if self.degraded.load(std::sync::atomic::Ordering::SeqCst) {
-                return Ok(false);
-            }
-            self.ready.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(true)
-        }
-
-        async fn remove_layout(
-            &self,
-            _volume_uid: &ResourceUid,
-            _spec: &VolumeSpec,
-        ) -> Result<(), String> {
-            self.calls.lock().push("remove-layout");
-            Ok(())
-        }
-
-        fn has_layout(&self, _volume_uid: &ResourceUid) -> bool {
-            self.calls.lock().push("has-layout");
-            self.ready.load(std::sync::atomic::Ordering::SeqCst)
-        }
-    }
 
     /// Recording manager endpoint over one shared ordered log so tests can
     /// assert commit-before-spawn (F1) and retire/retain behavior. The

@@ -357,7 +357,7 @@ impl HelperRegistry {
                 return Err(HelperRegistryError::RequestCorrelationMismatch);
             }
         }
-        if let Err(error) = connection.queue_outbound(DaemonToUnsafeLocalHelper::Launch(request)) {
+        if let Err(error) = connection.queue_outbound(DaemonToUnsafeLocalHelper::Launch(Box::new(request))) {
             connection.pending.lock().remove(&request_id);
             self.operations
                 .lock()

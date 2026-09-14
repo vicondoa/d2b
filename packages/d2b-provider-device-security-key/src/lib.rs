@@ -14,6 +14,9 @@ mod process;
 pub mod relay;
 mod relay_service;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 pub use authority::{
     PhysicalAuthorityLease, PhysicalUsbBackingClaim, PhysicalUsbBackingToken, RelayLaunchTicket,
     SecurityKeyAdmission, SecurityKeyEffectError, SecurityKeyEffectPort, SecurityKeyOpenIntent,

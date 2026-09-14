@@ -1260,10 +1260,10 @@ fn answer_request(
         return Ok(RequestOutcome::Reply(error.into_response(), Vec::new()));
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
-    if config.profile == BrokerProfile::Guest {
-        if let Err(error) = validate_guest_process_binding(&request) {
-            return Ok(RequestOutcome::Reply(error.into_response(), Vec::new()));
-        }
+    if config.profile == BrokerProfile::Guest
+        && let Err(error) = validate_guest_process_binding(&request)
+    {
+        return Ok(RequestOutcome::Reply(error.into_response(), Vec::new()));
     }
     let (rate_role, rate_operation) = if effective_uid == config.d2bd_uid {
         (envelope.caller_role.for_display(), operation)
@@ -1742,8 +1742,10 @@ fn validate_tap_create_provenance(
         zone_uid,
         network_uid,
         attachment_id,
-        network_generation,
-        attachment_generation,
+        (
+            network_generation,
+            attachment_generation,
+        ),
         bundle_generation,
         canonical_role_id,
         vm_id.as_str(),
@@ -4554,7 +4556,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             }
             let controller_bootstrap_fd_index = posture.bootstrap_response_index();
             let console_fd_index = posture.console_response_index(outcome.extra_response_fds.len());
-            let response = BrokerResponse::SpawnRunner(
+            let response = BrokerResponse::SpawnRunner(Box::new(
                 d2b_contracts_broker::broker_wire::SpawnRunnerResponse {
                     vm_id: req.vm_id.clone(),
                     role_id: req.role_id.clone(),
@@ -4578,7 +4580,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     controller_bootstrap_fd_index,
                     console_fd_index,
                 },
-            );
+            ));
             let _ = intent_id_legacy_runner;
             let mut response_fds = Vec::with_capacity(1 + outcome.extra_response_fds.len());
             response_fds.push(outcome.pidfd);
@@ -7817,8 +7819,10 @@ fn prepare_runner_preopened_fds(
                     &tap_context.zone_uid,
                     &tap_context.network_uid,
                     &tap_context.attachment_id,
-                    tap_context.network_generation,
-                    tap_context.attachment_generation,
+                    (
+                        tap_context.network_generation,
+                        tap_context.attachment_generation,
+                    ),
                     &tap_context.bundle_generation,
                     &tap_role_id,
                     req.vm_id.as_str(),
@@ -10742,17 +10746,16 @@ fn validate_spawn_runner_request_matches_intent(
         intent,
         device_worker_scope,
     )?;
-    if typed {
-        if !req.runtime_allocations.is_empty()
+    if typed
+        && (!req.runtime_allocations.is_empty()
             || req.workload_identity.is_some()
-            || req.network_tap_context.is_some()
-        {
-            return Err(BrokerError::SpawnRunnerIntentMismatch {
-                field: "runtime_allocations",
-                requested: "caller-supplied-runtime-state".to_owned(),
-                resolved: "bundle-authoritative-runtime".to_owned(),
-            });
-        }
+            || req.network_tap_context.is_some())
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "runtime_allocations",
+            requested: "caller-supplied-runtime-state".to_owned(),
+            resolved: "bundle-authoritative-runtime".to_owned(),
+        });
     }
     Ok(())
 }
@@ -16279,7 +16282,7 @@ mod tests {
         }
 
         let spawn_runner = assert_dispatch(
-            BrokerRequest::SpawnRunner(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
+            BrokerRequest::SpawnRunner(Box::new(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
                 execution_ref: None,
                 execution_domain: None,
                 user_ref: None,
@@ -16313,7 +16316,7 @@ mod tests {
                 }],
                 tracing_span_id: Some(TracingSpanId::new("span-spawn")),
                 network_tap_context: None,
-            }),
+            })),
             "SpawnRunner",
             OperationFields::SpawnRunner {
                 bundle_runner_intent_ref: intent_id_legacy_runner("corp-vm", "ch-runner"),
@@ -17099,7 +17102,7 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
         let request =
-            BrokerRequest::SpawnRunner(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
+            BrokerRequest::SpawnRunner(Box::new(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
                 execution_ref: None,
                 execution_domain: None,
                 user_ref: None,
@@ -17136,7 +17139,7 @@ mod tests {
                 }],
                 tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-refusal")),
                 network_tap_context: None,
-            });
+            }));
         let audit_context = DispatchAuditContext::from_request(&request, 5152, &caller_role)
             .expect("audit context");
 
@@ -17242,7 +17245,7 @@ mod tests {
         let caller_gid = Gid::current().as_raw();
         let intent_ref = intent_id_legacy_runner("corp-vm", "otel-host-bridge");
         let request =
-            BrokerRequest::SpawnRunner(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
+            BrokerRequest::SpawnRunner(Box::new(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
                 execution_ref: None,
                 execution_domain: None,
                 user_ref: None,
@@ -17273,7 +17276,7 @@ mod tests {
                 }],
                 tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-wrong-vm")),
                 network_tap_context: None,
-            });
+            }));
         let audit_context = DispatchAuditContext::from_request(&request, 5153, &caller_role)
             .expect("audit context");
 
@@ -17785,8 +17788,10 @@ mod tests {
                     &zone_uid,
                     &network_uid,
                     &attachment_id,
-                    ResourceGeneration::new(4).unwrap(),
-                    ResourceGeneration::new(7).unwrap(),
+                    (
+                        ResourceGeneration::new(4).unwrap(),
+                        ResourceGeneration::new(7).unwrap(),
+                    ),
                     &bundle_generation,
                     role_id.as_str(),
                     "corp-vm",
@@ -17928,8 +17933,10 @@ mod tests {
                     &zone_uid,
                     &network_uid,
                     &attachment_id,
-                    network_generation,
-                    attachment_generation,
+                    (
+                        network_generation,
+                        attachment_generation,
+                    ),
                     &bundle_generation,
                     role_id.as_str(),
                     "corp-vm",

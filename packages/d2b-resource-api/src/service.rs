@@ -135,6 +135,15 @@ impl core::fmt::Debug for UpgradeResult {
 }
 
 /// Default until the controller dispatch slice lands.
+///
+/// Closing unit: the controller dispatch slice (upgrades U-series) that lands
+/// a production `UpgradeDispatcher`. It is the only production impl and the
+/// default `U` on `ResourceService`/`ResourceApiClient`/`ResourceBusAdapter`,
+/// reached via `new`/`new_session_bound`/`new_with_zone_uid`
+/// (service.rs:151/:208/:225, host plane `d2bd/src/resource_runtime.rs:4543`,
+/// guest runtime `d2bd-runtime/src/guest_resource_runtime.rs:269`). Until the
+/// slice lands, the public `upgrade()` RPC (service.rs:1111) deliberately
+/// errors `ResourceProviderUnavailable`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UnavailableUpgradeDispatcher;
 
@@ -910,10 +919,10 @@ where
             Ok(parsed) => parsed,
             Err(error) => return batch_error(error),
         };
-        if let Some(scoped_mutations) = scoped_mutations.as_deref() {
-            if let Err(error) = attach_scoped_fences(&mut parsed, scoped_mutations, &routes) {
-                return batch_error(error);
-            }
+        if let Some(scoped_mutations) = scoped_mutations.as_deref()
+            && let Err(error) = attach_scoped_fences(&mut parsed, scoped_mutations, &routes)
+        {
+            return batch_error(error);
         }
         for mutation in &mut parsed {
             mutation.store.configuration_generation = configuration_generation;

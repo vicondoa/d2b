@@ -199,6 +199,7 @@ d2bd_test_support_deps = [
     "//packages/d2b-session-unix:d2b_session_unix_test_support",
     "//packages/d2b-provider-volume-local:d2b_provider_volume_local_test_support",
     "//packages/d2b-provider-device:d2b_provider_device_test_support",
+    "//packages/d2b-provider-endpoint:d2b_provider_endpoint_test_support",
     "//packages/d2b-provider-volume:d2b_provider_volume_test_support",
     "//packages/d2b-provider-volume-binding:d2b_provider_volume_binding_test_support",
     "//packages/d2b-provider-provider:d2b_provider_provider_test_support",

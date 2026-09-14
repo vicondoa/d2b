@@ -220,14 +220,13 @@ impl<P: UserDiscoveryEffectPort> UserReconciler<P> {
         user_ref: &ResourceRef,
         spec: &UserSpec,
     ) -> Result<UserStatusReport, SystemCoreError> {
-        ownership::require_resource_type(user_ref, USER_RESOURCE_TYPE).map_err(|error| {
+        ownership::require_resource_type(user_ref, USER_RESOURCE_TYPE).inspect_err(|&error| {
             warn!(
                 provider = crate::PROVIDER_NAME,
                 user = %user_ref.to_canonical_string(),
                 error = %error,
                 "assignment rejected: user resource type not owned by system-core"
             );
-            error
         })?;
         let Some(discovered) = self.port.discover(user_ref, spec).await? else {
             debug!(

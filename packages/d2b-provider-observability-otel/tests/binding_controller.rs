@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_observability_otel::{
     IdentityCanaries, Ingress, IngressOutcome, MetricFrame, MetricPoint,
-    TelemetryBindingController, TelemetryBindingPhase, TelemetryComponentSession,
+    TelemetryBindingController, TelemetryBindingFrame, TelemetryBindingPhase,
+    TelemetryComponentSession,
     TelemetryControllerError, TelemetryServiceController, TelemetryServicePhase,
     TelemetryServiceRole, TelemetryStreamRequest, TelemetryStreamSignal,
 };
@@ -47,11 +48,13 @@ fn explicit_binding_reconciles_collector_children_and_route_status() {
             &binding,
             &service,
             &target,
-            Ingress::OtlpVsock,
-            7,
-            &frame(),
-            &IdentityCanaries::default(),
-            true,
+            TelemetryBindingFrame {
+                ingress: Ingress::OtlpVsock,
+                connection_id: 7,
+                frame: &frame(),
+                canaries: &IdentityCanaries::default(),
+                capacity_available: true,
+            },
         )
         .unwrap();
     assert_eq!(controller.phase(), TelemetryBindingPhase::Ready);
@@ -86,11 +89,13 @@ fn finalization_blocks_reconcile_and_service_alone_cannot_create_children() {
                 &binding,
                 &service,
                 &target,
-                Ingress::OtlpVsock,
-                7,
-                &frame(),
-                &IdentityCanaries::default(),
-                true,
+                TelemetryBindingFrame {
+                    ingress: Ingress::OtlpVsock,
+                    connection_id: 7,
+                    frame: &frame(),
+                    canaries: &IdentityCanaries::default(),
+                    capacity_available: true,
+                },
             )
             .is_err()
     );
@@ -214,11 +219,13 @@ fn telemetry_binding_requires_an_identity_scoped_connection() {
             &binding,
             &service,
             &target,
-            Ingress::OtlpVsock,
-            0,
-            &frame(),
-            &IdentityCanaries::default(),
-            true,
+            TelemetryBindingFrame {
+                ingress: Ingress::OtlpVsock,
+                connection_id: 0,
+                frame: &frame(),
+                canaries: &IdentityCanaries::default(),
+                capacity_available: true,
+            },
         ),
         Err(TelemetryControllerError::Admission)
     );

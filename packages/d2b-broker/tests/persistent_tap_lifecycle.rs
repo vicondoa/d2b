@@ -66,8 +66,10 @@ fn tap_intent_ref() -> BundleOpId {
         &zone_uid(),
         &network_uid(),
         &attachment_id(),
-        ResourceGeneration::new(4).unwrap(),
-        ResourceGeneration::new(7).unwrap(),
+        (
+            ResourceGeneration::new(4).unwrap(),
+            ResourceGeneration::new(7).unwrap(),
+        ),
         &bundle_generation(),
         "network-attachment",
         "work-vm",

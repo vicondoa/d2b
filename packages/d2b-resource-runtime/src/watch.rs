@@ -357,10 +357,10 @@ impl WatchHub {
             epoch: self.epoch,
             sequence: inner.sequence,
         };
-        if let Some(cursor) = after {
-            if !self.cursor_servable(&inner, cursor) {
-                return WatchRegistration::Expired(RevisionExpired { cursor, snapshot });
-            }
+        if let Some(cursor) = after
+            && !self.cursor_servable(&inner, cursor)
+        {
+            return WatchRegistration::Expired(RevisionExpired { cursor, snapshot });
         }
         let replay: Vec<ResourceChange> = match after {
             Some(cursor) => inner

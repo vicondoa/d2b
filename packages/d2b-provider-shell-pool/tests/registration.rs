@@ -84,7 +84,7 @@ fn the_declaration_serves_the_pool_row() {
         &[WellKnownType::HOST, WellKnownType::GUEST, WellKnownType::USER]
     );
     assert!(descriptor.operations.is_empty() && descriptor.creations.is_empty());
-    assert!(ShellPool::SPEC_PROVIDER_SELECTOR);
+    const { assert!(ShellPool::SPEC_PROVIDER_SELECTOR); };
     assert_eq!(ShellPool::RESOURCE_TYPE, SHELL_POOL_TYPE);
 }
 

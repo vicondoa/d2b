@@ -89,7 +89,7 @@ async fn run_session(
         SeqpacketSocket::from_parent_prearmed(controller_endpoint).map_err(|e| {
             warn!(reason = %e, "controller session setup failed: controller endpoint setup failed");
         })?;
-    if let Err(()) = send_bootstrap(&bootstrap, daemon_endpoint).await {
+    if let Err(()) = send_bootstrap(bootstrap, daemon_endpoint).await {
         eprintln!("acceptance-controller: bootstrap send failed, retrying");
         return Err(());
     }

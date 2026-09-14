@@ -79,6 +79,12 @@ impl ConsoleRing {
     }
 }
 
+impl Default for ConsoleRing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Per-VM console session.
 #[derive(Debug)]
 pub struct ConsoleSession {

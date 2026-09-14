@@ -332,14 +332,13 @@ impl HostReconciler {
         provider_ref: &ResourceRef,
         spec: &HostSpec,
     ) -> Result<HostStatusReport, SystemCoreError> {
-        ownership::require_resource_type(host_ref, HOST_RESOURCE_TYPE).map_err(|error| {
+        ownership::require_resource_type(host_ref, HOST_RESOURCE_TYPE).inspect_err(|&error| {
             warn!(
                 provider = crate::PROVIDER_NAME,
                 host = %host_ref.to_canonical_string(),
                 error = %error,
                 "assignment rejected: host resource type not owned by system-core"
             );
-            error
         })?;
         if provider_ref.to_canonical_string() != crate::PROVIDER_REF {
             warn!(
@@ -436,14 +435,13 @@ impl HostReconciler {
             return Err(SystemCoreError::CapabilityMissing);
         }
         if requires_minijail {
-            snapshot.minijail_gate().validate().map_err(|error| {
+            snapshot.minijail_gate().validate().inspect_err(|&error| {
                 warn!(
                     provider = crate::PROVIDER_NAME,
                     host = %host_ref.to_canonical_string(),
                     error = %error,
                     "minijail platform gate rejected host posture"
                 );
-                error
             })?;
         }
         if spec.policy().admits_user_domain() && !snapshot.user_manager_available() {
@@ -489,7 +487,7 @@ impl HostReconciler {
             if port
                 .probe(capability)
                 .await
-                .map_err(|error| {
+                .inspect_err(|&error| {
                     warn!(
                         provider = crate::PROVIDER_NAME,
                         host = %host_ref.to_canonical_string(),
@@ -497,34 +495,31 @@ impl HostReconciler {
                         error = %error,
                         "host capability probe failed"
                     );
-                    error
                 })?
             {
                 capabilities.insert(capability);
             }
         }
-        let metadata = port.metadata().await.map_err(|error| {
+        let metadata = port.metadata().await.inspect_err(|&error| {
             warn!(
                 provider = crate::PROVIDER_NAME,
                 host = %host_ref.to_canonical_string(),
                 error = %error,
                 "host probe metadata collection failed"
             );
-            error
         })?;
         let snapshot = HostProbeSnapshot::new(
             capabilities,
             metadata.kernel_release,
             metadata.os_name,
             metadata.user_manager_available,
-            port.platform().await.map_err(|error| {
+            port.platform().await.inspect_err(|&error| {
                 warn!(
                     provider = crate::PROVIDER_NAME,
                     host = %host_ref.to_canonical_string(),
                     error = %error,
                     "host platform probe failed"
                 );
-                error
             })?,
             metadata.active_process_count,
         )?;

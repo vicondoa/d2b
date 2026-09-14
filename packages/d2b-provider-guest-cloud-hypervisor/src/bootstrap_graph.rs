@@ -32,16 +32,39 @@ impl VmmLifecycleEligibility {
     }
 }
 
+/// Closed failures while constructing or planning a Guest bootstrap graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapGraphError {
+    /// An attachment ticket was empty, oversized, or contained non-printable bytes.
+    InvalidAttachmentRef,
+    /// A direct dependency named a Host reference, which a Guest graph never permits.
+    HostReferenceNotAllowed,
+    /// The verified setup descriptor did not project a direct-child batch.
+    InvalidSetupDescriptor,
+}
+
+impl fmt::Display for BootstrapGraphError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidAttachmentRef => "bootstrap-graph-invalid-attachment-ref",
+            Self::HostReferenceNotAllowed => "bootstrap-graph-host-reference-not-allowed",
+            Self::InvalidSetupDescriptor => "bootstrap-graph-invalid-setup-descriptor",
+        })
+    }
+}
+
+impl std::error::Error for BootstrapGraphError {}
+
 /// Opaque VMM attachment reference.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AttachmentRef(String);
 
 impl AttachmentRef {
     /// Construct a bounded opaque attachment ref.
-    pub fn new(value: impl Into<String>) -> Result<Self, ()> {
+    pub fn new(value: impl Into<String>) -> Result<Self, BootstrapGraphError> {
         let value = value.into();
         if value.is_empty() || value.len() > 128 || !value.bytes().all(|b| b.is_ascii_graphic()) {
-            return Err(());
+            return Err(BootstrapGraphError::InvalidAttachmentRef);
         }
         Ok(Self(value))
     }
@@ -75,7 +98,7 @@ impl BootstrapGraph {
         guest_ref: ResourceRef,
         execution_ref: ResourceRef,
         descriptor: &VerifiedGuestSetupDescriptor,
-    ) -> Result<GuestChildGraphPlan, ()> {
+    ) -> Result<GuestChildGraphPlan, BootstrapGraphError> {
         GuestChildGraphPlan::from_descriptor(zone, guest_ref, execution_ref, descriptor)
     }
 
@@ -86,7 +109,7 @@ impl BootstrapGraph {
         volumes: Vec<ResourceRef>,
         bindings: Vec<ResourceRef>,
         attachments: Vec<AttachmentRef>,
-    ) -> Result<Self, ()> {
+    ) -> Result<Self, BootstrapGraphError> {
         if devices
             .iter()
             .chain(networks.iter())
@@ -94,7 +117,7 @@ impl BootstrapGraph {
             .chain(bindings.iter())
             .any(|reference| reference.resource_type().as_str() == "Host")
         {
-            return Err(());
+            return Err(BootstrapGraphError::HostReferenceNotAllowed);
         }
         Ok(Self {
             devices,
@@ -168,9 +191,9 @@ impl GuestChildGraphPlan {
         guest_ref: ResourceRef,
         execution_ref: ResourceRef,
         descriptor: &VerifiedGuestSetupDescriptor,
-    ) -> Result<Self, ()> {
+    ) -> Result<Self, BootstrapGraphError> {
         let batch = GuestChildBatch::from_descriptor(zone, guest_ref, execution_ref, descriptor)
-            .map_err(|_| ())?;
+            .map_err(|_| BootstrapGraphError::InvalidSetupDescriptor)?;
         let mut creation_order = child_refs(&batch);
         creation_order.sort_by_key(|target| {
             (

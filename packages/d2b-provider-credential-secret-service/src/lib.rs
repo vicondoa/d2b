@@ -1314,17 +1314,15 @@ impl SecretServiceCredentialProvider {
             .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
             .get(user_ref)
             .copied()
-        {
-            if self
+            && self
                 .sessions
                 .lock()
                 .map_err(|_| {
                     CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
                 })?
                 .contains_key(&key)
-            {
-                return Ok(key);
-            }
+        {
+            return Ok(key);
         }
         if self.placement.user_ref().is_some() {
             return Err(CredentialServiceError::new(

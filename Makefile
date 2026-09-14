@@ -135,6 +135,12 @@ check: check-clippy
 check-clippy:
 	RUSTFLAGS= cargo clippy --workspace --all-targets --locked --keep-going
 
+## check-dead-code - workspace dead-code/visibility/unused-dependency gate
+## (cargo-hawk + cargo-shear + rustc dead_code) via the xtask. Requires
+## cargo-hawk and cargo-shear on PATH (cargo install cargo-hawk cargo-shear).
+check-dead-code:
+	cd $(CURDIR) && cargo run -p xtask -- deadcode-check
+
 ## check-ci - run the Layer-1 gate, then the conditional container lane.
 check-ci: check-clippy
 	$(D2B_BAZEL_TEST) //bazel/checks:check

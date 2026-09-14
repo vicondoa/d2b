@@ -690,10 +690,10 @@ impl ZoneEnrollReply {
     /// Decode one bounded reply payload, refusing anything else.
     pub fn decode(bytes: &[u8]) -> Result<Self, ZoneEnrollmentRefusal> {
         let reply: Self = decode_enrollment_payload(bytes)?;
-        if let Self::Enrolled { generation, .. } = &reply {
-            if *generation == 0 {
-                return Err(ZoneEnrollmentRefusal::MalformedRequest);
-            }
+        if let Self::Enrolled { generation, .. } = &reply
+            && *generation == 0
+        {
+            return Err(ZoneEnrollmentRefusal::MalformedRequest);
         }
         Ok(reply)
     }

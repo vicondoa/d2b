@@ -389,14 +389,13 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             self.authority_reserved = true;
         }
 
-        let observed = effect.observe().map_err(|error| {
+        let observed = effect.observe().inspect_err(|error| {
             tracing::warn!(
                 resource = %self.guest_ref,
                 provider = "runtime-qemu-media",
                 code = error.code(),
                 "process observation effect failed during reconcile"
             );
-            error
         })?;
         let identity = match observed {
             Some(candidate) => {
@@ -420,14 +419,13 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 }
                 self.phase = QemuMediaPhase::Starting;
                 if !self.pidfd_opened {
-                    effect.open_pidfd(&candidate).map_err(|error| {
+                    effect.open_pidfd(&candidate).inspect_err(|error| {
                         tracing::warn!(
                             resource = %self.guest_ref,
                             provider = "runtime-qemu-media",
                             code = error.code(),
                             "pidfd open failed for adopted process"
                         );
-                        error
                     })?;
                     self.pidfd_opened = true;
                 }
@@ -449,14 +447,13 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                     dependencies.media_refs.clone(),
                     dependencies.display_ref.clone(),
                 )?;
-                let candidate = effect.launch(&ticket).map_err(|error| {
+                let candidate = effect.launch(&ticket).inspect_err(|error| {
                     tracing::warn!(
                         resource = %self.guest_ref,
                         provider = "runtime-qemu-media",
                         code = error.code(),
                         "process launch failed for guest"
                     );
-                    error
                 })?;
                 if !candidate.matches_process_token(expected_process) {
                     if let Err(stop_error) = effect.stop(&candidate) {
@@ -553,14 +550,13 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 return Err(QemuMediaError::QmpNotReady);
             }
             QmpVmStatus::Paused if !self.settings.pause_at_boot => {
-                effect.continue_guest().map_err(|error| {
+                effect.continue_guest().inspect_err(|error| {
                     tracing::warn!(
                         resource = %self.guest_ref,
                         provider = "runtime-qemu-media",
                         code = error.code(),
                         "failed to resume unexpectedly paused guest"
                     );
-                    error
                 })?;
             }
             QmpVmStatus::Paused => {
@@ -596,14 +592,13 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             effect.close_media_effects()?;
             self.media_closed = true;
         }
-        let observed = effect.observe().map_err(|error| {
+        let observed = effect.observe().inspect_err(|error| {
             tracing::warn!(
                 resource = %self.guest_ref,
                 provider = "runtime-qemu-media",
                 code = error.code(),
                 "process observation effect failed during finalization"
             );
-            error
         })?;
         if self.expected_identity.is_none() && observed.is_some() {
             tracing::warn!(
@@ -630,14 +625,13 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                     self.pidfd_opened = true;
                 }
                 if !self.process_stopped {
-                    effect.stop(identity).map_err(|error| {
+                    effect.stop(identity).inspect_err(|error| {
                         tracing::warn!(
                             resource = %self.guest_ref,
                             provider = "runtime-qemu-media",
                             code = error.code(),
                             "process stop failed during finalization"
                         );
-                        error
                     })?;
                     self.process_stopped = true;
                 }

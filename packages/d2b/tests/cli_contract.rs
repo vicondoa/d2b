@@ -173,7 +173,7 @@ fn explicit_zone_uses_the_root_listener_and_keeps_the_zone_target() {
     let missing_public = Path::new("zone-only-clean-break-child-public.sock");
     let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
         .args(["--zone", "child", "list", "Guest", "--json"])
-        .env("D2B_PUBLIC_SOCKET", &missing_public)
+        .env("D2B_PUBLIC_SOCKET", missing_public)
         .output()
         .expect("spawn d2b --zone child list Guest --json");
     assert_eq!(out.status.code(), Some(1));

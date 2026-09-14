@@ -146,9 +146,9 @@ fn doc_lines(lines: &[&str]) -> String {
 /// Render one `&[&str]` constant.
 fn string_slice(name: &str, doc: &[&str], values: &[String]) -> String {
     let mut out = doc_lines(doc);
-    let _ = write!(out, "pub const {name}: &[&str] = &[\n");
+    let _ = writeln!(out, "pub const {name}: &[&str] = &[");
     for value in values {
-        let _ = write!(out, "    \"{value}\",\n");
+        let _ = writeln!(out, "    \"{value}\",");
     }
     out.push_str("];\n");
     out
@@ -157,9 +157,9 @@ fn string_slice(name: &str, doc: &[&str], values: &[String]) -> String {
 /// Render one closed `&[&str]` constant.
 fn string_array(name: &str, doc: &[&str], values: &[String]) -> String {
     let mut out = doc_lines(doc);
-    let _ = write!(out, "pub const {name}: &[&str] = &[\n");
+    let _ = writeln!(out, "pub const {name}: &[&str] = &[");
     for value in values {
-        let _ = write!(out, "    \"{value}\",\n");
+        let _ = writeln!(out, "    \"{value}\",");
     }
     out.push_str("];\n");
     out
@@ -168,9 +168,9 @@ fn string_array(name: &str, doc: &[&str], values: &[String]) -> String {
 /// Render one `&[(&str, &str)]` constant.
 fn string_pair_slice(name: &str, doc: &[&str], values: &[(&str, &str)]) -> String {
     let mut out = doc_lines(doc);
-    let _ = write!(out, "pub const {name}: &[(&str, &str)] = &[\n");
+    let _ = writeln!(out, "pub const {name}: &[(&str, &str)] = &[");
     for (left, right) in values {
-        let _ = write!(out, "    (\"{left}\", \"{right}\"),\n");
+        let _ = writeln!(out, "    (\"{left}\", \"{right}\"),");
     }
     out.push_str("];\n");
     out

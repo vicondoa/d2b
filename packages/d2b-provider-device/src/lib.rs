@@ -17,6 +17,9 @@
 
 mod driver;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 pub use driver::{
     DEVICE_REGISTRATIONS, DEVICE_RESYNC, DEVICE_TYPE_NAME, DeviceComponent, DeviceDriverArgs,
     DeviceDriverEffects, DeviceResourceState, GPU_CONTROLLER_REF, SECURITY_KEY_CONTROLLER_REF,

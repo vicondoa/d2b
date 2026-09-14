@@ -8,6 +8,9 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 async-trait = "0.1"
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
@@ -20,6 +23,7 @@ d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-boot
 d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
 libc = "0.2"
+parking_lot = "0.12"
 serde.workspace = true
 serde_json.workspace = true
 tracing = "0.1"
@@ -27,4 +31,3 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"
 
 [dev-dependencies]
 d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
-parking_lot = "0.12"

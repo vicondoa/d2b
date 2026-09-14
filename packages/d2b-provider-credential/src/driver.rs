@@ -10,10 +10,10 @@
 //! BEFORE the child actor exists, F1). The agent is never spawned here: it
 //! is a Process resource whose lifetime belongs to the Process driver
 //! (KTD13), and the child creation is declared on
-//! [`credential_descriptor`]. Delete preserves the revocation-first ordering
-//! - the provider RevokeToken call is confirmed (or already confirmed)
-//! before any owned Process child is marked deleting - and fails closed when
-//! the session generation is missing or no longer current (R28). The manager
+//! [`credential_descriptor`]. Delete preserves the revocation-first ordering:
+//! the provider RevokeToken call is confirmed (or already confirmed) before
+//! any owned Process child is marked deleting, and fails closed when the
+//! session generation is missing or no longer current (R28). The manager
 //! holds the Credential row until its owned children retire (F3), so the
 //! durable deleting mark stays observable for the whole teardown exactly as
 //! the old revoke-finalizer ordering made it.
@@ -579,10 +579,7 @@ impl CredentialDriver {
         &self,
         ctx: &ResourceContext,
         spec: &CredentialSpec,
-        provider_ref: &ResourceRef,
-        provider_generation: u64,
-        rotation_generation: u64,
-        session_generation: ReconnectGeneration,
+        identity: RevocationIdentity<'_>,
         op: DriverOp,
     ) -> Result<CredentialRevocationRequest, CredentialDriverError> {
         let invalid = || self.error(CredentialDriverErrorKind::RevocationIdentity, op);
@@ -593,7 +590,7 @@ impl CredentialDriver {
             d2b_contracts_resource::v3::ResourceGeneration::new(ctx.generation())
                 .map_err(|_| invalid())?;
         let provider_generation =
-            d2b_contracts_resource::v3::ResourceGeneration::new(provider_generation)
+            d2b_contracts_resource::v3::ResourceGeneration::new(identity.provider_generation)
                 .map_err(|_| invalid())?;
         CredentialRevocationRequest::new(CredentialRevocationInputs {
             zone,
@@ -601,11 +598,11 @@ impl CredentialDriver {
             credential_uid,
             credential_generation,
             user_ref: spec.scope().user_ref().cloned(),
-            provider_ref: provider_ref.clone(),
+            provider_ref: identity.provider_ref.clone(),
             provider_generation,
             controller_generation: self.controller_generation,
-            session_generation,
-            rotation_generation,
+            session_generation: identity.session_generation,
+            rotation_generation: identity.rotation_generation,
         })
         .map_err(|error| match error {
             CredentialResourceRuntimeError::InvalidResource => invalid(),
@@ -653,10 +650,12 @@ impl CredentialDriver {
         let request = self.revocation_request(
             ctx,
             spec,
-            provider_ref,
-            facts.provider_generation,
-            rotation_generation,
-            session_generation,
+            RevocationIdentity {
+                provider_ref,
+                provider_generation: facts.provider_generation,
+                rotation_generation,
+                session_generation,
+            },
             op,
         )?;
         let outcome = session
@@ -698,6 +697,16 @@ impl CredentialDriver {
             }
         }
     }
+}
+
+/// The revoker identity a revocation request must bind (R28): the current
+/// provider ref and generation plus the live session generation and rotation
+/// generation the delete path revokes through.
+struct RevocationIdentity<'a> {
+    provider_ref: &'a ResourceRef,
+    provider_generation: u64,
+    rotation_generation: u64,
+    session_generation: ReconnectGeneration,
 }
 
 /// Canonical JSON bytes (the store contract's deterministic encoding: the
@@ -1035,6 +1044,8 @@ pub fn credential_descriptor(args: CredentialDriverArgs) -> DriverDescriptor {
 mod tests {
     use std::sync::Arc;
 
+    use crate::test_support::{FakeEffects, Log, RecordingSession, facts, log};
+
     use d2b_contracts_provider::v3::credential::CredentialLeaseState;
     use d2b_contracts_resource::v3::identity::ReconnectGeneration;
     use d2b_contracts_resource::v3::process::ProcessSpec;
@@ -1059,135 +1070,13 @@ mod tests {
 
     use super::{
         CONTROLLER_PROVIDER_GENERATION_ANNOTATION, CONTROLLER_PROVIDER_REF_ANNOTATION,
-        CONTROLLER_PROVIDER_UID_ANNOTATION, CREDENTIAL_TYPE_NAME, CredentialDependencyFacts,
-        CredentialDriver, CredentialDriverArgs, CredentialDriverFactory, CredentialDriverStatus,
+        CONTROLLER_PROVIDER_UID_ANNOTATION, CREDENTIAL_TYPE_NAME, CredentialDriver,
+        CredentialDriverArgs, CredentialDriverFactory, CredentialDriverStatus,
         CredentialLeaseFacts, credential_spec_decoder,
     };
 
     const MI_PROVIDER: &str = "Provider/credential-managed-identity";
     const SECRET_SERVICE_PROVIDER: &str = "Provider/credential-secret-service";
-
-    type Log = Arc<Mutex<Vec<String>>>;
-
-    fn log() -> Log {
-        Arc::new(Mutex::new(Vec::new()))
-    }
-
-    // -- fakes ---------------------------------------------------------------
-
-    /// Scripted effect port. Every call lands in the shared ordered log so
-    /// revocation-before-child-deletion is observable.
-    struct FakeEffects {
-        log: Log,
-        facts: Mutex<Option<CredentialDependencyFacts>>,
-        lease: Mutex<Option<CredentialLeaseFacts>>,
-        agent_ready: Mutex<bool>,
-        session: Mutex<Option<Arc<dyn CredentialSession>>>,
-    }
-
-    impl FakeEffects {
-        fn new(log: Log) -> Arc<Self> {
-            Arc::new(Self {
-                log,
-                facts: Mutex::new(Some(facts(true, true))),
-                lease: Mutex::new(None),
-                agent_ready: Mutex::new(true),
-                session: Mutex::new(Some(Arc::new(RecordingSession::new(Some(7))))),
-            })
-        }
-
-        fn set_facts(&self, value: Option<CredentialDependencyFacts>) {
-            *self.facts.lock() = value;
-        }
-
-        fn set_lease(&self, value: Option<CredentialLeaseFacts>) {
-            *self.lease.lock() = value;
-        }
-
-        fn set_agent_ready(&self, value: bool) {
-            *self.agent_ready.lock() = value;
-        }
-
-        fn set_session(&self, value: Option<Arc<dyn CredentialSession>>) {
-            *self.session.lock() = value;
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl super::CredentialDriverEffects for FakeEffects {
-        async fn dependency_facts(
-            &self,
-            _provider_ref: &ResourceRef,
-            _execution_ref: &ResourceRef,
-        ) -> Option<CredentialDependencyFacts> {
-            self.log.lock().push("dependency-facts".to_owned());
-            self.facts.lock().clone()
-        }
-
-        async fn lease_facts(&self, _credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts> {
-            self.log.lock().push("lease-facts".to_owned());
-            *self.lease.lock()
-        }
-
-        async fn agent_ready(&self, _agent_ref: &ResourceRef) -> bool {
-            self.log.lock().push("agent-ready".to_owned());
-            *self.agent_ready.lock()
-        }
-
-        fn session(&self, _provider_ref: &ResourceRef) -> Option<Arc<dyn CredentialSession>> {
-            self.log.lock().push("session".to_owned());
-            self.session.lock().clone()
-        }
-    }
-
-    fn facts(provider_ready: bool, execution_ready: bool) -> CredentialDependencyFacts {
-        CredentialDependencyFacts {
-            provider_uid: "223e4567-e89b-42d3-a456-426614174000".to_owned(),
-            provider_generation: 1,
-            provider_ready,
-            execution_ready,
-        }
-    }
-
-    /// Session double that binds the generation exactly like the real
-    /// `ComponentCredentialSession`: a request carrying a different
-    /// generation is `Uncertain`, never `Revoked`.
-    struct RecordingSession {
-        generation: Option<ReconnectGeneration>,
-        operations: Mutex<Vec<String>>,
-    }
-
-    impl RecordingSession {
-        fn new(generation: Option<u64>) -> Self {
-            Self {
-                generation: generation.map(|value| ReconnectGeneration::new(value).unwrap()),
-                operations: Mutex::new(Vec::new()),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl CredentialSession for RecordingSession {
-        fn session_generation(&self) -> Option<ReconnectGeneration> {
-            self.generation
-        }
-
-        async fn revoke_credential(
-            &self,
-            request: &CredentialRevocationRequest,
-        ) -> Result<CredentialRevocationOutcome, CredentialResourceRuntimeError> {
-            if Some(request.session_generation()) != self.generation {
-                return Ok(CredentialRevocationOutcome::Uncertain);
-            }
-            let mut operations = self.operations.lock();
-            let operation_id = request.operation_id().to_owned();
-            if operations.contains(&operation_id) {
-                return Ok(CredentialRevocationOutcome::AlreadyRevoked);
-            }
-            operations.push(operation_id);
-            Ok(CredentialRevocationOutcome::Revoked)
-        }
-    }
 
     /// Recording manager: child mutations, deletes, and reads share the
     /// ordered log with the effect port.

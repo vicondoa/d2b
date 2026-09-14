@@ -29,8 +29,6 @@ impl ClipboardRunnerContract {
         self.repair_interval_secs
     }
 
-    /// Whether legacy clipboard scheduling is disabled.
-
     /// Whether configuration is dependency-only.
     pub const fn watched_configuration_is_dependency(self) -> bool {
         self.watched_configuration_is_dependency

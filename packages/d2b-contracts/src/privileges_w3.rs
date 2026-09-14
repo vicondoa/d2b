@@ -211,9 +211,8 @@ mod tests {
     #[test]
     fn no_remaining_operation_grants_secret_access() {
         for op in W3BrokerOperation::all() {
-            assert_eq!(
-                op.flags().secret_access,
-                false,
+            assert!(
+                !op.flags().secret_access,
                 "unexpected secret_access flag for {op:?}"
             );
         }

@@ -265,7 +265,7 @@ pub fn parse_host_network_observation(
     addresses: &[u8],
     routes: &[u8],
 ) -> Result<HostNetworkOccupancy, HostNetworkObservationError> {
-    let link_values = parse_array(&links)?;
+    let link_values = parse_array(links)?;
     let mut interface_names = Vec::new();
     let mut interface_markers = BTreeMap::new();
     for value in &link_values {
@@ -284,7 +284,7 @@ pub fn parse_host_network_observation(
 
     let mut cidrs = Vec::new();
     let mut cidr_markers = BTreeMap::new();
-    for value in parse_array(&addresses)? {
+    for value in parse_array(addresses)? {
         let Some(entries) = value.get("addr_info").and_then(Value::as_array) else {
             continue;
         };
@@ -316,7 +316,7 @@ pub fn parse_host_network_observation(
     let mut route_names = Vec::new();
     let mut route_tuples = Vec::new();
     let mut route_markers = BTreeMap::new();
-    for value in parse_array(&routes)? {
+    for value in parse_array(routes)? {
         let destination = value
             .get("dst")
             .and_then(Value::as_str)

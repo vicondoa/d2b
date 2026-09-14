@@ -1045,7 +1045,15 @@ fn converted_type_status_layers_round_trip_through_their_typed_decoders() {
     use d2b_resource_runtime::resource::ResourceStatus;
     use d2b_resource_runtime::spec_store::{ResourceKey, ResourceProvenance};
 
-    let decode: [(&str, serde_json::Value, fn(&serde_json::Value) -> Result<serde_json::Value, String>); 3] = [
+    /// One typed status decoder case: the converted type's name, the served
+    /// wire `status.resource` value, and the type's decoder.
+    type TypedDecoderCase = (
+        &'static str,
+        serde_json::Value,
+        fn(&serde_json::Value) -> Result<serde_json::Value, String>,
+    );
+
+    let decode: [TypedDecoderCase; 3] = [
         (
             "VolumeBinding",
             serde_json::json!({

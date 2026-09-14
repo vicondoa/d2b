@@ -1,6 +1,5 @@
 //! Shared conformance, fault, and latency coverage for ProviderSupervisor.
 
-use std::num::NonZeroU32;
 use std::os::fd::AsFd;
 use std::sync::{
     Arc, Mutex,
@@ -8,6 +7,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+use d2b_contracts_broker::broker_wire::SystemdUnitIdentity;
 use d2b_provider_process::{
     AdoptionCandidate, BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity,
     ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest, ProcessRequest,
@@ -405,16 +405,17 @@ impl SystemdEffectOwner for SystemdOwner {
 }
 
 fn invocation(start_time: u64) -> SystemdInvocationIdentity {
-    SystemdInvocationIdentity::new(
-        [1; 16],
-        [2; 32],
-        NonZeroU32::new(100).unwrap(),
-        start_time,
-        [3; 32],
-        [4; 32],
-        1,
-        "bundle",
-    )
+    SystemdInvocationIdentity::new(&SystemdUnitIdentity {
+        invocation_id: [1; 16],
+        cgroup_identity: [2; 32],
+        main_pid: 100,
+        start_time_ticks: start_time,
+        provider_identity: [3; 32],
+        template_identity: [4; 32],
+        generation: 1,
+        bundle_content_identity: "bundle".to_owned(),
+        guest_execution: None,
+    })
     .unwrap()
 }
 
@@ -581,7 +582,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         let pid = rustix::process::Pid::from_raw(pid).unwrap();
         let pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
             .expect("open self pidfd");
-        let response = BrokerResponse::SpawnRunner(SpawnRunnerResponse {
+        let response = BrokerResponse::SpawnRunner(Box::new(SpawnRunnerResponse {
             vm_id: server_vm,
             role_id: server_role,
             role: RunnerRole::ProviderController,
@@ -607,7 +608,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
             template_identity,
             generation,
             bundle_content_identity: Some("bundle-content-test".to_owned()),
-        });
+        }));
         let frame = d2b_contracts::encode_frame(&response).unwrap();
         let iov = [IoSlice::new(&frame)];
         let descriptors = [pidfd.as_fd()];

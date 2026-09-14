@@ -106,6 +106,38 @@ impl ScopedCredentialClient for GatewayGuestCredentialSource {
     }
 }
 
+/// Shared transport composition parameters for the Gateway Guest-local
+/// ZoneLink constructors.
+pub struct GatewayGuestZoneLinkTransportConfig {
+    /// Placement Ref of the Guest execution resource.
+    pub execution_ref: ResourceRef,
+    /// Placement Ref of the Network resource.
+    pub network_ref: ResourceRef,
+    /// Relay transport settings (entity path, retry and framing).
+    pub settings: RelayTransportSettings,
+    /// Maximum concurrent Relay sessions the composed Provider accepts.
+    pub max_concurrent_sessions: u32,
+    /// Connect timeout, in seconds, applied to each Relay carriage open.
+    pub connect_timeout_seconds: u32,
+}
+
+/// One Guest-local Relay carriage open request: role, placement and
+/// credential binding for a ZoneLink ComponentSession.
+pub struct RelayCarriageRequest {
+    /// Exact Relay role this carriage enrolls under.
+    pub role: RelayRole,
+    /// Zone the credential and execution resources live in.
+    pub zone: ZoneId,
+    /// Credential resource Ref to read admission for.
+    pub credential_ref: ResourceRef,
+    /// Execution resource Ref the carriage is bound to.
+    pub execution_ref: ResourceRef,
+    /// Exact credential binding the enrolled socket must match.
+    pub binding: RelayCredentialBinding,
+    /// Total wall-clock budget, in milliseconds, for the carriage open.
+    pub deadline_ms: u32,
+}
+
 /// Gateway Guest-local Azure Relay Provider and credential boundary.
 ///
 /// Credential custody is supplied either by the Guest-local sealed bootstrap
@@ -129,15 +161,11 @@ impl GatewayGuestZoneLinkRuntime {
     pub fn from_sealed(
         credential_path: impl AsRef<Path>,
         seal_key_path: impl AsRef<Path>,
-        execution_ref: ResourceRef,
-        network_ref: ResourceRef,
-        settings: RelayTransportSettings,
-        max_concurrent_sessions: u32,
-        connect_timeout_seconds: u32,
         policy: &CredentialFilePolicy,
+        config: GatewayGuestZoneLinkTransportConfig,
     ) -> Result<Self, GatewayGuestZoneLinkError> {
-        if execution_ref.resource_type().as_str() != "Guest"
-            || network_ref.resource_type().as_str() != "Network"
+        if config.execution_ref.resource_type().as_str() != "Guest"
+            || config.network_ref.resource_type().as_str() != "Network"
         {
             return Err(GatewayGuestZoneLinkError::InvalidPlacement);
         }
@@ -152,12 +180,14 @@ impl GatewayGuestZoneLinkRuntime {
         let credential_send_key_digest = credentials.safe_observation_digest();
         let provider = AzureRelayTransportProvider::new(
             RelayTransportConfig {
-                execution_ref,
-                network_ref,
-                max_concurrent_sessions,
-                connect_timeout_seconds,
+                execution_ref: config.execution_ref,
+                network_ref: config.network_ref,
+                max_concurrent_sessions: config.max_concurrent_sessions,
+                connect_timeout_seconds: config.connect_timeout_seconds,
             },
-            crate::RelayEndpoint { settings },
+            crate::RelayEndpoint {
+                settings: config.settings,
+            },
             Arc::new(GatewayGuestCredentialSource::Sealed(credentials)),
             Arc::new(AzureRelaySocketConnector::new()),
         )
@@ -177,25 +207,23 @@ impl GatewayGuestZoneLinkRuntime {
     /// serializes credential material.
     pub fn from_scoped_client(
         credentials: Arc<dyn ScopedCredentialClient>,
-        execution_ref: ResourceRef,
-        network_ref: ResourceRef,
-        settings: RelayTransportSettings,
-        max_concurrent_sessions: u32,
-        connect_timeout_seconds: u32,
+        config: GatewayGuestZoneLinkTransportConfig,
     ) -> Result<Self, GatewayGuestZoneLinkError> {
-        if execution_ref.resource_type().as_str() != "Guest"
-            || network_ref.resource_type().as_str() != "Network"
+        if config.execution_ref.resource_type().as_str() != "Guest"
+            || config.network_ref.resource_type().as_str() != "Network"
         {
             return Err(GatewayGuestZoneLinkError::InvalidPlacement);
         }
         let provider = AzureRelayTransportProvider::new(
             RelayTransportConfig {
-                execution_ref,
-                network_ref,
-                max_concurrent_sessions,
-                connect_timeout_seconds,
+                execution_ref: config.execution_ref,
+                network_ref: config.network_ref,
+                max_concurrent_sessions: config.max_concurrent_sessions,
+                connect_timeout_seconds: config.connect_timeout_seconds,
             },
-            crate::RelayEndpoint { settings },
+            crate::RelayEndpoint {
+                settings: config.settings,
+            },
             Arc::new(GatewayGuestCredentialSource::Scoped(credentials)),
             Arc::new(AzureRelaySocketConnector::new()),
         )
@@ -259,15 +287,18 @@ impl GatewayGuestZoneLinkRuntime {
     /// Open and enroll one exact Relay carriage for a ZoneLink session.
     pub async fn open_authenticated_transport<V: RelayEnrollmentVerifier>(
         &self,
-        role: RelayRole,
-        zone: ZoneId,
-        credential_ref: ResourceRef,
-        execution_ref: ResourceRef,
-        binding: RelayCredentialBinding,
-        deadline_ms: u32,
+        request: RelayCarriageRequest,
         verifier: &V,
         transcript: &[u8],
     ) -> Result<RelayComponentSessionTransport, GatewayGuestZoneLinkError> {
+        let RelayCarriageRequest {
+            role,
+            zone,
+            credential_ref,
+            execution_ref,
+            binding,
+            deadline_ms,
+        } = request;
         let credential_role = Self::credential_role(role);
         let credential_for_log = credential_ref.clone();
         let request = crate::ScopedCredentialRequest::new(
@@ -401,12 +432,15 @@ mod tests {
         GatewayGuestZoneLinkRuntime::from_sealed(
             credential_path,
             seal_key_path,
-            ResourceRef::parse("Guest/gateway").expect("Guest ref"),
-            ResourceRef::parse("Network/relay-egress").expect("Network ref"),
-            RelayTransportSettings::new("relns-d2b-prod", "hc-d2b").expect("Relay settings"),
-            32,
-            30,
             &CredentialFilePolicy::default(),
+            GatewayGuestZoneLinkTransportConfig {
+                execution_ref: ResourceRef::parse("Guest/gateway").expect("Guest ref"),
+                network_ref: ResourceRef::parse("Network/relay-egress").expect("Network ref"),
+                settings: RelayTransportSettings::new("relns-d2b-prod", "hc-d2b")
+                    .expect("Relay settings"),
+                max_concurrent_sessions: 32,
+                connect_timeout_seconds: 30,
+            },
         )
         .expect("Guest runtime")
     }
@@ -428,12 +462,14 @@ mod tests {
         let result = GatewayGuestZoneLinkRuntime::from_sealed(
             "credential.sealed.json",
             "seal.key",
-            ResourceRef::parse("Host/host").unwrap(),
-            ResourceRef::parse("Network/relay").unwrap(),
-            RelayTransportSettings::new("relns-d2b-prod", "hc-d2b").unwrap(),
-            32,
-            30,
             &CredentialFilePolicy::default(),
+            GatewayGuestZoneLinkTransportConfig {
+                execution_ref: ResourceRef::parse("Host/host").unwrap(),
+                network_ref: ResourceRef::parse("Network/relay").unwrap(),
+                settings: RelayTransportSettings::new("relns-d2b-prod", "hc-d2b").unwrap(),
+                max_concurrent_sessions: 32,
+                connect_timeout_seconds: 30,
+            },
         );
         assert!(matches!(
             result,
@@ -445,11 +481,13 @@ mod tests {
     fn scoped_client_composition_never_requires_a_sealed_credential() {
         let runtime = GatewayGuestZoneLinkRuntime::from_scoped_client(
             Arc::new(ScopedOnlyCredentials),
-            ResourceRef::parse("Guest/gateway").unwrap(),
-            ResourceRef::parse("Network/relay-egress").unwrap(),
-            RelayTransportSettings::new("relns-d2b-prod", "hc-d2b").unwrap(),
-            32,
-            30,
+            GatewayGuestZoneLinkTransportConfig {
+                execution_ref: ResourceRef::parse("Guest/gateway").unwrap(),
+                network_ref: ResourceRef::parse("Network/relay-egress").unwrap(),
+                settings: RelayTransportSettings::new("relns-d2b-prod", "hc-d2b").unwrap(),
+                max_concurrent_sessions: 32,
+                connect_timeout_seconds: 30,
+            },
         )
         .expect("scoped client runtime");
         assert_eq!(
@@ -494,12 +532,15 @@ mod tests {
         let missing = GatewayGuestZoneLinkRuntime::from_sealed(
             dir.path().join("missing.sealed.json"),
             dir.path().join("missing.key"),
-            ResourceRef::parse("Guest/gateway").expect("Guest ref"),
-            ResourceRef::parse("Network/relay-egress").expect("Network ref"),
-            RelayTransportSettings::new("relns-d2b-prod", "hc-d2b").expect("Relay settings"),
-            32,
-            30,
             &CredentialFilePolicy::default(),
+            GatewayGuestZoneLinkTransportConfig {
+                execution_ref: ResourceRef::parse("Guest/gateway").expect("Guest ref"),
+                network_ref: ResourceRef::parse("Network/relay-egress").expect("Network ref"),
+                settings: RelayTransportSettings::new("relns-d2b-prod", "hc-d2b")
+                    .expect("Relay settings"),
+                max_concurrent_sessions: 32,
+                connect_timeout_seconds: 30,
+            },
         );
         assert!(missing.is_err());
         assert!(!missing_marker.exists());
@@ -520,12 +561,15 @@ mod tests {
         let invalid = GatewayGuestZoneLinkRuntime::from_sealed(
             invalid_credential,
             invalid_key,
-            ResourceRef::parse("Guest/gateway").expect("Guest ref"),
-            ResourceRef::parse("Network/relay-egress").expect("Network ref"),
-            RelayTransportSettings::new("relns-d2b-prod", "hc-d2b").expect("Relay settings"),
-            32,
-            30,
             &CredentialFilePolicy::default(),
+            GatewayGuestZoneLinkTransportConfig {
+                execution_ref: ResourceRef::parse("Guest/gateway").expect("Guest ref"),
+                network_ref: ResourceRef::parse("Network/relay-egress").expect("Network ref"),
+                settings: RelayTransportSettings::new("relns-d2b-prod", "hc-d2b")
+                    .expect("Relay settings"),
+                max_concurrent_sessions: 32,
+                connect_timeout_seconds: 30,
+            },
         );
         assert!(invalid.is_err());
         assert!(!invalid_marker.exists());

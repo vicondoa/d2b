@@ -23,7 +23,10 @@ pub use guest_credential::{
     GATEWAY_CREDENTIAL_SCHEMA_VERSION, GATEWAY_SEAL_KEY_LEN, GATEWAY_SEAL_KEY_MODE,
     GatewayCredential, GatewayCredentialMaterial, GatewayGuestCredentialPort, SealingKey,
 };
-pub use guest_zone_link::{GatewayGuestZoneLinkError, GatewayGuestZoneLinkRuntime};
+pub use guest_zone_link::{
+    GatewayGuestZoneLinkError, GatewayGuestZoneLinkRuntime,
+    GatewayGuestZoneLinkTransportConfig, RelayCarriageRequest,
+};
 pub use relay_transport::{
     AzureRelaySocketConnector, AzureRelayTransportProvider, MAX_RELAY_CA_BYTES,
     MAX_RELAY_GENERATION_FENCES, MAX_RELAY_WS_WRITE_BUFFER_BYTES, RelayAuthenticatedPeer,

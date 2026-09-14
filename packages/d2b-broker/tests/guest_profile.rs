@@ -106,7 +106,7 @@ fn guest_binary_rejects_spawn_runner_before_bundle_mutation() {
     for execution_ref in ["Guest/guest-vm", "Host/host"] {
         let client = connect_seqpacket(broker.socket_path()).expect("connect guest broker");
         let envelope = BrokerRequestEnvelope {
-            request: BrokerRequest::SpawnRunner(SpawnRunnerRequest {
+            request: BrokerRequest::SpawnRunner(Box::new(SpawnRunnerRequest {
                 vm_id: VmId::new("guest-vm"),
                 role_id: RoleId::new("cloud-hypervisor"),
                 resource_ref: None,
@@ -136,7 +136,7 @@ fn guest_binary_rejects_spawn_runner_before_bundle_mutation() {
                 workload_identity: None,
                 inherited_fd_count: 0,
                 network_tap_context: None,
-            }),
+            })),
             caller_role: BrokerCallerRole::AdminUid { uid: D2BD_UID },
             test_peer_uid: Some(D2BD_UID),
             audit_join: None,

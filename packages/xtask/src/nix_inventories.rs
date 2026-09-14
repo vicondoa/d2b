@@ -678,22 +678,23 @@ fn host_users_module(
 /// Write every Nix inventory the generator owns.
 pub fn gen_nix_inventories(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let allocation = principal_allocation(repo_root)?;
-    let mut written = Vec::new();
-    written.push(write(
-        repo_root,
-        PROVIDER_PROJECTIONS_OUT,
-        provider_projections_module(),
-    )?);
-    written.push(write(
-        repo_root,
-        RESOURCE_INVENTORIES_OUT,
-        resource_inventories_module(repo_root)?,
-    )?);
-    written.push(write(
-        repo_root,
-        HOST_USERS_OUT,
-        host_users_module(&allocation)?,
-    )?);
+    let written = vec![
+        write(
+            repo_root,
+            PROVIDER_PROJECTIONS_OUT,
+            provider_projections_module(),
+        )?,
+        write(
+            repo_root,
+            RESOURCE_INVENTORIES_OUT,
+            resource_inventories_module(repo_root)?,
+        )?,
+        write(
+            repo_root,
+            HOST_USERS_OUT,
+            host_users_module(&allocation)?,
+        )?,
+    ];
     if written.is_empty() {
         return Err(render_error(
             "gen-nix-inventories wrote no artifact; refusing to report success",

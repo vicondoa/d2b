@@ -247,8 +247,7 @@ fn cloud_assignment_expectation(
         ReconnectGeneration::new(session_generation)
             .map_err(|_| AssignmentError::RoleContractInvalid)?,
         resource_types,
-        primary_verbs,
-        owner_child_process_verbs,
+        (primary_verbs, owner_child_process_verbs),
         scopes,
     )
 }

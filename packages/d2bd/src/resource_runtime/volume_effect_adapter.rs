@@ -38,8 +38,8 @@ use d2b_contracts_resource::v3::{
 };
 
 use d2b_provider_volume_local::{
-    ContentFile, ContentMaterializationEvidence, ContentProjection, DriftClass, EntryRequest,
-    MarkerState, NetworkConfigContentProjection, NetworkConfigMaterializationEvidence,
+    AnchoredRoot, ContentFile, ContentMaterializationEvidence, ContentProjection, DriftClass,
+    EntryRequest, MarkerState, NetworkConfigContentProjection, NetworkConfigMaterializationEvidence,
     ObservedContentFile, ObservedEntry, OwnerProof, QuotaCapability, StoreViewMarkerEvidence,
     VolumeLayoutEffectPort, VolumeLocalError, VolumeRootHandle, VolumeSourceEffectPort,
     atomic::{AtomicFilesystem, AtomicWriteError, replace_bytes},
@@ -303,18 +303,18 @@ impl<R: VolumeRootResolver> VolumeSourceEffectPort for AnchoredVolumeEffectAdapt
                 );
                 return Err(VolumeLocalError::SourceUnresolved);
             }
-            Ok(VolumeRootHandle::from_anchored(
-                root.fd,
-                root.marker_root_fd,
-                root.volume_uid,
-                root.marker_name,
-                root.lock_name,
-                root.identity,
-                root.marker_binding,
-                root.marker_owner_uid,
-                root.marker_group_gid,
-                root.preexisting_state,
-            ))
+            Ok(VolumeRootHandle::from_anchored(AnchoredRoot {
+                fd: root.fd,
+                marker_root_fd: root.marker_root_fd,
+                volume_uid: root.volume_uid,
+                marker_name: root.marker_name,
+                lock_name: root.lock_name,
+                identity: root.identity,
+                marker_binding: root.marker_binding,
+                marker_owner_uid: root.marker_owner_uid,
+                marker_group_gid: root.marker_group_gid,
+                preexisting_state: root.preexisting_state,
+            }))
         }
     }
 
@@ -873,10 +873,10 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
             let observed = self.materialize_files_locked(root, &files)?;
             NetworkConfigMaterializationEvidence::from_observed_files(
                 projection,
-                &observed[0].bytes(),
-                &observed[1].bytes(),
-                &observed[2].bytes(),
-                &observed[3].bytes(),
+                observed[0].bytes(),
+                observed[1].bytes(),
+                observed[2].bytes(),
+                observed[3].bytes(),
             )
         })
     }

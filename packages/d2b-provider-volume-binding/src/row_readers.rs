@@ -19,7 +19,7 @@ pub fn binding_readiness_current(child: &StoredResource) -> bool {
     let Some(resource) = value
         .pointer("/status/resource")
         .cloned()
-        .map(|resource| serde_json::from_value::<VolumeBindingStatusResource>(resource))
+        .map(serde_json::from_value::<VolumeBindingStatusResource>)
         .transpose()
         .ok()
         .flatten()

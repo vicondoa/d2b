@@ -615,12 +615,12 @@ impl ZoneServiceServer {
 
     /// Serve `zone-bootstrap`.
     ///
-    /// The handler composes the frozen enrollment state machine: it consumes
-    /// the runtime-issued admission, refuses a call whose identity is not the
-    /// identity that admission was issued for, requires the named edge to be
-    /// one of this Zone's sealed rows, and only then admits one IKpsk2 attempt
-    /// - which burns the presented single-use PSK whether or not the handshake
-    /// that follows succeeds.
+    /// The handler composes the frozen enrollment state machine: it consumes the
+    /// runtime-issued admission, refuses a call whose identity is not the identity
+    /// that admission was issued for, requires the named edge to be one of this
+    /// Zone's sealed rows, and only then admits one IKpsk2 attempt - which burns
+    /// the presented single-use PSK whether or not the handshake that follows
+    /// succeeds.
     pub fn zone_bootstrap(&mut self, request: &ZoneBootstrapRequest) -> ZoneBootstrapReply {
         let method = ZoneServiceMethod::ZoneBootstrap;
         let call = &request.call;

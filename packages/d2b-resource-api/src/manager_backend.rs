@@ -456,7 +456,7 @@ fn list_selector_digest(request: &StoreListRequest) -> String {
 }
 
 fn hex_decode(value: &str) -> Option<Vec<u8>> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return None;
     }
     let nibble = |byte: u8| match byte {
@@ -644,8 +644,7 @@ fn stored_from_view(view: &ResourceView) -> Result<StoredResource, StoreError> {
         &view.key,
         &view.uid,
         view.generation,
-        &view.metadata,
-        &view.spec,
+        (&view.metadata, &view.spec),
         view.owner_key.as_ref(),
         view.provenance,
         &view.wire_status(),
@@ -712,12 +711,12 @@ fn render_envelope(
     key: &RuntimeResourceKey,
     uid: &[u8; 16],
     generation: u64,
-    metadata: &[u8],
-    spec: &[u8],
+    row: (&[u8], &[u8]),
     resolved_owner: Option<&RuntimeResourceKey>,
     provenance: ResourceProvenance,
     status: &serde_json::Value,
 ) -> Result<Vec<u8>, StoreError> {
+    let (metadata, spec) = row;
     let spec_value = CanonicalJsonValue::parse(spec).map_err(|_| envelope_invalid())?;
     if spec_value.as_object().is_some_and(|root| {
         root.contains_key("apiVersion") && root.contains_key("spec")
@@ -1124,11 +1123,12 @@ impl ResourceStoreBackend for ManagerBackend {
     }
 
     async fn list(&self, request: StoreListRequest) -> Result<StoreListResult, StoreError> {
-        let mut selector = ResourceSelector::default();
-        selector.zone = Some(request.zone.as_str().to_owned());
-        if request.resource_types.len() == 1 {
-            selector.type_name = Some(request.resource_types[0].as_str().to_owned());
-        }
+        let selector = ResourceSelector {
+            zone: Some(request.zone.as_str().to_owned()),
+            type_name: (request.resource_types.len() == 1)
+                .then(|| request.resource_types[0].as_str().to_owned()),
+            ..ResourceSelector::default()
+        };
         let mut views = self.manager.list(selector).await.map_err(map_manager_error)?;
         // The manager's row map is unordered; paging needs one stable order.
         // `(zone, type, name)` is the durable plane's key order, so a cursor

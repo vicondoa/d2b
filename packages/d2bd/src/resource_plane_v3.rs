@@ -399,7 +399,7 @@ impl PlaneResourceRegistry {
     /// Process effects bind it to controller rows that Provider owns. Fed by
     /// the plane's construction path from
     /// [`ConstructionInputs::committed_provider_identities`].
-    fn register_committed_provider_identity(
+    pub(crate) fn register_committed_provider_identity(
         &self,
         provider_ref: &ResourceRef,
         uid: ResourceUid,
@@ -411,12 +411,10 @@ impl PlaneResourceRegistry {
                 .insert(provider_ref.to_canonical_string(), (uid, generation));
         });
     }
-}
 
-/// The committed-`Provider` identity view the production Process effects
-/// consult (KTD7), published by [`PlaneResourceRegistry`].
-impl d2b_provider_process::CommittedProviderIdentitySource for PlaneResourceRegistry {
-    fn committed_provider_identity(
+    /// The committed-`Provider` identity view the production Process effects
+    /// consult (KTD7), published by [`PlaneResourceRegistry`].
+    pub(crate) fn committed_provider_identity(
         &self,
         provider_ref: &ResourceRef,
     ) -> Option<(ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)> {
@@ -658,12 +656,12 @@ impl BindingSocketProbe {
             .registry
             .socket_target_by_identity(&self.zone_token, socket)
             .await?;
-        Some(virtiofs_socket_path(
+        virtiofs_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
             &target.volume_ref,
             &target.execution_ref,
-        )?)
+        )
     }
 }
 
@@ -686,12 +684,12 @@ impl SocketWaitEffect {
             .registry
             .socket_target_by_ref(&self.zone_token, producer_ref)
             .await?;
-        Some(virtiofs_socket_path(
+        virtiofs_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
             &target.volume_ref,
             &target.execution_ref,
-        )?)
+        )
     }
 
     /// Whether the producer's socket is resolved and bound on the host
@@ -944,12 +942,12 @@ impl SocketRemoveEffect {
             .registry
             .socket_target_by_ref(&self.zone_token, producer_ref)
             .await?;
-        Some(virtiofs_socket_path(
+        virtiofs_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
             &target.volume_ref,
             &target.execution_ref,
-        )?)
+        )
     }
 }
 
@@ -1099,7 +1097,7 @@ impl ZoneVolumeRootResolver {
         let generation_token = u32::try_from(intent.generation)
             .map_err(|_| self.source_unresolved("store-view-generation", &anchor.volume_name))?;
         let response =
-            self.sync_store_view(guest_ref, &intent, generation_token, &anchor.volume_name)?;
+            self.sync_store_view(guest_ref, intent, generation_token, &anchor.volume_name)?;
         let expected_generation_id = d2b_host::hardlink_farm::generation_id(
             &intent.closure_paths,
             d2b_host::hardlink_farm::system_store_path(&intent.closure_paths),
@@ -1191,8 +1189,8 @@ impl crate::resource_runtime::VolumeRootResolver for ZoneVolumeRootResolver {
         .map_err(|_| self.source_unresolved("storage-subdir-open", &anchor.volume_name))?;
         let marker_file = open_anchored_directory(&self.marker_root)
             .map_err(|_| self.source_unresolved("marker-root", &anchor.volume_name))?;
-        crate::resource_runtime::ResolvedVolumeRoot::new(file.into(), volume_uid.clone())?
-            .with_marker_root(marker_file.into())
+        crate::resource_runtime::ResolvedVolumeRoot::new(file, volume_uid.clone())?
+            .with_marker_root(marker_file)
     }
 
     fn resolve_principal(
@@ -1355,16 +1353,6 @@ pub struct ConstructionInputs {
     /// (`<daemon-state>/zones/<zone>`); the spec store lives at
     /// `spec-store.sqlite3` underneath it.
     pub spec_store_dir: PathBuf,
-    /// Absolute runtime root the virtiofs worker-template exports resolve
-    /// under (`PrivateSocketPath::derive` input); production derives it
-    /// from the broker socket's parent directory.
-    ///
-    /// Unwired: [`ConstructionInputs::production`] derives the same root from
-    /// `ServerState` directly and the endpoint/binding socket resolvers read
-    /// the registry's own copy, so no reader consults this field yet. The
-    /// plane's endpoint-socket derivation owns moving onto it.
-    #[allow(dead_code)]
-    pub socket_runtime_dir: PathBuf,
     pub authority: ZoneAuthorityInputs,
     /// Committed `Provider` identities (KTD7) keyed by canonical reference,
     /// resolved by the composition unit from the old plane's durable
@@ -1472,7 +1460,6 @@ impl ConstructionInputs {
             zone: zone.clone(),
             zone_token,
             spec_store_dir,
-            socket_runtime_dir,
             authority: ZoneAuthorityInputs {
                 zone_uid: Some(authority.zone_uid().clone()),
                 policy_revision: None,
@@ -1644,13 +1631,13 @@ impl GuestOwnerIdentitySource for PlaneGuestOwnerIdentities {
 // Manager-boundary admission (U9/U10 subjects)
 // ---------------------------------------------------------------------------
 
-/// Manager-boundary admission for the plane (KTD2 execution decision):
-/// Nix ingestion presents the bundle subject (`nix:<generation>`), the API
-/// path (U8) presents the api caller subject, owned cascades present the
-/// resource-owner subject. U14 retired the Phase A type partition, so the
-/// manager serves every type; the DriverFactory's registered directory is
-/// the only gate on which types can spawn actors. The manager's default
-/// [`AllowAll`] admission is therefore the whole policy.
+// Manager-boundary admission for the plane (KTD2 execution decision):
+// Nix ingestion presents the bundle subject (`nix:<generation>`), the API
+// path (U8) presents the api caller subject, owned cascades present the
+// resource-owner subject. U14 retired the Phase A type partition, so the
+// manager serves every type; the DriverFactory's registered directory is
+// the only gate on which types can spawn actors. The manager's default
+// [`AllowAll`] admission is therefore the whole policy.
 
 /// Default spec decode hook for rows no per-type decoder covers (a row whose
 /// type has no driver never spawns an actor, so this only ever sees
@@ -2257,7 +2244,7 @@ impl ResourcePlaneV3 {
     /// composition reads `client`/`hub`/`registry`/`targets`/
     /// `ready_zone_count` today, and the readiness reporting the checklist was
     /// sized for is the composition's outstanding wiring.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn readiness(&self) -> d2bd_runtime::resource_runtime_support::NewPlaneReadiness {
         self.readiness.snapshot()
     }
@@ -2329,7 +2316,7 @@ impl ResourcePlaneV3 {
     }
 
     /// See [`Self::readiness`]: read by this module's tests.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn store(&self) -> &Arc<SpecStore> {
         &self.store
     }
@@ -2352,9 +2339,9 @@ impl ResourcePlaneV3 {
 
     /// Stop the manager actor. Read by this module's tests; the daemon
     /// composition stops the manager through the runtime it owns.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub async fn shutdown(&self) {
-        let _ = self.client.actor().get_cell().stop(None);
+        self.client.actor().get_cell().stop(None);
     }
 }
 
@@ -2569,7 +2556,6 @@ impl ResourcePlaneV3 {
 mod tests {
     use super::*;
     use d2b_provider_activation_nixos::HostHandoffResult;
-    use d2b_contracts_broker::host_generation::HostGenerationHandoffIntent;
     use d2b_contracts_resource::v3::ResourceName;
     use d2b_contracts_zone_session::v3::resource_bundle::BundleResourceMetadata;
     use d2b_process_conformance::ProcessIdentityDigest;
@@ -2609,232 +2595,6 @@ mod tests {
         .expect("bundle row")
     }
 
-    /// The plane's Process effects double: the launch succeeds and is
-    /// counted, so a test can prove a committed `Process` row reached the
-    /// driver's launch path (the counter is the test's observable).
-    struct FakeProcessEffects {
-        launches: Arc<std::sync::atomic::AtomicUsize>,
-    }
-
-    impl FakeProcessEffects {
-        fn new() -> Self {
-            Self {
-                launches: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl ProcessDriverEffects for FakeProcessEffects {
-        async fn launch(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-            _timeout: Duration,
-        ) -> Result<ProcessIdentityDigest, String> {
-            self.launches
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(ProcessIdentityDigest::from_bytes([0u8; 32]))
-        }
-
-        async fn adopt(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<d2b_provider_process::ProviderAdoption, String> {
-            Ok(d2b_provider_process::ProviderAdoption::Absent)
-        }
-
-        async fn probe(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<d2b_provider_process::ProviderLiveness, String> {
-            Ok(d2b_provider_process::ProviderLiveness::Alive)
-        }
-
-        async fn launch_ephemeral(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-            _timeout: Duration,
-        ) -> Result<ProcessIdentityDigest, String> {
-            self.launches
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(ProcessIdentityDigest::from_bytes([0u8; 32]))
-        }
-
-        async fn adopt_ephemeral(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<d2b_provider_process::ProviderAdoption, String> {
-            Ok(d2b_provider_process::ProviderAdoption::Absent)
-        }
-
-        async fn probe_ephemeral(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<d2b_provider_process::ProviderLiveness, String> {
-            Ok(d2b_provider_process::ProviderLiveness::Alive)
-        }
-
-        async fn stop_ephemeral(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-            _term_timeout: Duration,
-            _kill_timeout: Duration,
-        ) -> Result<bool, String> {
-            Ok(true)
-        }
-
-        async fn stop(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-            _term_timeout: Duration,
-            _kill_timeout: Duration,
-        ) -> Result<bool, String> {
-            Ok(true)
-        }
-
-        async fn stop_stale(
-            &self,
-            _provider_ref: &ResourceRef,
-            _candidate: &d2b_process_conformance::AdoptionCandidate,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        async fn finalize(&self, _identity: &d2b_provider_process::ProcessResourceIdentity) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn has_active(
-            &self,
-            _zone: &ZoneId,
-            _zone_uid: Option<&ResourceUid>,
-            _resource_ref: &ResourceRef,
-        ) -> bool {
-            false
-        }
-    }
-
-    struct FakeVolumeEffects;
-
-    #[async_trait::async_trait]
-    impl VolumeDriverEffects for FakeVolumeEffects {
-        async fn ensure_layout(
-            &self,
-            _volume_uid: &ResourceUid,
-            _spec: &VolumeSpec,
-            _provider: Option<&serde_json::Value>,
-            _owner_ref: Option<&ResourceRef>,
-        ) -> Result<bool, String> {
-            Ok(true)
-        }
-
-        async fn remove_layout(&self, _volume_uid: &ResourceUid, _spec: &VolumeSpec) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn has_layout(&self, _volume_uid: &ResourceUid) -> bool {
-            false
-        }
-    }
-
-    struct FakeBindingEffects;
-
-    #[async_trait::async_trait]
-    impl BindingDriverEffects for FakeBindingEffects {
-        async fn socket_ready(&self, _socket: &SocketIdentity) -> bool {
-            true
-        }
-
-        async fn remove_socket(&self, _socket: &SocketIdentity) -> Result<(), String> {
-            Ok(())
-        }
-    }
-
-    struct FakeEndpointEffects;
-
-    impl d2b_provider_endpoint::EndpointPurposeVocabulary for FakeEndpointEffects {
-        fn guest_control_producer(
-            &self,
-            purpose: &str,
-        ) -> Option<d2b_provider_endpoint::GuestControlProducer> {
-            crate::endpoint_effects::guest_control_producer(purpose)
-        }
-
-        fn device_worker_endpoint_class(
-            &self,
-            purpose: &str,
-        ) -> Option<d2b_contracts_resource::v3::endpoint::EndpointClass> {
-            crate::endpoint_effects::device_worker_endpoint_class(purpose)
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl d2b_provider_endpoint::EndpointDriverEffects for FakeEndpointEffects {
-        async fn socket_present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
-            true
-        }
-
-        async fn ensure_socket(&self, _producer_ref: &ResourceRef, _purpose: &str) -> Result<(), String> {
-            Ok(())
-        }
-
-        async fn remove_socket(&self, _producer_ref: &ResourceRef, _purpose: &str) -> Result<(), String> {
-            Ok(())
-        }
-    }
-
-    struct FakeActivationEffects;
-
-    #[async_trait::async_trait]
-    impl ActivationDriverEffects for FakeActivationEffects {
-        async fn apply_host_generation_handoff(
-            &self,
-            _target: ResourceRef,
-            _intent: HostGenerationHandoffIntent,
-        ) -> HostHandoffResult {
-            HostHandoffResult::Incomplete
-        }
-    }
-
-    struct FakeCredentialEffects;
-
-    #[async_trait::async_trait]
-    impl CredentialDriverEffects for FakeCredentialEffects {
-        async fn dependency_facts(
-            &self,
-            _provider_ref: &ResourceRef,
-            _execution_ref: &ResourceRef,
-        ) -> Option<d2b_provider_credential::CredentialDependencyFacts> {
-            None
-        }
-
-        async fn lease_facts(
-            &self,
-            _credential_ref: &ResourceRef,
-        ) -> Option<d2b_provider_credential::CredentialLeaseFacts> {
-            None
-        }
-
-        async fn agent_ready(&self, _agent_ref: &ResourceRef) -> bool {
-            false
-        }
-
-        fn session(
-            &self,
-            _provider_ref: &ResourceRef,
-        ) -> Option<Arc<dyn d2b_provider_credential::CredentialSession>> {
-            None
-        }
-    }
-
     struct FakeInteractionEffects;
 
     #[async_trait::async_trait]
@@ -2861,114 +2621,6 @@ mod tests {
             d2b_provider_wayland_policy::InteractionEffectError,
         > {
             Ok(d2b_provider_wayland_policy::InteractionFinalize::Complete)
-        }
-    }
-
-    struct FakeSharedProviderEffects;
-
-    fn fake_outcome() -> d2b_provider_toolkit::SharedProviderEffectOutcome {
-        d2b_provider_toolkit::SharedProviderEffectOutcome::phase(
-            d2b_provider_toolkit::SharedProviderEffectPhase::Pending,
-        )
-    }
-
-    #[async_trait::async_trait]
-    impl d2b_provider_network_local::NetworkDriverEffects for FakeSharedProviderEffects {
-        async fn reconcile_network(
-            &self,
-            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_toolkit::SharedProviderEffectOutcome,
-            d2b_provider_toolkit::SharedProviderEffectError,
-        > {
-            Ok(fake_outcome())
-        }
-
-        async fn finalize(
-            &self,
-            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_toolkit::SharedProviderFinalize,
-            d2b_provider_toolkit::SharedProviderEffectError,
-        > {
-            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl d2b_provider_device_usbip::UsbipDriverEffects for FakeSharedProviderEffects {
-        async fn reconcile_usbip(
-            &self,
-            _component: d2b_provider_device_usbip::UsbipComponent,
-            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_toolkit::SharedProviderEffectOutcome,
-            d2b_provider_toolkit::SharedProviderEffectError,
-        > {
-            Ok(fake_outcome())
-        }
-
-        async fn finalize(
-            &self,
-            _component: d2b_provider_device_usbip::UsbipComponent,
-            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_toolkit::SharedProviderFinalize,
-            d2b_provider_toolkit::SharedProviderEffectError,
-        > {
-            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl d2b_provider_device_security_key::SecurityKeyDriverEffects for FakeSharedProviderEffects {
-        async fn reconcile_security_key(
-            &self,
-            _component: d2b_provider_device_security_key::SecurityKeyComponent,
-            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_toolkit::SharedProviderEffectOutcome,
-            d2b_provider_toolkit::SharedProviderEffectError,
-        > {
-            Ok(fake_outcome())
-        }
-
-        async fn finalize(
-            &self,
-            _component: d2b_provider_device_security_key::SecurityKeyComponent,
-            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_toolkit::SharedProviderFinalize,
-            d2b_provider_toolkit::SharedProviderEffectError,
-        > {
-            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl d2b_provider_device::DeviceDriverEffects for FakeSharedProviderEffects {
-        async fn reconcile_device(
-            &self,
-            _component: d2b_provider_device::DeviceComponent,
-            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
-            _state: &d2b_provider_device::DeviceResourceState,
-        ) -> Result<
-            d2b_provider_toolkit::SharedProviderEffectOutcome,
-            d2b_provider_toolkit::SharedProviderEffectError,
-        > {
-            Ok(fake_outcome())
-        }
-
-        async fn finalize_device(
-            &self,
-            _component: d2b_provider_device::DeviceComponent,
-            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
-            _state: &d2b_provider_device::DeviceResourceState,
-        ) -> Result<
-            d2b_provider_toolkit::SharedProviderFinalize,
-            d2b_provider_toolkit::SharedProviderEffectError,
-        > {
-            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
         }
     }
 
@@ -3006,7 +2658,6 @@ mod tests {
     fn test_inputs() -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let spec_store_dir = dir.path().join("daemon-state/zones/test");
-        let socket_runtime_dir = dir.path().join("run");
         let readiness = Arc::new(NewPlaneReadinessState::new());
         (
             dir,
@@ -3014,7 +2665,6 @@ mod tests {
                 zone: ZoneId::parse("test").unwrap(),
                 zone_token: BoundedToken::parse("test".to_owned()).unwrap(),
                 spec_store_dir: spec_store_dir.clone(),
-                socket_runtime_dir,
                 authority: ZoneAuthorityInputs {
                     zone_uid: None,
                     policy_revision: Some(1),
@@ -3027,20 +2677,60 @@ mod tests {
                 committed_provider_identities: BTreeMap::new(),
                 registry: Arc::new(PlaneResourceRegistry::new()),
                 provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
-                process_effects: Arc::new(FakeProcessEffects::new()),
-                volume_effects: Arc::new(FakeVolumeEffects),
-                binding_effects: Arc::new(FakeBindingEffects),
-                endpoint_effects: Arc::new(FakeEndpointEffects),
-                activation_effects: Arc::new(FakeActivationEffects),
-                credential_effects: Arc::new(FakeCredentialEffects),
-                shared_provider_effects: {
-                    let effects = Arc::new(FakeSharedProviderEffects);
-                    crate::shared_provider_effects::SharedProviderEffects {
-                        network: effects.clone(),
-                        usbip: effects.clone(),
-                        security_key: effects.clone(),
-                        device: effects,
-                    }
+                process_effects: {
+                    let effects = Arc::new(
+                        d2b_provider_process::test_support::FakeEffects::new(Default::default()),
+                    );
+                    // The old plane fake reported no retained identity
+                    // (has_active false); the shared double's default reports
+                    // one (active true), so script it back so the launch path
+                    // (and only it) is what the plane tests observe.
+                    effects.set_active(false);
+                    effects as Arc<dyn ProcessDriverEffects>
+                },
+                volume_effects: d2b_provider_volume::test_support::FakeLayoutEffects::new(),
+                binding_effects: {
+                    let effects =
+                        d2b_provider_volume_binding::test_support::FakeServingEffects::new();
+                    // The old plane fake reported the serving socket present
+                    // (socket_ready true); the shared double starts absent.
+                    effects.make_ready();
+                    effects
+                },
+                endpoint_effects: {
+                    let effects = d2b_provider_endpoint::test_support::FakeSocketEffects::new();
+                    // The old plane fake reported the socket present
+                    // (socket_present true); the shared double starts absent.
+                    effects.make_present();
+                    effects
+                },
+                activation_effects: d2b_provider_activation_nixos::test_support::
+                    FakeActivationEffects::new(HostHandoffResult::Incomplete),
+                credential_effects: {
+                    let effects = d2b_provider_credential::test_support::FakeEffects::new(
+                        d2b_provider_credential::test_support::log(),
+                    );
+                    // The old plane fake answered no provider/execution
+                    // facts, no live agent, and no bound session; the shared
+                    // double's defaults differ, so script them back.
+                    effects.set_facts(None);
+                    effects.set_agent_ready(false);
+                    effects.set_session(None);
+                    effects
+                },
+                shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects {
+                    network: Arc::new(
+                        d2b_provider_network_local::test_support::RecordingEffects::default(),
+                    ),
+                    usbip: Arc::new(
+                        d2b_provider_device_usbip::test_support::RecordingEffects::default(),
+                    ),
+                    security_key: Arc::new(
+                        d2b_provider_device_security_key::test_support::RecordingEffects::default(),
+                    ),
+                    device: Arc::new(
+                        d2b_provider_device::test_support::RecordingEffects::default(),
+                    ),
                 },
                 guest_effects: Arc::new(FakeGuestEffects),
                 interaction_effects: Arc::new(FakeInteractionEffects),
@@ -3170,7 +2860,7 @@ mod tests {
         )]);
         let registry = Arc::clone(&inputs.registry);
         let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
-        let source = &*registry as &dyn d2b_provider_process::CommittedProviderIdentitySource;
+        let source = &*registry;
         assert_eq!(
             source.committed_provider_identity(
                 &ResourceRef::parse("Provider/network-local").expect("provider ref")
@@ -3441,10 +3131,16 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn controller_committed_process_child_reaches_the_process_driver() {
         let (_dir, mut inputs, _readiness) = test_inputs();
-        let launches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        inputs.process_effects = Arc::new(FakeProcessEffects {
-            launches: Arc::clone(&launches),
-        });
+        // The plane's canonical Process effects double: the shared recording
+        // fake, kept with a successful one-shot launch (the old plane fake's
+        // launch always succeeded), so the committed row is observed at the
+        // driver's launch effect.
+        let effects = Arc::new(d2b_provider_process::test_support::FakeEffects::new(
+            Default::default(),
+        ));
+        effects.set_active(false);
+        let process_effects: Arc<dyn ProcessDriverEffects> = effects.clone();
+        inputs.process_effects = process_effects;
         let plane = Arc::new(ResourcePlaneV3::open(inputs).await.expect("plane"));
         // The owner row the child commit is linked under: the production
         // manager holds the Guest (bundle ingest) before any provider
@@ -3472,12 +3168,12 @@ mod tests {
         assert_eq!(committed.resource_ref, target);
         assert_ne!(committed.uid.as_str(), "");
 
-        // The driver runs for the committed row: with the plane's fake
-        // effects the launch is observable, and the row keeps the authored
-        // owner reference and spec layer through the manager's rendering.
+        // The driver runs for the committed row: the shared double records
+        // the launch, and the row keeps the authored owner reference and
+        // spec layer through the manager's rendering.
         let mut launched = false;
         for _ in 0..200 {
-            if launches.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            if !effects.launch_calls().is_empty() {
                 launched = true;
                 break;
             }
@@ -3604,13 +3300,11 @@ mod tests {
         );
     }
 
-    /// Process effects double that adopts after the first launch: the driver's
-    /// `Ready` (and only `Ready`) publishes the committed child row, exactly
-    /// as the production provider's retained identity does.
-    struct AdoptingProcessEffects {
-        launched: std::sync::atomic::AtomicBool,
-    }
-
+    /// The retained-identity report the shared Process effects double
+    /// replays as the scripted adoption: the driver's `Ready` (and only
+    /// `Ready`) publishes the committed child row, exactly as the production
+    /// provider's retained identity does. `ProviderAdoption::Adopted` with
+    /// this report is queued on the double after the first launch.
     fn adopted_report() -> d2b_process_conformance::ProcessStatusReport {
         d2b_process_conformance::ProcessStatusReport {
             provider: BoundedToken::parse("system-minijail").expect("provider token"),
@@ -3626,111 +3320,6 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait]
-    impl ProcessDriverEffects for AdoptingProcessEffects {
-        async fn launch(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-            _timeout: Duration,
-        ) -> Result<ProcessIdentityDigest, String> {
-            self.launched.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(ProcessIdentityDigest::from_bytes([0x51; 32]))
-        }
-
-        async fn adopt(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<d2b_provider_process::ProviderAdoption, String> {
-            if self.launched.load(std::sync::atomic::Ordering::SeqCst) {
-                Ok(d2b_provider_process::ProviderAdoption::Adopted(
-                    adopted_report(),
-                ))
-            } else {
-                Ok(d2b_provider_process::ProviderAdoption::Absent)
-            }
-        }
-
-        async fn probe(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-        ) -> Result<d2b_provider_process::ProviderLiveness, String> {
-            Ok(d2b_provider_process::ProviderLiveness::Alive)
-        }
-
-        async fn launch_ephemeral(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-            _timeout: Duration,
-        ) -> Result<ProcessIdentityDigest, String> {
-            self.launched.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(ProcessIdentityDigest::from_bytes([0x51; 32]))
-        }
-
-        async fn adopt_ephemeral(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<d2b_provider_process::ProviderAdoption, String> {
-            Ok(d2b_provider_process::ProviderAdoption::Absent)
-        }
-
-        async fn probe_ephemeral(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-        ) -> Result<d2b_provider_process::ProviderLiveness, String> {
-            Ok(d2b_provider_process::ProviderLiveness::Alive)
-        }
-
-        async fn stop_ephemeral(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
-            _term_timeout: Duration,
-            _kill_timeout: Duration,
-        ) -> Result<bool, String> {
-            Ok(true)
-        }
-
-        async fn stop(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
-            _term_timeout: Duration,
-            _kill_timeout: Duration,
-        ) -> Result<bool, String> {
-            Ok(true)
-        }
-
-        async fn stop_stale(
-            &self,
-            _provider_ref: &ResourceRef,
-            _candidate: &d2b_process_conformance::AdoptionCandidate,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        async fn finalize(
-            &self,
-            _identity: &d2b_provider_process::ProcessResourceIdentity,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn has_active(
-            &self,
-            _zone: &ZoneId,
-            _zone_uid: Option<&ResourceUid>,
-            _resource_ref: &ResourceRef,
-        ) -> bool {
-            false
-        }
-    }
-
     /// U17: the guest-runtime control endpoints (`ch-api`, `guest-control`)
     /// are realized by the guest's committed VMM Process row being `Ready` -
     /// the exact evidence the old daemon publication stage wrote both rows
@@ -3740,9 +3329,20 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn guest_control_endpoints_are_realized_with_the_committed_vmm_process() {
         let (_dir, mut inputs, _readiness) = test_inputs();
-        inputs.process_effects = Arc::new(AdoptingProcessEffects {
-            launched: std::sync::atomic::AtomicBool::new(false),
-        });
+        // The plane's canonical Process effects double adopts the committed
+        // VMM row after the first launch (`Absent` comes first from the
+        // default queue, then the scripted `Adopted` report): the driver's
+        // `Ready` - and only `Ready` - publishes the evidence row, exactly
+        // as the production provider's retained identity does.
+        let effects = Arc::new(d2b_provider_process::test_support::FakeEffects::new(
+            Default::default(),
+        ));
+        effects.set_active(false);
+        effects.push_adoption(d2b_provider_process::ProviderAdoption::Adopted(
+            adopted_report(),
+        ));
+        let process_effects: Arc<dyn ProcessDriverEffects> = effects.clone();
+        inputs.process_effects = process_effects;
         let zone = ZoneId::parse("test").expect("zone");
         let planes: Arc<parking_lot::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>> =
             Arc::new(parking_lot::Mutex::new(HashMap::new()));

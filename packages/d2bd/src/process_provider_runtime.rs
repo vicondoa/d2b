@@ -445,14 +445,17 @@ pub(crate) struct ProcessResourceContext<'a> {
 impl<'a> ProcessResourceContext<'a> {
     pub(crate) const fn new(
         zone: ZoneId,
-        resource_ref: &'a ResourceRef,
-        resource_uid: &'a ResourceUid,
-        resource_generation: ResourceGeneration,
-        resource_revision: ZoneRevision,
+        identity: (
+            &'a ResourceRef,
+            &'a ResourceUid,
+            ResourceGeneration,
+            ZoneRevision,
+        ),
         provider_ref: &'a ResourceRef,
         controller_generation: ControllerGeneration,
         target_ref: Option<ResourceRef>,
     ) -> Self {
+        let (resource_ref, resource_uid, resource_generation, resource_revision) = identity;
         Self {
             zone,
             resource_ref,
@@ -534,7 +537,7 @@ impl<'a> ProcessResourceContext<'a> {
     /// so this stays available for the Guest-side realization follow-on and
     /// its tests; the bootstrap context falls back to the Provider owner ref
     /// meanwhile.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn with_controller_provider_ref(
         mut self,
         provider_ref: Option<ResourceRef>,
@@ -940,22 +943,6 @@ impl ProductionProcessProviders {
         }
     }
 
-    /// Bind the Guest-local Credential backend responder supervisor.
-    ///
-    /// Retained seam: the composition site was the Guest-local Process
-    /// supervisor, which the U12 conversion retired with its typed Runner
-    /// (EphemeralProcess moved to the manager plane). The Guest half of the
-    /// converted drivers re-composes it; until then the launch path's
-    /// guest-local credential ticket arm stays fail-closed without it.
-    #[allow(dead_code)]
-    pub(crate) fn with_guest_backend_supervisor(
-        mut self,
-        supervisor: Arc<dyn GuestCredentialBackendSupervisor>,
-    ) -> Self {
-        self.guest_backend_supervisor = Some(supervisor);
-        self
-    }
-
     /// Return the fixed daemon mode bound to these Process Providers.
     pub const fn mode(&self) -> DaemonMode {
         self.mode
@@ -1204,13 +1191,16 @@ impl ProductionProcessProviders {
         let ticket = resource_ticket(
             &self.bundle,
             &context,
-            spec.execution(),
-            None,
-            &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            ExecutionIntent {
+                execution: spec.execution(),
+                activation_input: None,
+                spec_bytes: &serde_json::to_vec(spec)
+                    .map_err(|_| "provider-ticket:serialization".to_owned())?,
+                readiness: Some(spec.readiness().class()),
+            },
             provider,
             self.mode,
             timeout,
-            Some(spec.readiness().class()),
         )?;
         // A binding-owned serving worker launches with the binding-declared
         // arguments; the template decides whether that is admitted at all
@@ -1309,25 +1299,25 @@ impl ProductionProcessProviders {
                 return Err(error);
             }
         };
-        self.remember_resource(
-            context.zone.clone(),
-            context.zone_uid.clone(),
-            context.resource_ref,
-            context.resource_uid,
-            context.resource_generation,
-            context.controller_generation,
+        self.remember_resource(ManagedResource {
+            zone: context.zone.clone(),
+            zone_uid: context.zone_uid.clone(),
+            resource_ref: context.resource_ref.clone(),
             provider,
-            context.provider_ref.clone(),
-            context.provider_uid.clone(),
-            context.provider_generation,
-            context.owner_ref.clone(),
-            context.owner_uid.clone(),
-            ticket.template().clone(),
-            report.identity,
-            spec.execution().execution_ref(),
-            context.target_ref.clone(),
-            ticket.runtime_scope(),
-        )?;
+            provider_ref: context.provider_ref.clone(),
+            provider_uid: context.provider_uid.clone(),
+            provider_generation: context.provider_generation,
+            owner_ref: context.owner_ref.clone(),
+            owner_uid: context.owner_uid.clone(),
+            template: ticket.template().clone(),
+            identity: report.identity,
+            uid: context.resource_uid.clone(),
+            generation: context.resource_generation,
+            controller_generation: context.controller_generation,
+            execution_ref: spec.execution().execution_ref().clone(),
+            target_ref: context.target_ref.clone(),
+            runtime_scope: ticket.runtime_scope(),
+        })?;
         if controller_bootstrap {
             let daemon_endpoint = match self
                 .minijail
@@ -1446,9 +1436,13 @@ impl ProductionProcessProviders {
             &self.bundle,
             &self.socket_runtime_dir,
             &context,
-            spec.execution(),
-            spec.activation_input(),
-            &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            ExecutionIntent {
+                execution: spec.execution(),
+                activation_input: spec.activation_input(),
+                spec_bytes: &serde_json::to_vec(spec)
+                    .map_err(|_| "provider-ticket:serialization".to_owned())?,
+                readiness: None,
+            },
             provider,
             self.mode,
             timeout,
@@ -1471,25 +1465,25 @@ impl ProductionProcessProviders {
                 self.systemd.launch(&ticket).await.map_err(provider_error)?
             }
         };
-        self.remember_resource(
-            context.zone.clone(),
-            context.zone_uid.clone(),
-            context.resource_ref,
-            context.resource_uid,
-            context.resource_generation,
-            context.controller_generation,
+        self.remember_resource(ManagedResource {
+            zone: context.zone.clone(),
+            zone_uid: context.zone_uid.clone(),
+            resource_ref: context.resource_ref.clone(),
             provider,
-            context.provider_ref.clone(),
-            context.provider_uid.clone(),
-            context.provider_generation,
-            context.owner_ref.clone(),
-            context.owner_uid.clone(),
-            ticket.template().clone(),
-            report.identity,
-            spec.execution().execution_ref(),
-            context.target_ref.clone(),
-            ticket.runtime_scope(),
-        )?;
+            provider_ref: context.provider_ref.clone(),
+            provider_uid: context.provider_uid.clone(),
+            provider_generation: context.provider_generation,
+            owner_ref: context.owner_ref.clone(),
+            owner_uid: context.owner_uid.clone(),
+            template: ticket.template().clone(),
+            identity: report.identity,
+            uid: context.resource_uid.clone(),
+            generation: context.resource_generation,
+            controller_generation: context.controller_generation,
+            execution_ref: spec.execution().execution_ref().clone(),
+            target_ref: context.target_ref.clone(),
+            runtime_scope: ticket.runtime_scope(),
+        })?;
         Ok(ProviderLaunch {
             identity: report.identity,
         })
@@ -1538,25 +1532,25 @@ impl ProductionProcessProviders {
                 self.systemd.launch(&ticket).await.map_err(provider_error)?
             }
         };
-        self.remember_resource(
-            resource.zone().clone(),
-            None,
-            resource.process_ref(),
-            resource.uid(),
-            resource.resource_generation(),
-            resource.controller_generation(),
+        self.remember_resource(ManagedResource {
+            zone: resource.zone().clone(),
+            zone_uid: None,
+            resource_ref: resource.process_ref().clone(),
             provider,
-            resource.process_provider_ref().clone(),
-            None,
-            Some(resource.provider_generation()),
-            Some(resource.provider_ref().clone()),
-            None,
-            ticket.template().clone(),
-            report.identity,
-            resource.target(),
-            Some(resource.target().clone()),
-            ticket.runtime_scope(),
-        )?;
+            provider_ref: resource.process_provider_ref().clone(),
+            provider_uid: None,
+            provider_generation: Some(resource.provider_generation()),
+            owner_ref: Some(resource.provider_ref().clone()),
+            owner_uid: None,
+            template: ticket.template().clone(),
+            identity: report.identity,
+            uid: resource.uid().clone(),
+            generation: resource.resource_generation(),
+            controller_generation: resource.controller_generation(),
+            execution_ref: resource.target().clone(),
+            target_ref: Some(resource.target().clone()),
+            runtime_scope: ticket.runtime_scope(),
+        })?;
         Ok(ProviderLaunch {
             identity: report.identity,
         })
@@ -1596,25 +1590,25 @@ impl ProductionProcessProviders {
         match outcome {
             AdoptionOutcome::Absent => Ok(ProviderAdoption::Absent),
             AdoptionOutcome::Adopted(report) => {
-                self.remember_resource(
-                    resource.zone().clone(),
-                    None,
-                    resource.process_ref(),
-                    resource.uid(),
-                    resource.resource_generation(),
-                    resource.controller_generation(),
+                self.remember_resource(ManagedResource {
+                    zone: resource.zone().clone(),
+                    zone_uid: None,
+                    resource_ref: resource.process_ref().clone(),
                     provider,
-                    resource.process_provider_ref().clone(),
-                    None,
-                    Some(resource.provider_generation()),
-                    Some(resource.provider_ref().clone()),
-                    None,
-                    ticket.template().clone(),
-                    report.identity,
-                    resource.target(),
-                    Some(resource.target().clone()),
-                    ticket.runtime_scope(),
-                )?;
+                    provider_ref: resource.process_provider_ref().clone(),
+                    provider_uid: None,
+                    provider_generation: Some(resource.provider_generation()),
+                    owner_ref: Some(resource.provider_ref().clone()),
+                    owner_uid: None,
+                    template: ticket.template().clone(),
+                    identity: report.identity,
+                    uid: resource.uid().clone(),
+                    generation: resource.resource_generation(),
+                    controller_generation: resource.controller_generation(),
+                    execution_ref: resource.target().clone(),
+                    target_ref: Some(resource.target().clone()),
+                    runtime_scope: ticket.runtime_scope(),
+                })?;
                 Ok(ProviderAdoption::Adopted(report))
             }
             AdoptionOutcome::Stale { candidate } => {
@@ -1652,17 +1646,20 @@ impl ProductionProcessProviders {
     pub(crate) fn attach_pending_controller_provider_context_for_test(
         &self,
         daemon_endpoint: OwnedFd,
-        zone: ZoneId,
-        process_ref: ResourceRef,
-        process_uid: ResourceUid,
-        process_generation: ResourceGeneration,
-        process_provider_ref: ResourceRef,
-        provider_owner_ref: ResourceRef,
-        provider_uid: ResourceUid,
-        provider_generation: ResourceGeneration,
-        execution_ref: ResourceRef,
-        controller_generation: ControllerGeneration,
+        controller: (
+            ZoneId,
+            ResourceRef,
+            ResourceUid,
+            ResourceGeneration,
+            ResourceRef,
+            ControllerGeneration,
+        ),
+        provider: (ResourceRef, ResourceRef, ResourceUid, ResourceGeneration),
     ) -> Result<(), String> {
+        let (zone, process_ref, process_uid, process_generation, execution_ref, controller_generation) =
+            controller;
+        let (process_provider_ref, provider_owner_ref, provider_uid, provider_generation) =
+            provider;
         let context = ControllerBootstrapContext {
             zone: zone.clone(),
             zone_uid: None,
@@ -1797,10 +1794,13 @@ impl ProductionProcessProviders {
     ) -> Result<bool, String> {
         self.stop_resource_with_execution(
             context,
-            spec.execution(),
-            None,
-            &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
-            Some(spec.readiness().class()),
+            ExecutionIntent {
+                execution: spec.execution(),
+                activation_input: None,
+                spec_bytes: &serde_json::to_vec(spec)
+                    .map_err(|_| "provider-ticket:serialization".to_owned())?,
+                readiness: Some(spec.readiness().class()),
+            },
             term_timeout,
             kill_timeout,
         )
@@ -1818,10 +1818,13 @@ impl ProductionProcessProviders {
     ) -> Result<bool, String> {
         self.stop_resource_with_execution(
             context,
-            spec.execution(),
-            spec.activation_input(),
-            &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
-            None,
+            ExecutionIntent {
+                execution: spec.execution(),
+                activation_input: spec.activation_input(),
+                spec_bytes: &serde_json::to_vec(spec)
+                    .map_err(|_| "provider-ticket:serialization".to_owned())?,
+                readiness: None,
+            },
             term_timeout,
             kill_timeout,
         )
@@ -1917,13 +1920,12 @@ impl ProductionProcessProviders {
         zone: &ZoneId,
         zone_uid: &ResourceUid,
         resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
-        owner_ref: &ResourceRef,
-        owner_uid: &ResourceUid,
+        row: (&ResourceUid, ResourceGeneration),
+        binding: (&ResourceRef, &ResourceRef, &ResourceUid),
         execution_ref: &ResourceRef,
     ) -> bool {
+        let (resource_uid, generation) = row;
+        let (provider_ref, owner_ref, owner_uid) = binding;
         self.managed_resources
             .lock()
             .ok()
@@ -2349,13 +2351,15 @@ impl ProductionProcessProviders {
         let ticket = resource_ticket(
             &self.bundle,
             &context,
-            execution,
-            activation_input,
-            spec_bytes,
+            ExecutionIntent {
+                execution,
+                activation_input,
+                spec_bytes,
+                readiness,
+            },
             provider,
             self.mode,
             Duration::from_secs(30),
-            readiness,
         )?;
         self.retire_resource_if_identity_changed(
             &context,
@@ -2380,25 +2384,25 @@ impl ProductionProcessProviders {
                 Ok(ProviderAdoption::Absent)
             }
             AdoptionOutcome::Adopted(report) => {
-                self.remember_resource(
-                    context.zone.clone(),
-                    context.zone_uid.clone(),
-                    context.resource_ref,
-                    context.resource_uid,
-                    context.resource_generation,
-                    context.controller_generation,
+                self.remember_resource(ManagedResource {
+                    zone: context.zone.clone(),
+                    zone_uid: context.zone_uid.clone(),
+                    resource_ref: context.resource_ref.clone(),
                     provider,
-                    context.provider_ref.clone(),
-                    context.provider_uid.clone(),
-                    context.provider_generation,
-                    context.owner_ref.clone(),
-                    context.owner_uid.clone(),
-                    ticket.template().clone(),
-                    report.identity,
-                    execution.execution_ref(),
-                    context.target_ref.clone(),
-                    ticket.runtime_scope(),
-                )?;
+                    provider_ref: context.provider_ref.clone(),
+                    provider_uid: context.provider_uid.clone(),
+                    provider_generation: context.provider_generation,
+                    owner_ref: context.owner_ref.clone(),
+                    owner_uid: context.owner_uid.clone(),
+                    template: ticket.template().clone(),
+                    identity: report.identity,
+                    uid: context.resource_uid.clone(),
+                    generation: context.resource_generation,
+                    controller_generation: context.controller_generation,
+                    execution_ref: execution.execution_ref().clone(),
+                    target_ref: context.target_ref.clone(),
+                    runtime_scope: ticket.runtime_scope(),
+                })?;
                 if controller_bootstrap {
                     let controller_context = ControllerBootstrapContext::from_resource_context(
                         &context,
@@ -2477,17 +2481,19 @@ impl ProductionProcessProviders {
     ) -> Result<ProviderLiveness, String> {
         self.validate_execution_target(execution.execution_ref())?;
         let provider = managed_provider_from_ref(context.provider_ref)?;
-        validate_resource_execution_target(self.mode, &context, execution)?;
+        validate_resource_execution_target(self.mode, context, execution)?;
         let ticket = resource_ticket(
             &self.bundle,
-            &context,
-            execution,
-            activation_input,
-            spec_bytes,
+            context,
+            ExecutionIntent {
+                execution,
+                activation_input,
+                spec_bytes,
+                readiness,
+            },
             provider,
             self.mode,
             Duration::from_secs(30),
-            readiness,
         )?;
         let candidate = match provider {
             ManagedProvider::Minijail => self
@@ -2526,25 +2532,30 @@ impl ProductionProcessProviders {
     async fn stop_resource_with_execution(
         &self,
         context: ProcessResourceContext<'_>,
-        execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
-        activation_input: Option<&d2b_contracts_resource::v3::ActivationRunnerInput>,
-        spec_bytes: &[u8],
-        readiness: Option<ReadinessClass>,
+        intent: ExecutionIntent<'_>,
         term_timeout: Duration,
         kill_timeout: Duration,
     ) -> Result<bool, String> {
+        let ExecutionIntent {
+            execution,
+            activation_input,
+            spec_bytes,
+            readiness,
+        } = intent;
         validate_resource_execution_target(self.mode, &context, execution)?;
         let provider = managed_provider_from_ref(context.provider_ref)?;
         let ticket = resource_ticket(
             &self.bundle,
             &context,
-            execution,
-            activation_input,
-            spec_bytes,
+            ExecutionIntent {
+                execution,
+                activation_input,
+                spec_bytes,
+                readiness,
+            },
             provider,
             self.mode,
             Duration::from_secs(30),
-            readiness,
         )?;
         let managed = self
             .managed_resources
@@ -2959,48 +2970,18 @@ impl ProductionProcessProviders {
 
     fn remember_resource(
         &self,
-        zone: ZoneId,
-        zone_uid: Option<ResourceUid>,
-        resource_ref: &ResourceRef,
-        uid: &ResourceUid,
-        generation: ResourceGeneration,
-        controller_generation: ControllerGeneration,
-        provider: ManagedProvider,
-        provider_ref: ResourceRef,
-        provider_uid: Option<ResourceUid>,
-        provider_generation: Option<ResourceGeneration>,
-        owner_ref: Option<ResourceRef>,
-        owner_uid: Option<ResourceUid>,
-        template: BoundedToken,
-        identity: ProcessIdentityDigest,
-        execution_ref: &ResourceRef,
-        target_ref: Option<ResourceRef>,
-        runtime_scope: Option<ConfigurationDigest>,
+        managed: ManagedResource,
     ) -> Result<(), String> {
         self.managed_resources
             .lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
             .insert(
-                (zone.clone(), zone_uid.clone(), resource_ref.clone()),
-                ManagedResource {
-                    zone,
-                    zone_uid,
-                    resource_ref: resource_ref.clone(),
-                    provider,
-                    provider_ref,
-                    provider_uid,
-                    provider_generation,
-                    owner_ref,
-                    owner_uid,
-                    template,
-                    identity,
-                    uid: uid.clone(),
-                    generation,
-                    controller_generation,
-                    execution_ref: execution_ref.clone(),
-                    target_ref,
-                    runtime_scope,
-                },
+                (
+                    managed.zone.clone(),
+                    managed.zone_uid.clone(),
+                    managed.resource_ref.clone(),
+                ),
+                managed,
             );
         Ok(())
     }
@@ -3705,6 +3686,17 @@ fn device_worker_launch_args(
     Ok(argv.split_off(1))
 }
 
+/// The launch inputs shared by every resource ticket assembly: the resolved
+/// execution spec, the runner activation inputs (when declared), the verbatim
+/// resource-row bytes the compiled-ticket digest commits, and the readiness
+/// class to admit.
+struct ExecutionIntent<'a> {
+    execution: &'a d2b_contracts_resource::v3::process::ExecutionSpec,
+    activation_input: Option<&'a d2b_contracts_resource::v3::ActivationRunnerInput>,
+    spec_bytes: &'a [u8],
+    readiness: Option<ReadinessClass>,
+}
+
 /// Compose the launch ticket of one one-shot (`EphemeralProcess`) resource
 /// row.
 ///
@@ -3721,23 +3713,29 @@ fn ephemeral_launch_ticket(
     bundle: &BundleResolver,
     socket_runtime_dir: &std::path::Path,
     context: &ProcessResourceContext<'_>,
-    execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
-    activation_input: Option<&d2b_contracts_resource::v3::ActivationRunnerInput>,
-    spec_bytes: &[u8],
+    intent: ExecutionIntent<'_>,
     provider: ManagedProvider,
     mode: DaemonMode,
     timeout: Duration,
 ) -> Result<LaunchTicket, String> {
-    let ticket = resource_ticket(
-        bundle,
-        context,
+    let ExecutionIntent {
         execution,
         activation_input,
         spec_bytes,
+        readiness,
+    } = intent;
+    let ticket = resource_ticket(
+        bundle,
+        context,
+        ExecutionIntent {
+            execution,
+            activation_input,
+            spec_bytes,
+            readiness,
+        },
         provider,
         mode,
         timeout,
-        None,
     )?;
     match context.device_worker_launch.as_ref() {
         Some(launch) => ticket
@@ -3750,14 +3748,17 @@ fn ephemeral_launch_ticket(
 fn resource_ticket(
     bundle: &BundleResolver,
     context: &ProcessResourceContext<'_>,
-    execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
-    activation_input: Option<&d2b_contracts_resource::v3::ActivationRunnerInput>,
-    spec_bytes: &[u8],
+    intent: ExecutionIntent<'_>,
     provider: ManagedProvider,
     mode: DaemonMode,
     timeout: Duration,
-    readiness: Option<ReadinessClass>,
 ) -> Result<LaunchTicket, String> {
+    let ExecutionIntent {
+        execution,
+        activation_input,
+        spec_bytes,
+        readiness,
+    } = intent;
     validate_resource_execution_target(mode, context, execution)?;
     let execution_domain = match execution.domain().unwrap_or(ExecutionDomain::System) {
         ExecutionDomain::System => d2b_core::processes::ProcessExecutionDomain::System,
@@ -4788,10 +4789,12 @@ mod tests {
         let provider_ref = ResourceRef::parse("Provider/system-systemd").expect("provider ref");
         let context = ProcessResourceContext::new(
             ZoneId::parse("work").expect("zone"),
-            &resource_ref,
-            &uid,
-            ResourceGeneration::new(1).expect("generation"),
-            ZoneRevision::new(1),
+            (
+                &resource_ref,
+                &uid,
+                ResourceGeneration::new(1).expect("generation"),
+                ZoneRevision::new(1)
+            ),
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -4816,10 +4819,12 @@ mod tests {
         let provider_ref = ResourceRef::parse("Provider/system-systemd").expect("provider ref");
         let context = ProcessResourceContext::new(
             ZoneId::parse("work").expect("zone"),
-            &resource_ref,
-            &uid,
-            ResourceGeneration::new(1).expect("generation"),
-            ZoneRevision::new(1),
+            (
+                &resource_ref,
+                &uid,
+                ResourceGeneration::new(1).expect("generation"),
+                ZoneRevision::new(1)
+            ),
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -4884,10 +4889,12 @@ mod tests {
         };
         let context = ProcessResourceContext::new(
             ZoneId::parse("work").expect("zone"),
-            &resource_ref,
-            &uid,
-            ResourceGeneration::new(4).expect("generation"),
-            ZoneRevision::new(4),
+            (
+                &resource_ref,
+                &uid,
+                ResourceGeneration::new(4).expect("generation"),
+                ZoneRevision::new(4)
+            ),
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -4950,10 +4957,12 @@ mod tests {
         };
         let context = ProcessResourceContext::new(
             ZoneId::parse("work").expect("zone"),
-            &resource_ref,
-            &uid,
-            ResourceGeneration::new(4).expect("generation"),
-            ZoneRevision::new(4),
+            (
+                &resource_ref,
+                &uid,
+                ResourceGeneration::new(4).expect("generation"),
+                ZoneRevision::new(4)
+            ),
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -4962,10 +4971,12 @@ mod tests {
         assert!(resource_identity_matches(&managed, &context));
         let stale_context = ProcessResourceContext::new(
             ZoneId::parse("work").expect("zone"),
-            &resource_ref,
-            &uid,
-            ResourceGeneration::new(3).expect("generation"),
-            ZoneRevision::new(3),
+            (
+                &resource_ref,
+                &uid,
+                ResourceGeneration::new(3).expect("generation"),
+                ZoneRevision::new(3)
+            ),
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -4978,10 +4989,12 @@ mod tests {
         );
         let newer_revision = ProcessResourceContext::new(
             ZoneId::parse("work").expect("zone"),
-            &resource_ref,
-            &uid,
-            ResourceGeneration::new(4).expect("generation"),
-            ZoneRevision::new(5),
+            (
+                &resource_ref,
+                &uid,
+                ResourceGeneration::new(4).expect("generation"),
+                ZoneRevision::new(5)
+            ),
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -4990,10 +5003,12 @@ mod tests {
         assert!(resource_identity_matches(&managed, &newer_revision));
         let stale_controller = ProcessResourceContext::new(
             ZoneId::parse("work").expect("zone"),
-            &resource_ref,
-            &uid,
-            ResourceGeneration::new(4).expect("generation"),
-            ZoneRevision::new(4),
+            (
+                &resource_ref,
+                &uid,
+                ResourceGeneration::new(4).expect("generation"),
+                ZoneRevision::new(4)
+            ),
             &provider_ref,
             ControllerGeneration::new(2).expect("controller generation"),
             None,
@@ -5006,10 +5021,12 @@ mod tests {
         );
         let different_zone = ProcessResourceContext::new(
             ZoneId::parse("work").expect("zone"),
-            &resource_ref,
-            &uid,
-            ResourceGeneration::new(4).expect("generation"),
-            ZoneRevision::new(4),
+            (
+                &resource_ref,
+                &uid,
+                ResourceGeneration::new(4).expect("generation"),
+                ZoneRevision::new(4)
+            ),
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -5093,10 +5110,12 @@ mod tests {
         let identity = ProcessIdentityDigest::from_bytes([0x11; 32]);
         let context = ProcessResourceContext::new(
             zone,
-            &process_ref,
-            &process_uid,
-            ResourceGeneration::new(1).expect("generation"),
-            ZoneRevision::new(1),
+            (
+                &process_ref,
+                &process_uid,
+                ResourceGeneration::new(1).expect("generation"),
+                ZoneRevision::new(1)
+            ),
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -5235,10 +5254,12 @@ mod tests {
         let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("uid");
         let context = ProcessResourceContext::new(
             zone,
-            &process_ref,
-            &uid,
-            ResourceGeneration::new(1).expect("generation"),
-            ZoneRevision::new(1),
+            (
+                &process_ref,
+                &uid,
+                ResourceGeneration::new(1).expect("generation"),
+                ZoneRevision::new(1)
+            ),
             &provider,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -5252,13 +5273,15 @@ mod tests {
         let ticket = resource_ticket(
             &resolver,
             &context,
-            &execution,
-            None,
-            b"process-spec",
+            ExecutionIntent {
+                execution: &execution,
+                activation_input: None,
+                spec_bytes: b"process-spec",
+                readiness: Some(ReadinessClass::ReadyCondition),
+            },
             ManagedProvider::Minijail,
             DaemonMode::Host,
             Duration::from_secs(5),
-            Some(ReadinessClass::ReadyCondition),
         )
         .expect("static controller ticket");
         assert_eq!(ticket.inherited_fd_table().count(), 1);
@@ -5273,13 +5296,15 @@ mod tests {
             resource_ticket(
                 &resolver,
                 &wrong_owner_context,
-                &execution,
-                None,
-                b"process-spec",
+                ExecutionIntent {
+                    execution: &execution,
+                    activation_input: None,
+                    spec_bytes: b"process-spec",
+                    readiness: Some(ReadinessClass::ReadyCondition),
+                },
                 ManagedProvider::Minijail,
                 DaemonMode::Host,
                 Duration::from_secs(5),
-                Some(ReadinessClass::ReadyCondition),
             ),
             Err("provider-ticket:template-not-found".to_owned())
         );
@@ -5503,10 +5528,12 @@ mod tests {
             ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
         let context = ProcessResourceContext::new(
             zone.clone(),
-            &process_ref,
-            &uid,
-            ResourceGeneration::new(1).expect("generation"),
-            ZoneRevision::new(1),
+            (
+                &process_ref,
+                &uid,
+                ResourceGeneration::new(1).expect("generation"),
+                ZoneRevision::new(1)
+            ),
             &provider,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -5516,13 +5543,15 @@ mod tests {
         let ticket = resource_ticket(
             &resolver,
             &context,
-            &execution,
-            None,
-            b"process-spec",
+            ExecutionIntent {
+                execution: &execution,
+                activation_input: None,
+                spec_bytes: b"process-spec",
+                readiness: Some(ReadinessClass::ReadyCondition),
+            },
             ManagedProvider::Minijail,
             DaemonMode::Host,
             Duration::from_secs(5),
-            Some(ReadinessClass::ReadyCondition),
         )
         .expect("device worker ticket");
         assert_eq!(ticket.template(), &template);
@@ -5537,10 +5566,12 @@ mod tests {
         let other_ref = ResourceRef::parse("Process/swtpm-other").expect("other ref");
         let other_context = ProcessResourceContext::new(
             zone,
-            &other_ref,
-            &uid,
-            ResourceGeneration::new(1).expect("generation"),
-            ZoneRevision::new(1),
+            (
+                &other_ref,
+                &uid,
+                ResourceGeneration::new(1).expect("generation"),
+                ZoneRevision::new(1)
+            ),
             &provider,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -5551,13 +5582,15 @@ mod tests {
             resource_ticket(
                 &resolver,
                 &other_context,
-                &execution,
-                None,
-                b"process-spec",
+                ExecutionIntent {
+                    execution: &execution,
+                    activation_input: None,
+                    spec_bytes: b"process-spec",
+                    readiness: Some(ReadinessClass::ReadyCondition),
+                },
                 ManagedProvider::Minijail,
                 DaemonMode::Host,
                 Duration::from_secs(5),
-                Some(ReadinessClass::ReadyCondition),
             ),
             Err("provider-ticket:template-not-found".to_owned())
         );
@@ -5711,10 +5744,12 @@ mod tests {
             ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
         let context = ProcessResourceContext::new(
             zone.clone(),
-            &process_ref,
-            &uid,
-            ResourceGeneration::new(1).expect("generation"),
-            ZoneRevision::new(1),
+            (
+                &process_ref,
+                &uid,
+                ResourceGeneration::new(1).expect("generation"),
+                ZoneRevision::new(1)
+            ),
             &provider,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -5737,9 +5772,12 @@ mod tests {
             &resolver,
             std::path::Path::new("/run/d2b"),
             &context,
-            &execution,
-            None,
-            &spec_bytes,
+            ExecutionIntent {
+                execution: &execution,
+                activation_input: None,
+                spec_bytes: &spec_bytes,
+                readiness: None,
+            },
             ManagedProvider::Minijail,
             DaemonMode::Host,
             Duration::from_secs(5),
@@ -5760,9 +5798,12 @@ mod tests {
             &resolver,
             std::path::Path::new("/run/d2b"),
             &bare,
-            &execution,
-            None,
-            &spec_bytes,
+            ExecutionIntent {
+                execution: &execution,
+                activation_input: None,
+                spec_bytes: &spec_bytes,
+                readiness: None,
+            },
             ManagedProvider::Minijail,
             DaemonMode::Host,
             Duration::from_secs(5),

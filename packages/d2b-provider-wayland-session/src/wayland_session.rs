@@ -122,7 +122,7 @@ impl InteractionType for WaylandSession {
         let spec = envelope.base_spec::<WaylandSessionSpec>()?;
         let session_ref = key_ref(children.key);
         let session_uid = resource_uid(children.uid)
-            .map_err(|_| InteractionEffectError::InvalidResource)?;
+            .ok_or(InteractionEffectError::InvalidResource)?;
         let intents = self.children.display_children(&DisplayChildRequest {
             zone: children.zone,
             session_ref: &session_ref,

@@ -32,9 +32,21 @@ pub struct CloudHypervisorConfig {
     pub startup_deadline_ms: u32,
 }
 
+/// Closed validation failure for root Provider configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfigValidationError;
+
+impl fmt::Display for ConfigValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("cloud-hypervisor-config-invalid")
+    }
+}
+
+impl std::error::Error for ConfigValidationError {}
+
 impl CloudHypervisorConfig {
     /// Validate root configuration.
-    pub fn validate(&self) -> Result<(), ()> {
+    pub fn validate(&self) -> Result<(), ConfigValidationError> {
         if self.controller_execution_ref.resource_type().as_str() != "Host"
             || !(1..=1024).contains(&self.default_vcpus)
             || !(128..=524_288).contains(&self.default_memory_mb)
@@ -45,7 +57,7 @@ impl CloudHypervisorConfig {
             || self.health_check_failure_threshold == 0
             || !(1..=900_000).contains(&self.startup_deadline_ms)
         {
-            return Err(());
+            return Err(ConfigValidationError);
         }
         Ok(())
     }

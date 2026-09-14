@@ -107,7 +107,7 @@ fn the_declaration_serves_the_session_row() {
         ]
     );
     assert!(descriptor.operations.is_empty() && descriptor.creations.is_empty());
-    assert!(ShellSession::SPEC_PROVIDER_SELECTOR);
+    const { assert!(ShellSession::SPEC_PROVIDER_SELECTOR); };
     assert_eq!(ShellSession::RESOURCE_TYPE, SHELL_SESSION_TYPE);
 }
 

@@ -18,12 +18,21 @@ pub mod launch_identity;
 pub mod operations;
 pub mod worker_launch;
 
+// The scripted ProcessDriverEffects recording double. Needed both by
+// external crates (d2bd's plane tests, which opt in via the `test-support`
+// feature) and by this crate's own tests. Gating on
+// `any(test, feature = "test-support")` makes it available automatically when
+// compiling this crate's tests, so `cargo test -p d2b-provider-process` works
+// without remembering `--features test-support`.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 pub use backend::{
     BackendLaunch, BackendObservation, ProcessEffectBackend, ProcessEffectError,
     ProcessLaunchRequest, ProcessRequest, ProcessStopClass,
 };
 pub use driver::{
-    CommittedProviderIdentitySource, DeviceWorkerFamily, GuestOwnerIdentitySource,
+    DeviceWorkerFamily, GuestOwnerIdentitySource,
     ProcessDriverArgs, device_worker_family, device_worker_vm, process_family_descriptors,
     process_spec_decoder, resolve_guest_owner_uid, resource_uid_from_bytes,
 };

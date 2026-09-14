@@ -434,8 +434,8 @@ pub(crate) fn socket_connectable(path: &Path) -> io::Result<()> {
 /// Readiness is tokio's [`AsyncFd`]: the descriptor is registered with the
 /// process runtime's reactor and every syscall below is non-blocking, so no
 /// CLI thread parks in the kernel on this path. The CLI envelope is unchanged
-/// - one datagram per frame, a 4-byte little-endian length prefix and one JSON
-/// body - and each operation carries an explicit deadline whose expiry
+/// (one datagram per frame, a 4-byte little-endian length prefix and one JSON
+/// body), and each operation carries an explicit deadline whose expiry
 /// surfaces as [`io::ErrorKind::TimedOut`] for the caller to name.
 pub(crate) struct CliSocket {
     fd: AsyncFd<OwnedFd>,
@@ -1490,11 +1490,10 @@ impl TerminalInput {
 
 fn shell_terminal_size(host: &crate::exec_client::RealHostIo) -> Option<TerminalSize> {
     let (rows, cols) = host.window_size()?;
-    let size = u16::try_from(rows)
+    u16::try_from(rows)
         .ok()
         .zip(u16::try_from(cols).ok())
-        .and_then(|(rows, cols)| TerminalSize::new(rows, cols).ok());
-    size
+        .and_then(|(rows, cols)| TerminalSize::new(rows, cols).ok())
 }
 
 /// Name one interactive shell transport failure.
@@ -1937,116 +1936,108 @@ impl CliAttachStream {
 }
 
 impl NamedStreamTransport for CliAttachStream {
-    fn send(&self, bytes: Vec<u8>) -> impl Future<Output = Result<(), ClientError>> + Send {
-        async move { self.send_stdin(&bytes).await }
+    async fn send(&self, bytes: Vec<u8>) -> Result<(), ClientError> {
+        self.send_stdin(&bytes).await
     }
 
-    fn resize(&self, size: TerminalSize) -> impl Future<Output = Result<(), ClientError>> + Send {
-        async move {
-            match self
-                .round_trip(
-                    NamedProcessStreamRequest::Resize {
-                        control_seq: self.control_sequence.fetch_add(1, Ordering::AcqRel),
-                        rows: u32::from(size.rows()),
-                        cols: u32::from(size.cols()),
-                    },
-                    self.io_budget(),
-                )
-                .await?
-            {
-                NamedProcessStreamResponse::Delivered(_) => Ok(()),
-                _ => Err(ClientError::ContractViolation),
-            }
+    async fn resize(&self, size: TerminalSize) -> Result<(), ClientError> {
+        match self
+            .round_trip(
+                NamedProcessStreamRequest::Resize {
+                    control_seq: self.control_sequence.fetch_add(1, Ordering::AcqRel),
+                    rows: u32::from(size.rows()),
+                    cols: u32::from(size.cols()),
+                },
+                self.io_budget(),
+            )
+            .await?
+        {
+            NamedProcessStreamResponse::Delivered(_) => Ok(()),
+            _ => Err(ClientError::ContractViolation),
         }
     }
 
-    fn receive(&self) -> impl Future<Output = Result<Vec<u8>, ClientError>> + Send {
-        async move {
-            if self.eof.load(Ordering::Acquire) {
-                return Err(ClientError::Cancelled);
-            }
-            match self
-                .round_trip(
-                    NamedProcessStreamRequest::Read {
-                        stream: ExecStream::Stdout,
-                        offset: self.stdout_offset.load(Ordering::Acquire),
-                        max_len: d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES,
-                        wait: true,
-                        timeout_ms: 50,
-                    },
-                    self.io_budget(),
-                )
-                .await?
-            {
-                NamedProcessStreamResponse::Output(ExecReadOutputResult {
-                    data_base64,
-                    next_offset,
-                    eof,
-                    ..
-                }) => {
-                    let data = d2b_core::base64_codec::decode(&data_base64)
-                        .map_err(|_| ClientError::ContractViolation)?;
-                    self.stdout_offset.store(next_offset, Ordering::Release);
-                    if eof {
-                        self.eof.store(true, Ordering::Release);
-                        if data.is_empty() {
-                            return Err(ClientError::Cancelled);
-                        }
-                    }
-                    Ok(data)
-                }
-                NamedProcessStreamResponse::Terminal(_) => {
+    async fn receive(&self) -> Result<Vec<u8>, ClientError> {
+        if self.eof.load(Ordering::Acquire) {
+            return Err(ClientError::Cancelled);
+        }
+        match self
+            .round_trip(
+                NamedProcessStreamRequest::Read {
+                    stream: ExecStream::Stdout,
+                    offset: self.stdout_offset.load(Ordering::Acquire),
+                    max_len: d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES,
+                    wait: true,
+                    timeout_ms: 50,
+                },
+                self.io_budget(),
+            )
+            .await?
+        {
+            NamedProcessStreamResponse::Output(ExecReadOutputResult {
+                data_base64,
+                next_offset,
+                eof,
+                ..
+            }) => {
+                let data = d2b_core::base64_codec::decode(&data_base64)
+                    .map_err(|_| ClientError::ContractViolation)?;
+                self.stdout_offset.store(next_offset, Ordering::Release);
+                if eof {
                     self.eof.store(true, Ordering::Release);
-                    Err(ClientError::Cancelled)
+                    if data.is_empty() {
+                        return Err(ClientError::Cancelled);
+                    }
                 }
-                _ => Err(ClientError::ContractViolation),
+                Ok(data)
             }
+            NamedProcessStreamResponse::Terminal(_) => {
+                self.eof.store(true, Ordering::Release);
+                Err(ClientError::Cancelled)
+            }
+            _ => Err(ClientError::ContractViolation),
         }
     }
 
-    fn close(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
-        async move {
-            self.closed.store(true, Ordering::Release);
-            let result = if self.socket.is_some() {
-                match self
-                    .round_trip(NamedProcessStreamRequest::Close, self.io_budget())
-                    .await
-                {
-                    Ok(NamedProcessStreamResponse::Closed(_)) => Ok(()),
-                    Ok(_) => Err(ClientError::ContractViolation),
-                    Err(error) => Err(error),
-                }
-            } else {
-                Ok(())
-            };
-            if result.is_ok() {
-                self.teardown_sent.store(true, Ordering::Release);
+    async fn close(&self) -> Result<(), ClientError> {
+        self.closed.store(true, Ordering::Release);
+        let result = if self.socket.is_some() {
+            match self
+                .round_trip(NamedProcessStreamRequest::Close, self.io_budget())
+                .await
+            {
+                Ok(NamedProcessStreamResponse::Closed(_)) => Ok(()),
+                Ok(_) => Err(ClientError::ContractViolation),
+                Err(error) => Err(error),
             }
-            result
+        } else {
+            Ok(())
+        };
+        if result.is_ok() {
+            self.teardown_sent.store(true, Ordering::Release);
         }
+        result
     }
 
-    fn cancel(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
-        async move {
-            self.closed.store(true, Ordering::Release);
-            let result = if self.socket.is_some() {
-                match self
-                    .round_trip(NamedProcessStreamRequest::Cancel, self.io_budget())
-                    .await
-                {
-                    Ok(NamedProcessStreamResponse::Closed(_))
-                    | Ok(NamedProcessStreamResponse::Delivered(_)) => Ok(()),
-                    Ok(_) => Err(ClientError::ContractViolation),
-                    Err(error) => Err(error),
-                }
-            } else {
-                Ok(())
-            };
-            if result.is_ok() {
-                self.teardown_sent.store(true, Ordering::Release);
+    async fn cancel(&self) -> Result<(), ClientError> {
+        self.closed.store(true, Ordering::Release);
+        let result = if self.socket.is_some() {
+            match self
+                .round_trip(NamedProcessStreamRequest::Cancel, self.io_budget())
+                .await
+            {
+                Ok(NamedProcessStreamResponse::Closed(_))
+                | Ok(NamedProcessStreamResponse::Delivered(_)) => Ok(()),
+                Ok(_) => Err(ClientError::ContractViolation),
+                Err(error) => Err(error),
             }
-            result
+        } else {
+            Ok(())
+        };
+        if result.is_ok() {
+            self.teardown_sent.store(true, Ordering::Release);
         }
+        result
     }
 }
 

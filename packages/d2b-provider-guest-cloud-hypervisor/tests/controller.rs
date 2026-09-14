@@ -59,7 +59,7 @@ impl AuthenticatedResourceSession for RecordingSession {
                 Ok(CloudHypervisorResourceResponse::Registered)
             }
             CloudHypervisorResourceRequest::GetGuest { .. } => {
-                Ok(CloudHypervisorResourceResponse::Guest(guest()))
+                Ok(CloudHypervisorResourceResponse::Guest(Box::new(guest())))
             }
             CloudHypervisorResourceRequest::RelistOwnedChildren { .. } => {
                 Ok(CloudHypervisorResourceResponse::OwnedChildren(Vec::new()))

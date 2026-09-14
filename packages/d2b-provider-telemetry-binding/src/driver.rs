@@ -230,6 +230,12 @@ impl TelemetryBindingDriverFactory {
     }
 }
 
+impl Default for TelemetryBindingDriverFactory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait::async_trait]
 impl ResourceDriverFactory for TelemetryBindingDriverFactory {
     fn resource_types(&self) -> &[ResourceTypeName] {

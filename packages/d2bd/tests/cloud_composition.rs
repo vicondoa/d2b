@@ -357,7 +357,9 @@ impl AuthenticatedResourceSession for FakeCloudSession {
             CloudHypervisorResourceRequest::GetGuest { .. } => match self.mode {
                 CloudMode::Failed => Err(CloudHypervisorResourceApiError::Transport),
                 CloudMode::Ready | CloudMode::ProcessAbsent | CloudMode::Ambiguous => {
-                    Ok(CloudHypervisorResourceResponse::Guest(cloud_guest()))
+                    Ok(CloudHypervisorResourceResponse::Guest(Box::new(
+                        cloud_guest(),
+                    )))
                 }
             },
             CloudHypervisorResourceRequest::RelistOwnedChildren { expected_refs, .. } => {

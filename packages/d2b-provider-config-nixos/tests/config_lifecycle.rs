@@ -224,16 +224,15 @@ fn staging_rejects_paths_invalid_views_and_unauthorized_callers() {
     );
     assert!(ConfigDiffRequest::new(guest.clone(), "/etc/host.nix").is_err());
     assert!(ConfigApproveRequest::new(guest.clone(), "/etc/host.nix").is_err());
-    assert_eq!(
-        store
+    assert!(
+        !store
             .reject(
                 ConfigCaller::Admin,
                 &zone(),
                 &ConfigRejectRequest::new(guest).expect("reject request"),
             )
             .expect("reject empty store")
-            .removed,
-        false
+            .removed
     );
 }
 

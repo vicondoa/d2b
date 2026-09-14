@@ -138,7 +138,7 @@ fn plans_uid_free_process_endpoint_volume_batch_and_recovers_uncertain_response(
         OwnerChildIdentity::new(process_ref.clone(), uid(2), ZoneRevision::new(10)),
         OwnerChildIdentity::new(endpoint_ref.clone(), uid(3), ZoneRevision::new(10)),
     ]);
-    let resolved = committed.resolve(&batch, &[]).unwrap();
+    let resolved = committed.resolve(batch, &[]).unwrap();
     assert!(!resolved.was_relisted());
     assert_eq!(resolved.uid(&endpoint_ref), Some(&uid(3)));
 
@@ -153,7 +153,7 @@ fn plans_uid_free_process_endpoint_volume_batch_and_recovers_uncertain_response(
             [process_ref.clone()],
         ),
     ];
-    let recovered = uncertain.resolve(&batch, &relisted).unwrap();
+    let recovered = uncertain.resolve(batch, &relisted).unwrap();
     assert!(recovered.was_relisted());
     assert_eq!(recovered.uid(&volume_ref), Some(&uid(1)));
     assert_eq!(recovered.uid(&process_ref), Some(&uid(2)));
@@ -207,7 +207,7 @@ fn rejects_partial_batch_and_fences_missing_extra_foreign_cross_zone_and_stale_c
             uid(2),
             ZoneRevision::new(10),
         )])
-        .resolve(&batch, &[])
+        .resolve(batch, &[])
         .is_err()
     );
 

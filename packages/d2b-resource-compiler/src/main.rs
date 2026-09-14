@@ -342,7 +342,7 @@ fn compile(
             "declared and generated resource count exceeds the compiler bound",
         ));
     }
-    resources.sort_by(|left, right| resource_sort_key(left).cmp(&resource_sort_key(right)));
+    resources.sort_by_key(resource_sort_key);
     let mut compiled_input = input;
     compiled_input.resources = resources;
     validate_resources(&compiled_input, strict_secrets)?;

@@ -62,7 +62,7 @@ pub use bindings::{BindingIntent, desired_binding_intents};
 pub use finalization::{
     FinalizationAction, FinalizationObservation, FinalizationResult, finalization_plan,
 };
-pub use identity::{EntryDigest, MarkerState, OwnerProof, VolumeRootHandle, VolumeRootHandleView};
+pub use identity::{AnchoredRoot, EntryDigest, MarkerState, OwnerProof, VolumeRootHandle, VolumeRootHandleView};
 pub use layout::{
     ConditionSeverity, EntryCondition, EntryPlan, EntryRequest, plan_cleanup, plan_entry,
 };

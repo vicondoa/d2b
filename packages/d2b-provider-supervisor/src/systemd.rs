@@ -45,41 +45,34 @@ pub struct SystemdInvocationIdentity {
 }
 
 impl SystemdInvocationIdentity {
-    /// Construct a complete service-manager identity tuple.
+    /// Construct the trusted identity tuple from an atomically observed unit
+    /// identity.
     ///
-    /// A zero generation or an empty bundle content identity is a drifted
-    /// runtime tuple, not a launchable identity.
-    pub fn new(
-        invocation_id: [u8; 16],
-        cgroup_identity: [u8; 32],
-        main_pid: NonZeroU32,
-        start_time_ticks: u64,
-        provider_identity: [u8; 32],
-        template_identity: [u8; 32],
-        generation: u64,
-        bundle_content_identity: impl Into<String>,
-    ) -> Result<Self, ProcessEffectError> {
-        let bundle_content_identity = bundle_content_identity.into();
-        if invocation_id == [0; 16]
-            || cgroup_identity == [0; 32]
-            || start_time_ticks == 0
-            || provider_identity == [0; 32]
-            || template_identity == [0; 32]
-            || generation == 0
-            || bundle_content_identity.is_empty()
+    /// A zero main pid, zero generation, or an empty bundle content identity
+    /// is a drifted runtime tuple, not a launchable identity.
+    pub fn new(identity: &SystemdUnitIdentity) -> Result<Self, ProcessEffectError> {
+        let main_pid = NonZeroU32::new(identity.main_pid)
+            .ok_or(ProcessEffectError::IdentityChanged)?;
+        if identity.invocation_id == [0; 16]
+            || identity.cgroup_identity == [0; 32]
+            || identity.start_time_ticks == 0
+            || identity.provider_identity == [0; 32]
+            || identity.template_identity == [0; 32]
+            || identity.generation == 0
+            || identity.bundle_content_identity.is_empty()
         {
             return Err(ProcessEffectError::IdentityChanged);
         }
         Ok(Self {
-            invocation_id,
-            cgroup_identity,
+            invocation_id: identity.invocation_id,
+            cgroup_identity: identity.cgroup_identity,
             main_pid,
-            start_time_ticks,
-            provider_identity,
-            template_identity,
-            generation,
-            bundle_content_identity,
-            guest_execution: None,
+            start_time_ticks: identity.start_time_ticks,
+            provider_identity: identity.provider_identity,
+            template_identity: identity.template_identity,
+            generation: identity.generation,
+            bundle_content_identity: identity.bundle_content_identity.clone(),
+            guest_execution: identity.guest_execution.clone(),
         })
     }
 
@@ -132,21 +125,6 @@ impl SystemdInvocationIdentity {
             bundle_content_identity: self.bundle_content_identity.clone(),
             guest_execution: self.guest_execution.clone(),
         }
-    }
-
-    pub(crate) fn from_wire(identity: &SystemdUnitIdentity) -> Result<Self, ProcessEffectError> {
-        let mut value = Self::new(
-            identity.invocation_id,
-            identity.cgroup_identity,
-            NonZeroU32::new(identity.main_pid).ok_or(ProcessEffectError::IdentityChanged)?,
-            identity.start_time_ticks,
-            identity.provider_identity,
-            identity.template_identity,
-            identity.generation,
-            identity.bundle_content_identity.clone(),
-        )?;
-        value.guest_execution = identity.guest_execution.clone();
-        Ok(value)
     }
 }
 
@@ -334,16 +312,17 @@ mod tests {
     fn identity(seed: u32) -> SystemdInvocationIdentity {
         let mut invocation_id = [0; 16];
         invocation_id[..4].copy_from_slice(&(seed + 1).to_le_bytes());
-        SystemdInvocationIdentity::new(
+        SystemdInvocationIdentity::new(&SystemdUnitIdentity {
             invocation_id,
-            [1; 32],
-            NonZeroU32::new(seed + 1).unwrap(),
-            u64::from(seed) + 1,
-            [2; 32],
-            [3; 32],
-            1,
-            "bundle",
-        )
+            cgroup_identity: [1; 32],
+            main_pid: seed + 1,
+            start_time_ticks: u64::from(seed) + 1,
+            provider_identity: [2; 32],
+            template_identity: [3; 32],
+            generation: 1,
+            bundle_content_identity: "bundle".to_owned(),
+            guest_execution: None,
+        })
         .unwrap()
     }
 
@@ -601,7 +580,7 @@ impl BrokerSystemdEffectOwner {
             );
             return Err(ProcessEffectError::IdentityChanged);
         }
-        SystemdInvocationIdentity::from_wire(wire)
+        SystemdInvocationIdentity::new(wire)
     }
 
     /// Query one unit identity, optionally retaining the unit request so a
@@ -714,7 +693,7 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
         let BrokerResponse::OpenSystemdUnitPidfd(ref response) = frame.response else {
             return Err(response_error(&frame.response));
         };
-        let actual = SystemdInvocationIdentity::from_wire(&response.identity)?;
+        let actual = SystemdInvocationIdentity::new(&response.identity)?;
         if actual != *expected || response.vm_id != unit.vm_id || response.role_id != unit.role_id {
             warn!(
                 provider = "supervisor",

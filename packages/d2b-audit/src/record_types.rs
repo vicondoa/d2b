@@ -1064,7 +1064,7 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
         AuditRecordFields::ResourceMutation(fields) => {
             if !closed(
                 &fields.verb,
-                &crate::generated::audit_catalog::MUTATION_VERBS,
+                crate::generated::audit_catalog::MUTATION_VERBS,
             ) || !valid_resource_type(&fields.resource_type)
                 || !closed(
                     &fields.outcome,
@@ -1209,7 +1209,7 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
             if !closed(&fields.event, &["launch", "stop", "adopt", "quarantine"])
                 || !closed(
                     &fields.provider,
-                    &crate::generated::audit_catalog::PROCESS_PROVIDERS,
+                    crate::generated::audit_catalog::PROCESS_PROVIDERS,
                 )
                 || !closed(&fields.domain, &["system", "user"])
                 || !closed(&fields.outcome, &["ok", "error"])

@@ -1541,8 +1541,7 @@ impl ControllerAssignmentExpectation {
         target_kind: ControllerTargetKind,
         session_generation: ReconnectGeneration,
         resource_types: BTreeSet<ResourceTypeName>,
-        primary_verbs: BTreeSet<AssignmentVerb>,
-        owner_child_process_verbs: BTreeSet<AssignmentVerb>,
+        verbs: (BTreeSet<AssignmentVerb>, BTreeSet<AssignmentVerb>),
         scopes: BTreeSet<AssignmentScope>,
     ) -> Result<Self, AssignmentError> {
         Self::new_inner(
@@ -1554,8 +1553,8 @@ impl ControllerAssignmentExpectation {
             None,
             session_generation,
             resource_types,
-            primary_verbs,
-            owner_child_process_verbs,
+            verbs.0,
+            verbs.1,
             scopes,
         )
     }
@@ -2239,7 +2238,7 @@ impl ControllerAssignmentGrantStore {
         }
         if let Some(existing) = self.revoked.get(assignment.resource_uid())
             && existing.identity == assignment
-            && self.grants.get(assignment.resource_uid()).is_none()
+            && !self.grants.contains_key(assignment.resource_uid())
         {
             return Ok(GrantDisposition::Duplicate);
         }

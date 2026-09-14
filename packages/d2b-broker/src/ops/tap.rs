@@ -453,8 +453,10 @@ fn verify_tap_intent(
         provenance.zone_uid(),
         provenance.network_uid(),
         attachment_id,
-        provenance.network_generation(),
-        provenance.attachment_generation(),
+        (
+            provenance.network_generation(),
+            provenance.attachment_generation(),
+        ),
         provenance.bundle_generation(),
         canonical_role_id,
         vm_id.as_str(),

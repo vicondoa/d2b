@@ -959,7 +959,7 @@ fn provider_projection(
 /// positional argument is the route's authority when it is given, so
 /// `d2b debug prod` connects to `prod`; `run` refuses an explicit global zone
 /// that disagrees with it.
-fn routed_zone<'a>(cli: &'a ModernCli) -> Option<&'a str> {
+fn routed_zone(cli: &ModernCli) -> Option<&str> {
     match &cli.command {
         ModernCommand::Debug(args) => Some(args.zone_ref.as_str()),
         _ => cli.zone.as_deref(),

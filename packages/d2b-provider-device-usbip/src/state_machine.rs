@@ -429,7 +429,7 @@ impl UsbipExecutionReport {
 pub fn execute_usbip_plan<E: UsbipStepExecutor>(
     plan: &UsbipBusidPlan,
     executor: &mut E,
-) -> Result<UsbipExecutionReport, (UsbipExecutionReport, UsbipPlanError)> {
+) -> Result<UsbipExecutionReport, (Box<UsbipExecutionReport>, UsbipPlanError)> {
     let mut report = UsbipExecutionReport {
         busid: plan.busid.clone(),
         env: plan.env.clone(),
@@ -465,7 +465,7 @@ pub fn execute_usbip_plan<E: UsbipStepExecutor>(
                     step: *step,
                     reason,
                 };
-                return Err((report, err));
+                return Err((Box::new(report), err));
             }
         }
     }

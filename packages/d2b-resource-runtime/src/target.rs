@@ -1150,7 +1150,7 @@ mod tests {
 
         let lost = directory.disconnect_guest(&guest(), 1).expect("disconnect");
 
-        assert_eq!(lost.affected(), [source.clone()], "the actor learns what lost its target");
+        assert_eq!(lost.affected(), std::slice::from_ref(&source), "the actor learns what lost its target");
         assert_eq!(
             directory.availability(&guest()),
             TargetAvailability::Unavailable { last_session_generation: 1 }
@@ -1215,11 +1215,11 @@ mod tests {
         assert_eq!(reconnected.session_generation(), 2);
         assert_eq!(
             reconnected.pending_adoption(),
-            [source.clone()],
+            std::slice::from_ref(&source),
             "a reconnect names the assignments that must re-run discovery"
         );
 
-        let adopted = directory.adopt(&stale, &[source.clone()]).await.expect("adopt");
+        let adopted = directory.adopt(&stale, std::slice::from_ref(&source)).await.expect("adopt");
 
         assert_eq!(adopted.handle().session_generation(), Some(2), "the handle is re-bound");
         match &adopted.adopted()[0] {
@@ -1270,7 +1270,7 @@ mod tests {
         );
         assert_eq!(
             directory
-                .adopt(&stale, &[source.clone()])
+                .adopt(&stale, std::slice::from_ref(&source))
                 .await
                 .expect("adopt")
                 .handle()
@@ -1463,7 +1463,7 @@ mod tests {
             directory.availability(&guest()),
             TargetAvailability::Connected { session_generation: 2 }
         );
-        assert_eq!(reconnected.pending_adoption(), [link.clone()], "the link re-adopts");
+        assert_eq!(reconnected.pending_adoption(), std::slice::from_ref(&link), "the link re-adopts");
         assert_eq!(
             directory.assignment(&link).expect("assignment").session_generation(),
             Some(1),

@@ -442,6 +442,21 @@ impl ComponentSessionShellErrorKind {
     }
 }
 
+/// Boxed payload of [`TypedError::BundleDnsmasqDrift`]. Shared so the
+/// variant is a single pointer-sized field and `TypedError` stays small for
+/// the daemon's error-propagation paths. Field-visibility must stay `pub`
+/// because the struct is reachable through the `pub` enum variant; the
+/// fields are only ever populated by d2bd-runtime's own preflight code.
+#[derive(Debug, Clone)]
+pub struct BundleDnsmasqDriftFields {
+    pub vm: String,
+    pub env: String,
+    pub path: PathBuf,
+    pub expected: String,
+    pub actual: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum TypedError {
     AuthzNotALauncher {
@@ -541,14 +556,7 @@ pub enum TypedError {
     /// the dnsmasq render step did not rerun - rebuild the bundle
     /// (or re-run the host singleton that renders dnsmasq.conf)
     /// and retry.
-    BundleDnsmasqDrift {
-        vm: String,
-        env: String,
-        path: PathBuf,
-        expected: String,
-        actual: String,
-        reason: String,
-    },
+    BundleDnsmasqDrift(Box<BundleDnsmasqDriftFields>),
     /// Daemon refusal raised on startup when one or more REQUIRED kernel
     /// modules (see
     /// [`crate::kernel_module_check`]) are neither loaded into
@@ -726,7 +734,7 @@ impl TypedError {
             Self::BundleTampered { .. } => "bundle-tampered",
             Self::OwnershipMatrixDrift { .. } => "ownership-matrix-drift",
             Self::SshdHostKeyDrift { .. } => "sshd-host-key-drift",
-            Self::BundleDnsmasqDrift { .. } => "bundle-dnsmasq-drift",
+            Self::BundleDnsmasqDrift(_) => "bundle-dnsmasq-drift",
             Self::HostKernelModulesMissing { .. } => "host-kernel-modules-missing",
             Self::OtelHostBridgeReadinessTimeout { .. } => "otel-host-bridge-readiness-timeout",
             Self::NetRoutePreflightDegraded { .. } => "net-route-preflight-degraded",
@@ -770,7 +778,7 @@ impl TypedError {
             Self::BundleTampered { .. } => 60,
             Self::OwnershipMatrixDrift { .. } => 61,
             Self::SshdHostKeyDrift { .. } => 62,
-            Self::BundleDnsmasqDrift { .. } => 63,
+            Self::BundleDnsmasqDrift(_) => 63,
             Self::HostKernelModulesMissing { .. } => 64,
             Self::OtelHostBridgeReadinessTimeout { .. } => 65,
             // Net-route degraded mode shares the kind class with
@@ -863,8 +871,8 @@ impl TypedError {
             Self::SshdHostKeyDrift { vm, drift, .. } => {
                 format!("vm '{vm}' refused: sshd host key drift: {drift}")
             }
-            Self::BundleDnsmasqDrift { vm, reason, .. } => {
-                format!("vm '{vm}' refused: {reason}")
+            Self::BundleDnsmasqDrift(fields) => {
+                format!("vm '{}' refused: {}", fields.vm, fields.reason)
             }
             Self::HostKernelModulesMissing { missing } => {
                 format!("daemon refused to start: required kernel modules not loaded: {missing}")
@@ -1014,7 +1022,7 @@ impl TypedError {
             Self::SshdHostKeyDrift { .. } => {
                 "regenerate or chown/chmod the per-VM sshd host keys so each ssh_host_*_key under /var/lib/d2b/vms/<vm>/sshd-host-keys is a regular file owned root:root with mode 0400 (no symlinks); see docs/reference/ssh-host-key-preflight.md. Recovery: nixos-rebuild switch (re-runs the host-activation key sync), or remove the offending key and let d2b keys rotate <vm> reprovision it.".to_owned()
             }
-            Self::BundleDnsmasqDrift { .. } => {
+            Self::BundleDnsmasqDrift(_) => {
                 "re-render the per-env dnsmasq.conf so it matches the trusted bundle's hosts_intent + route_intent + nft_intent, then retry the net VM start. Recovery: nixos-rebuild switch (re-runs the dnsmasq render host singleton) and verify the file at /var/lib/d2b/dnsmasq/<env>.conf is owned by the daemon and matches the bundle. See docs/reference/net-vm-bundle-gate.md.".to_owned()
             }
             Self::HostKernelModulesMissing { .. } => {
@@ -1224,7 +1232,7 @@ impl TypedError {
             | Self::BundleTampered { .. }
             | Self::OwnershipMatrixDrift { .. }
             | Self::SshdHostKeyDrift { .. }
-            | Self::BundleDnsmasqDrift { .. }
+            | Self::BundleDnsmasqDrift(_)
             | Self::HostKernelModulesMissing { .. }
             | Self::OtelHostBridgeReadinessTimeout { .. }
             | Self::NetRoutePreflightDegraded { .. }
@@ -1607,7 +1615,7 @@ mod tests {
                 "sshd-host-key-drift",
             ),
             (
-                TypedError::BundleDnsmasqDrift {
+                TypedError::BundleDnsmasqDrift(Box::new(BundleDnsmasqDriftFields {
                     vm: "sys-work-net".to_owned(),
                     env: "work".to_owned(),
                     path: PathBuf::from("/var/lib/d2b/dnsmasq/work.conf"),
@@ -1615,7 +1623,7 @@ mod tests {
                     actual: "b".repeat(64),
                     reason: "dnsmasq.conf hash for env 'work' diverges from bundle expectation"
                         .to_owned(),
-                },
+                })),
                 "bundle-dnsmasq-drift",
             ),
             (
@@ -1650,7 +1658,7 @@ mod tests {
 
     #[test]
     fn bundle_dnsmasq_drift_envelope_shape() {
-        let err = TypedError::BundleDnsmasqDrift {
+        let err = TypedError::BundleDnsmasqDrift(Box::new(BundleDnsmasqDriftFields {
             vm: "sys-work-net".to_owned(),
             env: "work".to_owned(),
             path: PathBuf::from("/var/lib/d2b/dnsmasq/work.conf"),
@@ -1659,7 +1667,7 @@ mod tests {
             reason: "dnsmasq.conf hash for env 'work' diverges from bundle expectation \
                 (expected aaaa, actual bbbb); rebuild required"
                 .to_owned(),
-        };
+        }));
         assert_eq!(err.kind(), "bundle-dnsmasq-drift");
         assert_eq!(err.exit_code(), 63);
         let envelope = err.to_envelope();

@@ -108,6 +108,36 @@ pub struct VolumeRootHandleView<'a> {
     pub marker_group_gid: u32,
 }
 
+/// The trusted adapter-bound inputs for one resolved Volume root.
+///
+/// Groups the anchored descriptor, identity, and marker/owner bindings that
+/// a broker core boundary resolved, so `VolumeRootHandle::from_anchored`
+/// takes one argument instead of ten. Built only by the effect adapter
+/// immediately after resolution; never persisted and never serialized.
+#[derive(Debug)]
+pub struct AnchoredRoot {
+    /// The anchored Volume-root directory descriptor.
+    pub fd: OwnedFd,
+    /// The broker-owned marker-root descriptor, when the marker is external.
+    pub marker_root_fd: Option<OwnedFd>,
+    /// The Volume UID bound to the root.
+    pub volume_uid: ResourceUid,
+    /// The marker filename relative to the marker root or the volume root.
+    pub marker_name: String,
+    /// The lock filename relative to the volume root.
+    pub lock_name: String,
+    /// The root filesystem identity captured at resolution.
+    pub identity: VolumeRootIdentity,
+    /// The marker binding validated by the trusted resolver.
+    pub marker_binding: MarkerBinding,
+    /// Expected marker owner UID.
+    pub marker_owner_uid: u32,
+    /// Expected marker group GID.
+    pub marker_group_gid: u32,
+    /// Whether the trusted effect already materialized this root.
+    pub preexisting_state: bool,
+}
+
 impl VolumeRootHandle {
     /// Record that a validated Volume root descriptor is held.
     ///
@@ -148,28 +178,19 @@ impl VolumeRootHandle {
     /// This is a trusted adapter boundary. The returned handle remains opaque
     /// to the Provider controller and is never serializable.
     pub fn from_anchored(
-        fd: OwnedFd,
-        marker_root_fd: Option<OwnedFd>,
-        volume_uid: ResourceUid,
-        marker_name: String,
-        lock_name: String,
-        identity: VolumeRootIdentity,
-        marker_binding: MarkerBinding,
-        marker_owner_uid: u32,
-        marker_group_gid: u32,
-        preexisting_state: bool,
+        anchored: AnchoredRoot,
     ) -> Self {
         Self {
-            fd: Some(fd),
-            marker_root_fd,
-            volume_uid: Some(volume_uid),
-            marker_name: Some(marker_name),
-            lock_name: Some(lock_name),
-            identity: Some(identity),
-            marker_binding: Some(marker_binding),
-            marker_owner_uid: Some(marker_owner_uid),
-            marker_group_gid: Some(marker_group_gid),
-            preexisting_state,
+            fd: Some(anchored.fd),
+            marker_root_fd: anchored.marker_root_fd,
+            volume_uid: Some(anchored.volume_uid),
+            marker_name: Some(anchored.marker_name),
+            lock_name: Some(anchored.lock_name),
+            identity: Some(anchored.identity),
+            marker_binding: Some(anchored.marker_binding),
+            marker_owner_uid: Some(anchored.marker_owner_uid),
+            marker_group_gid: Some(anchored.marker_group_gid),
+            preexisting_state: anchored.preexisting_state,
         }
     }
 

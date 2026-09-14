@@ -190,7 +190,7 @@ pub enum BrokerRequest {
     CgroupKill(CgroupKillRequest),
     SignalRunner(SignalRunnerRequest),
     DeregisterRunnerPidfd(DeregisterRunnerPidfdRequest),
-    SpawnRunner(SpawnRunnerRequest),
+    SpawnRunner(Box<SpawnRunnerRequest>),
     UpdateHostsFile(UpdateHostsFileRequest),
     UsbipBind(UsbipBindRequest),
     UsbipBindFirewallRule(UsbipBindFirewallRuleRequest),
@@ -1081,7 +1081,7 @@ pub enum BrokerResponse {
     SetBridgePortFlags(BridgePortFlagsResponse),
     SignalRunner(SignalRunnerResponse),
     DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse),
-    SpawnRunner(SpawnRunnerResponse),
+    SpawnRunner(Box<SpawnRunnerResponse>),
     /// Typed response carrying the activated generation (collision-free
     /// `generation_id` plus the u32 `generation_token`), the resolved
     /// hardlink-farm root, and the count of top-level closure paths
@@ -1650,7 +1650,7 @@ pub struct GuestExecutionBinding {
 impl GuestExecutionBinding {
     /// Return whether all Guest execution commitments are populated.
     pub fn is_valid(&self) -> bool {
-        self.target_uid.as_str().len() > 0
+        !self.target_uid.as_str().is_empty()
             && self.boot_identity_digest != [0; 32]
             && self.session_generation > 0
             && self.assignment_epoch > 0
@@ -3984,7 +3984,7 @@ mod tests {
     }
 
     fn spawn_runner_for_profile(role: RunnerRole, execution_ref: &str) -> BrokerRequest {
-        BrokerRequest::SpawnRunner(SpawnRunnerRequest {
+        BrokerRequest::SpawnRunner(Box::new(SpawnRunnerRequest {
             vm_id: VmId::new("guest-vm"),
             role_id: RoleId::new(role.as_str()),
             resource_ref: None,
@@ -4012,7 +4012,7 @@ mod tests {
             workload_identity: None,
             inherited_fd_count: 0,
             network_tap_context: None,
-        })
+        }))
     }
 
     #[test]
@@ -4265,7 +4265,7 @@ mod tests {
         // The pidfd is delivered out-of-band over SCM_RIGHTS; the
         // JSON body carries (pid, start_time_ticks, pidfd_index) so
         // the daemon's pidfd table can validate / reconcile the handle.
-        let response = BrokerResponse::SpawnRunner(SpawnRunnerResponse {
+        let response = BrokerResponse::SpawnRunner(Box::new(SpawnRunnerResponse {
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch"),
             role: RunnerRole::CloudHypervisor,
@@ -4287,7 +4287,7 @@ mod tests {
             template_identity: None,
             generation: None,
             bundle_content_identity: None,
-        });
+        }));
         let frame = encode_frame(&response).expect("encodes");
         let decoded = decode_frame::<BrokerResponse>("BrokerResponse", &frame).expect("decodes");
         match decoded {

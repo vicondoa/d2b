@@ -734,7 +734,7 @@ where
     )?;
 
     projected_resources
-        .sort_by(|left, right| resource_sort_key(left).cmp(&resource_sort_key(right)));
+        .sort_by_key(resource_sort_key);
     templates.sort_by(|left, right| {
         left.process_ref()
             .to_canonical_string()
@@ -746,10 +746,10 @@ where
     })
 }
 
-fn append_managed_identity_agent_templates<'a>(
+fn append_managed_identity_agent_templates(
     zone: &ZoneId,
     resources: &[serde_json::Value],
-    artifacts: &BTreeMap<String, &'a VerifiedProviderArtifact>,
+    artifacts: &BTreeMap<String, &VerifiedProviderArtifact>,
     generated_identities: &mut BTreeSet<(String, String)>,
     templates: &mut Vec<ProcessTemplateBinding>,
 ) -> Result<(), StaticControllerProjectionError> {
@@ -878,10 +878,10 @@ fn resource_identity(resource: &serde_json::Value) -> Option<(String, String)> {
 /// from the mint. The executable name is the artifact's own: it stays pinned
 /// here because no declared row carries the serving worker - the binding
 /// runner mints the row, not the provider's projection.
-fn append_virtiofsd_worker_templates<'a>(
+fn append_virtiofsd_worker_templates(
     zone: &ZoneId,
     resources: &[serde_json::Value],
-    artifacts: &BTreeMap<String, &'a VerifiedProviderArtifact>,
+    artifacts: &BTreeMap<String, &VerifiedProviderArtifact>,
     generated_identities: &mut BTreeSet<(String, String)>,
     templates: &mut Vec<ProcessTemplateBinding>,
 ) -> Result<(), StaticControllerProjectionError> {
@@ -988,10 +988,10 @@ fn append_virtiofsd_worker_templates<'a>(
 /// A template whose executable the artifact does not enumerate (the
 /// deployment's artifact ships only the controller binary) yields no binding
 /// - the same fail-closed rule as the virtiofsd serving worker.
-fn append_device_worker_templates<'a>(
+fn append_device_worker_templates(
     zone: &ZoneId,
     resources: &[serde_json::Value],
-    artifacts: &BTreeMap<String, &'a VerifiedProviderArtifact>,
+    artifacts: &BTreeMap<String, &VerifiedProviderArtifact>,
     generated_identities: &mut BTreeSet<(String, String)>,
     templates: &mut Vec<ProcessTemplateBinding>,
 ) -> Result<(), StaticControllerProjectionError> {
@@ -1169,7 +1169,7 @@ fn declared_device_worker_posture_matches(
         ("user", namespaces.user),
     ]
     .into_iter()
-    .filter_map(|(name, enabled)| enabled.then(|| name.to_owned()))
+    .filter_map(|(name, enabled)| enabled.then_some(name.to_owned()))
     .collect::<BTreeSet<_>>();
     let declared_namespaces = field("namespaceClasses")
         .as_array()

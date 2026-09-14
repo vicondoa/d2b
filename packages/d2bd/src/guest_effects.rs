@@ -550,14 +550,14 @@ impl azure_vm_runtime::AzureEffectPort for FrameworkAzureEffect {
 /// In-memory Provider controller for one framework Guest.
 enum GuestRuntimeController {
     Qemu {
-        controller: qemu_media_runtime::QemuMediaController<FrameworkQemuEffect>,
+        controller: Box<qemu_media_runtime::QemuMediaController<FrameworkQemuEffect>>,
         effect: FrameworkQemuEffect,
     },
     Aca {
-        controller: aca_runtime::AcaController<FrameworkAcaControl, FrameworkAcaLease>,
+        controller: Box<aca_runtime::AcaController<FrameworkAcaControl, FrameworkAcaLease>>,
     },
     AzureVm {
-        controller: azure_vm_runtime::AzureVmController<FrameworkAzureEffect>,
+        controller: Box<azure_vm_runtime::AzureVmController<FrameworkAzureEffect>>,
     },
 }
 
@@ -963,8 +963,7 @@ impl ProductionGuestDriverEffects {
             .map_err(|_| GuestEffectError::InvalidResource)?;
         let plane = self.plane()?;
         {
-            use d2b_provider_process::CommittedProviderIdentitySource;
-            let source = plane.registry().as_ref() as &dyn CommittedProviderIdentitySource;
+            let source = plane.registry().as_ref();
             if source.committed_provider_identity(&provider_ref).is_none() {
                 return Err(GuestEffectError::Unavailable);
             }
@@ -1137,7 +1136,7 @@ impl ProductionGuestDriverEffects {
                 )
                 .map_err(|_| GuestEffectError::InvalidResource)?;
                 Ok(GuestRuntimeController::Qemu {
-                    controller,
+                    controller: Box::new(controller),
                     effect: FrameworkQemuEffect::new(request.target.clone()),
                 })
             }
@@ -1170,7 +1169,7 @@ impl ProductionGuestDriverEffects {
                 )
                 .map_err(|_| GuestEffectError::InvalidResource)?;
                 Ok(GuestRuntimeController::Aca {
-                    controller: provider.controller(binding),
+                    controller: Box::new(provider.controller(binding)),
                 })
             }
             GuestKind::AzureVirtualMachine => {
@@ -1199,7 +1198,9 @@ impl ProductionGuestDriverEffects {
                 .with_bootstrap_service(azure_vm_runtime::BootstrapService::from_state(
                     azure_vm_runtime::BootstrapServiceState::Enrolled,
                 ));
-                Ok(GuestRuntimeController::AzureVm { controller })
+                Ok(GuestRuntimeController::AzureVm {
+                    controller: Box::new(controller),
+                })
             }
             GuestKind::CloudHypervisor => Err(GuestEffectError::InvalidResource),
         }
@@ -1213,8 +1214,7 @@ impl ProductionGuestDriverEffects {
         provider_ref: &ResourceRef,
     ) -> Result<ResourceGeneration, GuestEffectError> {
         let plane = self.plane()?;
-        use d2b_provider_process::CommittedProviderIdentitySource;
-        let source = plane.registry().as_ref() as &dyn CommittedProviderIdentitySource;
+        let source = plane.registry().as_ref();
         source
             .committed_provider_identity(provider_ref)
             .map(|(_, generation)| generation)
@@ -1260,7 +1260,7 @@ impl ProductionGuestDriverEffects {
         provider: &Value,
     ) -> Result<GuestEffectPhase, GuestEffectError> {
         let runtime = {
-            let _ = self.validate_guest_runtime_fence(kind, request).await?;
+            self.validate_guest_runtime_fence(kind, request).await?;
             self.runtime()?
         };
         let children = request.children.owned().await?;
@@ -1643,7 +1643,9 @@ mod tests {
             provider_generation: 1,
             config_fingerprint: [2; 32],
         });
-        let mut controller = GuestRuntimeController::Aca { controller };
+        let mut controller = GuestRuntimeController::Aca {
+            controller: Box::new(controller),
+        };
         let GuestRuntimeController::Aca { controller } = &mut controller else {
             unreachable!();
         };

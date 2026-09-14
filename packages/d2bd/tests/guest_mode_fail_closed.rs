@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, process::Command};
+use std::{fs, path::{Path, PathBuf}, process::Command};
 
 fn scratch(name: &str) -> PathBuf {
     let root = std::env::current_dir()
@@ -10,7 +10,7 @@ fn scratch(name: &str) -> PathBuf {
     root
 }
 
-fn guest_args(root: &PathBuf) -> Vec<String> {
+fn guest_args(root: &Path) -> Vec<String> {
     vec![
         "guest".to_owned(),
         "--guest-ref".to_owned(),

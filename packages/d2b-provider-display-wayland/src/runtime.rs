@@ -423,13 +423,12 @@ where
                     policy,
                     self.controller
                         .dependency_proof(session, spec, &result, policy, self.observation)
-                        .map_err(|e| {
+                        .inspect_err(|e| {
                             tracing::debug!(
                                 guest = %spec.guest_ref().to_canonical_string(),
                                 error = %e,
                                 "launch proof unavailable before grant issue; continuing without proof"
                             );
-                            e
                         })
                         .ok()
                         .as_ref(),
@@ -621,13 +620,12 @@ where
             let proof = self
                 .controller
                 .dependency_proof_from_route(route, spec, &result, policy, self.observation)
-                .map_err(|e| {
+                .inspect_err(|e| {
                     tracing::debug!(
                         guest = %spec.guest_ref().to_canonical_string(),
                         error = %e,
                         "launch proof unavailable before grant issue; continuing without proof"
                     );
-                    e
                 })
                 .ok();
             let grants = self

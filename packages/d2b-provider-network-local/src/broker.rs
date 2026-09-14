@@ -506,8 +506,10 @@ pub fn resolve_tap_identity(
         provenance.zone_uid(),
         provenance.network_uid(),
         attachment_id,
-        provenance.network_generation(),
-        provenance.attachment_generation(),
+        (
+            provenance.network_generation(),
+            provenance.attachment_generation(),
+        ),
         provenance.bundle_generation(),
         canonical_role_id,
         vm_id.as_str(),
@@ -1032,16 +1034,18 @@ mod tests {
                 context.network_admission().unwrap().key().zone_uid(),
                 context.network_admission().unwrap().key().network_uid(),
                 &attachment_id,
-                context
-                    .network_admission()
-                    .unwrap()
-                    .key()
-                    .network_generation(),
-                context
-                    .network_admission()
-                    .unwrap()
-                    .key()
-                    .attachment_generation(),
+                (
+                    context
+                        .network_admission()
+                        .unwrap()
+                        .key()
+                        .network_generation(),
+                    context
+                        .network_admission()
+                        .unwrap()
+                        .key()
+                        .attachment_generation(),
+                ),
                 context
                     .network_admission()
                     .unwrap()

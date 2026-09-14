@@ -24,6 +24,7 @@ use d2b_provider_device_usbip::{
     ServiceLifecycleError, ServiceRelayLease, UsbipBrokerDispatcher,
 };
 
+#[cfg(test)]
 use d2b_core::device_usbip_adapter::UsbipCoreAdapter;
 
 use crate::{ServerState, dispatch_broker_request_as};
@@ -82,7 +83,7 @@ impl UsbipBindingContext {
     }
 
     /// Resolve Core-owned context before any host firewall or runner effect.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn before_host_effects(
         vm_id: impl Into<String>,
         env: impl Into<String>,
@@ -135,7 +136,6 @@ pub struct DaemonUsbipDispatcher<'a> {
     relay_lease: Option<ServiceRelayLease>,
 }
 
-#[allow(dead_code)]
 impl<'a> DaemonUsbipDispatcher<'a> {
     /// Construct one dispatcher over the daemon's broker and authority ledger.
     pub(crate) fn new(
@@ -414,16 +414,6 @@ impl<'a> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a> {
         self.attach_slot = None;
         Ok(())
     }
-}
-
-/// Construct a production Provider port from a daemon state and Core context.
-#[allow(dead_code)]
-pub(crate) fn production_port<'a>(
-    state: &'a ServerState,
-    context: UsbipBindingContext,
-    ledger: Arc<Mutex<AuthorityLedger>>,
-) -> ProductionPort<DaemonUsbipDispatcher<'a>> {
-    DaemonUsbipDispatcher::new(state, context, ledger).into_port()
 }
 
 #[cfg(test)]

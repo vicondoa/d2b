@@ -371,7 +371,7 @@ impl BrokerEnvelope {
                     invocation_id.clone(),
                     operation,
                     UNREGISTERED_HANDLER,
-                    failure.detail.or_else(|| Some(failure.code)),
+                    failure.detail.or(Some(failure.code)),
                 )
             })?;
         Ok(Invocation {
@@ -513,20 +513,17 @@ impl BrokerEnvelopeBuilder {
     }
 }
 
+/// A registered operation handler.
+pub type OperationHandler =
+    Box<dyn Fn(&DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> + Send + Sync>;
+
 /// A dispatcher that serves an explicit handler table.
 ///
 /// Used by the broker's own operations and by the tests; a family row is
 /// served by the declaring crate's process, not here.
 #[derive(Default)]
 pub struct HandlerTable {
-    handlers: Vec<(
-        &'static str,
-        Box<
-            dyn Fn(&DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure>
-                + Send
-                + Sync,
-        >,
-    )>,
+    handlers: Vec<(&'static str, OperationHandler)>,
 }
 
 impl std::fmt::Debug for HandlerTable {

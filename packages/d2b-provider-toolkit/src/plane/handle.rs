@@ -204,15 +204,6 @@ impl<'a> ZonePlaneHandle<'a> {
         }
     }
 
-    /// Build a handle whose plane port refuses every action.
-    pub fn unavailable(
-        zone: ZoneId,
-        declaration: &ProviderDeclaration,
-        drivers: &'static [d2b_resource_types::DriverDescriptor],
-    ) -> Self {
-        Self::new(zone, declaration, drivers, Arc::new(UnavailablePlanePort))
-    }
-
     /// Borrow the zone this provider was placed in.
     pub const fn zone(&self) -> &ZoneId {
         &self.zone

@@ -1804,14 +1804,13 @@ impl AuthoritativeUnixSubjectResolver {
             .subjects
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if subject.is_exact_resource_v3() {
-            if let Some(index) = subjects
+        if subject.is_exact_resource_v3()
+            && let Some(index) = subjects
                 .iter()
                 .position(|existing| existing.has_same_exact_resource_v3_key(&subject))
-            {
-                subjects[index] = subject;
-                return Ok(());
-            }
+        {
+            subjects[index] = subject;
+            return Ok(());
         }
         if subjects.len() >= self.max_subjects {
             return Err(d2b_session::SessionError::new(
@@ -1878,17 +1877,17 @@ struct InteractionSubjectRegistrar {
     authority: Arc<InteractionSubjectAuthority>,
 }
 
-struct CommittedInteractionSubjectInstallBody {
-    zone: ZoneId,
-    display_subject_ref: ResourceRef,
-    display_subject_uid: ResourceUid,
-    expected_peer_uid: u32,
-    execution_ref: ResourceRef,
-    display_generation: ResourceGeneration,
-    clipboard_generation: Option<ResourceGeneration>,
-    notification_generation: Option<ResourceGeneration>,
-    clipboard_provider_uid: Option<ResourceUid>,
-    notification_provider_uid: Option<ResourceUid>,
+pub struct CommittedInteractionSubjectInstallBody {
+    pub zone: ZoneId,
+    pub display_subject_ref: ResourceRef,
+    pub display_subject_uid: ResourceUid,
+    pub expected_peer_uid: u32,
+    pub execution_ref: ResourceRef,
+    pub display_generation: ResourceGeneration,
+    pub clipboard_generation: Option<ResourceGeneration>,
+    pub notification_generation: Option<ResourceGeneration>,
+    pub clipboard_provider_uid: Option<ResourceUid>,
+    pub notification_provider_uid: Option<ResourceUid>,
 }
 
 /// Opaque issuer for one Zone's committed interaction subject projection.
@@ -1984,34 +1983,14 @@ impl CommittedInteractionSubjectIssuer {
     /// issuer is created and is deliberately absent from this API.
     pub fn seal(
         self,
-        zone: ZoneId,
-        display_subject_ref: ResourceRef,
-        display_subject_uid: ResourceUid,
-        expected_peer_uid: u32,
-        execution_ref: ResourceRef,
-        display_generation: ResourceGeneration,
-        clipboard_generation: Option<ResourceGeneration>,
-        notification_generation: Option<ResourceGeneration>,
-        clipboard_provider_uid: Option<ResourceUid>,
-        notification_provider_uid: Option<ResourceUid>,
+        body: CommittedInteractionSubjectInstallBody,
     ) -> d2b_session::Result<CommittedInteractionSubjectInstall> {
-        if self.authority.zone != zone {
+        if self.authority.zone != body.zone {
             return Err(subject_configuration_mismatch());
         }
         Ok(CommittedInteractionSubjectInstall {
             authority: self.authority,
-            body: CommittedInteractionSubjectInstallBody {
-                zone,
-                display_subject_ref,
-                display_subject_uid,
-                expected_peer_uid,
-                execution_ref,
-                display_generation,
-                clipboard_generation,
-                notification_generation,
-                clipboard_provider_uid,
-                notification_provider_uid,
-            },
+            body,
         })
     }
 }
@@ -5090,18 +5069,18 @@ mod tests {
         issuer: CommittedInteractionSubjectIssuer,
     ) -> CommittedInteractionSubjectInstall {
         issuer
-            .seal(
-                ZoneId::parse("dev").unwrap(),
-                ResourceRef::parse("Guest/guest").unwrap(),
-                ResourceUid::parse(CALLER_UID).unwrap(),
-                42,
-                ResourceRef::parse("Host/host-system").unwrap(),
-                ResourceGeneration::new(2).unwrap(),
-                None,
-                None,
-                None,
-                None,
-            )
+            .seal(CommittedInteractionSubjectInstallBody {
+                zone: ZoneId::parse("dev").unwrap(),
+                display_subject_ref: ResourceRef::parse("Guest/guest").unwrap(),
+                display_subject_uid: ResourceUid::parse(CALLER_UID).unwrap(),
+                expected_peer_uid: 42,
+                execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
+                display_generation: ResourceGeneration::new(2).unwrap(),
+                clipboard_generation: None,
+                notification_generation: None,
+                clipboard_provider_uid: None,
+                notification_provider_uid: None,
+            })
             .unwrap()
     }
 

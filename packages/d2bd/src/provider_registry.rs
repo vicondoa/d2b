@@ -723,11 +723,10 @@ impl ProviderRuntime {
         caller: &BrokerCallerRole,
         provider_ref: &ResourceRef,
         guest_ref: ResourceRef,
-        operation: GuestLifecycleOperation,
-        idempotency_key: impl Into<String>,
-        authorization: LifecycleAuthorization,
+        intent: (GuestLifecycleOperation, String, LifecycleAuthorization),
         effect: &P,
     ) -> Result<ProviderRuntimeDispatch<P::Output>, ProviderEffectError> {
+        let (operation, idempotency_key, authorization) = intent;
         let state = self
             .state
             .read()
@@ -804,12 +803,15 @@ impl ProviderRuntime {
         &self,
         provider_ref: &ResourceRef,
         zone_uid: &d2b_contracts_resource::v3::ResourceUid,
-        guest_ref: &ResourceRef,
-        guest_uid: &d2b_contracts_resource::v3::ResourceUid,
-        guest_generation: ResourceGeneration,
-        provider_assignment_generation: ResourceGeneration,
-        policy_revision: u64,
+        guest: (
+            &ResourceRef,
+            &d2b_contracts_resource::v3::ResourceUid,
+            ResourceGeneration,
+        ),
+        revision: (ResourceGeneration, u64),
     ) -> Result<Option<GuestLifecycleOperation>, ProviderEffectError> {
+        let (guest_ref, guest_uid, guest_generation) = guest;
+        let (provider_assignment_generation, policy_revision) = revision;
         let state = self
             .state
             .read()
@@ -1179,9 +1181,11 @@ mod tests {
                 &BrokerCallerRole::AdminUid { uid: 1000 },
                 &provider_ref,
                 ResourceRef::parse("Guest/workstation").expect("Guest ref"),
-                GuestLifecycleOperation::Start,
-                "v3-start",
-                authorization("v3-start"),
+                (
+                    GuestLifecycleOperation::Start,
+                    "v3-start".to_owned(),
+                    authorization("v3-start"),
+                ),
                 &effect,
             )
             .expect("v3 lifecycle dispatch");

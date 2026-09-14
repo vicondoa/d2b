@@ -461,8 +461,7 @@ mod tests {
     #[test]
     fn retry_backoff_refuses_without_a_caller_runtime() {
         let token = CancellationToken::default();
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
+        let mut context = Context::from_waker(Waker::noop());
         let mut delay = Box::pin(retry_backoff(10_000, &token));
         assert_eq!(
             Future::poll(delay.as_mut(), &mut context),
@@ -487,11 +486,5 @@ mod tests {
             retry_backoff(60_000, &token).await,
             Err(ClientError::Cancelled)
         );
-    }
-
-    struct NoopWake;
-
-    impl std::task::Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
     }
 }

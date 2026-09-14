@@ -321,14 +321,13 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
             .port
             .launch_with_inherited_fds(ticket, inherited_fds)
             .await
-            .map_err(|error| {
+            .inspect_err(|error| {
                 warn!(
                     provider = PROVIDER_NAME,
                     resource = %ticket.process_ref().to_canonical_string(),
                     error = %error,
                     "process start failed"
                 );
-                error
             })?;
         // d2b owns wait and reap for every minijail-launched process.
         if launched.wait_reap_owner != WaitReapOwner::Local {
@@ -341,25 +340,23 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         }
         launched
             .validate(self.profile.required_identity_bindings())
-            .map_err(|error| {
+            .inspect_err(|error| {
                 warn!(
                     provider = PROVIDER_NAME,
                     identity = %launched.identity.to_hex(),
                     error = %error,
                     "launched process identity binding validation failed"
                 );
-                error
             })?;
         ticket
             .validate_process_identity(&launched.identity)
-            .map_err(|error| {
+            .inspect_err(|error| {
                 warn!(
                     provider = PROVIDER_NAME,
                     identity = %launched.identity.to_hex(),
                     error = %error,
                     "launched process identity does not match the ticket"
                 );
-                error
             })?;
         match self.readiness_phase(ticket, launched.identity).await {
             Ok(phase) => Ok(self.report(
@@ -428,14 +425,13 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
                 )));
             }
         };
-        let _pidfd = self.port.open_pidfd(&candidate).await.map_err(|error| {
+        let _pidfd = self.port.open_pidfd(&candidate).await.inspect_err(|error| {
             warn!(
                 provider = PROVIDER_NAME,
                 identity = %candidate.identity.to_hex(),
                 error = %error,
                 "pidfd open failed during adoption"
             );
-            error
         })?;
         Ok(AdoptionOutcome::Adopted(self.report(
             ticket,
@@ -457,14 +453,13 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
             );
             return Err(ProcessConformanceError::IdentityUnverified);
         }
-        self.port.stop(identity, class).await.map_err(|error| {
+        self.port.stop(identity, class).await.inspect_err(|error| {
             warn!(
                 provider = PROVIDER_NAME,
                 identity = %identity.to_hex(),
                 error = %error,
                 "process stop failed"
             );
-            error
         })
     }
 
@@ -483,14 +478,13 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         self.port
             .stop(&candidate.identity, StopClass::Terminate)
             .await
-            .map_err(|error| {
+            .inspect_err(|error| {
                 warn!(
                     provider = PROVIDER_NAME,
                     identity = %candidate.identity.to_hex(),
                     error = %error,
                     "stale candidate stop failed"
                 );
-                error
             })
     }
 }

@@ -23,6 +23,12 @@ use d2b_provider_credential::{
 pub(crate) type DependencyFactsFuture<'a> =
     Pin<Box<dyn Future<Output = Option<CredentialDependencyFacts>> + Send + 'a>>;
 
+/// Boxed credential dependency-facts probe closure (one Provider/target
+/// pair).
+pub(crate) type DependencyFactsEffect = Arc<
+    dyn for<'a> Fn(&'a ResourceRef, &'a ResourceRef) -> DependencyFactsFuture<'a> + Send + Sync,
+>;
+
 /// Boxed future of one production lease-fact read.
 pub(crate) type LeaseFactsFuture<'a> =
     Pin<Box<dyn Future<Output = Option<CredentialLeaseFacts>> + Send + 'a>>;
@@ -33,9 +39,7 @@ pub(crate) type AgentReadyFuture<'a> = Pin<Box<dyn Future<Output = bool> + Send 
 /// The production effects over the preserved provider reads and the
 /// ProviderSupervisor handoff registry.
 pub(crate) struct ProductionCredentialDriverEffects {
-    facts: Arc<
-        dyn for<'a> Fn(&'a ResourceRef, &'a ResourceRef) -> DependencyFactsFuture<'a> + Send + Sync,
-    >,
+    facts: DependencyFactsEffect,
     lease: Arc<dyn for<'a> Fn(&'a ResourceRef) -> LeaseFactsFuture<'a> + Send + Sync>,
     agent: Arc<dyn for<'a> Fn(&'a ResourceRef) -> AgentReadyFuture<'a> + Send + Sync>,
     sessions: crate::credential_resource_runtime::CredentialSessionRegistry,
@@ -43,11 +47,7 @@ pub(crate) struct ProductionCredentialDriverEffects {
 
 impl ProductionCredentialDriverEffects {
     pub(crate) fn new(
-        facts: Arc<
-            dyn for<'a> Fn(&'a ResourceRef, &'a ResourceRef) -> DependencyFactsFuture<'a>
-                + Send
-                + Sync,
-        >,
+        facts: DependencyFactsEffect,
         lease: Arc<dyn for<'a> Fn(&'a ResourceRef) -> LeaseFactsFuture<'a> + Send + Sync>,
         agent: Arc<dyn for<'a> Fn(&'a ResourceRef) -> AgentReadyFuture<'a> + Send + Sync>,
         sessions: crate::credential_resource_runtime::CredentialSessionRegistry,

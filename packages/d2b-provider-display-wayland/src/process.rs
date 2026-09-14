@@ -613,8 +613,10 @@ impl LaunchGrants {
                     policy_digest,
                     policy_generation,
                     identity_label,
-                    expected_controller_generation,
-                    expected_teardown_generation,
+                    LaunchGenerations::new(
+                        expected_controller_generation,
+                        expected_teardown_generation,
+                    ),
                 )
                 .ok()?,
             );
@@ -901,6 +903,21 @@ pub struct LaunchTicket {
     teardown_generation: u64,
 }
 
+/// Generations fencing one launch ticket: the authenticated controller
+/// generation and the supervisor teardown generation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LaunchGenerations {
+    controller: u64,
+    teardown: u64,
+}
+
+impl LaunchGenerations {
+    /// Build the generation pair for an independently supervised worker.
+    pub(crate) fn new(controller: u64, teardown: u64) -> Self {
+        Self { controller, teardown }
+    }
+}
+
 impl LaunchTicket {
     /// Construct a launch ticket without accepting paths or raw file
     /// descriptors.
@@ -965,8 +982,7 @@ impl LaunchTicket {
             policy_digest,
             policy_generation,
             identity_label,
-            1,
-            teardown_generation,
+            LaunchGenerations::new(1, teardown_generation),
         )
     }
 
@@ -979,16 +995,15 @@ impl LaunchTicket {
         policy_digest: impl Into<String>,
         policy_generation: u64,
         identity_label: impl Into<String>,
-        controller_generation: u64,
-        teardown_generation: u64,
+        generations: LaunchGenerations,
     ) -> Result<Self, &'static str> {
         let policy_digest = policy_digest.into();
         let identity_label = identity_label.into();
         if !policy_digest.starts_with("sha256:")
             || identity_label.is_empty()
             || identity_label.len() > 64
-            || controller_generation == 0
-            || teardown_generation == 0
+            || generations.controller == 0
+            || generations.teardown == 0
             || (role == DisplayProcessRole::HostProxy && compositor_grant.is_none())
         {
             return Err("display-launch-ticket-invalid");
@@ -1000,8 +1015,8 @@ impl LaunchTicket {
             policy_digest,
             policy_generation,
             identity_label,
-            controller_generation,
-            teardown_generation,
+            controller_generation: generations.controller,
+            teardown_generation: generations.teardown,
         })
     }
 

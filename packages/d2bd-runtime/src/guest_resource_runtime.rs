@@ -71,6 +71,13 @@ impl core::fmt::Debug for GuestResourceRuntime {
     }
 }
 
+/// Store + adapter pair yielded by [`GuestResourceRuntime::bind_session_parts`]
+/// for a bound Guest resource session.
+type SessionBoundParts = (
+    Arc<SessionBoundStore>,
+    Arc<ResourceBusAdapter<SessionBoundStore, UnavailableUpgradeDispatcher>>,
+);
+
 impl GuestResourceRuntime {
     /// Build the target-local Resource API with Guest-owned in-process state.
     ///
@@ -245,13 +252,7 @@ impl GuestResourceRuntime {
     fn bind_session_parts(
         &self,
         route: &d2b_session::AuthenticatedSessionRouteBinding,
-    ) -> Result<
-        (
-            Arc<SessionBoundStore>,
-            Arc<ResourceBusAdapter<SessionBoundStore, UnavailableUpgradeDispatcher>>,
-        ),
-        GuestResourceRuntimeError,
-    > {
+    ) -> Result<SessionBoundParts, GuestResourceRuntimeError> {
         self.identity
             .validate_route(route)
             .map_err(|_| GuestResourceRuntimeError::SessionBinding)?;

@@ -1087,7 +1087,8 @@ mod tests {
         resource_status::StatusCode,
         volume_binding::{VolumeBindingReadinessFence, VolumeBindingStatusResource},
     };
-    use d2b_provider_volume_virtiofs::{SocketIdentity, StoredBinding, WORKER_TEMPLATE};
+    use crate::test_support::FakeServingEffects;
+    use d2b_provider_volume_virtiofs::WORKER_TEMPLATE;
     use d2b_resource_runtime::context::{ChildEnsure, ManagerEndpoint, ResourceContext, WatchId, WatchRegistration};
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
@@ -1102,61 +1103,6 @@ mod tests {
     };
 
     type OrderLog = Vec<String>;
-
-    // -- fakes ---------------------------------------------------------------
-
-    /// Scripted serving port over the caller's ordered log, so the tests
-    /// assert one sequence across manager calls and serving effects.
-    struct FakeServingEffects {
-        log: Arc<parking_lot::Mutex<OrderLog>>,
-        ready: std::sync::atomic::AtomicBool,
-        mounted: std::sync::atomic::AtomicBool,
-    }
-
-    impl FakeServingEffects {
-        fn new() -> Arc<Self> {
-            Self::shared(Arc::new(parking_lot::Mutex::new(Vec::new())))
-        }
-
-        fn shared(log: Arc<parking_lot::Mutex<OrderLog>>) -> Arc<Self> {
-            Arc::new(Self {
-                log,
-                ready: std::sync::atomic::AtomicBool::new(false),
-                mounted: std::sync::atomic::AtomicBool::new(false),
-            })
-        }
-
-        fn make_ready(&self) {
-            self.ready.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-
-        /// The guest observes the mount: the drain gate must block.
-        fn make_mounted(&self) {
-            self.mounted.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl super::BindingDriverEffects for FakeServingEffects {
-        async fn socket_ready(&self, _socket: &SocketIdentity) -> bool {
-            self.log.lock().push("socket-ready".to_owned());
-            self.ready.load(std::sync::atomic::Ordering::SeqCst)
-        }
-
-        async fn remove_socket(&self, _socket: &SocketIdentity) -> Result<(), String> {
-            self.log.lock().push("remove-socket".to_owned());
-            Ok(())
-        }
-
-        async fn guest_mount_ready(
-            &self,
-            _key: &ResourceKey,
-            _binding: &StoredBinding,
-        ) -> Result<bool, String> {
-            self.log.lock().push("guest-mount".to_owned());
-            Ok(self.mounted.load(std::sync::atomic::Ordering::SeqCst))
-        }
-    }
 
     /// Recording manager endpoint over one shared ordered log. Rows are
     /// keyed by `zone/type/name`; `get` returns the parent Volume row the

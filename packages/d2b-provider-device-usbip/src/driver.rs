@@ -334,48 +334,13 @@ fn binding_child_ensures(
 mod tests {
     use std::sync::Arc;
 
-    use async_trait::async_trait;
-    use d2b_provider_toolkit::{
-        SharedProviderEffectOutcome, SharedProviderEffectPhase, SharedProviderFinalize,
-    };
-
     use super::{
         PROVIDER_REF, USBIP_REGISTRATIONS, USB_BINDING_RESOURCE_TYPE, USB_SERVICE_RESOURCE_TYPE,
-        UsbipComponent, UsbipDriverArgs, UsbipDriverEffects, usbip_descriptors,
+        UsbipComponent, UsbipDriverArgs,
+        usbip_descriptors,
     };
 
-    #[derive(Default)]
-    struct RecordingEffects {
-        reconciled: parking_lot::Mutex<Vec<UsbipComponent>>,
-        finalized: parking_lot::Mutex<Vec<UsbipComponent>>,
-    }
-
-    #[async_trait]
-    impl UsbipDriverEffects for RecordingEffects {
-        async fn reconcile_usbip(
-            &self,
-            component: UsbipComponent,
-            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
-        ) -> Result<SharedProviderEffectOutcome, d2b_provider_toolkit::SharedProviderEffectError>
-        {
-            self.reconciled.lock().push(component);
-            Ok(SharedProviderEffectOutcome::phase(
-                SharedProviderEffectPhase::Ready,
-            ))
-        }
-
-        async fn finalize(
-            &self,
-            component: UsbipComponent,
-            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_toolkit::SharedProviderFinalize,
-            d2b_provider_toolkit::SharedProviderEffectError,
-        > {
-            self.finalized.lock().push(component);
-            Ok(SharedProviderFinalize::Complete)
-        }
-    }
+    use crate::test_support::RecordingEffects;
 
     fn descriptors(
         effects: Arc<RecordingEffects>,

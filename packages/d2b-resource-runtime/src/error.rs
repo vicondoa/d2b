@@ -341,7 +341,11 @@ impl DriverVerdict {
 pub struct DriverFailure {
     op: DriverOp,
     stage: &'static str,
-    kind: FailureKind,
+    /// Boxed so every [`Self`] value stays small: `FailureKind` is a 48-byte
+    /// value and failures are rare, so splitting kind's static text across two
+    /// pointers keeps the `Err`-variant of `Result<_, Self>` under clippy's
+    /// 128-byte `result_large_err` threshold on a hot call path.
+    kind: Box<FailureKind>,
     verdict: DriverVerdict,
     comparisons: Vec<FailureComparison>,
     note: Option<String>,
@@ -423,7 +427,7 @@ impl DriverFailure {
         Self {
             op,
             stage: op.as_str(),
-            kind,
+            kind: Box::new(kind),
             verdict,
             comparisons: Vec::new(),
             note: None,
@@ -488,7 +492,7 @@ impl DriverFailure {
 
     /// The registered failure kind.
     pub const fn kind(&self) -> FailureKind {
-        self.kind
+        *self.kind
     }
 
     /// The structural verdict.
