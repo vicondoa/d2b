@@ -4835,7 +4835,7 @@
     {
       "from": "d2b-provider-activation-nixos@0.0.0-bootstrap#path",
       "to": "parking_lot@0.12.5#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
+      "kind": "normal",
       "target": null
     },
     {
@@ -5459,7 +5459,7 @@
     {
       "from": "d2b-provider-credential@0.0.0-bootstrap#path",
       "to": "parking_lot@0.12.5#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
+      "kind": "normal",
       "target": null
     },
     {
@@ -5711,7 +5711,7 @@
     {
       "from": "d2b-provider-device-usbip@0.0.0-bootstrap#path",
       "to": "parking_lot@0.12.5#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
+      "kind": "normal",
       "target": null
     },
     {
@@ -5969,7 +5969,7 @@
     {
       "from": "d2b-provider-endpoint@0.0.0-bootstrap#path",
       "to": "parking_lot@0.12.5#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
+      "kind": "normal",
       "target": null
     },
     {
@@ -6431,7 +6431,7 @@
     {
       "from": "d2b-provider-network-local@0.0.0-bootstrap#path",
       "to": "parking_lot@0.12.5#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
+      "kind": "normal",
       "target": null
     },
     {
@@ -7709,7 +7709,7 @@
     {
       "from": "d2b-provider-volume-binding@0.0.0-bootstrap#path",
       "to": "parking_lot@0.12.5#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
+      "kind": "normal",
       "target": null
     },
     {
@@ -7853,7 +7853,7 @@
     {
       "from": "d2b-provider-volume@0.0.0-bootstrap#path",
       "to": "parking_lot@0.12.5#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
+      "kind": "normal",
       "target": null
     },
     {

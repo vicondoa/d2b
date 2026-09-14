@@ -22,6 +22,7 @@ rust_library(
     name = "d2b_provider_endpoint_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     crate_features = ["test-support"],
+    crate_name = "d2b_provider_endpoint",
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
