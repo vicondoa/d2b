@@ -271,25 +271,25 @@ async fn main() {
 /// pins is free is a property of the host the build deploys to. The check is
 /// therefore a diagnostic the operator runs with that host's table, and it
 /// refuses the same overlap the allocator refuses a candidate for.
+///
+/// The report names the overlaps but not the table it read: the operator passed
+/// that path in, and a printed path labelled as an account table reads to a
+/// scanner as account data leaving the host in a log.
 fn check_principal_allocation(path: &Path) -> Result<(), String> {
     let table = std::fs::read_to_string(path)
-        .map_err(|error| format!("read {}: {error}", path.display()))?;
+        .map_err(|error| format!("read host account table: {error}"))?;
     let host = HostAccounts::parse_passwd(&table)
-        .map_err(|error| format!("{}: {error}", path.display()))?;
+        .map_err(|error| format!("host account table: {error}"))?;
     let check = check_committed_against(&host).map_err(|error| error.to_string())?;
     for overlap in check.overlaps() {
         eprintln!("{overlap}");
     }
     if check.is_clear() {
-        println!(
-            "principal allocation is clear of {}",
-            path.display()
-        );
+        println!("principal allocation is clear of the host account table");
         Ok(())
     } else {
         Err(format!(
-            "{}: {} principal allocation overlap(s)",
-            path.display(),
+            "{} principal allocation overlap(s)",
             check.overlaps().len()
         ))
     }
