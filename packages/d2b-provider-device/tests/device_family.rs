@@ -13,12 +13,9 @@ use async_trait::async_trait;
 use d2b_contracts_resource::v3::ControllerGeneration;
 use d2b_provider_device::{
     DEVICE_REGISTRATIONS, DEVICE_RESYNC, DEVICE_TYPE_NAME, DeviceComponent, DeviceDriverArgs,
-    DeviceDriverEffects, DeviceResourceState, device_descriptor,
+    device_descriptor,
 };
-use d2b_provider_toolkit::{
-    SharedProviderEffectOutcome, SharedProviderEffectPhase, SharedProviderEffectRequest,
-    SharedProviderFinalize,
-};
+use d2b_provider_device::test_support::RecordingEffects;
 use d2b_resource_runtime::context::{
     ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
     WatchRegistration,
@@ -30,39 +27,6 @@ use d2b_resource_runtime::identity::{
 use d2b_resource_runtime::spec_store::EnsureOutcome;
 use d2b_resource_runtime::target::TargetHandle;
 use serde_json::json;
-
-#[derive(Default)]
-struct RecordingEffects {
-    reconciled: parking_lot::Mutex<Vec<DeviceComponent>>,
-}
-
-#[async_trait]
-impl DeviceDriverEffects for RecordingEffects {
-    async fn reconcile_device(
-        &self,
-        component: DeviceComponent,
-        _request: &SharedProviderEffectRequest<'_>,
-        _state: &DeviceResourceState,
-    ) -> Result<SharedProviderEffectOutcome, d2b_provider_toolkit::SharedProviderEffectError>
-    {
-        self.reconciled.lock().push(component);
-        Ok(SharedProviderEffectOutcome::phase(
-            SharedProviderEffectPhase::Pending,
-        ))
-    }
-
-    async fn finalize_device(
-        &self,
-        _component: DeviceComponent,
-        _request: &SharedProviderEffectRequest<'_>,
-        _state: &DeviceResourceState,
-    ) -> Result<
-        SharedProviderFinalize,
-        d2b_provider_toolkit::SharedProviderEffectError,
-    > {
-        Ok(SharedProviderFinalize::Complete)
-    }
-}
 
 struct DeadManager;
 

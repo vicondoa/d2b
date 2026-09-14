@@ -20,6 +20,14 @@ pub mod observe;
 pub mod plan;
 pub mod routes;
 
+// `test_support` is needed both by external crates (which opt in via the
+// `test-support` feature) and by this crate's own tests. Gating on
+// `any(test, feature = "test-support")` makes it available automatically
+// when compiling this crate's tests, so `cargo test -p d2b-provider-network-local`
+// works without enabling the feature.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 pub use driver::{
     NETWORK_CONTROLLER_REF, NETWORK_CREATIONS, NETWORK_PROVIDER_REF, NETWORK_REGISTRATIONS,
     NETWORK_RESYNC, NETWORK_TYPE_NAME, NetworkComponent, NetworkDriverArgs, NetworkDriverEffects,

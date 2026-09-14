@@ -37,6 +37,7 @@ rust_library(
         "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, cargo_only = True),
     crate_name = "d2b_provider_activation_nixos",
+    crate_features = ["test-support"],
     visibility = ["//visibility:public"],
 )
 

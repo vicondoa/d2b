@@ -315,6 +315,11 @@ pub trait SupervisedProvider: ProviderBase {
     /// needs the plane fails loudly instead of silently succeeding. A
     /// provider whose attach body acts through the plane overrides this with
     /// the port the composition root supplied.
+    ///
+    /// Closing unit: a `Provider` that attaches to the daemon plane overrides
+    /// `plane_port()` (daemon-side `ProductionPlanePort` already exists at
+    /// `d2bd/src/plane_port.rs:279`); until then every supervised provider
+    /// fails closed by design.
     fn plane_port(&self) -> Arc<dyn crate::plane::ZonePlanePort> {
         Arc::new(crate::plane::UnavailablePlanePort)
     }

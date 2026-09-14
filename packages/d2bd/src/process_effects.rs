@@ -16,7 +16,7 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_process_conformance::{AdoptionCandidate, ProcessIdentityDigest};
 use d2b_provider_process::{
-    CommittedProviderIdentitySource, DeviceWorkerFamily, DeviceWorkerLaunch, GuestOwnerIdentitySource,
+    DeviceWorkerFamily, DeviceWorkerLaunch, GuestOwnerIdentitySource,
     ProcessDriverEffects, ProcessFamilySpec, ProcessResourceIdentity, ProviderAdoption,
     ProviderLiveness, device_worker_family, device_worker_vm, resolve_guest_owner_uid,
     resource_uid_from_bytes,
@@ -25,6 +25,7 @@ use d2b_resource_runtime::context::ResourceContext;
 use d2b_resource_runtime::identity::ResourceKey;
 
 use crate::process_provider_runtime::{ProcessResourceContext, ProductionProcessProviders};
+use crate::resource_plane_v3::PlaneResourceRegistry;
 
 /// The video sidecar posture fence: the declared row's template and the
 /// owning Device's `videoNvidiaDecode` setting are one decision, so they must
@@ -97,7 +98,7 @@ pub(crate) struct ProductionProcessDriverEffects {
     providers: Arc<ProductionProcessProviders>,
     /// Committed Provider identities (KTD7), wired by the plane's
     /// construction path from the composition-resolved snapshot.
-    committed_provider_identities: Option<Arc<dyn CommittedProviderIdentitySource>>,
+    committed_provider_identities: Option<Arc<PlaneResourceRegistry>>,
     /// Guest-owner durable identities (KTD7), wired by the plane's
     /// construction path from the pre-v3 plane that owns `Guest` rows.
     guest_owner_identities: Option<Arc<dyn GuestOwnerIdentitySource>>,
@@ -117,7 +118,7 @@ impl ProductionProcessDriverEffects {
     /// path refuses closed.
     pub(crate) fn with_committed_provider_identities(
         mut self,
-        source: Arc<dyn CommittedProviderIdentitySource>,
+        source: Arc<PlaneResourceRegistry>,
     ) -> Self {
         self.committed_provider_identities = Some(source);
         self
@@ -243,7 +244,7 @@ fn decode_device_gpu_settings(
 /// path still refuses closed.
 pub(crate) fn process_resource_context<'a>(
     identity: &'a ProcessResourceIdentity,
-    committed_provider_identities: Option<&dyn CommittedProviderIdentitySource>,
+    committed_provider_identities: Option<&PlaneResourceRegistry>,
     guest_owner_uid: Option<&ResourceUid>,
     guest_descriptor_digest: impl Fn(&ZoneId, &ResourceRef) -> Option<SchemaFingerprint>,
 ) -> ProcessResourceContext<'a> {
@@ -278,15 +279,17 @@ pub(crate) fn identity_resource_context(
 ) -> ProcessResourceContext<'_> {
     ProcessResourceContext::new(
         identity.zone.clone(),
-        &identity.resource_ref,
-        &identity.resource_uid,
-        identity.resource_generation,
-        // The new store has no zone-wide commit revision: the durable
-        // revision of a row is its generation. The launch ticket requires
-        // a non-zero resource revision, and the provider identity fence
-        // compares generations, not revisions, so the row generation is
-        // the honest binding here.
-        ZoneRevision::new(identity.resource_generation.get()),
+        (
+            &identity.resource_ref,
+            &identity.resource_uid,
+            identity.resource_generation,
+            // The new store has no zone-wide commit revision: the durable
+            // revision of a row is its generation. The launch ticket requires
+            // a non-zero resource revision, and the provider identity fence
+            // compares generations, not revisions, so the row generation is
+            // the honest binding here.
+            ZoneRevision::new(identity.resource_generation.get()),
+        ),
         &identity.provider_ref,
         identity.controller_generation,
         identity.launch.target_ref().cloned(),
@@ -316,7 +319,7 @@ pub(crate) fn identity_resource_context(
 /// driver-derived context, so a genuinely missing row still refuses closed.
 fn bind_committed_controller_provider_identity<'a>(
     identity: &'a ProcessResourceIdentity,
-    source: Option<&dyn CommittedProviderIdentitySource>,
+    source: Option<&PlaneResourceRegistry>,
 ) -> ProcessResourceContext<'a> {
     let context = identity_resource_context(identity);
     if identity.process_class != ProcessClass::Controller
@@ -523,7 +526,7 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
             .ok_or("device-worker-owner-not-device")?;
         let device_uid = ctx
             .owner()
-            .and_then(|bytes| resource_uid_from_bytes(bytes).ok())
+            .and_then(resource_uid_from_bytes)
             .ok_or("device-worker-owner-uid-unresolved")?;
         // A Device-owned worker row declares `executionRef Host/host-system`
         // and no Guest target, so the row's own launch identity names no VM
@@ -790,35 +793,6 @@ mod tests {
         )
     }
 
-    /// Fixed committed Provider rows: the view the plane registry publishes
-    /// after bundle ingestion.
-    #[derive(Default)]
-    struct FixedProviderIdentities(
-        std::collections::BTreeMap<String, (ResourceUid, ResourceGeneration)>,
-    );
-
-    impl FixedProviderIdentities {
-        fn with(mut self, provider_ref: &str, uid: &str, generation: u64) -> Self {
-            self.0.insert(
-                provider_ref.to_owned(),
-                (
-                    ResourceUid::parse(uid).expect("provider uid"),
-                    ResourceGeneration::new(generation).expect("provider generation"),
-                ),
-            );
-            self
-        }
-    }
-
-    impl CommittedProviderIdentitySource for FixedProviderIdentities {
-        fn committed_provider_identity(
-            &self,
-            provider_ref: &ResourceRef,
-        ) -> Option<(ResourceUid, ResourceGeneration)> {
-            self.0.get(&provider_ref.to_canonical_string()).cloned()
-        }
-    }
-
     // -- committed controller-provider identity -------------------------------
 
     /// A controller row owned by a Provider takes the owner's committed
@@ -828,14 +802,15 @@ mod tests {
     #[tokio::test]
     async fn controller_provider_identity_binds_the_committed_provider_row() {
         let identity = controller_identity();
-        let source = FixedProviderIdentities::default().with(
-            "Provider/network-local",
-            COMMITTED_PROVIDER_UID,
-            COMMITTED_PROVIDER_GENERATION,
+        let registry = PlaneResourceRegistry::new();
+        registry.register_committed_provider_identity(
+            &ResourceRef::parse("Provider/network-local").unwrap(),
+            ResourceUid::parse(COMMITTED_PROVIDER_UID).expect("provider uid"),
+            ResourceGeneration::new(COMMITTED_PROVIDER_GENERATION).expect("provider generation"),
         );
         let context = super::bind_committed_controller_provider_identity(
             &identity,
-            Some(&source as &dyn CommittedProviderIdentitySource),
+            Some(&registry),
         );
         assert_eq!(
             context.provider_uid.as_ref().map(ResourceUid::as_str),
@@ -853,10 +828,10 @@ mod tests {
     #[tokio::test]
     async fn controller_provider_identity_stays_unbound_without_a_committed_row() {
         let identity = controller_identity();
-        let empty = FixedProviderIdentities::default();
+        let empty = PlaneResourceRegistry::new();
         let unretained = super::bind_committed_controller_provider_identity(
             &identity,
-            Some(&empty as &dyn CommittedProviderIdentitySource),
+            Some(&empty),
         );
         assert_eq!(unretained.provider_uid, None);
         assert_eq!(unretained.provider_generation, None);

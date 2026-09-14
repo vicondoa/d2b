@@ -632,81 +632,11 @@ mod tests {
 
     use super::{
         EndpointDriverArgs, EndpointDriverFactory, EndpointPurposeVocabulary,
-        GuestControlProducer, endpoint_spec_decoder,
+        endpoint_spec_decoder,
     };
+    use crate::test_support::FakeSocketEffects;
 
     // -- fakes ---------------------------------------------------------------
-
-    /// Scripted socket port: records every call in order, and answers the
-    /// purpose derivations with the purposes the declaring providers commit
-    /// (the Cloud Hypervisor child roles and the Device TPM worker sockets).
-    struct FakeSocketEffects {
-        calls: parking_lot::Mutex<Vec<&'static str>>,
-        present: std::sync::atomic::AtomicBool,
-    }
-
-    impl FakeSocketEffects {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: parking_lot::Mutex::new(Vec::new()),
-                present: std::sync::atomic::AtomicBool::new(false),
-            })
-        }
-
-        fn call_order(&self) -> Vec<&'static str> {
-            self.calls.lock().clone()
-        }
-
-        fn make_present(&self) {
-            self.present.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
-    impl EndpointPurposeVocabulary for FakeSocketEffects {
-        fn guest_control_producer(&self, purpose: &str) -> Option<GuestControlProducer> {
-            match purpose {
-                "ch-api" => Some(GuestControlProducer::VmmProcess),
-                "guest-control" => Some(GuestControlProducer::Guest),
-                _ => None,
-            }
-        }
-
-        fn device_worker_endpoint_class(&self, purpose: &str) -> Option<EndpointClass> {
-            match purpose {
-                "swtpm-tpm-socket" => Some(EndpointClass::Device),
-                "swtpm-control-socket" => Some(EndpointClass::Control),
-                _ => None,
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl super::EndpointDriverEffects for FakeSocketEffects {
-        async fn socket_present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
-            self.calls.lock().push("socket-present");
-            self.present.load(std::sync::atomic::Ordering::SeqCst)
-        }
-
-        async fn ensure_socket(
-            &self,
-            _producer_ref: &ResourceRef,
-            _purpose: &str,
-        ) -> Result<(), String> {
-            self.calls.lock().push("ensure-socket");
-            self.make_present();
-            Ok(())
-        }
-
-        async fn remove_socket(
-            &self,
-            _producer_ref: &ResourceRef,
-            _purpose: &str,
-        ) -> Result<(), String> {
-            self.calls.lock().push("remove-socket");
-            self.present.store(false, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        }
-    }
 
     /// Dead manager: these Endpoint flows make no manager calls. It also
     /// carries the owned-row set the finalize gate reads: `delete` records

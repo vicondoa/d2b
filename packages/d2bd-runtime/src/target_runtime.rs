@@ -906,10 +906,8 @@ impl AssignmentState {
 
     fn revoke(&self) {
         self.active.store(false, Ordering::Release);
-        if let Ok(mut slot) = self.permit.lock() {
-            if let Some(permit) = slot.take() {
-                permit.release();
-            }
+        if let Some(permit) = self.permit.lock().ok().and_then(|mut slot| slot.take()) {
+            permit.release();
         }
     }
 }

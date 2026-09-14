@@ -673,15 +673,15 @@ fn driver_declaration(code: &str) -> Option<String> {
                 .chars()
                 .next_back()
                 .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_');
-            if boundary {
-                if let Some(rest) = after.strip_prefix(" for") {
-                    let rest = rest.trim_start();
-                    let end = rest
-                        .find(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
-                        .unwrap_or(rest.len());
-                    if end > 0 {
-                        return Some(rest[..end].to_owned());
-                    }
+            if boundary
+                && let Some(rest) = after.strip_prefix(" for")
+            {
+                let rest = rest.trim_start();
+                let end = rest
+                    .find(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                    .unwrap_or(rest.len());
+                if end > 0 {
+                    return Some(rest[..end].to_owned());
                 }
             }
             search = after;
@@ -1457,25 +1457,23 @@ fn item_binding(line: &str, name: &str) -> bool {
                 .chars()
                 .next_back()
                 .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_');
-            if boundary && starts_with_whitespace(after) {
-                if let Some(binding) = after.trim_start().strip_prefix(name) {
-                    if ends_identifier(binding) {
-                        return true;
-                    }
-                }
+            if boundary
+                && starts_with_whitespace(after)
+                && let Some(binding) = after.trim_start().strip_prefix(name)
+                && ends_identifier(binding)
+            {
+                return true;
             }
             search = after;
         }
     }
-    if let Some(index) = line.find("macro_rules!") {
-        if let Some(binding) = line[index + "macro_rules!".len()..]
+    if let Some(index) = line.find("macro_rules!")
+        && let Some(binding) = line[index + "macro_rules!".len()..]
             .trim_start()
             .strip_prefix(name)
-        {
-            if ends_identifier(binding) {
-                return true;
-            }
-        }
+        && ends_identifier(binding)
+    {
+        return true;
     }
     false
 }
@@ -1571,7 +1569,7 @@ fn whole_line_rewrite(
     let body = comment.trim_start_matches('/').trim();
     let bare = body
         .trim_matches('`')
-        .trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ':'))
+        .trim_end_matches(['.', ',', ';', ':'])
         .trim();
     if bare != token {
         return None;
@@ -1634,7 +1632,7 @@ fn trailing_clause_rewrite(
 ) -> Option<CitationRewrite> {
     let before = comment[..token_start].trim_end();
     let before = before.strip_suffix('`').map_or(before, str::trim_end);
-    let separator_index = before.rfind(|ch: char| matches!(ch, ',' | '-'))?;
+    let separator_index = before.rfind([',', '-'])?;
     let separator = comment[separator_index..].chars().next()?;
     let clause = comment[separator_index + separator.len_utf8()..token_end].replace('`', "");
     let clause = clause.trim();
@@ -1672,7 +1670,7 @@ fn is_citation_cue(text: &str) -> bool {
 }
 
 fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), String> {
-    let on_disk = on_disk_providers(&repo_root)?;
+    let on_disk = on_disk_providers(repo_root)?;
     let has_provider_member = members.iter().any(|member| {
         name_kind(&member.package_name, member.declares_driver) == ProviderNameKind::Provider
     });
@@ -1689,7 +1687,7 @@ fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), 
     for member in &members {
         match name_kind(&member.package_name, member.declares_driver) {
             ProviderNameKind::Provider => {
-                if !is_provider_directory(&repo_root, &member.crate_dir, &member.package_name) {
+                if !is_provider_directory(repo_root, &member.crate_dir, &member.package_name) {
                     violations.push(Diagnostic::simple(
                         "provider-crate-location-invalid",
                         &member.package_name,

@@ -22,7 +22,8 @@ pub use config::{
     reject_process_environment_credential_chain,
 };
 pub use controller::{
-    TelemetryBindingController, TelemetryBindingPhase, TelemetryBindingStatus,
+    TelemetryBindingController, TelemetryBindingFrame, TelemetryBindingPhase,
+    TelemetryBindingStatus,
     TelemetryComponentSession, TelemetryControllerError, TelemetryReconcileResult,
     TelemetryServiceController, TelemetryServiceError, TelemetryServicePhase, TelemetryServiceRole,
     TelemetryServiceStatus, TelemetryStreamAdmission, TelemetryStreamRequest,

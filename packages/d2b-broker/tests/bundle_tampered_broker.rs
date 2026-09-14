@@ -59,7 +59,7 @@ mod broker_tampered {
         });
         let bundle_hash = format!(
             "sha256:{}",
-            sha2::Sha256::digest(&serde_json::to_vec(&bundle).expect("serialize preimage"))
+            sha2::Sha256::digest(serde_json::to_vec(&bundle).expect("serialize preimage"))
                 .iter()
                 .map(|b| format!("{b:02x}"))
                 .collect::<String>(),

@@ -20,6 +20,9 @@ pub mod reconcile_state;
 pub mod state_machine;
 mod workers;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 pub use arbitration::{UsbipArbitrator, UsbipClaim, UsbipClaimError};
 pub use busid::{BusId, FirewallOwnershipMarker, MAX_BUS_ID_BYTES, PhysicalUsbBackingToken};
 pub use controller::{

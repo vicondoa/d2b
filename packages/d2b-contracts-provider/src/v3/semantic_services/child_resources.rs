@@ -516,15 +516,15 @@ pub fn explicit_binding_children_with_user(
                     return Err(BindingChildError::InvalidProviderRef);
                 }
             }
-            if let Some(template) = declaration.process_template {
-                if !valid_role(template) {
-                    return Err(BindingChildError::InvalidRole);
-                }
+            if let Some(template) = declaration.process_template
+                && !valid_role(template)
+            {
+                return Err(BindingChildError::InvalidRole);
             }
-            if let Some(class) = declaration.process_class {
-                if !matches!(class, "controller" | "service" | "worker") {
-                    return Err(BindingChildError::InvalidRole);
-                }
+            if let Some(class) = declaration.process_class
+                && !matches!(class, "controller" | "service" | "worker")
+            {
+                return Err(BindingChildError::InvalidRole);
             }
             if declaration.process_user && user_ref.is_none() {
                 return Err(BindingChildError::MissingUser);

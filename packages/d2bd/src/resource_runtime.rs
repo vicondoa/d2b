@@ -28,7 +28,8 @@ use crate::credential_resource_runtime::{
 use async_trait::async_trait;
 use d2b_bus::{
     BusAuthorizer, BusConfig, BusIngress, CommittedControllerProcessSubjectInput,
-    CommittedInteractionSubjectInstall, CommittedInteractionSubjectIssuer, ZoneBus, ZoneRegistrar,
+    CommittedInteractionSubjectInstall, CommittedInteractionSubjectInstallBody,
+    CommittedInteractionSubjectIssuer, ZoneBus, ZoneRegistrar,
 };
 #[cfg(test)]
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
@@ -478,20 +479,7 @@ fn policy_input_content(resource: &StoredResource) -> ([u8; 32], &'static [u8]) 
 /// composition has published one (U14: the table is the only authority a
 /// reader built before publication can resolve lazily).
 fn published_plane_view(
-    planes: &Arc<
-        Mutex<
-            Option<
-                Arc<
-                    parking_lot::Mutex<
-                        std::collections::HashMap<
-                            String,
-                            Arc<crate::resource_plane_v3::ResourcePlaneV3>,
-                        >,
-                    >,
-                >,
-            >,
-        >,
-    >,
+    planes: &PublishedPlaneTable,
     zone: &ZoneId,
 ) -> Option<Arc<dyn ControllerPlaneView>> {
     let table = planes.lock().ok().and_then(|slot| slot.clone())?;
@@ -612,18 +600,18 @@ impl CommittedInteractionIdentity {
         issuer: CommittedInteractionSubjectIssuer,
         expected_peer_uid: u32,
     ) -> d2b_session::Result<CommittedInteractionSubjectInstall> {
-        issuer.seal(
-            self.zone.clone(),
-            self.subject_ref.clone(),
-            self.subject_uid.clone(),
+        issuer.seal(CommittedInteractionSubjectInstallBody {
+            zone: self.zone.clone(),
+            display_subject_ref: self.subject_ref.clone(),
+            display_subject_uid: self.subject_uid.clone(),
             expected_peer_uid,
-            self.host_execution_ref.clone(),
-            self.display_provider_generation,
-            self.clipboard_provider_generation,
-            self.notification_provider_generation,
-            self.clipboard_provider_uid.clone(),
-            self.notification_provider_uid.clone(),
-        )
+            execution_ref: self.host_execution_ref.clone(),
+            display_generation: self.display_provider_generation,
+            clipboard_generation: self.clipboard_provider_generation,
+            notification_generation: self.notification_provider_generation,
+            clipboard_provider_uid: self.clipboard_provider_uid.clone(),
+            notification_provider_uid: self.notification_provider_uid.clone(),
+        })
     }
 
     pub(crate) const fn zone(&self) -> &ZoneId {
@@ -1092,6 +1080,29 @@ struct ControllerSessionCoordinator {
 }
 
 type CloudHypervisorResourceClient = ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>;
+
+/// Arc-wrapped slot holding the process-status client once the Zone runtime
+/// has been published to the manager plane.
+type ProcessStatusClientSlot = Arc<Mutex<Option<Arc<CloudHypervisorResourceClient>>>>;
+
+/// The published per-zone v3 plane table (F1 wiring): the manager-backed API
+/// service resolves its manager client and watch hub from here. The inner
+/// lock is the composition's published plane table; the slot is shared with
+/// the reader closures built before publication.
+pub(crate) type PublishedPlaneTable = Arc<
+    Mutex<
+        Option<
+            Arc<
+                parking_lot::Mutex<
+                    std::collections::HashMap<
+                        String,
+                        Arc<crate::resource_plane_v3::ResourcePlaneV3>,
+                    >,
+                >,
+            >,
+        >,
+    >,
+>;
 
 
 
@@ -2114,9 +2125,9 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 let (guest, origin) = self
                     .get_stored_with_origin(&guest_ref, "cloud-hypervisor-get-guest")
                     .await?;
-                Ok(CloudHypervisorResourceResponse::Guest(
+                Ok(CloudHypervisorResourceResponse::Guest(Box::new(
                     self.snapshot_from_stored(&guest, origin)?,
-                ))
+                )))
             }
             CloudHypervisorResourceRequest::RelistOwnedChildren {
                 guest_ref,
@@ -2551,10 +2562,12 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                             self.descriptor.descriptor().descriptor_digest().clone();
                         let context = crate::process_provider_runtime::ProcessResourceContext::new(
                             self.zone.clone(),
-                            &resource.resource_ref,
-                            &resource.uid,
-                            resource.generation,
-                            resource.revision,
+                            (
+                                &resource.resource_ref,
+                                &resource.uid,
+                                resource.generation,
+                                resource.revision
+                            ),
                             &provider_ref,
                             self.controller_generation,
                             Some(guest_ref.clone()),
@@ -3000,20 +3013,7 @@ pub struct ZoneResourceRuntime {
     /// service resolves its manager client and watch hub from here. The
     /// inner lock is the composition's published plane table. The slot is
     /// shared with the reader closures built before publication.
-    v3_planes: Arc<
-        Mutex<
-            Option<
-                Arc<
-                    parking_lot::Mutex<
-                        std::collections::HashMap<
-                            String,
-                            Arc<crate::resource_plane_v3::ResourcePlaneV3>,
-                        >,
-                    >,
-                >,
-            >,
-        >,
-    >,
+    v3_planes: PublishedPlaneTable,
     /// The manager-backed Resource API service for this Zone: built once,
     /// after the Zone's v3 plane has been published. Shared with the
     /// controller-session coordinator, whose live sessions serve it.
@@ -3027,8 +3027,7 @@ pub struct ZoneResourceRuntime {
     registrar: Arc<Mutex<Option<ZoneRegistrar>>>,
     ingress: Mutex<Option<BusIngress>>,
     service_task: Mutex<Option<tokio::task::JoinHandle<Result<(), SessionServerError>>>>,
-    process_status_client:
-        Arc<Mutex<Option<Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>>>>,
+    process_status_client: ProcessStatusClientSlot,
     core_controller_subject: Mutex<Option<AuthenticatedSubjectContext>>,
     system_core_rebind_pending: AtomicBool,
     credential_sessions: CredentialSessionRegistry,
@@ -3069,33 +3068,6 @@ pub struct ZoneResourceRuntime {
     interaction_provider_configuration: Option<CommittedInteractionProviderConfiguration>,
     interaction_identity: Option<CommittedInteractionIdentity>,
     interaction_state: InteractionState,
-}
-
-/// Store-derived admission evidence for one security-key Device effect.
-///
-/// This contains only the exact values validated against the authoritative
-/// resource record. It is consumed by the Device effect adapter before it can
-/// request a broker-opened descriptor.
-#[allow(dead_code)]
-#[allow(dead_code)]
-pub(crate) struct SecurityKeyDeviceAdmission {
-    pub(crate) zone_ref: ResourceRef,
-    pub(crate) device_uid: ResourceUid,
-    pub(crate) holder_ref: ResourceRef,
-    pub(crate) selector_id: String,
-}
-
-/// Request fields that select the Device admission record to validate.
-#[allow(dead_code)]
-#[allow(dead_code)]
-pub(crate) struct SecurityKeyDeviceAdmissionRequest<'a> {
-    pub(crate) device_uid: &'a ResourceUid,
-    pub(crate) device_ref: &'a ResourceRef,
-    pub(crate) request_zone_ref: &'a ResourceRef,
-    pub(crate) holder_ref: &'a ResourceRef,
-    pub(crate) vm_id: &'a str,
-    pub(crate) selector_id: &'a str,
-    pub(crate) operation_id: &'a str,
 }
 
 impl core::fmt::Debug for ZoneResourceRuntime {
@@ -3188,7 +3160,7 @@ impl ZoneResourceRuntime {
         let (policy, state) = runtime_policy(
             &zone,
             &bootstrap_snapshot,
-            ZoneRevision::new(u64::from(bootstrap_snapshot.policy_revision)),
+            ZoneRevision::new(bootstrap_snapshot.policy_revision),
             &bundle_resource_types,
         )
         .inspect_err(|error| {
@@ -3594,7 +3566,7 @@ impl ZoneResourceRuntime {
                 },
                 RecoverySnapshot {
                     startup_epoch: 0,
-                    checkpoint_revision: u64::from(policy.policy_revision),
+                    checkpoint_revision: policy.policy_revision,
                     active_configuration_revision: policy
                         .active_configuration_revision
                         .get(),
@@ -3609,7 +3581,7 @@ impl ZoneResourceRuntime {
             d2bd_runtime::resource_runtime_support::mark_core_handlers(
                 &mut core,
                 aggregate_handler_phase,
-                u64::from(policy.policy_revision),
+                policy.policy_revision,
             )?;
         };
         self.zone_status = Mutex::new(
@@ -4028,15 +4000,6 @@ impl ZoneResourceRuntime {
 
     /// Re-enroll the fixed internal system-core session after a policy
     /// revision change so its old lease cannot continue past the fence.
-    #[allow(dead_code)]
-    async fn refresh_system_core_session(
-        &self,
-        state: AuthorizationState,
-    ) -> Result<(), ResourceRuntimeError> {
-        let _session_guard = self.controller_session_lock.lock().await;
-        self.refresh_system_core_session_locked(state).await
-    }
-
     async fn refresh_system_core_session_locked(
         &self,
         state: AuthorizationState,
@@ -4093,19 +4056,19 @@ impl ZoneResourceRuntime {
             task.abort();
             let _ = task.await;
         }
-        if let Some(mut ingress) = ingress {
-            if let Err(error) = registrar.revoke_in_place(&mut ingress).await {
-                tracing::warn!(
-                    error = ?error,
-                    "system-core session ingress revoke failed during rebind",
-                );
-                *self
-                    .registrar
-                    .lock()
-                    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
-                    Some(registrar);
-                return Err(ResourceRuntimeError::AuthenticationUnavailable);
-            }
+        if let Some(mut ingress) = ingress
+            && let Err(error) = registrar.revoke_in_place(&mut ingress).await
+        {
+            tracing::warn!(
+                error = ?error,
+                "system-core session ingress revoke failed during rebind",
+            );
+            *self
+                .registrar
+                .lock()
+                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
+                Some(registrar);
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
         }
         let (new_ingress, new_task, status_client, subject_context) =
             match register_system_core_session(
@@ -4579,29 +4542,6 @@ impl ZoneResourceRuntime {
             .lock()
             .ok()
             .and_then(|client| client.clone())
-    }
-
-    /// Gate a Guest-local typed Credential session through this Zone's
-    /// authenticated ResourceService before it can read a lease.
-    #[allow(dead_code)]
-    pub(crate) fn scoped_credential_client(
-        &self,
-        session: Option<&d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
-        delegate: Arc<dyn d2b_provider_transport_azure_relay::ScopedCredentialClient>,
-    ) -> Result<
-        Arc<crate::credential_resource_runtime::SameZoneScopedCredentialClient>,
-        ResourceRuntimeError,
-    > {
-        let Some(session) = session else {
-            return Err(ResourceRuntimeError::ResourceApiBindFailed);
-        };
-        crate::credential_resource_runtime::SameZoneScopedCredentialClient::with_component_session(
-            self.zone.clone(),
-            session,
-            delegate,
-        )
-        .map(Arc::new)
-        .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)
     }
 
     fn status_client(
@@ -5124,11 +5064,11 @@ impl ZoneResourceRuntime {
             let lifecycle_intent = match state.provider_runtime.latest_v3_lifecycle_operation(
                 &provider_ref,
                 &self.bound_zone_uid()?,
-                &guest_ref,
-                &guest_uid,
-                guest_generation,
-                provider_assignment_generation,
-                self.committed_policy_snapshot().policy_revision,
+                (&guest_ref, &guest_uid, guest_generation),
+                (
+                    provider_assignment_generation,
+                    self.committed_policy_snapshot().policy_revision,
+                ),
             ) {
                 Ok(intent) => intent,
                 Err(
@@ -5688,10 +5628,9 @@ impl ZoneResourceRuntime {
                     session.context.provider_owner_ref(),
                 ) && !session.service_task.is_finished()
             })
+            && let Some(client) = session.resource_client.as_ref()
         {
-            if let Some(client) = session.resource_client.as_ref() {
-                return Ok(Arc::clone(client));
-            }
+            return Ok(Arc::clone(client));
         }
         self.status_client()
     }
@@ -5986,10 +5925,12 @@ impl ZoneResourceRuntime {
             });
         let context = crate::process_provider_runtime::ProcessResourceContext::new(
             self.zone.clone(),
-            &process.resource_ref,
-            &process.uid,
-            process.generation,
-            process.revision,
+            (
+                &process.resource_ref,
+                &process.uid,
+                process.generation,
+                process.revision
+            ),
             &provider_ref,
             self.committed_policy_snapshot()
                 .controller_generation
@@ -6170,7 +6111,7 @@ impl ZoneResourceRuntime {
             .spec()
             .provider_ref()
             .cloned()
-            .filter(|reference| d2b_provider_guest_cloud_hypervisor::is_provider_ref(reference))
+            .filter(d2b_provider_guest_cloud_hypervisor::is_provider_ref)
             .ok_or(ResourceRuntimeError::CapabilityUnavailable)?;
         let provider = self
             .committed_resource_stored(&provider_ref, "cloud-hypervisor-guest-inputs")
@@ -6271,8 +6212,8 @@ enum ChildPublicationGate {
 /// stage.
 ///
 /// A `Failed` phase whose manager status carries the actor's retryable
-/// classification (`row_status_failure_is_retryable`) is a retry in progress
-/// - the endpoint actor's bounded realize effect waiting for the VMM evidence
+/// classification (`row_status_failure_is_retryable`) is a retry in progress:
+/// the endpoint actor's bounded realize effect waiting for the VMM evidence
 /// fails retryably while the VMM is still coming up - so it defers exactly
 /// like `Pending`; the child's own actor owns the retry and the stage sees
 /// `Ready` once it converges. Every other unrecognized phase (a terminal
@@ -7328,21 +7269,19 @@ impl ControllerSessionCoordinator {
             .controller_sessions
             .lock()
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .iter()
-            .map(|(_, session)| (session.context.clone(), session.binding.clone()))
+            .values()
+            .map(|session| (session.context.clone(), session.binding.clone()))
             .collect::<Vec<_>>();
         let mut first_error = None;
         for (context, binding) in sessions {
             if let Err(error) = self
                 .reconcile_controller_assignments_for_session(&context, &binding)
                 .await
-            {
-                if let Err(error) = self
+                && let Err(error) = self
                     .handle_controller_assignment_refresh_error(providers, &context, error)
                     .await
-                {
-                    first_error.get_or_insert(error);
-                }
+            {
+                first_error.get_or_insert(error);
             }
         }
         first_error.map_or(Ok(()), Err)
@@ -7736,17 +7675,16 @@ impl ControllerSessionCoordinator {
                     .get(lease.identity().session_owner())
                     .map(|session| session.driver.clone())
             })
+            && let Err(error) = driver.send_named_stream(stream, bytes).await
         {
-            if let Err(error) = driver.send_named_stream(stream, bytes).await {
-                tracing::debug!(
-                    error = %error,
-                    "unrecorded assignment revocation delivery failed",
+            tracing::debug!(
+                error = %error,
+                "unrecorded assignment revocation delivery failed",
+            );
+            if driver.reset_named_stream(stream).await.is_ok() {
+                let _ = self.mark_controller_assignment_stream_closed(
+                    lease.identity().session_binding(),
                 );
-                if driver.reset_named_stream(stream).await.is_ok() {
-                    let _ = self.mark_controller_assignment_stream_closed(
-                        lease.identity().session_binding(),
-                    );
-                }
             }
         }
     }
@@ -8659,7 +8597,7 @@ impl ZoneResourceRuntime {
                     .and_then(|value| {
                         ResourceRef::parse(value).map_err(|_| ResourceRuntimeError::RequestInvalid)
                     })?;
-                let mut meta = public_request_meta(&operation_id);
+                let mut meta = public_request_meta(operation_id);
                 meta.deadline_ms = 30_000;
                 let response = client
                     .get(wire::GetRequest {
@@ -8688,37 +8626,35 @@ impl ZoneResourceRuntime {
             "List" => {
                 let parsed = parse_list_request(request)?;
                 let response = client
-                    .list(public_list_request(parsed, &operation_id))
+                    .list(public_list_request(parsed, operation_id))
                     .await;
                 encode_public_list_response(response)
             }
             "Create" => {
-                let request_wire = public_create_request(self, request, &operation_id).await?;
+                let request_wire = public_create_request(self, request, operation_id).await?;
                 let response = client.create(request_wire).await;
                 encode_public_create_response(response)
             }
             "UpdateSpec" => {
-                let request_wire =
-                    public_update_spec_request(&client, self, request, &operation_id).await?;
+                let request_wire = public_update_spec_request(client, self, request, operation_id).await?;
                 let response = client.update_spec(request_wire).await;
                 encode_public_update_spec_response(response)
             }
             "UpdateStatus" => {
-                let request_wire =
-                    public_update_status_request(&client, self, request, &operation_id).await?;
+                let request_wire = public_update_status_request(client, self, request, operation_id).await?;
                 let response = client.update_status(request_wire).await;
                 encode_public_update_status_response(response)
             }
             "UpdateFinalizers" => {
-                let request_wire = public_update_finalizers_request(self, request, &operation_id)?;
+                let request_wire = public_update_finalizers_request(self, request, operation_id)?;
                 let response = client.update_finalizers(request_wire).await;
                 encode_public_update_finalizers_response(response)
             }
             "Delete" => {
                 let target = public_target_ref(request)?;
-                let current = public_get_resource(client, self, &target, &operation_id).await?;
+                let current = public_get_resource(client, self, &target, operation_id).await?;
                 let request_wire =
-                    public_delete_request_from_current(self, request, &operation_id, current)?;
+                    public_delete_request_from_current(self, request, operation_id, current)?;
                 let response = client.delete(request_wire).await;
                 encode_public_delete_response(response)
             }
@@ -8870,63 +8806,6 @@ impl ZoneResourceRuntime {
         }
     }
 
-    /// Load and validate the committed Device record before a security-key
-    /// provider constructs its one-use admission. Request fields select a
-    /// candidate only; the returned values all originate from the manager row.
-    ///
-    /// Retained with the security-key effect port the composition audit keeps:
-    /// the legacy Device-Reconcile dispatch that was this admission's only
-    /// caller is deleted, and the v3 family path that owns the same trusted
-    /// resolution is rebuilt by the security-key migration.
-    #[allow(dead_code)]
-    pub(crate) async fn security_key_device_is_admitted(
-        &self,
-        request: SecurityKeyDeviceAdmissionRequest<'_>,
-    ) -> Result<SecurityKeyDeviceAdmission, ResourceRuntimeError> {
-        let resource = self
-            .committed_resource_stored(request.device_ref, request.operation_id)
-            .await
-            .inspect_err(|error| {
-                tracing::warn!(
-                    device = %request.device_ref,
-                    error = %error,
-                    "security-key device admission read failed",
-                );
-            })
-            .ok();
-        let Some(resource) = resource.filter(|resource| {
-            resource.uid == *request.device_uid
-                && resource.resource_ref == *request.device_ref
-                && resource.resource_ref.resource_type().as_str() == "Device"
-                && resource.zone == self.zone
-        }) else {
-            return Err(ResourceRuntimeError::AuthenticationUnavailable);
-        };
-        let value = serde_json::from_slice::<Value>(&resource.canonical_json)
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
-        if !Self::security_key_device_matches(
-            &value,
-            &self.zone,
-            request.request_zone_ref,
-            request.holder_ref,
-            request.vm_id,
-            request.selector_id,
-        ) {
-            return Err(ResourceRuntimeError::AuthenticationUnavailable);
-        }
-        let zone_ref = ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
-            .expect("ZoneId always produces a valid Zone resource reference");
-        Ok(SecurityKeyDeviceAdmission {
-            zone_ref,
-            device_uid: resource.uid,
-            holder_ref: request.holder_ref.clone(),
-            selector_id: request.selector_id.to_owned(),
-        })
-    }
-
-
-    #[allow(dead_code)]
-    #[allow(dead_code)]
     fn tpm_device_targets_vm(resource: &Value, vm_id: &str) -> bool {
         resource
             .get("metadata")
@@ -8937,8 +8816,7 @@ impl ZoneResourceRuntime {
             == Some(vm_id)
     }
 
-    #[allow(dead_code)]
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn security_key_device_matches(
         resource: &Value,
         zone: &ZoneId,
@@ -10943,114 +10821,119 @@ fn replace_public_field(
 fn encode_public_create_response(
     response: wire::CreateResponse,
 ) -> Result<Value, ResourceRuntimeError> {
-    encode_public_mutation_response(
-        response.error.as_ref(),
-        response.resource.as_ref(),
-        None,
-        response.revision,
-        Some(
+    encode_public_mutation_response(PublicMutationResponse {
+        error: response.error.as_ref(),
+        resource: response.resource.as_ref(),
+        identity: None,
+        revision: response.revision,
+        disposition: Some(
             response
                 .disposition
                 .enum_value()
                 .unwrap_or(wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED),
         ),
-        Some(
+        status_persistence: Some(
             response
                 .status_persistence
                 .enum_value()
                 .unwrap_or(wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED),
         ),
-        response.last_persisted_status_revision,
-        response.reconcile_projection.as_ref(),
-    )
+        last_persisted_status_revision: response.last_persisted_status_revision,
+        reconcile_projection: response.reconcile_projection.as_ref(),
+    })
 }
 
 fn encode_public_update_spec_response(
     response: wire::UpdateSpecResponse,
 ) -> Result<Value, ResourceRuntimeError> {
-    encode_public_mutation_response(
-        response.error.as_ref(),
-        response.resource.as_ref(),
-        None,
-        response.revision,
-        Some(
+    encode_public_mutation_response(PublicMutationResponse {
+        error: response.error.as_ref(),
+        resource: response.resource.as_ref(),
+        identity: None,
+        revision: response.revision,
+        disposition: Some(
             response
                 .disposition
                 .enum_value()
                 .unwrap_or(wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED),
         ),
-        Some(
+        status_persistence: Some(
             response
                 .status_persistence
                 .enum_value()
                 .unwrap_or(wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED),
         ),
-        response.last_persisted_status_revision,
-        response.reconcile_projection.as_ref(),
-    )
+        last_persisted_status_revision: response.last_persisted_status_revision,
+        reconcile_projection: response.reconcile_projection.as_ref(),
+    })
 }
 
 fn encode_public_update_status_response(
     response: wire::UpdateStatusResponse,
 ) -> Result<Value, ResourceRuntimeError> {
-    encode_public_mutation_response(
-        response.error.as_ref(),
-        response.resource.as_ref(),
-        None,
-        response.revision,
-        None,
-        None,
-        None,
-        None,
-    )
+    encode_public_mutation_response(PublicMutationResponse {
+        error: response.error.as_ref(),
+        resource: response.resource.as_ref(),
+        identity: None,
+        revision: response.revision,
+        disposition: None,
+        status_persistence: None,
+        last_persisted_status_revision: None,
+        reconcile_projection: None,
+    })
 }
 
 fn encode_public_update_finalizers_response(
     response: wire::UpdateFinalizersResponse,
 ) -> Result<Value, ResourceRuntimeError> {
-    encode_public_mutation_response(
-        response.error.as_ref(),
-        response.resource.as_ref(),
-        None,
-        response.revision,
-        None,
-        None,
-        None,
-        None,
-    )
+    encode_public_mutation_response(PublicMutationResponse {
+        error: response.error.as_ref(),
+        resource: response.resource.as_ref(),
+        identity: None,
+        revision: response.revision,
+        disposition: None,
+        status_persistence: None,
+        last_persisted_status_revision: None,
+        reconcile_projection: None,
+    })
 }
 
 fn encode_public_delete_response(
     response: wire::DeleteResponse,
 ) -> Result<Value, ResourceRuntimeError> {
-    encode_public_mutation_response(
-        response.error.as_ref(),
-        None,
-        response.resource.as_ref(),
-        response.revision,
-        Some(
+    encode_public_mutation_response(PublicMutationResponse {
+        error: response.error.as_ref(),
+        resource: None,
+        identity: response.resource.as_ref(),
+        revision: response.revision,
+        disposition: Some(
             response
                 .disposition
                 .enum_value()
                 .unwrap_or(wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED),
         ),
-        None,
-        None,
-        None,
-    )
+        status_persistence: None,
+        last_persisted_status_revision: None,
+        reconcile_projection: None,
+    })
 }
 
-fn encode_public_mutation_response(
-    error: Option<&wire::ResourceError>,
-    resource: Option<&wire::ResourceEnvelopeBytes>,
-    identity: Option<&wire::ResourceIdentity>,
+/// The wire mutation response's fields viewed for public encoding.
+struct PublicMutationResponse<'a> {
+    error: Option<&'a wire::ResourceError>,
+    resource: Option<&'a wire::ResourceEnvelopeBytes>,
+    identity: Option<&'a wire::ResourceIdentity>,
     revision: u64,
     disposition: Option<wire::ReconcileDisposition>,
     status_persistence: Option<wire::StatusPersistence>,
     last_persisted_status_revision: Option<u64>,
-    reconcile_projection: Option<&wire::ResourceEnvelopeBytes>,
+    reconcile_projection: Option<&'a wire::ResourceEnvelopeBytes>,
+}
+
+fn encode_public_mutation_response(
+    response: PublicMutationResponse<'_>,
 ) -> Result<Value, ResourceRuntimeError> {
-    if let Some(error) = error {
+    if let Some(error) = response.error {
         tracing::warn!(
             kind = ?error.kind,
             retry_class = ?error.retry_class,
@@ -11063,17 +10946,18 @@ fn encode_public_mutation_response(
         ));
     }
     let mut body = serde_json::Map::new();
-    if let Some(resource) = resource {
+    if let Some(resource) = response.resource {
         body.insert("resource".to_owned(), encode_public_resource(resource)?);
     }
-    if let Some(identity) = identity {
+    if let Some(identity) = response.identity {
         body.insert(
             "resourceRef".to_owned(),
             Value::String(format!("{}/{}", identity.resource_type, identity.name)),
         );
     }
-    body.insert("revision".to_owned(), Value::from(revision));
-    if let Some(disposition) = disposition
+    body.insert("revision".to_owned(), Value::from(response.revision));
+    if let Some(disposition) = response
+        .disposition
         .filter(|value| *value != wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED)
     {
         body.insert(
@@ -11093,7 +10977,8 @@ fn encode_public_mutation_response(
             ),
         );
     }
-    if let Some(status_persistence) = status_persistence
+    if let Some(status_persistence) = response
+        .status_persistence
         .filter(|value| *value != wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED)
     {
         body.insert(
@@ -11108,13 +10993,13 @@ fn encode_public_mutation_response(
             ),
         );
     }
-    if let Some(revision) = last_persisted_status_revision {
+    if let Some(revision) = response.last_persisted_status_revision {
         body.insert(
             "lastPersistedStatusRevision".to_owned(),
             Value::from(revision),
         );
     }
-    if let Some(projection) = reconcile_projection {
+    if let Some(projection) = response.reconcile_projection {
         body.insert(
             "reconcileProjection".to_owned(),
             encode_public_resource(projection)?,
@@ -11976,16 +11861,20 @@ mod tests {
         providers
             .attach_pending_controller_provider_context_for_test(
                 daemon_endpoint,
-                zone.clone(),
-                process_ref.clone(),
-                ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
-                ResourceGeneration::new(1).unwrap(),
-                process_provider_ref,
-                provider_owner_ref,
-                ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-                ResourceGeneration::new(1).unwrap(),
-                ResourceRef::parse("Host/host-system").unwrap(),
-                ControllerGeneration::new(1).unwrap(),
+                (
+                    zone.clone(),
+                    process_ref.clone(),
+                    ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+                    ResourceGeneration::new(1).unwrap(),
+                    ResourceRef::parse("Host/host-system").unwrap(),
+                    ControllerGeneration::new(1).unwrap(),
+                ),
+                (
+                    process_provider_ref,
+                    provider_owner_ref,
+                    ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+                    ResourceGeneration::new(1).unwrap(),
+                ),
             )
             .unwrap();
 

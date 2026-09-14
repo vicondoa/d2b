@@ -571,12 +571,11 @@ impl ResourceManagerState {
                 .entry(ResourceTypeName::new(key.type_name.clone()))
                 .or_default()
                 .remove(key);
-            if let Some(owner_uid) = row.owner_uid {
-                if let Some(owner_key) = self.by_uid.get(&owner_uid).cloned() {
-                    if let Some(children) = self.by_owner.get_mut(&owner_key) {
-                        children.remove(key);
-                    }
-                }
+            if let Some(owner_uid) = row.owner_uid
+                && let Some(owner_key) = self.by_uid.get(&owner_uid).cloned()
+                && let Some(children) = self.by_owner.get_mut(&owner_key)
+            {
+                children.remove(key);
             }
         }
         // Watch edges owned by the deleted resource die with it.
@@ -1612,15 +1611,15 @@ fn selector_matches(
     selector: &ResourceSelector,
     key: &ResourceKey,
 ) -> bool {
-    if let Some(zone) = &selector.zone {
-        if *zone != key.zone {
-            return false;
-        }
+    if let Some(zone) = &selector.zone
+        && *zone != key.zone
+    {
+        return false;
     }
-    if let Some(type_name) = &selector.type_name {
-        if *type_name != key.type_name {
-            return false;
-        }
+    if let Some(type_name) = &selector.type_name
+        && *type_name != key.type_name
+    {
+        return false;
     }
     if let Some(owner) = &selector.owner {
         let Some(owner_row) = state.rows.get(owner) else {
@@ -1954,10 +1953,10 @@ mod tests {
 
         h.client.remove(subject(), k.clone()).await.expect("remove");
         for _ in 0..500 {
-            if let Ok(Some(row)) = h.client.get_row(k.clone()).await {
-                if row.deleting {
-                    break;
-                }
+            if let Ok(Some(row)) = h.client.get_row(k.clone()).await
+                && row.deleting
+            {
+                break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }

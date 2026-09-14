@@ -36,6 +36,7 @@ rust_library(
         "Cargo.toml",
     ],
     crate_name = "d2b_provider_device_usbip",
+    crate_features = ["test-support"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core_test_support",

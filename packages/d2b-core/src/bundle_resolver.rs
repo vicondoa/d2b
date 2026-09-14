@@ -1426,8 +1426,8 @@ impl BundleResolver {
             manifest,
         } = artifacts;
         let parsed_zone_resources = zone_resource_bundles
-            .iter()
-            .filter_map(|(_path, bytes)| ResourceBundle::from_json(bytes).ok())
+            .values()
+            .filter_map(|bytes| ResourceBundle::from_json(bytes).ok())
             .map(|bundle| (bundle.zone.to_canonical_string(), bundle))
             .collect();
         let installed_generation_identity = build_installed_generation_identity(&bundle);
@@ -2424,16 +2424,13 @@ impl BundleResolver {
     ) -> Option<ResolvedVmStartIntent> {
         let node = self.find_process_node(vm_id, role_id)?;
         let mut actions = Vec::new();
-        match node.role {
-            ProcessRole::HostReconcile => {
-                if let Some(intent) = self.resolve_prepare_dir_intent(vm_id, true) {
-                    actions.push(ResolvedVmStartAction::PrepareRuntimeDir(intent));
-                }
-                if let Some(intent) = self.resolve_prepare_dir_intent(vm_id, false) {
-                    actions.push(ResolvedVmStartAction::PrepareStateDir(intent));
-                }
+        if node.role == ProcessRole::HostReconcile {
+            if let Some(intent) = self.resolve_prepare_dir_intent(vm_id, true) {
+                actions.push(ResolvedVmStartAction::PrepareRuntimeDir(intent));
             }
-            _ => {}
+            if let Some(intent) = self.resolve_prepare_dir_intent(vm_id, false) {
+                actions.push(ResolvedVmStartAction::PrepareStateDir(intent));
+            }
         }
         Some(ResolvedVmStartIntent {
             intent_id: intent_id_vm_start(vm_id, role_id),
@@ -2554,8 +2551,10 @@ impl BundleResolver {
                 provenance.zone_uid(),
                 provenance.network_uid(),
                 &attachment_id,
-                provenance.network_generation(),
-                provenance.attachment_generation(),
+                (
+                    provenance.network_generation(),
+                    provenance.attachment_generation(),
+                ),
                 provenance.bundle_generation(),
                 canonical_role_id,
                 vm_id,
@@ -2968,8 +2967,10 @@ pub fn intent_id_network_tap(
     zone_uid: &d2b_contracts_resource::v3::ResourceUid,
     network_uid: &d2b_contracts_resource::v3::ResourceUid,
     attachment_uid: &d2b_contracts_resource::v3::ResourceUid,
-    network_generation: d2b_contracts_resource::v3::ResourceGeneration,
-    attachment_generation: d2b_contracts_resource::v3::ResourceGeneration,
+    generations: (
+        d2b_contracts_resource::v3::ResourceGeneration,
+        d2b_contracts_resource::v3::ResourceGeneration,
+    ),
     bundle_generation: &d2b_contracts_resource::v3::ResourceBundleGenerationId,
     role_id: &str,
     vm_id: &str,
@@ -2980,8 +2981,7 @@ pub fn intent_id_network_tap(
             zone_uid,
             network_uid,
             attachment_uid,
-            network_generation,
-            attachment_generation,
+            generations,
             bundle_generation,
             role_id,
             vm_id,
@@ -2993,8 +2993,10 @@ fn tap_identity_digest(
     zone_uid: &d2b_contracts_resource::v3::ResourceUid,
     network_uid: &d2b_contracts_resource::v3::ResourceUid,
     attachment_uid: &d2b_contracts_resource::v3::ResourceUid,
-    network_generation: d2b_contracts_resource::v3::ResourceGeneration,
-    attachment_generation: d2b_contracts_resource::v3::ResourceGeneration,
+    generations: (
+        d2b_contracts_resource::v3::ResourceGeneration,
+        d2b_contracts_resource::v3::ResourceGeneration,
+    ),
     bundle_generation: &d2b_contracts_resource::v3::ResourceBundleGenerationId,
     role_id: &str,
     vm_id: &str,
@@ -3011,7 +3013,7 @@ fn tap_identity_digest(
         hasher.update((value.len() as u64).to_be_bytes());
         hasher.update(value.as_bytes());
     }
-    for value in [network_generation.get(), attachment_generation.get()] {
+    for value in [generations.0.get(), generations.1.get()] {
         hasher.update(value.to_be_bytes());
     }
     let bundle = bundle_generation.as_str();
@@ -3199,17 +3201,21 @@ fn network_cidr_host_address(cidr: &str, host: u8) -> Option<String> {
     )
 }
 
-fn build_resource_network_intents(
-    bundles: &BTreeMap<String, Vec<u8>>,
-    include_fixture_network_intents: bool,
-) -> (
+/// Per-intent-kind Network resolution maps produced by
+/// [`build_resource_network_intents`].
+type ResolvedNetworkIntentMaps = (
     BTreeMap<String, ResolvedNftablesProjectionIntent>,
     BTreeMap<String, ResolvedOwnershipMarkerIntent>,
     BTreeMap<String, ResolvedBridgeIntent>,
     BTreeMap<String, ResolvedRouteIntent>,
     BTreeMap<String, ResolvedSysctlIntent>,
     BTreeMap<String, ResolvedHostsIntent>,
-) {
+);
+
+fn build_resource_network_intents(
+    bundles: &BTreeMap<String, Vec<u8>>,
+    include_fixture_network_intents: bool,
+) -> ResolvedNetworkIntentMaps {
     // Live bundle loading resolves Network rows only after d2bd supplies the
     // committed resource UID and generation. Test-only parsed fixtures may
     // carry a `networkUid` annotation for exercising the row builder.
@@ -4622,6 +4628,11 @@ fn resolve_bundle_ref(bundle_root: &Path, artifact_path: &str) -> PathBuf {
     }
 }
 
+/// Integrity-pinned per-Zone Resource bundle payloads plus the Process
+/// templates their manifests carry, as produced by
+/// [`load_zone_resource_bundles`].
+type LoadedZoneResourceBundles = (BTreeMap<String, Vec<u8>>, Vec<ProcessTemplateBinding>);
+
 /// Load the integrity-pinned per-Zone Resource bundles emitted by Nix.
 ///
 /// The bundle index is deliberately kept in `Bundle.artifact_hashes` rather
@@ -4632,7 +4643,7 @@ fn load_zone_resource_bundles(
     bundle: &Bundle,
     bundle_root: &Path,
     policy: &BundleVerifyPolicy,
-) -> Result<(BTreeMap<String, Vec<u8>>, Vec<ProcessTemplateBinding>), Error> {
+) -> Result<LoadedZoneResourceBundles, Error> {
     let mut bundles = BTreeMap::new();
     let mut process_templates = Vec::new();
     let Some(artifact_hashes) = bundle.artifact_hashes.as_ref() else {
@@ -4668,6 +4679,17 @@ fn load_zone_resource_bundles(
     Ok((bundles, process_templates))
 }
 
+/// Semantic Guest setup descriptors resolved from the artifact catalog: raw
+/// descriptors, provenance strings, VMM runner intents plus their Zone UIDs,
+/// and store-view intents - see [`load_guest_setup_descriptors`].
+type LoadedGuestSetupDescriptors = (
+    BTreeMap<(String, String), Vec<u8>>,
+    BTreeMap<(String, String), String>,
+    BTreeMap<(String, String), ResolvedRunnerIntent>,
+    BTreeMap<(String, String), ResourceUid>,
+    BTreeMap<String, ResolvedStoreViewIntent>,
+);
+
 /// Load the semantic Guest setup descriptors from the adjacent artifact
 /// catalog. The catalog is bound to every Zone resource bundle by its
 /// `artifactCatalogDigest`, so a descriptor cannot be selected from an
@@ -4676,16 +4698,7 @@ fn load_guest_setup_descriptors(
     zone_resource_bundles: &BTreeMap<String, Vec<u8>>,
     bundle_root: &Path,
     policy: &BundleVerifyPolicy,
-) -> Result<
-    (
-        BTreeMap<(String, String), Vec<u8>>,
-        BTreeMap<(String, String), String>,
-        BTreeMap<(String, String), ResolvedRunnerIntent>,
-        BTreeMap<(String, String), ResourceUid>,
-        BTreeMap<String, ResolvedStoreViewIntent>,
-    ),
-    Error,
-> {
+) -> Result<LoadedGuestSetupDescriptors, Error> {
     let catalog_path = resolve_bundle_ref(bundle_root, "artifact-catalog.json");
     if !catalog_path.exists() {
         return Ok((
@@ -4949,16 +4962,17 @@ fn load_guest_store_view_intents(
     Ok(intents)
 }
 
+/// Per-Guest VMM runner intents plus the bound Zone UIDs, as produced by
+/// [`load_guest_vmm_intents`].
+type ResolvedGuestVmmIntents = (
+    BTreeMap<(String, String), ResolvedRunnerIntent>,
+    BTreeMap<(String, String), ResourceUid>,
+);
+
 fn load_guest_vmm_intents(
     catalog: &serde_json::Value,
     descriptors: &BTreeMap<(String, String), Vec<u8>>,
-) -> Result<
-    (
-        BTreeMap<(String, String), ResolvedRunnerIntent>,
-        BTreeMap<(String, String), ResourceUid>,
-    ),
-    Error,
-> {
+) -> Result<ResolvedGuestVmmIntents, Error> {
     let Some(rows) = catalog
         .get("guestClosures")
         .and_then(serde_json::Value::as_array)
@@ -7089,8 +7103,10 @@ mod tests {
             &zone_uid,
             &network_uid,
             &attachment_uid,
-            d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
-            d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+            (
+                d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
+                d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+            ),
             &bundle_generation,
             "runner-lan",
             "corp-vm",
@@ -7104,8 +7120,10 @@ mod tests {
                 &zone_uid,
                 &network_uid,
                 &attachment_uid,
-                d2b_contracts_resource::v3::ResourceGeneration::new(5).unwrap(),
-                d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+                (
+                    d2b_contracts_resource::v3::ResourceGeneration::new(5).unwrap(),
+                    d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+                ),
                 &bundle_generation,
                 "runner-lan",
                 "corp-vm",
@@ -7117,8 +7135,10 @@ mod tests {
                 &zone_uid,
                 &network_uid,
                 &attachment_uid,
-                d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
-                d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+                (
+                    d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
+                    d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+                ),
                 &bundle_generation,
                 "runner-uplink",
                 "corp-vm",

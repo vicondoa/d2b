@@ -2688,39 +2688,41 @@ impl std::error::Error for InteractionFinalizeError {}
 /// Process effect port used by the interaction composition when all display
 /// children are reconciled through durable Process resources.
 ///
-/// The interaction Provider never owns a launch-capable process adapter.
+/// Kept only so hermetic tests exercise the launch surface; the production
+/// composition binds `InteractionSupervisor` to this non-launching port by
+/// design (the interaction Provider never owns a launch-capable process
+/// adapter), not as a stub.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct UnavailableProcessEffectPort;
+pub(crate) struct NonLaunchingProcessEffectPort;
 
-impl ProcessLaunchEffectPort for UnavailableProcessEffectPort {
-    fn launch(
+impl ProcessLaunchEffectPort for NonLaunchingProcessEffectPort {
+    async fn launch(
         &self,
         _ticket: &d2b_process_conformance::LaunchTicket,
-    ) -> impl Future<Output = Result<LaunchedProcess, ProcessConformanceError>> + Send {
-        async { Err(ProcessConformanceError::LaunchFailed) }
+    ) -> Result<LaunchedProcess, ProcessConformanceError> {
+        Err(ProcessConformanceError::LaunchFailed)
     }
 
-    fn observe(
+    async fn observe(
         &self,
         _ticket: &d2b_process_conformance::LaunchTicket,
-    ) -> impl Future<Output = Result<Option<AdoptionCandidate>, ProcessConformanceError>> + Send
-    {
-        async { Err(ProcessConformanceError::LaunchFailed) }
+    ) -> Result<Option<AdoptionCandidate>, ProcessConformanceError> {
+        Err(ProcessConformanceError::LaunchFailed)
     }
 
-    fn open_pidfd(
+    async fn open_pidfd(
         &self,
         _candidate: &AdoptionCandidate,
-    ) -> impl Future<Output = Result<PidfdEvidence, ProcessConformanceError>> + Send {
-        async { Err(ProcessConformanceError::PidfdUnavailable) }
+    ) -> Result<PidfdEvidence, ProcessConformanceError> {
+        Err(ProcessConformanceError::PidfdUnavailable)
     }
 
-    fn stop(
+    async fn stop(
         &self,
         _identity: &ProcessIdentityDigest,
         _class: d2b_process_conformance::StopClass,
-    ) -> impl Future<Output = Result<(), ProcessConformanceError>> + Send {
-        async { Err(ProcessConformanceError::StopUnavailable) }
+    ) -> Result<(), ProcessConformanceError> {
+        Err(ProcessConformanceError::StopUnavailable)
     }
 }
 
@@ -2835,7 +2837,7 @@ where
     pub fn live_worker_count(&self) -> usize {
         #[cfg(test)]
         {
-            return self.identities.len();
+            self.identities.len()
         }
         #[cfg(not(test))]
         {
@@ -3608,10 +3610,10 @@ where
             if response.error.is_some() {
                 return Err(WorkerEffectError::WorkerUnavailable);
             }
-            Ok(response
+            response
                 .resource
                 .0
-                .ok_or(WorkerEffectError::WorkerUnavailable)?)
+                .ok_or(WorkerEffectError::WorkerUnavailable)
         })?;
         let envelope = ResourceEnvelope::from_json(&updated.canonical_json)
             .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
@@ -3887,15 +3889,18 @@ where
                             true,
                         )
                     };
+                let identity = DurableProcessRecordContext {
+                    zone: &zone,
+                    owner_ref: &owner_ref,
+                    owner_uid: &owner_uid,
+                    expected_execution_ref: &expected_execution_ref,
+                };
                 let (state, record) = durable_record_from_response(
                     process_ref,
                     resource,
                     role,
                     expected_generation,
-                    &zone,
-                    &owner_ref,
-                    &owner_uid,
-                    &expected_execution_ref,
+                    &identity,
                 )?;
                 return Ok((
                     if policy_replaced {
@@ -3940,15 +3945,18 @@ where
             request.mutation = protobuf::MessageField::some(mutation);
             let created = client.create(request).await;
             if let Some(resource) = created.resource.0 {
+                let identity = DurableProcessRecordContext {
+                    zone: &zone,
+                    owner_ref: &owner_ref,
+                    owner_uid: &owner_uid,
+                    expected_execution_ref: &expected_execution_ref,
+                };
                 return durable_record_from_response(
                     process_ref,
                     *resource,
                     role,
                     expected_generation,
-                    &zone,
-                    &owner_ref,
-                    &owner_uid,
-                    &expected_execution_ref,
+                    &identity,
                 );
             }
             if created.error.is_some() {
@@ -3960,15 +3968,18 @@ where
                     ))
                     .await;
                 if let Some(resource) = adopted.resource.0 {
+                    let identity = DurableProcessRecordContext {
+                        zone: &zone,
+                        owner_ref: &owner_ref,
+                        owner_uid: &owner_uid,
+                        expected_execution_ref: &expected_execution_ref,
+                    };
                     return durable_record_from_response(
                         process_ref,
                         *resource,
                         role,
                         expected_generation,
-                        &zone,
-                        &owner_ref,
-                        &owner_uid,
-                        &expected_execution_ref,
+                        &identity,
                     );
                 }
                 return Err(WorkerEffectError::WorkerUnavailable);
@@ -4329,7 +4340,7 @@ where
                     self.last_failures.insert(role, observed_at_ms);
                 }
             }
-            return Ok(WorkerRestartEvidence::from_supervisor(
+            Ok(WorkerRestartEvidence::from_supervisor(
                 observed_at_ms,
                 self.last_failures
                     .get(&DisplayProcessRole::HostProxy)
@@ -4338,7 +4349,7 @@ where
                     .get(&DisplayProcessRole::GuestFrontend)
                     .copied(),
                 self.teardown_generation.max(1),
-            ));
+            ))
         }
         #[cfg(not(test))]
         Ok(WorkerRestartEvidence::from_supervisor(
@@ -4468,13 +4479,13 @@ where
             self.tickets.insert(role, process_ticket);
             self.consumed_grants
                 .insert(binding.attachment_digest(), binding.teardown_generation());
-            return Ok(WorkerLaunchReceipt::from_supervisor(
+            Ok(WorkerLaunchReceipt::from_supervisor(
                 role,
                 WorkerState::Ready { generation: 1 },
                 binding.policy_generation(),
                 binding.teardown_generation(),
                 self.session_digest,
-            ));
+            ))
         }
         #[cfg(not(test))]
         Err(WorkerEffectError::WorkerUnavailable)
@@ -4541,7 +4552,7 @@ pub(crate) fn display_owned_child_intents(
     process_generation: u64,
     controller_generation: u64,
 ) -> Result<Vec<OwnedChildIntent>, WorkerEffectError> {
-    let mut effects = DisplaySupervisorEffects::new_base(UnavailableProcessEffectPort);
+    let mut effects = DisplaySupervisorEffects::new_base(NonLaunchingProcessEffectPort);
     effects.resource_zone = Some(zone.clone());
     effects.wayland_session_ref = Some(session_ref.clone());
     effects.wayland_session_uid = Some(session_uid.clone());
@@ -4939,7 +4950,7 @@ fn validate_production_interaction_resource_state<'b>(
 pub(crate) fn production_interaction_composition(
     daemon_uid: u32,
     resource: ProductionInteractionResourceState<'_>,
-) -> Result<InteractionComposition<UnavailableProcessEffectPort>, BusError> {
+) -> Result<InteractionComposition<NonLaunchingProcessEffectPort>, BusError> {
     let identity = validate_production_interaction_resource_state(&resource)?;
     let system_core_client = resource
         .system_core_client
@@ -5019,7 +5030,7 @@ pub(crate) fn production_interaction_composition(
     )?;
     let mut composition = InteractionComposition::new_with_notification_port(
         registrar,
-        UnavailableProcessEffectPort,
+        NonLaunchingProcessEffectPort,
         Box::new(NotifyRustNotificationPort::default()),
     );
     composition.bind_display_resource_client(system_core_client);
@@ -6219,15 +6230,20 @@ fn endpoint_record_from_response(
     })
 }
 
+/// Identity context for a durable display process record.
+struct DurableProcessRecordContext<'a> {
+    zone: &'a ZoneId,
+    owner_ref: &'a ResourceRef,
+    owner_uid: &'a ResourceUid,
+    expected_execution_ref: &'a ResourceRef,
+}
+
 fn durable_record_from_response(
     process_ref: ResourceRef,
     resource: wire::ResourceEnvelopeBytes,
     role: DisplayProcessRole,
     expected_policy_generation: u64,
-    zone: &ZoneId,
-    owner_ref: &ResourceRef,
-    owner_uid: &ResourceUid,
-    expected_execution_ref: &ResourceRef,
+    identity: &DurableProcessRecordContext<'_>,
 ) -> Result<(WorkerState, DurableDisplayProcess), WorkerEffectError> {
     let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
         .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
@@ -6235,10 +6251,10 @@ fn durable_record_from_response(
         &envelope,
         role,
         &process_ref,
-        zone,
-        owner_ref,
-        owner_uid,
-        expected_execution_ref,
+        identity.zone,
+        identity.owner_ref,
+        identity.owner_uid,
+        identity.expected_execution_ref,
     ) {
         return Err(WorkerEffectError::LaunchRejected);
     }

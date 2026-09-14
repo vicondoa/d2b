@@ -293,11 +293,10 @@ fn run_supervised_binary(path: &str, provider: &str) {
             .expect("delivery key handoff");
         driver
             .send_named_stream(key_stream, {
-                let bytes = key_handoff
+                key_handoff
                     .encode_for_route(&route)
                     .expect("delivery key encoding")
-                    .to_vec();
-                bytes
+                    .to_vec()
             })
             .await
             .expect("send delivery key handoff");
@@ -698,17 +697,17 @@ fn delivery_key_handoff_serializes_only_explicit_key_material() {
     )
     .expect("handoff");
     let first: serde_json::Value = serde_json::from_slice(
-        &handoff
+        handoff
             .encode_for_route(&first)
             .expect("first handoff")
-            .to_vec(),
+            .as_ref(),
     )
     .expect("first handoff JSON");
     let second: serde_json::Value = serde_json::from_slice(
-        &handoff
+        handoff
             .encode_for_route(&second)
             .expect("second handoff")
-            .to_vec(),
+            .as_ref(),
     )
     .expect("second handoff JSON");
     assert_eq!(first["providerPrivate"], second["providerPrivate"]);

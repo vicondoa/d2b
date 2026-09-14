@@ -26,6 +26,9 @@
 mod driver;
 mod session;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 pub use driver::{
     CONTROLLER_PROVIDER_GENERATION_ANNOTATION, CONTROLLER_PROVIDER_REF_ANNOTATION,
     CONTROLLER_PROVIDER_UID_ANNOTATION, CREDENTIAL_TYPE_NAME, CredentialDependencyFacts,

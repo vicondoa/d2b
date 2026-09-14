@@ -8,6 +8,9 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 async-trait = "0.1"
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
@@ -15,9 +18,12 @@ d2b-provider-process-minijail = { path = "../d2b-provider-process-minijail", ver
 d2b-provider-volume-virtiofs = { path = "../d2b-provider-volume-virtiofs", version = "0.0.0-bootstrap" }
 d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
+# test_support (feature/test builds) and the driver unit tests script their
+# doubles over a parking_lot mutex; a normal dep so the `test-support`
+# feature builds outside `cfg(test)` too.
+parking_lot = "0.12"
 serde_json.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 
 [dev-dependencies]
-parking_lot = "0.12"

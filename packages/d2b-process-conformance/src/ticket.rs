@@ -793,24 +793,22 @@ impl LaunchTicket {
                 return Err(ProcessConformanceError::InvalidTicket);
             }
         }
-        if let Some(binding) = self.controller_launch {
-            if binding.provider_generation.get() == 0
+        if let Some(binding) = self.controller_launch
+            && (binding.provider_generation.get() == 0
                 || binding.target_session_generation.get() == 0
                 || binding.signed_descriptor_digest.is_zero()
                 || binding.target_readiness_digest.is_zero()
-                || self.process_ref.resource_type().as_str() != "Process"
-            {
-                return Err(ProcessConformanceError::InvalidTicket);
-            }
+                || self.process_ref.resource_type().as_str() != "Process")
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
         }
-        if let Some(binding) = self.assignment {
-            if binding.provider_generation.get() == 0
+        if let Some(binding) = self.assignment
+            && (binding.provider_generation.get() == 0
                 || binding.session_generation.get() == 0
                 || binding.assignment_epoch == 0
-                || binding.resource_client_binding.is_zero()
-            {
-                return Err(ProcessConformanceError::InvalidTicket);
-            }
+                || binding.resource_client_binding.is_zero())
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
         }
         Ok(())
     }

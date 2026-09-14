@@ -906,7 +906,7 @@ fn roll_back(
                 ))
             })?;
         }
-        sync_dir(&fragment_dir).map_err(|err| {
+        sync_dir(fragment_dir).map_err(|err| {
             FoldError::single(format!(
                 "{FRAGMENT_DIR}: cannot durably restore fragments: {err}"
             ))
@@ -1030,7 +1030,7 @@ fn apply_fold_hooked(
     // Helper: on a real I/O error, recover (rolling the just-started
     // transaction back) and surface the original reason.
     let prepare = || -> Result<(), FoldError> {
-        fs::create_dir(&txn).map_err(|err| {
+        fs::create_dir(txn).map_err(|err| {
             FoldError::single(format!(
                 "{TXN_DIR}: cannot create transaction directory: {err}"
             ))

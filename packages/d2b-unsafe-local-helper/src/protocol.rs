@@ -182,7 +182,7 @@ impl<M: UserScopeManager> HelperClient<M> {
                         .spawn(move || {
                             let request_id = request.request_id;
                             let operation_id = request.operation_id.clone();
-                            let response = match runtime.launch(request) {
+                            let response = match runtime.launch(*request) {
                                 Ok(result) => UnsafeLocalHelperToDaemon::Operation(result),
                                 Err(error) => {
                                     eprintln!("unsafe-local launch failed: {error:?}");

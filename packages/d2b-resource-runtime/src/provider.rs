@@ -233,7 +233,7 @@ impl ProviderDirectory {
         let type_name = ResourceTypeName::new(key.type_name.clone());
         let factory = self
             .lookup(&type_name)
-            .ok_or_else(|| ProviderDirectoryError::UnknownType(type_name))?;
+            .ok_or(ProviderDirectoryError::UnknownType(type_name))?;
         Ok(factory.create(key).await)
     }
 }

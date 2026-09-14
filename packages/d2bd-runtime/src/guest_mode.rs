@@ -711,10 +711,13 @@ impl GuestRuntimeInner {
             self.deployment
                 .revoke_session(generation)
                 .map_err(GuestModeError::Deployment)?;
-            if let Ok(mut permit) = self.active_session_permit.lock() {
-                if let Some(permit) = permit.take() {
-                    permit.release();
-                }
+            if let Some(permit) = self
+                .active_session_permit
+                .lock()
+                .ok()
+                .and_then(|mut p| p.take())
+            {
+                permit.release();
             }
             *active = None;
         }

@@ -414,9 +414,7 @@ mod tests {
     use async_trait::async_trait;
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use d2b_contracts_resource::v3::network::{Ipv4Cidr, NetworkSpec};
-    use d2b_provider_toolkit::{
-        SharedProviderEffectOutcome, SharedProviderEffectPhase, SharedProviderSpecEnvelope,
-    };
+    use d2b_provider_toolkit::SharedProviderSpecEnvelope;
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, WatchId, WatchRegistration,
     };
@@ -429,43 +427,13 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        NETWORK_PROVIDER_REF, NETWORK_TYPE_NAME, NetworkDriverArgs, NetworkDriverEffects,
-        declared_dependency_refs, network_descriptor, network_spec,
+        NETWORK_PROVIDER_REF, NETWORK_TYPE_NAME, NetworkDriverArgs, declared_dependency_refs,
+        network_descriptor, network_spec,
     };
+    use crate::test_support::RecordingEffects;
 
     /// Ordered log the fixture writes, so ordering is one assertion.
     type Log = Arc<parking_lot::Mutex<Vec<String>>>;
-
-    #[derive(Default)]
-    struct RecordingEffects {
-        reconciled: parking_lot::Mutex<usize>,
-        finalized: parking_lot::Mutex<usize>,
-    }
-
-    #[async_trait]
-    impl NetworkDriverEffects for RecordingEffects {
-        async fn reconcile_network(
-            &self,
-            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
-        ) -> Result<SharedProviderEffectOutcome, d2b_provider_toolkit::SharedProviderEffectError>
-        {
-            *self.reconciled.lock() += 1;
-            Ok(SharedProviderEffectOutcome::phase(
-                SharedProviderEffectPhase::Ready,
-            ))
-        }
-
-        async fn finalize(
-            &self,
-            _request: &d2b_provider_toolkit::SharedProviderEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_toolkit::SharedProviderFinalize,
-            d2b_provider_toolkit::SharedProviderEffectError,
-        > {
-            *self.finalized.lock() += 1;
-            Ok(d2b_provider_toolkit::SharedProviderFinalize::Complete)
-        }
-    }
 
     struct RecordingManager {
         log: Log,
@@ -762,6 +730,28 @@ mod tests {
             ResourceTypeName::new(row.resource_type).as_str(),
             NETWORK_TYPE_NAME
         );
+    }
+
+    /// The shared recording double appends every effect call in order, so the
+    /// plane can assert reconcile-then-finalize ordering through `call_order()`
+    /// while the per-verb counters keep counting.
+    #[tokio::test]
+    async fn recording_effects_records_ordered_calls() {
+        let effects = Arc::new(RecordingEffects::default());
+        let descriptor = descriptor(Arc::clone(&effects));
+        let manager = RecordingManager::new(Arc::new(parking_lot::Mutex::new(Vec::new())));
+        let mut ctx = context(
+            &descriptor,
+            network_spec_value(NETWORK_PROVIDER_REF),
+            manager,
+        );
+        let mut driver = descriptor.factory.create(ctx.key()).await;
+        driver.validate(&mut ctx).await.expect("network row validates");
+        driver.reconcile(&mut ctx).await.expect("network row reconciles");
+        driver.delete(&mut ctx).await.expect("network row finalizes");
+        assert_eq!(effects.call_order(), vec!["reconcile", "finalize"]);
+        assert_eq!(*effects.reconciled.lock(), 1);
+        assert_eq!(*effects.finalized.lock(), 1);
     }
 }
 

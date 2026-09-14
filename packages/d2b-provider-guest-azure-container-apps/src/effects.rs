@@ -1,7 +1,5 @@
 //! Azure Container Apps effect contracts.
 
-#![allow(missing_docs)]
-
 use std::fmt;
 
 use async_trait::async_trait;

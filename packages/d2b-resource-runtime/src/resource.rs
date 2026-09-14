@@ -194,18 +194,21 @@ struct Watcher {
     subscriber: mpsc::UnboundedSender<WatchSatisfied>,
 }
 
+/// One pending timer schedule: the id handed to the caller plus the ractor
+/// timer handle the actor aborts when a newer schedule supersedes it or the
+/// delete path cancels it.
+type PendingRequeue = Option<(
+    RequeueId,
+    ractor::concurrency::JoinHandle<Result<(), ractor::MessagingErr<ResourceMsg>>>,
+)>;
+
 /// Requeue scheduler over ractor timers (R13, spec section 32): one pending
 /// timer per actor, new schedules cancel the previous, cancellation is the
 /// delete path's job, nothing is persisted.
 struct ActorTimers {
     cell: ActorCell,
     next: AtomicU64,
-    pending: Mutex<
-        Option<(
-            RequeueId,
-            ractor::concurrency::JoinHandle<Result<(), ractor::MessagingErr<ResourceMsg>>>,
-        )>,
-    >,
+    pending: Mutex<PendingRequeue>,
 }
 
 impl ActorTimers {
@@ -235,10 +238,10 @@ impl RequeueScheduler for ActorTimers {
 
     fn cancel(&self, id: RequeueId) {
         let mut pending = self.pending.lock();
-        if pending.as_ref().is_some_and(|(scheduled, _)| *scheduled == id) {
-            if let Some((_, handle)) = pending.take() {
-                handle.abort();
-            }
+        if pending.as_ref().is_some_and(|(scheduled, _)| *scheduled == id)
+            && let Some((_, handle)) = pending.take()
+        {
+            handle.abort();
         }
     }
 }
@@ -1272,7 +1275,7 @@ pub(crate) mod test_support {
 
     impl Drop for TestHarness {
         fn drop(&mut self) {
-            let _ = self.client.actor().get_cell().stop(None);
+            self.client.actor().get_cell().stop(None);
         }
     }
 
@@ -1477,10 +1480,10 @@ pub(crate) mod test_support {
         status: crate::resource::ResourceStatus,
     ) {
         for _ in 0..500 {
-            if let Ok(Some(view)) = client.get(key.clone()).await {
-                if view.status.as_ref() == Some(&status) {
-                    return;
-                }
+            if let Ok(Some(view)) = client.get(key.clone()).await
+                && view.status.as_ref() == Some(&status)
+            {
+                return;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }

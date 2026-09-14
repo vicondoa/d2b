@@ -1097,15 +1097,17 @@ where
             );
             return Err(NetworkEffectError::HostMemoryBudgetExceeded);
         }
-        self.effects.validate_policy(&input.spec).await.map_err(|error| {
-            warn!(
-                provider = "network-local",
-                network_uid = input.network_uid.as_str(),
-                error = %error,
-                "reconcile rejected: policy validation failed"
-            );
-            error
-        })?;
+        self.effects
+            .validate_policy(&input.spec)
+            .await
+            .inspect_err(|error| {
+                warn!(
+                    provider = "network-local",
+                    network_uid = input.network_uid.as_str(),
+                    error = %error,
+                    "reconcile rejected: policy validation failed"
+                );
+            })?;
         if !input.admission.matches(
             &input.network_uid,
             input.network_generation,

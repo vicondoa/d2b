@@ -272,9 +272,16 @@ async fn admit(
     SessionDriverHandle,
     tokio::task::JoinHandle<()>,
 ) {
-    admit_inner(
-        registrar, policy, subject, uid, provider, None, true, None,
-    )
+    admit_inner(AdmitRequest {
+        registrar,
+        policy,
+        subject,
+        uid,
+        provider,
+        writer_pause: None,
+        start_echo: true,
+        controller_subject: None,
+    })
     .await
 }
 
@@ -289,9 +296,16 @@ async fn admit_without_echo(
     SessionDriverHandle,
     tokio::task::JoinHandle<()>,
 ) {
-    admit_inner(
-        registrar, policy, subject, uid, provider, None, false, None,
-    )
+    admit_inner(AdmitRequest {
+        registrar,
+        policy,
+        subject,
+        uid,
+        provider,
+        writer_pause: None,
+        start_echo: false,
+        controller_subject: None,
+    })
     .await
 }
 
@@ -307,16 +321,16 @@ async fn admit_with_writer_pause(
     SessionDriverHandle,
     tokio::task::JoinHandle<()>,
 ) {
-    admit_inner(
+    admit_inner(AdmitRequest {
         registrar,
         policy,
         subject,
         uid,
         provider,
         writer_pause,
-        true,
-        None,
-    )
+        start_echo: true,
+        controller_subject: None,
+    })
     .await
 }
 
@@ -332,15 +346,15 @@ async fn admit_controller(
     SessionDriverHandle,
     tokio::task::JoinHandle<()>,
 ) {
-    admit_inner(
+    admit_inner(AdmitRequest {
         registrar,
         policy,
-        provider,
+        subject: provider,
         uid,
         provider,
-        None,
-        true,
-        Some(CommittedControllerProcessSubjectInput {
+        writer_pause: None,
+        start_echo: true,
+        controller_subject: Some(CommittedControllerProcessSubjectInput {
             provider_ref: ResourceRef::parse(provider).unwrap(),
             provider_uid: ResourceUid::parse(uid).unwrap(),
             process_ref: ResourceRef::parse(process_ref).unwrap(),
@@ -349,7 +363,7 @@ async fn admit_controller(
             provider_generation: ResourceGeneration::new(PROVIDER_GENERATION).unwrap(),
             controller_generation: ControllerGeneration::new(CONTROLLER_GENERATION).unwrap(),
         }),
-    )
+    })
     .await
 }
 
@@ -408,20 +422,34 @@ async fn admit_with_verified_peer(
         .unwrap()
 }
 
-async fn admit_inner(
-    registrar: &ZoneRegistrar,
+struct AdmitRequest<'a> {
+    registrar: &'a ZoneRegistrar,
     policy: EndpointPolicy,
-    subject: &str,
-    uid: &str,
-    provider: &str,
+    subject: &'a str,
+    uid: &'a str,
+    provider: &'a str,
     writer_pause: Option<Arc<WriterPause>>,
     start_echo: bool,
     controller_subject: Option<CommittedControllerProcessSubjectInput>,
+}
+
+async fn admit_inner(
+    request: AdmitRequest<'_>,
 ) -> (
     AuthenticatedComponentSession<ComponentSessionAdmission>,
     SessionDriverHandle,
     tokio::task::JoinHandle<()>,
 ) {
+    let AdmitRequest {
+        registrar,
+        policy,
+        subject,
+        uid,
+        provider,
+        writer_pause,
+        start_echo,
+        controller_subject,
+    } = request;
     let descriptor = TransportDescriptor {
         class: policy.transport_binding.transport,
         locality: policy.transport_binding.locality,
@@ -1285,9 +1313,11 @@ fn scoped_bus() -> (
     (bus, registrar, assignments, native, state)
 }
 
+type CommittedMutationLog = Vec<Vec<(ResourceMutationKind, bool)>>;
+
 struct ScopedStore {
     acceptor: MutationSealAcceptor,
-    commits: std::sync::Arc<std::sync::Mutex<Vec<Vec<(ResourceMutationKind, bool)>>>>,
+    commits: std::sync::Arc<std::sync::Mutex<CommittedMutationLog>>,
     lists: std::sync::Arc<std::sync::Mutex<Vec<StoreListRequest>>>,
     watches: std::sync::Arc<std::sync::Mutex<Vec<StoreWatchRequest>>>,
 }
@@ -1578,7 +1608,7 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
                     "Provider/system-core",
                 ),
                 OperationSpec::new(
-                    OperationId::parse(&format!("owner-child-{method}")).unwrap(),
+                    OperationId::parse(format!("owner-child-{method}")).unwrap(),
                     10_000,
                 )
                 .unwrap(),

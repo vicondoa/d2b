@@ -332,6 +332,15 @@ pub fn close_received_fds(fds: &[RawFd]) {
     }
 }
 
+/// Wrap a raw `nix` `Errno` from the fd-transport layer into a typed
+/// internal I/O error carrying the call-site context.
+pub fn io_wrap(context: &'static str) -> impl FnOnce(nix::errno::Errno) -> TypedError {
+    move |err| TypedError::InternalIo {
+        context: context.to_owned(),
+        detail: err.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod broker_fd_tests {
     use super::*;
@@ -372,12 +381,5 @@ mod broker_fd_tests {
             "received request fd must be close-on-exec"
         );
         close_received_fds(&received);
-    }
-}
-
-pub fn io_wrap(context: &'static str) -> impl FnOnce(nix::errno::Errno) -> TypedError {
-    move |err| TypedError::InternalIo {
-        context: context.to_owned(),
-        detail: err.to_string(),
     }
 }

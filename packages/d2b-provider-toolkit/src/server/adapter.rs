@@ -257,9 +257,8 @@ where
         method: BoundedToken,
         payload: CanonicalJsonObject,
     ) -> Result<CanonicalJsonObject, ProviderToolkitError> {
-        let _permit = self.dispatch.acquire().map_err(|e| {
+        let _permit = self.dispatch.acquire().inspect_err(|e| {
             warn!(zone = ?zone, provider = %provider_ref, method = ?method, reason = %e, "dispatch refused: dispatch admission ceiling saturated");
-            e
         })?;
         let result = self.service.dispatch(&method, &payload);
         if let Err(e) = result.as_ref() {
@@ -330,9 +329,8 @@ where
                 warn!(zone = ?route.zone(), "provider session receive failed; closing session");
                 ProviderToolkitError::SessionClosed
             })?;
-            let request = codec.decode_request(&frame).map_err(|e| {
+            let request = codec.decode_request(&frame).inspect_err(|e| {
                 warn!(zone = ?route.zone(), reason = %e, "provider frame decode failed; closing session");
-                e
             })?;
             let response = self.dispatch_for_route(
                 &route,
@@ -343,9 +341,8 @@ where
             )?;
             let encoded = codec
                 .encode_response(request.request_id(), &response)
-                .map_err(|e| {
+                .inspect_err(|e| {
                     warn!(zone = ?route.zone(), reason = %e, "provider response encode failed; closing session");
-                    e
                 })?;
             driver
                 .send_ttrpc_cancellable(encoded, cancellation.clone())

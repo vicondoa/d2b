@@ -67,6 +67,11 @@ pub(crate) fn device_worker_purpose(purpose: &str) -> bool {
 /// the authority on a miss), so the port cannot be a sync closure.
 pub(crate) type SocketPresenceFuture<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
 
+/// Boxed socket-presence probe closure (one producer's socket state).
+pub(crate) type SocketPresenceEffect = Arc<
+    dyn for<'a> Fn(&'a ResourceRef, &'a str) -> SocketPresenceFuture<'a> + Send + Sync,
+>;
+
 /// A boxed async socket effect (ensure or remove).
 #[async_trait::async_trait]
 pub(crate) trait AsyncSocketEffect: Send + Sync {
@@ -77,14 +82,14 @@ pub(crate) trait AsyncSocketEffect: Send + Sync {
 /// effect executors plus the purpose derivations the family port answers
 /// with.
 pub(crate) struct ProductionEndpointDriverEffects {
-    present: Arc<dyn for<'a> Fn(&'a ResourceRef, &'a str) -> SocketPresenceFuture<'a> + Send + Sync>,
+    present: SocketPresenceEffect,
     ensure: Arc<dyn AsyncSocketEffect + Send + Sync>,
     remove: Arc<dyn AsyncSocketEffect + Send + Sync>,
 }
 
 impl ProductionEndpointDriverEffects {
     pub(crate) fn new(
-        present: Arc<dyn for<'a> Fn(&'a ResourceRef, &'a str) -> SocketPresenceFuture<'a> + Send + Sync>,
+        present: SocketPresenceEffect,
         ensure: Arc<dyn AsyncSocketEffect + Send + Sync>,
         remove: Arc<dyn AsyncSocketEffect + Send + Sync>,
     ) -> Self {

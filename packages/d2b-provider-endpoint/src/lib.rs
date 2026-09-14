@@ -20,6 +20,9 @@
 
 mod driver;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 pub use driver::{
     EndpointDriver, EndpointDriverArgs, EndpointDriverEffects, EndpointDriverError,
     EndpointDriverFactory, EndpointDriverStatus, EndpointPurposeVocabulary, EndpointRealization,

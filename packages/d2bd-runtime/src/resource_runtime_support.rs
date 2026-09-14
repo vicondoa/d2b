@@ -584,8 +584,7 @@ pub fn compile_committed_policy_with_subjects(
         let envelope = validated_plane_policy_envelope(resource, zone)?;
         if ROLE_BINDING_SUBJECT_RESOURCE_TYPES
             .contains(&resource.resource_ref.resource_type().as_str())
-        {
-            if subject_evidence
+            && subject_evidence
                 .insert(
                     resource.resource_ref.clone(),
                     (
@@ -594,16 +593,15 @@ pub fn compile_committed_policy_with_subjects(
                     ),
                 )
                 .is_some()
-            {
-                tracing::warn!(
-                    zone = zone.as_str(),
-                    resource = resource.resource_ref.to_canonical_string(),
-                    uid = resource.uid.as_str(),
-                    reason = "duplicate subject resource in the committed policy snapshot",
-                    "committed policy compilation failed",
-                );
-                return Err(ResourceRuntimeError::AuthorizationUnavailable);
-            }
+        {
+            tracing::warn!(
+                zone = zone.as_str(),
+                resource = resource.resource_ref.to_canonical_string(),
+                uid = resource.uid.as_str(),
+                reason = "duplicate subject resource in the committed policy snapshot",
+                "committed policy compilation failed",
+            );
+            return Err(ResourceRuntimeError::AuthorizationUnavailable);
         }
     }
     for resource in resources {

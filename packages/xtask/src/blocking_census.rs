@@ -43,12 +43,18 @@ pub fn parse_deny_list(clippy_toml: &str) -> Vec<DeniedApi> {
     entries
 }
 
+/// One context's lines: `(line_number, trimmed_text)`.
+pub type ContextLines = Vec<(usize, String)>;
+
+/// A source file split into its production and test contexts.
+pub type SplitContext = (ContextLines, ContextLines);
+
 /// Split a source file's lines into production and test contexts.
 ///
 /// A file is test context wholesale when its path lives in a `tests/`,
 /// `integration/`, or `benches/` directory. Otherwise, lines inside a
 /// `#[cfg(test)]` block are test context; everything else is production.
-pub fn split_contexts(raw: &str, path_is_test: bool) -> (Vec<(usize, String)>, Vec<(usize, String)>) {
+pub fn split_contexts(raw: &str, path_is_test: bool) -> SplitContext {
     let mut production = Vec::new();
     let mut test = Vec::new();
     let mut cfg_test_depth: Option<isize> = None;
@@ -77,10 +83,11 @@ pub fn split_contexts(raw: &str, path_is_test: bool) -> (Vec<(usize, String)>, V
             production.push((line_number, trimmed.to_owned()));
         }
 
-        if let Some(depth) = cfg_test_depth {
-            if depth <= 0 && !marker_line_pending {
-                cfg_test_depth = None;
-            }
+        if let Some(depth) = cfg_test_depth
+            && depth <= 0
+            && !marker_line_pending
+        {
+            cfg_test_depth = None;
         }
         marker_line_pending = false;
     }
@@ -90,7 +97,7 @@ pub fn split_contexts(raw: &str, path_is_test: bool) -> (Vec<(usize, String)>, V
 /// Count each denied API's occurrences per context, with the first few
 /// production locations for the report.
 pub fn count_occurrences(
-    files: &[(String, (Vec<(usize, String)>, Vec<(usize, String)>))],
+    files: &[(String, SplitContext)],
     entries: &[DeniedApi],
 ) -> Vec<(usize, usize, usize, Vec<String>)> {
     entries

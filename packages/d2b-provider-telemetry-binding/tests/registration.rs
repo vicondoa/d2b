@@ -34,10 +34,13 @@ async fn descriptor_declares_and_registers_the_binding_type() {
     assert!(!descriptor.exportable, "no binding is an export subject");
     assert!(descriptor.operations.is_empty());
 
-    assert!(
-        TELEMETRY_BINDING_COLLECTOR_CREATION.order < TELEMETRY_BINDING_ENDPOINT_CREATION.order,
-        "an Endpoint is produced by the worker Process the declaration names, so it follows it"
-    );
+    const {
+        assert!(
+            TELEMETRY_BINDING_COLLECTOR_CREATION.order
+                < TELEMETRY_BINDING_ENDPOINT_CREATION.order,
+            "an Endpoint is produced by the worker Process the declaration names, so it follows it"
+        );
+    };
 
     let mut providers = ProviderDirectory::new();
     providers.register_driver(&descriptor).expect("register");

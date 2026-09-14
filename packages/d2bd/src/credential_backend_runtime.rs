@@ -71,7 +71,6 @@ impl BackendOperation {
 
 /// Typed Guest-local backend request passed to the source implementation.
 #[derive(Clone)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct GuestCredentialBackendRequest {
     pub(crate) zone: ZoneId,
     pub(crate) provider_ref: ResourceRef,
@@ -208,7 +207,6 @@ impl GuestCredentialBackendAdapters {
 /// execution context that owns the corresponding Secret Service collection,
 /// identity Endpoint, or IMDS client. Missing sources remain fail-closed.
 pub(crate) struct GuestCredentialBackendSources {
-    #[allow(dead_code)]
     execution_ref: ResourceRef,
     secret_service: Option<Arc<dyn GuestCredentialProviderAdapter>>,
     entra: Option<Arc<dyn GuestCredentialProviderAdapter>>,
@@ -1171,7 +1169,6 @@ impl ProductionGuestCredentialBackendSupervisor {
     }
 
     /// Compose an explicit fail-closed source for negative/degraded tests.
-    #[allow(dead_code)]
     pub(crate) fn fail_closed() -> Arc<Self> {
         Self::new(Arc::new(FailClosedGuestCredentialBackend))
     }
@@ -1193,7 +1190,7 @@ impl GuestCredentialBackendSupervisor for ProductionGuestCredentialBackendSuperv
         let provider_ref = context
             .controller_provider_ref
             .as_ref()
-            .or_else(|| context.owner_ref.as_ref())
+            .or(context.owner_ref.as_ref())
             .filter(|reference| {
                 reference.resource_type().as_str() == "Provider"
                     && matches!(
@@ -1532,10 +1529,12 @@ mod tests {
         let guest_binding = guest_binding();
         let context = ProcessResourceContext::new(
             zone,
-            &process_ref,
-            &process_uid,
-            ResourceGeneration::new(1).expect("resource generation"),
-            ZoneRevision::new(1),
+            (
+                &process_ref,
+                &process_uid,
+                ResourceGeneration::new(1).expect("resource generation"),
+                ZoneRevision::new(1)
+            ),
             &process_provider,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
@@ -1679,10 +1678,12 @@ mod tests {
         let guest_binding = guest_binding();
         let context = ProcessResourceContext::new(
             zone,
-            &process_ref,
-            &process_uid,
-            ResourceGeneration::new(1).expect("resource generation"),
-            ZoneRevision::new(1),
+            (
+                &process_ref,
+                &process_uid,
+                ResourceGeneration::new(1).expect("resource generation"),
+                ZoneRevision::new(1)
+            ),
             &process_provider,
             ControllerGeneration::new(1).expect("controller generation"),
             None,

@@ -989,17 +989,16 @@ impl RealCloudHypervisorResourceSession {
             .process
             .lock()
             .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
-        if let Some(mut child) = process.take() {
-            if child
+        if let Some(mut child) = process.take()
+            && child
                 .try_wait()
                 .map_err(|_| CloudHypervisorResourceApiError::Transport)?
                 .is_none()
-            {
-                child
-                    .kill()
-                    .and_then(|_| child.wait())
-                    .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
-            }
+        {
+            child
+                .kill()
+                .and_then(|_| child.wait())
+                .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
         }
         fs::write(self.root.join("process.stopped"), b"stopped")
             .map_err(|_| CloudHypervisorResourceApiError::Transport)
@@ -1056,12 +1055,12 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                 Ok(CloudHypervisorResourceResponse::Registered)
             }
             CloudHypervisorResourceRequest::GetGuest { .. } => {
-                Ok(CloudHypervisorResourceResponse::Guest(
+                Ok(CloudHypervisorResourceResponse::Guest(Box::new(
                     self.guest
                         .lock()
                         .map_err(|_| CloudHypervisorResourceApiError::Transport)?
                         .clone(),
-                ))
+                )))
             }
             CloudHypervisorResourceRequest::RelistOwnedChildren { expected_refs, .. } => {
                 let ready = *self

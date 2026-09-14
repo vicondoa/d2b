@@ -18,6 +18,12 @@
 
 #![deny(missing_docs)]
 
+#[cfg(any(test, feature = "test-support"))]
+/// Recording test doubles shared with downstream crates' unit tests, gated
+/// behind the `test-support` Cargo feature so production consumers never
+/// pull them in.
+pub mod test_support;
+
 mod driver;
 mod row_readers;
 

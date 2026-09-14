@@ -35,6 +35,7 @@ use schemars::schema::RootSchema;
 
 mod bazel_evidence;
 mod changelog;
+mod deadcode;
 mod delivery;
 mod gen_broker_operations;
 mod gen_layer_catalogs;
@@ -204,6 +205,7 @@ fn main() -> std::process::ExitCode {
             run_blocking_census(rest)
         }
         [command] if command == "check-provider-layout" => run_provider_layout(),
+        [command] if command == "deadcode-check" => deadcode::run(),
         _ => {
             eprintln!(
                 "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-layer-catalogs [--check|--write]|gen-error-codes|gen-provider-packaging|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout [--fix]|blocking-census|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
@@ -220,7 +222,7 @@ fn run_blocking_census(args: &[String]) -> std::process::ExitCode {
     }
     match repo_root()
         .map_err(|error| error.to_string())
-        .and_then(|root| blocking_census::run(root))
+        .and_then(blocking_census::run)
     {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(message) => {

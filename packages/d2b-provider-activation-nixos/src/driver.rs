@@ -88,7 +88,7 @@ pub const RUNNER_PROVIDER_REF: &str = "Provider/system-minijail";
 /// The runner is the owned `EphemeralProcess` the driver mints for the
 /// members this declaration licenses, and the declaration is the family's own
 /// - it travels on the type's [`DriverDescriptor`], so a creation the driver
-/// never declared cannot be reached.
+///   never declared cannot be reached.
 pub const ACTIVATION_RUNNER_CREATION: ChildCreation = ChildCreation {
     child: WellKnownType::EPHEMERAL_PROCESS,
     provider_ref: RUNNER_PROVIDER_REF,
@@ -901,7 +901,7 @@ mod tests {
     use std::sync::Arc;
 
     use d2b_contracts_broker::host_generation::{
-        HostGenerationHandoffIntent, SourceGenerationCompatibilityFloorV1, target_fingerprint,
+        SourceGenerationCompatibilityFloorV1, target_fingerprint,
     };
     use d2b_contracts_resource::v3::{
         ActivationDetail, ActivationMode, ActivationOutcomeCode, ArtifactId, NixosGenerationSpec,
@@ -926,43 +926,9 @@ mod tests {
         RunnerRequest, activation_runner_ref, activation_spec_decoder, ordinal_from_name,
     };
     use crate::ActivationVerificationError;
+    use crate::test_support::FakeActivationEffects;
 
     // -- fakes ---------------------------------------------------------------
-
-    /// Scripted host-handoff port: records each dispatch and returns the
-    /// next scripted result.
-    struct FakeActivationEffects {
-        dispatches: parking_lot::Mutex<Vec<(ResourceRef, HostGenerationHandoffIntent)>>,
-        results: parking_lot::Mutex<Vec<HostHandoffResult>>,
-    }
-
-    impl FakeActivationEffects {
-        fn new(result: HostHandoffResult) -> Arc<Self> {
-            Arc::new(Self {
-                dispatches: parking_lot::Mutex::new(Vec::new()),
-                results: parking_lot::Mutex::new(vec![result]),
-            })
-        }
-
-        fn dispatches(&self) -> Vec<(ResourceRef, HostGenerationHandoffIntent)> {
-            self.dispatches.lock().clone()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl super::ActivationDriverEffects for FakeActivationEffects {
-        async fn apply_host_generation_handoff(
-            &self,
-            target: ResourceRef,
-            intent: HostGenerationHandoffIntent,
-        ) -> HostHandoffResult {
-            self.dispatches.lock().push((target, intent));
-            self.results
-                .lock()
-                .pop()
-                .unwrap_or(HostHandoffResult::Incomplete)
-        }
-    }
 
     /// Allowlist verifier: the production artifact/application adapter stand-in.
     struct AllowVerifier;

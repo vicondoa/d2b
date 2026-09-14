@@ -1144,13 +1144,13 @@ where
     C: ScopedCredentialClient + 'static,
 {
     fn drop(&mut self) {
-        if let Some(lease) = self.lease.take() {
-            if spawn_bounded_revoke(Arc::clone(&self.credentials), lease).is_none() {
-                tracing::warn!(
-                    provider = "transport-azure-relay",
-                    "credential lease best-effort revocation dropped: no tokio runtime on guard drop"
-                );
-            }
+        if let Some(lease) = self.lease.take()
+            && spawn_bounded_revoke(Arc::clone(&self.credentials), lease).is_none()
+        {
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                "credential lease best-effort revocation dropped: no tokio runtime on guard drop"
+            );
         }
     }
 }
@@ -1435,14 +1435,14 @@ where
                 return Err(error);
             }
         };
-        return RelayConnection::from_committed_socket(
+        RelayConnection::from_committed_socket(
             socket,
             256 * 1024,
             session_permit,
             binding,
             Arc::clone(&self.generation_fence),
             generation_lease,
-        );
+        )
     }
 
     /// Return the gateway execution boundary.

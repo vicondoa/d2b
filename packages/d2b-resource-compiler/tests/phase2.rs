@@ -735,25 +735,22 @@ fn an_undeclared_in_process_bootstrap_component_is_refused() {
     );
 }
 
+/// The default launchable fixture tuple threaded through nix-build failure
+/// scenarios (`fixture_for_artifact` output) and mutated by each vector.
+type NixFailureInput = (
+    ArtifactCatalogEntry,
+    MemoryDir,
+    StaticPublisherKeys,
+    Vec<u8>,
+);
+
 /// One nix-build failure vector: rebuild the default launchable fixture,
 /// mutate exactly the scenario's inputs, and pin the resulting diagnostic
 /// code.
 struct NixFailureVector {
     name: &'static str,
     expected_code: &'static str,
-    mutate: fn(
-        (
-            ArtifactCatalogEntry,
-            MemoryDir,
-            StaticPublisherKeys,
-            Vec<u8>,
-        ),
-    ) -> (
-        ArtifactCatalogEntry,
-        MemoryDir,
-        StaticPublisherKeys,
-        Vec<u8>,
-    ),
+    mutate: fn(NixFailureInput) -> NixFailureInput,
 }
 
 #[test]

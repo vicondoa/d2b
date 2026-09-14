@@ -322,7 +322,6 @@ impl CloudHypervisorResourceApi for FakeApi {
             .lock()
             .unwrap()
             .process_observation
-            .clone()
             .unwrap_or(ProcessAdoptionStatus::Current))
     }
 

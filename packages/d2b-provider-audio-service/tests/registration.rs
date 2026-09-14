@@ -84,10 +84,7 @@ fn the_declaration_serves_the_audio_service_row() {
     assert!(descriptor.reads.is_empty(), "a service reads nothing");
     assert!(descriptor.operations.is_empty() && descriptor.creations.is_empty());
     assert_eq!(AudioService::RESOURCE_TYPE, AUDIO_SERVICE_TYPE);
-    assert!(
-        AudioService::SPEC_PROVIDER_SELECTOR,
-        "the row must select Provider/audio-pipewire"
-    );
+    const { assert!(AudioService::SPEC_PROVIDER_SELECTOR, "the row must select Provider/audio-pipewire"); };
     assert_eq!(AudioService::PROVIDER_REF, "Provider/audio-pipewire");
 }
 

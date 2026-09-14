@@ -54,10 +54,10 @@ impl PickerProcess for Child {
     }
 
     fn terminate(&mut self) {
-        if let Some(pid) = rustix::process::Pid::from_raw(self.id() as i32) {
-            if let Err(e) = rustix::process::kill_process(pid, rustix::process::Signal::Term) {
-                log::debug!("d2b-clipd: picker terminate signal failed for pid {}; relying on kill/reap path: {e}", self.id());
-            }
+        if let Some(pid) = rustix::process::Pid::from_raw(self.id() as i32)
+            && let Err(e) = rustix::process::kill_process(pid, rustix::process::Signal::Term)
+        {
+            log::debug!("d2b-clipd: picker terminate signal failed for pid {}; relying on kill/reap path: {e}", self.id());
         }
     }
 

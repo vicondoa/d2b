@@ -498,7 +498,7 @@ impl GuestTargetRuntime {
         self: &Arc<Self>,
         session_generation: u64,
     ) -> Result<Arc<dyn GuestTargetControl>, GuestTargetError> {
-        SessionBoundGuestTargetControl::new(Arc::clone(self), session_generation)
+        SessionBoundGuestTargetControl::mint(Arc::clone(self), session_generation)
     }
 
     fn require_generation(&self, session_generation: u64) -> Result<(), GuestTargetError> {
@@ -636,7 +636,11 @@ pub struct SessionBoundGuestTargetControl {
 
 impl SessionBoundGuestTargetControl {
     /// Mint a capability for one authenticated session generation.
-    pub fn new(
+    ///
+    /// Not `new`: this factory returns an `Arc<dyn GuestTargetControl>`
+    /// trait object after validating the generation, not a plain `Self`, so
+    /// clippy's `new-ret-no-self` name contract is not met by `new`.
+    pub fn mint(
         runtime: Arc<GuestTargetRuntime>,
         session_generation: u64,
     ) -> Result<Arc<dyn GuestTargetControl>, GuestTargetError> {

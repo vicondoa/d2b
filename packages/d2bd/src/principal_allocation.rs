@@ -15,15 +15,19 @@
 //! committed allocation that table already overlaps, which is what
 //! `d2bd principal-allocation` runs.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::BTreeSet;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::Map;
 
 /// First uid/gid the allocator hands to an unseen principal name.
-#[allow(dead_code)]
+#[cfg(test)]
 pub const PRINCIPAL_RANGE_START: u32 = 900;
 /// Last uid/gid the allocator hands to an unseen principal name.
-#[allow(dead_code)]
+#[cfg(test)]
 pub const PRINCIPAL_RANGE_END: u32 = 999;
 /// Largest id the committed document may carry.
 pub const MAX_PRINCIPAL_ID: u32 = 0x00FF_FFFF;
@@ -50,13 +54,13 @@ impl PrincipalId {
     ///
     /// Read by the packaging generator and the launch path; the daemon's seed
     /// only checks that an allocated entry exists.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub const fn uid(&self) -> u32 {
         self.uid
     }
 
     /// The gid the principal executes as.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub const fn gid(&self) -> u32 {
         self.gid
     }
@@ -128,7 +132,7 @@ impl PrincipalAllocation {
     /// The packaging generator persists the document; the daemon only loads
     /// it, so this renderer has no production caller in the daemon crate and
     /// is exercised by this module's tests.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn to_json(&self) -> String {
         let principals: Map<String, Value> = self
             .principals
@@ -166,7 +170,7 @@ impl PrincipalAllocation {
     /// the next free id in the reserved range. A candidate the host account
     /// table already owns (`taken`) is skipped, and exhausting the range is a
     /// refusal, never a silent reuse.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn allocate_names(
         &mut self,
         names: impl IntoIterator<Item = String>,

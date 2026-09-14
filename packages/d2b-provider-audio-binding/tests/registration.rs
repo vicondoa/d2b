@@ -123,7 +123,7 @@ fn the_declaration_serves_the_binding_row() {
         &[WellKnownType::AUDIO_SERVICE, WellKnownType::GUEST]
     );
     assert!(descriptor.operations.is_empty() && descriptor.creations.is_empty());
-    assert!(AudioBinding::SPEC_PROVIDER_SELECTOR);
+    const { assert!(AudioBinding::SPEC_PROVIDER_SELECTOR); };
     assert_eq!(AudioBinding::RESOURCE_TYPE, AUDIO_BINDING_TYPE);
 }
 

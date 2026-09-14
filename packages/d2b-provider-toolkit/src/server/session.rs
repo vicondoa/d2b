@@ -138,9 +138,8 @@ where
             }
         };
         let route = session.route_binding();
-        let request = codec.decode_request(&frame, &route).map_err(|e| {
+        let request = codec.decode_request(&frame, &route).inspect_err(|e| {
             warn!(zone = ?route.zone(), reason = %e, "provider request decode failed; closing provider session");
-            e
         })?;
         validate_authenticated_provider_request(
             &route,
@@ -166,15 +165,13 @@ where
             })?;
         let response_payload = adapter
             .dispatch(zone.clone(), provider_ref.clone(), method.clone(), payload)
-            .map_err(|e| {
+            .inspect_err(|e| {
                 warn!(zone = ?zone, provider = %provider_ref, method = ?method, reason = %e, "provider dispatch failed; closing provider session");
-                e
             })?;
         let encoded = codec
             .encode_response(&request_id, &response_payload)
-            .map_err(|e| {
+            .inspect_err(|e| {
                 warn!(zone = ?zone, provider = %provider_ref, method = ?method, reason = %e, "provider response encode failed; closing provider session");
-                e
             })?;
         session
             .send_authorized_ttrpc(response, encoded, now_tick())

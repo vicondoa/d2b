@@ -30,9 +30,10 @@ pub enum TelemetryServiceRole {
 }
 
 /// Lifecycle phase of a telemetry Service.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TelemetryServicePhase {
     /// The Service is waiting for an ingest route.
+    #[default]
     Pending,
     /// The Service has a usable ingest route.
     Ready,
@@ -80,12 +81,6 @@ impl std::error::Error for TelemetryServiceError {}
 #[derive(Debug, Default)]
 pub struct TelemetryServiceController {
     phase: TelemetryServicePhase,
-}
-
-impl Default for TelemetryServicePhase {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 impl TelemetryServiceController {
@@ -335,6 +330,21 @@ impl std::error::Error for TelemetryControllerError {}
 ///
 /// The controller owns only bounded ingress policy state and child intent
 /// declarations. Process launch, Endpoint publication, and cleanup remain
+/// in the telemetry DriverEffects implementation.
+#[derive(Debug, Clone, Copy)]
+pub struct TelemetryBindingFrame<'a> {
+    /// Origin-asserted ingress transport.
+    pub ingress: Ingress,
+    /// Non-zero transport connection identifier.
+    pub connection_id: u64,
+    /// The bounded metric frame body.
+    pub frame: &'a MetricFrame,
+    /// Identity canaries bounding descriptor and label admission.
+    pub canaries: &'a IdentityCanaries,
+    /// Whether endpoint capacity remains available.
+    pub capacity_available: bool,
+}
+
 /// Core-managed resource effects.
 pub struct TelemetryBindingController {
     gate: IngressPolicyGate,
@@ -421,11 +431,7 @@ impl TelemetryBindingController {
         binding_ref: &ResourceRef,
         service_ref: &ResourceRef,
         target_ref: &ResourceRef,
-        ingress: Ingress,
-        connection_id: u64,
-        frame: &MetricFrame,
-        canaries: &IdentityCanaries,
-        capacity_available: bool,
+        frame_input: TelemetryBindingFrame<'_>,
     ) -> Result<TelemetryReconcileResult, TelemetryControllerError> {
         if self.phase == TelemetryBindingPhase::Deleted {
             debug!(
@@ -434,7 +440,7 @@ impl TelemetryBindingController {
             );
             return Err(TelemetryControllerError::Finalized);
         }
-        if connection_id == 0 {
+        if frame_input.connection_id == 0 {
             warn!(
                 provider = "observability-otel",
                 binding = %binding_ref.to_canonical_string(),
@@ -444,11 +450,11 @@ impl TelemetryBindingController {
         }
         let children = Self::child_resources(binding_ref, service_ref, target_ref)?;
         let (outcome, error_class) = self.gate.admit_for_connection(
-            ingress,
-            connection_id,
-            frame,
-            canaries,
-            capacity_available,
+            frame_input.ingress,
+            frame_input.connection_id,
+            frame_input.frame,
+            frame_input.canaries,
+            frame_input.capacity_available,
         );
         self.phase = match outcome {
             IngressOutcome::Accepted => TelemetryBindingPhase::Ready,

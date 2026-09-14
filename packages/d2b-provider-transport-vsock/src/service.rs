@@ -287,7 +287,7 @@ where
             );
             return Err(ServiceError::SessionIdentityMismatch);
         }
-        request.validate().map_err(|error| {
+        request.validate().inspect_err(|error| {
             tracing::warn!(
                 provider = "transport-vsock",
                 endpoint = %request.endpoint_id,
@@ -295,7 +295,6 @@ where
                 reason = ?error,
                 "transport open rejected: request validation failed"
             );
-            error
         })?;
         if request
             .session_generation
@@ -606,15 +605,14 @@ where
         if let Some(entry) = active.get(&request.transport_handle) {
             let (sender, receiver) = mpsc::channel(16);
             for event in entry.history.lock().await.iter().copied() {
-                if request.include_bytes
-                    || !matches!(event, TransportEvent::BytesTransferred { .. })
+                if (request.include_bytes
+                    || !matches!(event, TransportEvent::BytesTransferred { .. }))
+                    && sender.try_send(event).is_err()
                 {
-                    if sender.try_send(event).is_err() {
-                        tracing::debug!(
-                            provider = "transport-vsock",
-                            "transport event history dropped for a full observer channel"
-                        );
-                    }
+                    tracing::debug!(
+                        provider = "transport-vsock",
+                        "transport event history dropped for a full observer channel"
+                    );
                 }
             }
             entry

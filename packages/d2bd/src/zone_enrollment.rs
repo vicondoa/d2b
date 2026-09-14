@@ -74,6 +74,16 @@ pub(crate) const ZONE_ENROLLMENT_PORT: u32 = 14_320;
 /// guest-to-host vsock relays are.
 const ZONE_ENROLLMENT_SOCKET_MODE: u32 = 0o660;
 
+/// The host-side socket placement of one guest's enrollment endpoint: the
+/// vsock relay path and its mode owner, composed from committed facts.
+#[derive(Clone)]
+pub(crate) struct EnrolledSocketLayout {
+    /// Host-side path of the vsock relay the hypervisor bridges.
+    pub(crate) vsock_host_socket: PathBuf,
+    /// Socket mode owner (`uid`, `gid`).
+    pub(crate) socket_owner: (u32, u32),
+}
+
 /// One guest's enrollment endpoint, composed from committed declarations.
 #[derive(Clone)]
 pub(crate) struct GuestEnrollmentEndpoint {
@@ -93,10 +103,9 @@ impl GuestEnrollmentEndpoint {
         link_uid: ResourceUid,
         edge: ZoneTreeEdge,
         controller_generation: ZoneLinkControllerGeneration,
-        vsock_host_socket: PathBuf,
+        socket: EnrolledSocketLayout,
         identity: &GuestIdentity,
         guest_public: [u8; 32],
-        socket_owner: (u32, u32),
     ) -> Result<Self, ZoneEnrollmentRefusal> {
         let profile = identity.endpoint_policy();
         let expectation = ZoneEnrollmentExpectation::for_enrolled_guest_session(
@@ -112,9 +121,9 @@ impl GuestEnrollmentEndpoint {
             profile.limits,
         )?;
         Ok(Self {
-            vsock_host_socket,
+            vsock_host_socket: socket.vsock_host_socket,
             expectation,
-            socket_owner,
+            socket_owner: socket.socket_owner,
         })
     }
 
@@ -465,10 +474,12 @@ mod tests {
             ResourceUid::parse("33333333-3333-4333-8333-333333333333").expect("a valid UID"),
             edge(),
             ZoneLinkControllerGeneration::parse("controller-1").expect("a valid generation"),
-            PathBuf::from("/var/lib/d2b/vms/sk-vm/vsock.sock"),
+            EnrolledSocketLayout {
+                vsock_host_socket: PathBuf::from("/var/lib/d2b/vms/sk-vm/vsock.sock"),
+                socket_owner: (1000, 1000),
+            },
             &identity(),
             [0x33; 32],
-            (1000, 1000),
         )
         .expect("the contract's enrolled guest session profile")
     }
@@ -587,10 +598,12 @@ mod tests {
             ResourceUid::parse("33333333-3333-4333-8333-333333333333").expect("a valid UID"),
             edge(),
             ZoneLinkControllerGeneration::parse("controller-1").expect("a valid generation"),
-            root.join("vsock.sock"),
+            EnrolledSocketLayout {
+                vsock_host_socket: root.join("vsock.sock"),
+                socket_owner: state_root_owner(&root),
+            },
             &identity(),
             [0x33; 32],
-            state_root_owner(&root),
         )
         .expect("the contract's enrolled guest session profile");
         assert_eq!(

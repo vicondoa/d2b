@@ -12,7 +12,6 @@
 //!   * `guest list --json` and `guest status <name> --json` with the supplied
 //!     fixture artifacts and no Zone runtime fail closed with the strict v3
 //!     `zone-unavailable` envelope rather than a legacy `pendingRestart` field;
-//!  //!     stderr, and the v3 `zone-unavailable` envelope on stdout;
 //!   * `audit --json` run under a PTY (a real TTY): stays JSON (not the human
 //!     stderr form) and returns the daemon-down envelope
 //!     `kind == "d2b audit requires d2bd"`, exit 1.

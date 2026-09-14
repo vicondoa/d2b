@@ -909,14 +909,14 @@ mod tests {
     fn an_unreachable_zone_aborts_rather_than_degrading_every_type() {
         // A zone that is not answering is not 33 degraded type reads; the
         // report must refuse instead of printing an empty zone.
-        assert!(aborts_the_report(&failure_class(
+        assert!(aborts_the_report(failure_class(
             "zone-unavailable: Zone runtime is unavailable"
         )));
-        assert!(aborts_the_report(&failure_class(
+        assert!(aborts_the_report(failure_class(
             "deadline-exceeded: request deadline expired"
         )));
         // A per-type answer stays a per-type outcome.
-        assert!(!aborts_the_report(&failure_class(
+        assert!(!aborts_the_report(failure_class(
             "capability-unavailable: resource types are not served"
         )));
         // An unprefixed message falls back to the per-type class rather than

@@ -1620,6 +1620,22 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// Map an execution-side op error onto the establish-side error surface so a
+/// single typed error can carry either phase of the component session.
+pub fn op_to_establish(error: ExecOpError) -> ExecEstablishError {
+    match error {
+        ExecOpError::Transport => ExecEstablishError::Transport,
+        ExecOpError::Auth => ExecEstablishError::Auth,
+        ExecOpError::StaleSession => ExecEstablishError::Auth,
+        ExecOpError::Protocol => ExecEstablishError::Protocol,
+        ExecOpError::Timeout => ExecEstablishError::Timeout,
+        ExecOpError::OldGeneration => ExecEstablishError::OldGeneration,
+        ExecOpError::Capability => ExecEstablishError::Capability,
+        ExecOpError::DetachedUnavailable => ExecEstablishError::Capability,
+        ExecOpError::Guest(inner) => ExecEstablishError::Guest(inner),
+    }
+}
+
 // ===========================================================================
 // Tests (hermetic matrices: session-table adversarial, worker lifecycle
 // + teardown, no-head-of-line concurrency, backpressure/offset/idempotency,
@@ -3668,19 +3684,5 @@ mod tests {
 
         drop(control_tx);
         worker.join().expect("worker joins");
-    }
-}
-
-pub fn op_to_establish(error: ExecOpError) -> ExecEstablishError {
-    match error {
-        ExecOpError::Transport => ExecEstablishError::Transport,
-        ExecOpError::Auth => ExecEstablishError::Auth,
-        ExecOpError::StaleSession => ExecEstablishError::Auth,
-        ExecOpError::Protocol => ExecEstablishError::Protocol,
-        ExecOpError::Timeout => ExecEstablishError::Timeout,
-        ExecOpError::OldGeneration => ExecEstablishError::OldGeneration,
-        ExecOpError::Capability => ExecEstablishError::Capability,
-        ExecOpError::DetachedUnavailable => ExecEstablishError::Capability,
-        ExecOpError::Guest(inner) => ExecEstablishError::Guest(inner),
     }
 }

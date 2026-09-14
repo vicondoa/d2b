@@ -19,12 +19,16 @@ use d2b_contracts_provider::v3::credential::{
     CREDENTIAL_SERVICE_NAME, CredentialOutcomeCode, CredentialRequest, MetadataResponse,
     decode_outer, encode_outer,
 };
+#[cfg(test)]
 use d2b_contracts_resource::resource_proto as wire;
-use d2b_contracts_resource::v3::{ResourceRef, ZoneId, identity::ReconnectGeneration};
+use d2b_contracts_resource::v3::{ResourceRef, identity::ReconnectGeneration};
+#[cfg(test)]
+use d2b_contracts_resource::v3::ZoneId;
 use d2b_provider_credential::{
     CREDENTIAL_TYPE_NAME, CredentialResourceRuntimeError, CredentialRevocationOutcome,
     CredentialRevocationRequest, CredentialSession,
 };
+#[cfg(test)]
 use d2b_provider_transport_azure_relay::{
     RelayCredentialError, RelayCredentialLease, ScopedCredentialClient, ScopedCredentialRequest,
 };
@@ -187,17 +191,17 @@ impl CredentialSession for ComponentCredentialSession {
     }
 }
 
+/// Registered Credential sessions keyed by provider ref, each carrying the
+/// reconnect generation recorded at registration time. Newer generations
+/// replace older ones; observed staleness is rejected.
+type CredentialSessionMap = std::sync::Mutex<
+    std::collections::BTreeMap<ResourceRef, (ReconnectGeneration, Arc<dyn CredentialSession>)>,
+>;
+
 /// Registry populated by authenticated ProviderSupervisor session handoffs.
 #[derive(Clone, Default)]
 pub(crate) struct CredentialSessionRegistry {
-    sessions: Arc<
-        std::sync::Mutex<
-            std::collections::BTreeMap<
-                ResourceRef,
-                (ReconnectGeneration, Arc<dyn CredentialSession>),
-            >,
-        >,
-    >,
+    sessions: Arc<CredentialSessionMap>,
 }
 
 impl CredentialSessionRegistry {
@@ -229,13 +233,12 @@ impl CredentialSessionRegistry {
         provider_ref: &ResourceRef,
         session_generation: ReconnectGeneration,
     ) {
-        if let Ok(mut sessions) = self.sessions.lock() {
-            if sessions
+        if let Ok(mut sessions) = self.sessions.lock()
+            && sessions
                 .get(provider_ref)
                 .is_some_and(|(generation, _)| *generation == session_generation)
-            {
-                sessions.remove(provider_ref);
-            }
+        {
+            sessions.remove(provider_ref);
         }
     }
 
@@ -249,14 +252,7 @@ impl CredentialSessionRegistry {
 
 struct RegistryCredentialSession {
     provider_ref: ResourceRef,
-    sessions: Arc<
-        std::sync::Mutex<
-            std::collections::BTreeMap<
-                ResourceRef,
-                (ReconnectGeneration, Arc<dyn CredentialSession>),
-            >,
-        >,
-    >,
+    sessions: Arc<CredentialSessionMap>,
 }
 
 #[async_trait]
@@ -296,6 +292,7 @@ impl CredentialSession for RegistryCredentialSession {
 /// The delegate owns the sensitive delivery channel. This adapter only verifies
 /// the current Credential row and exact Guest scope before forwarding the
 /// already-authorized request.
+#[cfg(test)]
 pub(crate) struct SameZoneScopedCredentialClient {
     zone: ZoneId,
     route: d2b_session::AuthenticatedSessionRouteBinding,
@@ -304,66 +301,21 @@ pub(crate) struct SameZoneScopedCredentialClient {
     delegate: Arc<dyn ScopedCredentialClient>,
 }
 
+#[cfg(test)]
 #[async_trait]
 trait CredentialResourceReader: Send + Sync {
     async fn get(&self, request: wire::GetRequest) -> wire::GetResponse;
 }
 
-struct ComponentSessionCredentialResourceReader {
-    client: d2b_resource_api::generated::d2b_resource_v3_ttrpc::ResourceServiceClient,
-}
-
-#[async_trait]
-impl CredentialResourceReader for ComponentSessionCredentialResourceReader {
-    async fn get(&self, request: wire::GetRequest) -> wire::GetResponse {
-        self.client
-            .get(ttrpc::context::Context::default(), &request)
-            .await
-            .unwrap_or_else(|_| {
-                let mut response = wire::GetResponse::new();
-                response.error = protobuf::MessageField::some(wire::ResourceError {
-                    kind: protobuf::EnumOrUnknown::new(
-                        wire::ResourceErrorKind::RESOURCE_ERROR_KIND_INTERNAL_INTEGRITY_FAILURE,
-                    ),
-                    ..wire::ResourceError::new()
-                });
-                response
-            })
-    }
-}
-
+#[cfg(test)]
 impl core::fmt::Debug for SameZoneScopedCredentialClient {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("SameZoneScopedCredentialClient(<redacted>)")
     }
 }
 
+#[cfg(test)]
 impl SameZoneScopedCredentialClient {
-    pub(crate) fn with_component_session(
-        zone: ZoneId,
-        session: &d2bd_runtime::guest_component_session::GuestComponentSessionClient,
-        delegate: Arc<dyn ScopedCredentialClient>,
-    ) -> Result<Self, RelayCredentialError> {
-        let route = session.route_binding();
-        if session.identity().zone() != &zone
-            || session.generation() == 0
-            || !route.liveness().is_live()
-            || session.identity().validate_route(&route).is_err()
-            || route.context().execution_ref() != Some(session.identity().guest_ref())
-        {
-            return Err(RelayCredentialError::InvalidScope);
-        }
-        Ok(Self::with_resource_reader(
-            zone,
-            route,
-            session.identity().guest_ref().clone(),
-            Arc::new(ComponentSessionCredentialResourceReader {
-                client: session.resource_service_client(),
-            }),
-            delegate,
-        ))
-    }
-
     fn with_resource_reader(
         zone: ZoneId,
         route: d2b_session::AuthenticatedSessionRouteBinding,
@@ -396,6 +348,7 @@ impl SameZoneScopedCredentialClient {
 }
 
 #[async_trait]
+#[cfg(test)]
 impl ScopedCredentialClient for SameZoneScopedCredentialClient {
     async fn read_credential(
         &self,
@@ -472,6 +425,7 @@ impl ScopedCredentialClient for SameZoneScopedCredentialClient {
     }
 }
 
+#[cfg(test)]
 fn scoped_identity(request: &ScopedCredentialRequest) -> wire::ResourceIdentity {
     let mut identity = wire::ResourceIdentity::new();
     identity.zone = request.zone().as_str().to_owned();

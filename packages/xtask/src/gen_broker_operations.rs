@@ -630,11 +630,12 @@ fn generate_triage(catalog: &Catalog) -> String {
 /// Write every view of the committed broker operation rows.
 pub fn gen_broker_operations(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let catalog = parse(repo_root)?;
-    let mut written = Vec::new();
-    written.push(write(repo_root, PROFILES_OUT, generate_profiles(&catalog))?);
-    written.push(write(repo_root, W3_OUT, generate_w3(&catalog))?);
-    written.push(write(repo_root, AUTHZ_OUT, generate_authz(&catalog))?);
-    written.push(write(repo_root, CATALOG_OUT, generate_catalog(&catalog))?);
-    written.push(write(repo_root, TRIAGE_OUT, generate_triage(&catalog))?);
+    let written = vec![
+        write(repo_root, PROFILES_OUT, generate_profiles(&catalog))?,
+        write(repo_root, W3_OUT, generate_w3(&catalog))?,
+        write(repo_root, AUTHZ_OUT, generate_authz(&catalog))?,
+        write(repo_root, CATALOG_OUT, generate_catalog(&catalog))?,
+        write(repo_root, TRIAGE_OUT, generate_triage(&catalog))?,
+    ];
     Ok(written)
 }

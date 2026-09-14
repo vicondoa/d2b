@@ -353,7 +353,7 @@ pub fn device_worker_family(template: &str) -> Option<DeviceWorkerFamily> {
 
 /// Map the new store's 16-byte deterministic uid onto the contracts crate's
 /// UUIDv4-shaped `ResourceUid` (version nibble 4, RFC 9562 variant).
-pub fn resource_uid_from_bytes(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
+pub fn resource_uid_from_bytes(bytes: &[u8; 16]) -> Option<ResourceUid> {
     let mut bytes = *bytes;
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -362,26 +362,12 @@ pub fn resource_uid_from_bytes(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
     );
-    ResourceUid::parse(text).map_err(|_| ())
+    ResourceUid::parse(text).ok()
 }
 
 // ---------------------------------------------------------------------------
 // Provider effect port
 // ---------------------------------------------------------------------------
-
-/// KTD7 committed Provider identity source: the committed `Provider` rows
-/// (uid + generation) the per-zone plane publishes, resolved from the old
-/// plane's durable authority (the new store carries no `Provider` rows). The
-/// Process layer never reads a store itself (KTD7); a reference this source
-/// does not retain stays unbound, so the provider ticket path refuses the
-/// controller launch closed (`provider-controller-provider-identity-missing`).
-pub trait CommittedProviderIdentitySource: Send + Sync + 'static {
-    /// The committed row's identity for one `Provider` reference.
-    fn committed_provider_identity(
-        &self,
-        provider_ref: &ResourceRef,
-    ) -> Option<(ResourceUid, ResourceGeneration)>;
-}
 
 /// KTD7 Guest-owner identity source: the owning `Guest` row's durable uid for
 /// one canonical Guest reference. `Guest` has not been converted, so a
@@ -392,6 +378,11 @@ pub trait CommittedProviderIdentitySource: Send + Sync + 'static {
 /// and the owner identity cache second; a reference this source cannot
 /// resolve stays unbound, so the Cloud Hypervisor launch stays refused closed
 /// (the broker requires the owner uid to bind `d2b.guest_uid=`).
+///
+/// Trait, not a concrete type, because `d2b-provider-process` consumes it
+/// (`resolve_guest_owner_uid`) and cannot depend on `d2bd`, where the
+/// production impl `PlaneGuestOwnerIdentities` (`d2bd/src/resource_plane_v3.rs:1620`)
+/// lives.
 #[async_trait::async_trait]
 pub trait GuestOwnerIdentitySource: Send + Sync + 'static {
     /// The owning row's durable uid for one `Guest` reference, when the
@@ -983,7 +974,7 @@ impl ProcessDriver {
         let zone = ZoneId::parse(&key.zone)
             .map_err(|error| self.identity_field_invalid(op, "resource.zone", error.to_string()))?;
         let resource_uid = resource_uid_from_bytes(ctx.uid())
-            .map_err(|_| self.identity_field_invalid(op, "resource.uid", "not a uid".to_owned()))?;
+            .ok_or_else(|| self.identity_field_invalid(op, "resource.uid", "not a uid".to_owned()))?;
         let resource_generation = ResourceGeneration::new(ctx.generation()).map_err(|_| {
             self.identity_field_invalid(op, "resource.generation", ctx.generation().to_string())
         })?;
@@ -1030,7 +1021,7 @@ impl ProcessDriver {
         };
         let launch = resolve_launch_identity(&LaunchRow {
             owner_ref: owner_ref.as_ref(),
-            owner_uid: ctx.owner().and_then(|bytes: &[u8; 16]| resource_uid_from_bytes(bytes).ok()),
+            owner_uid: ctx.owner().and_then(resource_uid_from_bytes),
             execution_ref: spec.execution().execution_ref(),
             process_name: name.as_str(),
             template: spec.execution().template().as_str(),
@@ -2059,9 +2050,8 @@ mod tests {
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use crate::effects::{ProviderAdoption, ProviderLiveness};
     use crate::execution::ExecutionMode;
-    use crate::worker_launch::DeviceWorkerLaunch;
     use d2b_contracts_resource::v3::{
-        ControllerGeneration, EphemeralProcessSpec, ProcessSpec, ResourceRef, ResourceUid, ZoneId,
+        ControllerGeneration, ResourceRef, ResourceUid, ZoneId,
     };
     use d2b_process_conformance::testing::fixtures;
     use d2b_process_conformance::{
@@ -2092,298 +2082,7 @@ mod tests {
         process_family_descriptors, process_spec_decoder,
     };
 
-    // -- fake effect port ----------------------------------------------------
-
-    /// One recorded launch with the ticket inputs the driver derived.
-    #[derive(Clone, Debug)]
-    struct RecordedLaunch {
-        /// Which family arm launched: `Process` or `EphemeralProcess`.
-        kind: &'static str,
-        resource_ref: String,
-        resource_uid: String,
-        generation: u64,
-        zone: ZoneId,
-        zone_uid: Option<ResourceUid>,
-        policy_revision: Option<u64>,
-        provider_ref: String,
-        template: String,
-        execution_ref: String,
-        /// The one-shot launch budget (`startDeadline`) the driver derived.
-        start_deadline_ms: Option<u64>,
-    }
-
-    #[derive(Clone, Debug)]
-    struct RecordedStop {
-        /// Which family arm stopped: `Process` or `EphemeralProcess`.
-        kind: &'static str,
-        term_timeout: Duration,
-        kill_timeout: Duration,
-    }
-
-    #[derive(Clone)]
-    struct FakeEffectsConfig {
-        /// Scripted adoption results; the last one repeats once exhausted.
-        adoption: VecDeque<ProviderAdoption>,
-        /// When set, one-shot adoption refuses with this provider error.
-        adopt_error: Option<String>,
-        /// Scripted liveness results; the last one repeats once exhausted
-        /// (default `Alive`).
-        liveness: VecDeque<ProviderLiveness>,
-        launch: Result<ProcessIdentityDigest, String>,
-        /// Whether the fake reports a live retained identity.
-        active: bool,
-        /// When set, the declared Device-worker parameter derivation refuses
-        /// with this named code (the launch-only refusal shape).
-        device_worker_launch: Option<&'static str>,
-    }
-
-    impl Default for FakeEffectsConfig {
-        fn default() -> Self {
-            Self {
-                adoption: VecDeque::from([ProviderAdoption::Absent]),
-                adopt_error: None,
-                liveness: VecDeque::new(),
-                launch: Ok(ProcessIdentityDigest::from_bytes([0x51; 32])),
-                active: true,
-                device_worker_launch: None,
-            }
-        }
-    }
-
-    /// Scripted [`ProcessDriverEffects`] double: records every call with the
-    /// exact ticket inputs the driver derived (KTD7) and replays a scripted
-    /// adoption sequence.
-    struct FakeEffects {
-        config: Mutex<FakeEffectsConfig>,
-        calls: Mutex<Vec<&'static str>>,
-        launches: Mutex<Vec<RecordedLaunch>>,
-        stops: Mutex<Vec<RecordedStop>>,
-        finalizes: Mutex<usize>,
-    }
-
-    impl FakeEffects {
-        fn new(config: FakeEffectsConfig) -> Self {
-            Self {
-                config: Mutex::new(config),
-                calls: Mutex::new(Vec::new()),
-                launches: Mutex::new(Vec::new()),
-                stops: Mutex::new(Vec::new()),
-                finalizes: Mutex::new(0),
-            }
-        }
-
-        fn push_adoption(&self, adoption: ProviderAdoption) {
-            self.config.lock().adoption.push_back(adoption);
-        }
-
-        fn push_liveness(&self, liveness: ProviderLiveness) {
-            self.config.lock().liveness.push_back(liveness);
-        }
-
-        fn set_launch(&self, result: Result<ProcessIdentityDigest, String>) {
-            self.config.lock().launch = result;
-        }
-
-        /// Flip the retained-identity report (the Provider records one on a
-        /// successful launch, so a row can be launched first and then read as
-        /// live).
-        fn set_active(&self, active: bool) {
-            self.config.lock().active = active;
-        }
-
-        fn launch_calls(&self) -> Vec<RecordedLaunch> {
-            self.launches.lock().clone()
-        }
-
-        fn stop_calls(&self) -> Vec<RecordedStop> {
-            self.stops.lock().clone()
-        }
-
-        fn finalize_calls(&self) -> usize {
-            *self.finalizes.lock()
-        }
-
-        fn call_order(&self) -> Vec<&'static str> {
-            self.calls.lock().clone()
-        }
-    }
-
-    fn recorded_launch(
-        kind: &'static str,
-        identity: &super::ProcessResourceIdentity,
-        execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
-        start_deadline_ms: Option<u64>,
-    ) -> RecordedLaunch {
-        RecordedLaunch {
-            kind,
-            resource_ref: identity.resource_ref.to_canonical_string(),
-            resource_uid: identity.resource_uid.as_str().to_owned(),
-            generation: identity.resource_generation.get(),
-            zone: identity.zone.clone(),
-            zone_uid: identity.zone_uid.clone(),
-            policy_revision: identity.policy_revision,
-            provider_ref: identity.provider_ref.to_canonical_string(),
-            template: execution.template().as_str().to_owned(),
-            execution_ref: execution.execution_ref().to_canonical_string(),
-            start_deadline_ms,
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl super::ProcessDriverEffects for FakeEffects {
-        async fn launch(
-            &self,
-            identity: &super::ProcessResourceIdentity,
-            spec: &ProcessSpec,
-            _timeout: Duration,
-        ) -> Result<ProcessIdentityDigest, String> {
-            self.calls.lock().push("launch");
-            self.launches.lock().push(recorded_launch(
-                "Process",
-                identity,
-                spec.execution(),
-                None,
-            ));
-            self.config.lock().launch.clone()
-        }
-
-        async fn launch_ephemeral(
-            &self,
-            identity: &super::ProcessResourceIdentity,
-            spec: &EphemeralProcessSpec,
-            timeout: Duration,
-        ) -> Result<ProcessIdentityDigest, String> {
-            self.calls.lock().push("launch-ephemeral");
-            assert_eq!(
-                timeout,
-                Duration::from_millis(spec.start_deadline().as_millis()),
-                "the one-shot launch budget is the spec's startDeadline",
-            );
-            self.launches.lock().push(recorded_launch(
-                "EphemeralProcess",
-                identity,
-                spec.execution(),
-                Some(spec.start_deadline().as_millis()),
-            ));
-            self.config.lock().launch.clone()
-        }
-
-        async fn adopt(
-            &self,
-            _identity: &super::ProcessResourceIdentity,
-            _spec: &ProcessSpec,
-        ) -> Result<ProviderAdoption, String> {
-            self.calls.lock().push("adopt");
-            let mut config = self.config.lock();
-            Ok(config.adoption.pop_front().unwrap_or(ProviderAdoption::Absent))
-        }
-
-        async fn probe(
-            &self,
-            _identity: &super::ProcessResourceIdentity,
-            _spec: &ProcessSpec,
-        ) -> Result<ProviderLiveness, String> {
-            self.calls.lock().push("probe");
-            let mut config = self.config.lock();
-            Ok(config.liveness.pop_front().unwrap_or(ProviderLiveness::Alive))
-        }
-
-        async fn adopt_ephemeral(
-            &self,
-            _identity: &super::ProcessResourceIdentity,
-            _spec: &EphemeralProcessSpec,
-        ) -> Result<ProviderAdoption, String> {
-            self.calls.lock().push("adopt-ephemeral");
-            let mut config = self.config.lock();
-            if let Some(error) = config.adopt_error.clone() {
-                return Err(error);
-            }
-            Ok(config.adoption.pop_front().unwrap_or(ProviderAdoption::Absent))
-        }
-
-        async fn probe_ephemeral(
-            &self,
-            _identity: &super::ProcessResourceIdentity,
-            _spec: &EphemeralProcessSpec,
-        ) -> Result<ProviderLiveness, String> {
-            self.calls.lock().push("probe-ephemeral");
-            let mut config = self.config.lock();
-            Ok(config.liveness.pop_front().unwrap_or(ProviderLiveness::Alive))
-        }
-
-        async fn stop(
-            &self,
-            _identity: &super::ProcessResourceIdentity,
-            _spec: &ProcessSpec,
-            term_timeout: Duration,
-            kill_timeout: Duration,
-        ) -> Result<bool, String> {
-            self.calls.lock().push("stop");
-            self.stops.lock().push(RecordedStop {
-                kind: "Process",
-                term_timeout,
-                kill_timeout,
-            });
-            Ok(true)
-        }
-
-        async fn stop_ephemeral(
-            &self,
-            _identity: &super::ProcessResourceIdentity,
-            _spec: &EphemeralProcessSpec,
-            term_timeout: Duration,
-            kill_timeout: Duration,
-        ) -> Result<bool, String> {
-            self.calls.lock().push("stop-ephemeral");
-            self.stops.lock().push(RecordedStop {
-                kind: "EphemeralProcess",
-                term_timeout,
-                kill_timeout,
-            });
-            Ok(true)
-        }
-
-        async fn stop_stale(
-            &self,
-            _provider_ref: &ResourceRef,
-            _candidate: &AdoptionCandidate,
-        ) -> Result<(), String> {
-            self.calls.lock().push("stop-stale");
-            Ok(())
-        }
-
-        async fn device_worker_launch(
-            &self,
-            _ctx: &mut ResourceContext,
-            _identity: &super::ProcessResourceIdentity,
-            spec: &super::ProcessFamilySpec,
-        ) -> Result<Option<DeviceWorkerLaunch>, &'static str> {
-            let template = spec.execution().template().as_str();
-            if super::device_worker_family(template).is_none() {
-                return Ok(None);
-            }
-            self.calls.lock().push("device-worker-launch");
-            match self.config.lock().device_worker_launch {
-                Some(code) => Err(code),
-                None => Ok(None),
-            }
-        }
-
-        async fn finalize(&self, _identity: &super::ProcessResourceIdentity) -> Result<(), String> {
-            self.calls.lock().push("finalize");
-            *self.finalizes.lock() += 1;
-            Ok(())
-        }
-
-        fn has_active(
-            &self,
-            _zone: &ZoneId,
-            _zone_uid: Option<&ResourceUid>,
-            _resource_ref: &ResourceRef,
-        ) -> bool {
-            self.config.lock().active
-        }
-    }
+    use crate::test_support::{FakeEffects, FakeEffectsConfig};
 
     // -- fixtures ------------------------------------------------------------
 

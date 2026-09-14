@@ -19,13 +19,11 @@ use crate::ServerState;
 
 /// A Core adapter that sends one typed request through the authenticated
 /// daemon-to-broker transport.
-#[allow(dead_code)]
 pub(crate) struct DaemonNetworkBroker<'a> {
     state: &'a ServerState,
     caller_role: BrokerCallerRole,
 }
 
-#[allow(dead_code)]
 impl<'a> DaemonNetworkBroker<'a> {
     /// Bind the adapter to the current daemon request and caller role.
     pub(crate) const fn new(state: &'a ServerState, caller_role: BrokerCallerRole) -> Self {
@@ -50,11 +48,9 @@ impl<'a> DaemonNetworkBroker<'a> {
 }
 
 /// The production provider effect-port type.
-#[allow(dead_code)]
 pub(crate) type DaemonNetworkEffectPort<'a> = BrokerNetworkEffectPort<DaemonNetworkBroker<'a>>;
 
 /// Construct a production Network effect port for one Core-resolved context.
-#[allow(dead_code)]
 pub(crate) fn production_port<'a>(
     state: &'a ServerState,
     caller_role: BrokerCallerRole,
@@ -238,7 +234,6 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
     }
 }
 
-#[allow(dead_code)]
 fn map_broker_error(kind: &str, message: &str) -> NetworkBrokerError {
     if message.contains("nm-managed-foreign-conflict")
         || message.contains("foreign route")

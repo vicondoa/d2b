@@ -15,7 +15,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-type InteractionSupervisor = interaction_composition::UnavailableProcessEffectPort;
+type InteractionSupervisor = interaction_composition::NonLaunchingProcessEffectPort;
 type InteractionRuntime = interaction_composition::InteractionRuntimeSet<InteractionSupervisor>;
 type DaemonResourceApiClient = d2b_resource_api::ResourceApiClient<
     d2bd_runtime::resource_runtime_support::ZoneApiBackend,
@@ -374,7 +374,6 @@ pub mod provider_effects;
 pub mod provider_registry;
 pub mod provider_shutdown;
 pub mod resource_runtime;
-mod security_key_effect_port;
 pub mod tpm_effect_port;
 pub mod usbip_production;
 
@@ -562,7 +561,6 @@ struct ServerState {
     /// until the daemon restarts or the VM stops.
     console_sessions: Arc<Mutex<console_session::ConsoleSessionTable>>,
     security_key_sessions: Arc<parking_lot::Mutex<d2b_provider_device_security_key::SkSessionTable>>,
-    #[allow(dead_code)]
     unsafe_local_helpers: Arc<d2bd_runtime::unsafe_local_helper::HelperRegistry>,
     /// Per-Zone v3 resource planes (U9/U10): the new runtime the Resource
     /// API routes converted types to. Parked here so `open_resource_plane`
@@ -1148,13 +1146,12 @@ impl ZoneLinkGatewayComposition {
             .is_some();
         if had_session
             && self.session_state() == d2b_provider_zone_link::zone_links::ZoneLinkSessionState::Ready
+            && let Err(error) = self.apply_event(ZoneLinkEvent::SessionDisconnected)
         {
-            if let Err(error) = self.apply_event(ZoneLinkEvent::SessionDisconnected) {
-                tracing::warn!(
-                    error = %error,
-                    "zone-link session disconnect event rejected by zone-link state machine"
-                );
-            }
+            tracing::warn!(
+                error = %error,
+                "zone-link session disconnect event rejected by zone-link state machine"
+            );
         }
         self.gateway_guest
             .lock()
@@ -1811,7 +1808,7 @@ impl DaemonShellAuthority {
             .clone()
             .ok_or(ShellTerminalError::SupervisorAmbiguous)?;
         let runtime = plane
-            .zone(&zone)
+            .zone(zone)
             .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?;
         let client = runtime
             .process_resource_client()
@@ -2730,7 +2727,7 @@ impl exec_detached::DetachedProcessResourcePort for ComponentSessionProcessResou
         )
         .await
         .map_err(establish_error_as_exec_error)?;
-        let max_len = max_len.unwrap_or(u64::from(public_wire::EXEC_MAX_CHUNK_BYTES));
+        let max_len = max_len.unwrap_or(public_wire::EXEC_MAX_CHUNK_BYTES);
         let stdout_offset = stdout_offset.unwrap_or(0);
         let stderr_offset = stderr_offset.unwrap_or(0);
         let result = async {
@@ -4372,12 +4369,14 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         let runtime = d2b_provider_transport_azure_relay::GatewayGuestZoneLinkRuntime::from_sealed(
             config.credential_path,
             config.seal_key_path,
-            config.execution_ref,
-            config.network_ref,
-            config.settings,
-            config.max_concurrent_sessions,
-            config.connect_timeout_seconds,
             &d2b_provider_transport_azure_relay::CredentialFilePolicy::default(),
+            d2b_provider_transport_azure_relay::GatewayGuestZoneLinkTransportConfig {
+                execution_ref: config.execution_ref,
+                network_ref: config.network_ref,
+                settings: config.settings,
+                max_concurrent_sessions: config.max_concurrent_sessions,
+                connect_timeout_seconds: config.connect_timeout_seconds,
+            },
         )
         .map_err(|error| TypedError::InternalConfig {
             detail: error.code().to_owned(),
@@ -5723,7 +5722,7 @@ fn process_resource_execution_ref(request: &Value) -> Result<(String, ResourceRe
     let execution_ref = request
         .get("executionRef")
         .and_then(Value::as_str)
-        .ok_or_else(|| TypedError::ProcessExecFailed {
+        .ok_or(TypedError::ProcessExecFailed {
             kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
         })?;
     let execution_ref =
@@ -5751,7 +5750,7 @@ fn process_resource_execution_ref_from_resource(
         .and_then(Value::as_str)
         .and_then(|value| value.strip_prefix("Zone/"))
         .and_then(|value| ZoneId::parse(value.to_owned()).ok())
-        .ok_or_else(|| TypedError::ProcessExecFailed {
+        .ok_or(TypedError::ProcessExecFailed {
             kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
         })?;
     let process_ref = request
@@ -5759,7 +5758,7 @@ fn process_resource_execution_ref_from_resource(
         .and_then(Value::as_str)
         .and_then(|value| ResourceRef::parse(value).ok())
         .filter(|value| value.resource_type().as_str() == "EphemeralProcess")
-        .ok_or_else(|| TypedError::ProcessExecFailed {
+        .ok_or(TypedError::ProcessExecFailed {
             kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
         })?;
     let client = state
@@ -5818,7 +5817,7 @@ fn process_resource_execution_ref_from_resource(
         .and_then(Value::as_str)
         .and_then(|value| ResourceRef::parse(value).ok())
         .filter(|value| matches!(value.resource_type().as_str(), "Host" | "Guest"))
-        .ok_or_else(|| TypedError::ProcessExecFailed {
+        .ok_or(TypedError::ProcessExecFailed {
             kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
         })?;
     Ok((execution_ref.name().as_str().to_owned(), execution_ref))
@@ -5857,7 +5856,7 @@ fn dispatch_resource_exec_request(
         }
 
         Some("Status") => {
-            let process_ref = process_ref.ok_or_else(|| TypedError::ProcessExecFailed {
+            let process_ref = process_ref.ok_or(TypedError::ProcessExecFailed {
                 kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
             })?;
             let result = block_on_future(client.status(&process_ref))
@@ -5865,7 +5864,7 @@ fn dispatch_resource_exec_request(
             public_wire::ExecOpResponse::Status(result)
         }
         Some("Logs") => {
-            let process_ref = process_ref.ok_or_else(|| TypedError::ProcessExecFailed {
+            let process_ref = process_ref.ok_or(TypedError::ProcessExecFailed {
                 kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
             })?;
             let stdout_offset = request.get("stdoutOffset").and_then(Value::as_u64);
@@ -5877,7 +5876,7 @@ fn dispatch_resource_exec_request(
             public_wire::ExecOpResponse::Logs(result)
         }
         Some("Kill") => {
-            let process_ref = process_ref.ok_or_else(|| TypedError::ProcessExecFailed {
+            let process_ref = process_ref.ok_or(TypedError::ProcessExecFailed {
                 kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
             })?;
             let result = block_on_future(client.kill(&process_ref))
@@ -6759,9 +6758,11 @@ fn dispatch_guest_lifecycle_resource_request(
             &caller_role,
             &provider_ref,
             target.clone(),
-            operation,
-            operation_id.to_owned(),
-            authorization.clone(),
+            (
+                operation,
+                operation_id.to_owned(),
+                authorization.clone(),
+            ),
             &effect,
         ) {
             Ok(provider_registry::ProviderRuntimeDispatch::Active(
@@ -9406,7 +9407,7 @@ fn dispatch_broker_usbip_probe(
         .iter()
         .map(String::as_str)
         .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
-        .map(|intent| usbip_probe_entry_from_intent(intent))
+        .map(usbip_probe_entry_from_intent)
         .collect();
     entries.extend(qemu_media_probe_entries(state, &resolver));
     Ok(d2bd_runtime::wire::usbip_probe_response(
@@ -10503,11 +10504,8 @@ pub(crate) async fn resolve_component_session_endpoint_for_guest(
         runtime.zone(),
         zone_uid,
         &process_ref,
-        process.metadata().uid(),
-        process.metadata().generation(),
-        process_provider_ref,
-        target.guest_ref(),
-        target.guest_uid(),
+        (process.metadata().uid(), process.metadata().generation()),
+        (process_provider_ref, target.guest_ref(), target.guest_uid()),
         execution.execution_ref(),
     ) {
         return Err("guest-session:process-identity-not-live".to_owned());
@@ -13768,24 +13766,6 @@ fn dispatch_broker_request_with_optional_request_fds(
     Ok((decoded, received_fds))
 }
 
-#[allow(dead_code)]
-fn dispatch_broker_ack_request(
-    state: &ServerState,
-    verb: &str,
-    op_name: &str,
-    request: BrokerRequest,
-) -> Result<(), Value> {
-    dispatch_broker_ack_request_as(
-        state,
-        verb,
-        op_name,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-    )
-}
-
 fn dispatch_broker_ack_request_as(
     state: &ServerState,
     verb: &str,
@@ -14206,7 +14186,7 @@ async fn open_resource_plane(
     let coordinator_index = prepared_runtimes
         .iter()
         .position(|(zone, _, _)| zone == &topology.root)
-        .ok_or_else(|| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+        .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
     let prepare_result = prepared_runtimes[coordinator_index]
         .1
         .prepare_generation_publication(&set_generation, &prepared_generations)
@@ -14246,8 +14226,7 @@ async fn open_resource_plane(
     // that table, so a Zone whose plane is not published yet cannot activate.
     let mut v3_planes: BTreeMap<String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>> =
         BTreeMap::new();
-    for index in 0..prepared_runtimes.len() {
-        let (_zone, runtime, materialization_bundle) = &prepared_runtimes[index];
+    for (_zone, runtime, materialization_bundle) in &prepared_runtimes {
         // v3 resource plane (U9/U10): the manager plane carries every
         // type, so the zone's bundle is ingested into the per-zone
         // ResourceManager with provenance Nix here.
@@ -14302,7 +14281,7 @@ async fn open_resource_plane(
                 &std::sync::Arc::new(state.clone()),
                 _zone.clone(),
                 &d2bd_runtime::zone_authority::ZoneAuthorityIdentity::from_bundle_and_storage(
-                    &_zone,
+                    _zone,
                     bundle,
                     resolver
                         .zone_storage_row(_zone.as_str())
@@ -14400,7 +14379,7 @@ async fn open_resource_plane(
         if let Err(error) = runtime.activate_published_bundle().await {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
+            for (_, runtime, _) in remaining.by_ref() {
                 let _ = runtime.shutdown().await;
             }
             return Err(error);
@@ -14441,7 +14420,7 @@ async fn open_resource_plane(
         if let Err(error) = controller_session_startup {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
+            for (_, runtime, _) in remaining.by_ref() {
                 let _ = runtime.shutdown().await;
             }
             return Err(error);
@@ -14456,7 +14435,7 @@ async fn open_resource_plane(
             if error != resource_runtime::ResourceRuntimeError::InteractionConfigurationUnavailable {
                 let _ = runtime.shutdown().await;
                 let _ = plane.shutdown().await;
-                while let Some((_, runtime, _)) = remaining.next() {
+                for (_, runtime, _) in remaining.by_ref() {
                     let _ = runtime.shutdown().await;
                 }
                 return Err(error);
@@ -14471,7 +14450,7 @@ async fn open_resource_plane(
             Ok(_) => {}
             Err(error) => {
                 let _ = plane.shutdown().await;
-                while let Some((_, runtime, _)) = remaining.next() {
+                for (_, runtime, _) in remaining.by_ref() {
                     let _ = runtime.shutdown().await;
                 }
                 return Err(error);
@@ -14784,10 +14763,12 @@ fn guest_enrollment_endpoint(
         facts.link_uid.clone(),
         edge.clone(),
         facts.controller_generation.clone(),
-        vsock_host_socket,
+        crate::zone_enrollment::EnrolledSocketLayout {
+            vsock_host_socket,
+            socket_owner,
+        },
         &config.identity,
         config.guest_public,
-        socket_owner,
     )
     .inspect_err(|error| {
         tracing::warn!(
@@ -15553,8 +15534,10 @@ fn write_runner_snapshot(
         role,
         pid,
         start_time_ticks,
-        None,
-        None,
+        SnapshotLifecycle {
+            owner_resource_uid: None,
+            authorization: None,
+        },
     )
 }
 
@@ -15563,6 +15546,15 @@ fn write_runner_snapshot(
 /// Production's writer was the retained legacy TPM connector's executor;
 /// with the TPM port on Device-owned rows (U17) only test doubles write
 /// snapshots, and the startup adoption pass reads them.
+/// Lifecycle ownership attached to a runner snapshot: the Core lifecycle
+/// authorization (which also carries the durable owner resource) as written
+/// for the startup adoption pass.
+#[cfg(test)]
+struct SnapshotLifecycle<'a> {
+    owner_resource_uid: Option<&'a str>,
+    authorization: Option<&'a provider_effects::LifecycleAuthorization>,
+}
+
 #[cfg(test)]
 pub(crate) fn write_runner_snapshot_with_authorization(
     state: &ServerState,
@@ -15571,9 +15563,10 @@ pub(crate) fn write_runner_snapshot_with_authorization(
     role: RunnerRole,
     pid: i32,
     start_time_ticks: u64,
-    owner_resource_uid: Option<&str>,
-    authorization: Option<&provider_effects::LifecycleAuthorization>,
+    lifecycle: SnapshotLifecycle<'_>,
 ) -> Result<(), String> {
+    let owner_resource_uid = lifecycle.owner_resource_uid;
+    let authorization = lifecycle.authorization;
     let store =
         d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(&state.daemon_state_dir);
     d2bd_runtime::supervisor::state::SnapshotStore::upsert(
@@ -18543,7 +18536,7 @@ fn dispatch_broker_vm_start_inner(
     // be resolved skip the preflight loudly.
     let nixos_preflight_state_dir = match guest_runtime_provider_ref(state, &resolver, &request.vm)
     {
-        Some(provider_ref) if provider_ref == "Provider/runtime-qemu-media" => None,
+        Some("Provider/runtime-qemu-media") => None,
         Some(_) => Some(
             std::path::PathBuf::from("/var/lib/d2b/vms").join(&request.vm),
         ),
@@ -19391,9 +19384,8 @@ fn dispatch_broker_host_prepare_as(
 
     Ok(applied_response(
         VERB,
-        format!(
-            "host prepare: applied 1 host nft + 1 hosts + 1 nm-unmanaged op; Network resources own per-Network effects"
-        ),
+        "host prepare: applied 1 host nft + 1 hosts + 1 nm-unmanaged op; Network resources own per-Network effects"
+            .to_string(),
     ))
 }
 
@@ -19442,9 +19434,8 @@ fn dispatch_broker_host_destroy_as(
 
     Ok(applied_response(
         VERB,
-        format!(
-            "host destroy: applied host-owned nm-unmanaged-remove + nft-flush ops; Network resources own per-Network teardown"
-        ),
+        "host destroy: applied host-owned nm-unmanaged-remove + nft-flush ops; Network resources own per-Network teardown"
+            .to_string(),
     ))
 }
 
@@ -19492,9 +19483,8 @@ fn dispatch_broker_host_reconcile_as(
 
     Ok(applied_response(
         VERB,
-        format!(
-            "host reconcile --network: applied host-owned firewall projection; Network resources own per-Network effects"
-        ),
+        "host reconcile --network: applied host-owned firewall projection; Network resources own per-Network effects"
+            .to_string(),
     ))
 }
 
@@ -23409,7 +23399,7 @@ mod broker_dispatch_tests {
     use super::provider_shutdown::GracefulVmShutdown;
     use super::{
         ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ProviderGracefulInputs,
-        QemuBrokerShutdownProvider, ServerState, VM_RUNNER_ROLE_ID,
+        QemuBrokerShutdownProvider, ServerState, SnapshotLifecycle, VM_RUNNER_ROLE_ID,
         VmShutdownOutcome, VmStartNodeMode, adopt_orphaned_runners_on_startup_with,
         block_on_future, dispatch_broker_host_destroy_as,
         dispatch_broker_host_prepare_as, dispatch_broker_vm_restart,
@@ -23832,7 +23822,6 @@ mod broker_dispatch_tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[allow(dead_code)]
     fn write_custom_vm_start_bundle_artifacts(
         root: &Path,
         api_socket: &Path,
@@ -24759,7 +24748,7 @@ mod broker_dispatch_tests {
             let pidfd = open_child_pidfd(child.child());
             write_test_json_frame_with_fds(
                 accepted_fd,
-                &BrokerResponse::SpawnRunner(SpawnRunnerResponse {
+                &BrokerResponse::SpawnRunner(Box::new(SpawnRunnerResponse {
                     vm_id: VmId::new("vm-a"),
                     role_id: RoleId::new(VM_RUNNER_ROLE_ID),
                     role: RunnerRole::CloudHypervisor,
@@ -24781,7 +24770,7 @@ mod broker_dispatch_tests {
                     pidfd_index: 0,
                     controller_bootstrap_fd_index: None,
                     console_fd_index: None,
-                }),
+                })),
                 &[pidfd.as_raw_fd()],
             )
             .expect("write spawn response with pidfd");
@@ -25061,7 +25050,7 @@ mod broker_dispatch_tests {
                 let pidfd = open_child_pidfd(child.child());
                 write_test_json_frame_with_fds(
                     accepted_fd,
-                    &BrokerResponse::SpawnRunner(SpawnRunnerResponse {
+                    &BrokerResponse::SpawnRunner(Box::new(SpawnRunnerResponse {
                         vm_id: VmId::new("vm-a"),
                         role_id: RoleId::new(request.role_id.as_str()),
                         role: expected_runner_role,
@@ -25083,7 +25072,7 @@ mod broker_dispatch_tests {
                         pidfd_index: 0,
                         controller_bootstrap_fd_index: None,
                         console_fd_index: None,
-                    }),
+                    })),
                     &[pidfd.as_raw_fd()],
                 )
                 .expect("write spawn response with pidfd");
@@ -25370,8 +25359,10 @@ mod broker_dispatch_tests {
             RunnerRole::CloudHypervisor,
             4242,
             55,
-            None,
-            Some(&authorization),
+            SnapshotLifecycle {
+                owner_resource_uid: None,
+                authorization: Some(&authorization),
+            },
         )
         .expect("write authorized runner snapshot");
         let store = FilesystemSnapshotStore::new(&state.daemon_state_dir);
@@ -28702,7 +28693,8 @@ mod loader_worker_refusal_tests {
     /// and this parent proves the daemon names each `Unavailable` refusal.
     #[test]
     fn seat_death_surfaces_both_loader_unavailable_refusals_to_the_daemon() {
-        for child in ["seat_death_child_load"] {
+        {
+            let child = "seat_death_child_load";
             let exact = format!("loader_worker_refusal_tests::{child}");
             let output = Command::new(std::env::current_exe().expect("test binary path"))
                 .args(["--exact", exact.as_str(), "--nocapture"])

@@ -1127,14 +1127,13 @@ impl SessionSupervisor {
         let attachment = self
             .authority
             .reserve_attachment(&self.session, &self.identity)
-            .map_err(|error| {
+            .inspect_err(|error| {
                 warn!(
                     provider = "shell-terminal",
                     session = self.session.name(),
                     error = ?error,
                     "authority refused attachment reservation"
                 );
-                error
             })?;
         Ok(AttachReceipt {
             generation,
@@ -1160,14 +1159,13 @@ impl SessionSupervisor {
         let attachment = self
             .authority
             .admit_capability_attachment(&self.session, &self.identity, &capability)
-            .map_err(|error| {
+            .inspect_err(|error| {
                 warn!(
                     provider = "shell-terminal",
                     session = self.session.name(),
                     error = ?error,
                     "authority refused capability attachment"
                 );
-                error
             })?;
         Ok(AttachReceipt {
             generation,
@@ -1186,14 +1184,13 @@ impl SessionSupervisor {
         self.authorize(subject)?;
         self.authority
             .release_attachment(&self.session, &attachment)
-            .map_err(|error| {
+            .inspect_err(|error| {
                 warn!(
                     provider = "shell-terminal",
                     session = self.session.name(),
                     error = ?error,
                     "authority refused attachment release"
                 );
-                error
             })
     }
 

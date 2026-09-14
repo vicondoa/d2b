@@ -568,8 +568,8 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
             }
         }
     }
-    for operation in operations.iter().copied() {
-        if !views.authz.contains(&operation) {
+    for operation in operations.iter() {
+        if !views.authz.contains(operation) {
             mismatches.push(missing(
                 "authz",
                 format!("{operation}: committed row, no authorization row"),
@@ -829,13 +829,12 @@ mod tests {
 
     #[test]
     fn wire_row_resolves_every_variant_it_names() {
-        for (request, name) in [(
+        let (request, name) = (
             d2b_contracts_broker::broker_wire::BrokerRequest::PollChildReaped,
             "PollChildReaped",
-        )] {
-            assert_eq!(wire_variant_name(&request), name);
-            assert_eq!(wire_row(&request).map(|row| row.operation), Some(name));
-        }
+        );
+        assert_eq!(wire_variant_name(&request), name);
+        assert_eq!(wire_row(&request).map(|row| row.operation), Some(name));
     }
 
     #[test]

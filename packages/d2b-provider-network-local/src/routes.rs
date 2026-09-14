@@ -92,6 +92,35 @@ pub struct NetworkRouteIntent {
     tuple: RouteTuple,
 }
 
+/// Immutable Network provenance tuple that binds one route identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkRouteProvenance {
+    zone_uid: ResourceUid,
+    network_uid: ResourceUid,
+    network_generation: ResourceGeneration,
+    attachment_generation: ResourceGeneration,
+    bundle_generation: ResourceBundleGenerationId,
+}
+
+impl NetworkRouteProvenance {
+    /// Construct the exact route provenance tuple.
+    pub const fn new(
+        zone_uid: ResourceUid,
+        network_uid: ResourceUid,
+        network_generation: ResourceGeneration,
+        attachment_generation: ResourceGeneration,
+        bundle_generation: ResourceBundleGenerationId,
+    ) -> Self {
+        Self {
+            zone_uid,
+            network_uid,
+            network_generation,
+            attachment_generation,
+            bundle_generation,
+        }
+    }
+}
+
 impl NetworkRouteIntent {
     /// Construct a route identity from the committed Network tuple.
     pub fn new(
@@ -115,11 +144,7 @@ impl NetworkRouteIntent {
 
     /// Construct a route identity bound to the complete Network provenance.
     pub fn with_provenance(
-        zone_uid: ResourceUid,
-        network_uid: ResourceUid,
-        network_generation: ResourceGeneration,
-        attachment_generation: ResourceGeneration,
-        bundle_generation: ResourceBundleGenerationId,
+        provenance: NetworkRouteProvenance,
         index: usize,
         destination: impl Into<String>,
         via: Option<String>,
@@ -127,12 +152,16 @@ impl NetworkRouteIntent {
         table: impl Into<String>,
     ) -> Self {
         Self {
-            zone_uid: Some(zone_uid.clone()),
-            network_uid: network_uid.clone(),
-            network_generation,
-            attachment_generation: Some(attachment_generation),
-            bundle_generation,
-            route_name: derive_network_route_name_for(&zone_uid, &network_uid, index),
+            zone_uid: Some(provenance.zone_uid.clone()),
+            network_uid: provenance.network_uid.clone(),
+            network_generation: provenance.network_generation,
+            attachment_generation: Some(provenance.attachment_generation),
+            bundle_generation: provenance.bundle_generation,
+            route_name: derive_network_route_name_for(
+                &provenance.zone_uid,
+                &provenance.network_uid,
+                index,
+            ),
             tuple: RouteTuple::new(destination, via, Some(device.as_str().to_owned()), table),
         }
     }
@@ -521,11 +550,13 @@ mod tests {
         )
         .unwrap();
         let route = NetworkRouteIntent::with_provenance(
-            zone.clone(),
-            network.clone(),
-            ResourceGeneration::new(4).unwrap(),
-            ResourceGeneration::new(7).unwrap(),
-            bundle.clone(),
+            NetworkRouteProvenance::new(
+                zone.clone(),
+                network.clone(),
+                ResourceGeneration::new(4).unwrap(),
+                ResourceGeneration::new(7).unwrap(),
+                bundle.clone(),
+            ),
             0,
             "10.20.0.0/24",
             None,

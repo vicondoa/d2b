@@ -1604,10 +1604,10 @@ impl ComponentDescriptor {
                 let guest_artifact = self
                     .target_capability(ControllerTargetKind::Guest)
                     .map(ComponentTargetCapability::artifact_digest);
-                if let (Some(host), Some(guest)) = (host_artifact, guest_artifact) {
-                    if host != guest {
-                        return Err(ProviderContractError::ComponentArtifactMismatch);
-                    }
+                if let (Some(host), Some(guest)) = (host_artifact, guest_artifact)
+                    && host != guest
+                {
+                    return Err(ProviderContractError::ComponentArtifactMismatch);
                 }
                 if matches!(self.execution, ComponentExecution::InProcessBootstrap)
                     && !matches!(artifact_id.as_str(), "system-core" | "system-minijail")

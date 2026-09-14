@@ -512,7 +512,7 @@ mod tests {
         assert_eq!(failure.kind().code(), "children-draining");
         assert_eq!(failure.op(), DriverOp::Delete);
         assert!(
-            manager.call_order().iter().any(|call| *call == "delete"),
+            manager.call_order().contains(&"delete"),
             "the child is nudged through its own finalize-before-delete pass"
         );
 

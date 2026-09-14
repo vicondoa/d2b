@@ -131,7 +131,7 @@ impl BrokerLaunchIntent {
     }
 
     fn wire_runtime_scope(&self) -> Option<[u8; 32]> {
-        self.typed_identity.then(|| self.runtime_scope).flatten()
+        self.typed_identity.then_some(self.runtime_scope).flatten()
     }
 }
 
@@ -1038,7 +1038,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             return Err(ProcessEffectError::UnsupportedProvider);
         };
         let frame = self.request_with_fds(
-            BrokerRequest::SpawnRunner(typed_identity_request!(
+            BrokerRequest::SpawnRunner(Box::new(typed_identity_request!(
                 SpawnRunnerRequest {
                     execution_ref: Some(intent.execution_ref.clone()),
                     execution_domain: Some(intent.domain),
@@ -1060,7 +1060,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                     network_tap_context: None,
                 },
                 intent,
-            )),
+            ))),
             &inherited_fds,
         )?;
         let BrokerResponse::SpawnRunner(ref response) = frame.response else {
@@ -2236,8 +2236,8 @@ fn read_pidfd_process_id(pidfd: &OwnedFd) -> Result<Option<i32>, ProcessEffectEr
 ///
 /// `None` means the pid carries no observable start time: the process is
 /// absent (never existed here, or already reaped) or is a zombie (`Z`/`X`).
-/// A dying child is therefore indistinguishable from an absent one by design
-/// - both are *gone*, never a start-time *drift* - and callers must classify
+/// A dying child is therefore indistinguishable from an absent one by design -
+/// both are *gone*, never a start-time *drift* - and callers must classify
 /// it as such (`launch_adoption_error`).
 fn read_proc_start_time(pid: i32) -> Result<Option<u64>, ProcessEffectError> {
     let content = match fs::read_to_string(format!("/proc/{pid}/stat")) {

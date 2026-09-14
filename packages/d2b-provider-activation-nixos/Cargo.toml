@@ -8,9 +8,19 @@ license.workspace = true
 [lints]
 workspace = true
 
+# test_support is needed both by external crates (which opt in via the
+# `test-support` feature) and by this crate's OWN tests. Gating on
+# `any(test, feature = "test-support")` makes the module available
+# automatically when compiling this crate's tests, so `cargo test -p
+# d2b-provider-activation-nixos` works without anyone having to remember
+# `--features test-support`.
+[features]
+test-support = []
+
 [dependencies]
 async-trait = "0.1"
 tracing = "0.1"
+parking_lot = "0.12"
 d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
@@ -22,5 +32,4 @@ sha2 = { workspace = true }
 ring = { workspace = true }
 
 [dev-dependencies]
-parking_lot = "0.12"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }

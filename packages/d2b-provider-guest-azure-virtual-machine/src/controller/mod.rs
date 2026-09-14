@@ -1022,14 +1022,13 @@ where
         self.credentials
             .acquire_token("https://management.azure.com/", 30_000)
             .await
-            .map_err(|error| {
+            .inspect_err(|error| {
                 tracing::warn!(
                     resource_group = %self.settings.resource_group,
                     provider = "runtime-azure-virtual-machine",
                     code = error.code(),
                     "ARM access token acquisition failed"
                 );
-                error
             })
     }
 }

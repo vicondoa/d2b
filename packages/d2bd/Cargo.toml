@@ -127,5 +127,15 @@ d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["tes
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }
+d2b-provider-process = { path = "../d2b-provider-process", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-volume = { path = "../d2b-provider-volume", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-volume-binding = { path = "../d2b-provider-volume-binding", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-endpoint = { path = "../d2b-provider-endpoint", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-activation-nixos = { path = "../d2b-provider-activation-nixos", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-credential = { path = "../d2b-provider-credential", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-network-local = { path = "../d2b-provider-network-local", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-device = { path = "../d2b-provider-device", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-device-usbip = { path = "../d2b-provider-device-usbip", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-device-security-key = { path = "../d2b-provider-device-security-key", version = "0.0.0-bootstrap", features = ["test-support"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }

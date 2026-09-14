@@ -250,6 +250,12 @@ fn ensure_transactional(
     Ok(outcome)
 }
 
+/// One `resources` row as the ensure comparison reads it (spec section 9):
+/// generation, deleting mark, spec and metadata bytes, owner uid, provenance.
+/// An alias because the column tuple would otherwise exceed clippy's type
+/// complexity ceiling at its only two type sites.
+type ExistingRow = (u64, bool, Vec<u8>, Vec<u8>, Option<Vec<u8>>, String);
+
 fn ensure_transactional_inner(
     tx: &rusqlite::Transaction<'_>,
     row: StoredDesiredResource,
@@ -257,7 +263,7 @@ fn ensure_transactional_inner(
     // Every column the row's readers observe is compared, not only the spec:
     // a `metadata`-only ensure (the authored envelope the display status and
     // the owned-child annotations read) must never be a silent no-op.
-    let existing: Option<(u64, bool, Vec<u8>, Vec<u8>, Option<Vec<u8>>, String)> = tx
+    let existing: Option<ExistingRow> = tx
         .query_row(
             "SELECT generation, deleting, spec, metadata, owner_uid, provenance FROM resources \
              WHERE zone = ?1 AND type = ?2 AND name = ?3",
@@ -286,13 +292,15 @@ fn ensure_transactional_inner(
         let stored = insert_new(tx, &row)?;
         insert_audit(
             tx,
-            now(),
-            "resource.ensure",
-            row.provenance.as_str(),
-            Some(&row.key),
-            "ensure.create",
-            None,
-            Some(stored.generation as i64),
+            AuditWrite {
+                ts: now(),
+                subject: "resource.ensure",
+                provenance: row.provenance.as_str(),
+                key: Some(&row.key),
+                operation: "ensure.create",
+                generation_before: None,
+                generation_after: Some(stored.generation as i64),
+            },
         )?;
         return Ok(EnsureOutcome::Created(stored));
     };
@@ -332,13 +340,15 @@ fn ensure_transactional_inner(
         )?;
         insert_audit(
             tx,
-            now(),
-            "resource.ensure",
-            row.provenance.as_str(),
-            Some(&row.key),
-            "ensure.metadata",
-            Some(generation as i64),
-            Some(generation as i64),
+            AuditWrite {
+                ts: now(),
+                subject: "resource.ensure",
+                provenance: row.provenance.as_str(),
+                key: Some(&row.key),
+                operation: "ensure.metadata",
+                generation_before: Some(generation as i64),
+                generation_after: Some(generation as i64),
+            },
         )?;
         let stored = load_row(tx, &row.key)?.expect("row present within its own transaction");
         return Ok(EnsureOutcome::Updated(stored));
@@ -361,13 +371,15 @@ fn ensure_transactional_inner(
     )?;
     insert_audit(
         tx,
-        now(),
-        "resource.ensure",
-        row.provenance.as_str(),
-        Some(&row.key),
-        "ensure.update",
-        Some(generation as i64),
-        Some(next as i64),
+        AuditWrite {
+            ts: now(),
+            subject: "resource.ensure",
+            provenance: row.provenance.as_str(),
+            key: Some(&row.key),
+            operation: "ensure.update",
+            generation_before: Some(generation as i64),
+            generation_after: Some(next as i64),
+        },
     )?;
     let stored = load_row(tx, &row.key)?.expect("row present within its own transaction");
     Ok(EnsureOutcome::Updated(stored))
@@ -407,12 +419,12 @@ fn tighten_file_modes(path: &Path) {
 }
 
 fn open_connection(path: &Path) -> Result<Connection, SpecStoreError> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-            // Only when we create it: private directory for private data.
-            let _ = std::fs::set_permissions(parent, std::os::unix::fs::PermissionsExt::from_mode(0o700));
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+        // Only when we create it: private directory for private data.
+        let _ = std::fs::set_permissions(parent, std::os::unix::fs::PermissionsExt::from_mode(0o700));
     }
     let conn = Connection::open(path)?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
@@ -429,30 +441,35 @@ fn begin_immediate(conn: &mut Connection) -> Result<(), SpecStoreError> {
     Ok(conn.execute_batch("BEGIN IMMEDIATE")?)
 }
 
-fn insert_audit(
-    conn: &Connection,
+/// One audit-log write committed with the transaction (spec section 9): a
+/// subject, the row provenance, the optional resource key, the operation, and
+/// the generation transition the operation recorded. Grouped so the SQL write
+/// below stays under clippy's argument ceiling.
+struct AuditWrite<'a> {
     ts: i64,
-    subject: &str,
-    provenance: &str,
-    key: Option<&ResourceKey>,
-    operation: &str,
+    subject: &'a str,
+    provenance: &'a str,
+    key: Option<&'a ResourceKey>,
+    operation: &'a str,
     generation_before: Option<i64>,
     generation_after: Option<i64>,
-) -> Result<(), SpecStoreError> {
+}
+
+fn insert_audit(conn: &Connection, entry: AuditWrite<'_>) -> Result<(), SpecStoreError> {
     conn.execute(
         "INSERT INTO audit_log (ts, subject, provenance, resource_zone, resource_type, \
          resource_name, operation, generation_before, generation_after, detail) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
         params![
-            ts,
-            subject,
-            provenance,
-            key.map(|k| k.zone.as_str()),
-            key.map(|k| k.type_name.as_str()),
-            key.map(|k| k.name.as_str()),
-            operation,
-            generation_before,
-            generation_after,
+            entry.ts,
+            entry.subject,
+            entry.provenance,
+            entry.key.map(|k| k.zone.as_str()),
+            entry.key.map(|k| k.type_name.as_str()),
+            entry.key.map(|k| k.name.as_str()),
+            entry.operation,
+            entry.generation_before,
+            entry.generation_after,
         ],
     )?;
     Ok(())
@@ -574,13 +591,15 @@ fn mark_deleting_transactional(
             )?;
             insert_audit(
                 conn,
-                now(),
-                "resource.deletion",
-                before.provenance.as_str(),
-                Some(key),
-                "deletion.mark",
-                Some(before.generation as i64),
-                Some(before.generation as i64),
+                AuditWrite {
+                    ts: now(),
+                    subject: "resource.deletion",
+                    provenance: before.provenance.as_str(),
+                    key: Some(key),
+                    operation: "deletion.mark",
+                    generation_before: Some(before.generation as i64),
+                    generation_after: Some(before.generation as i64),
+                },
             )?;
         }
         Ok(load_row(conn, key)?.expect("row present within its own transaction"))
@@ -615,13 +634,15 @@ fn remove_after_cleanup(conn: &mut Connection, key: &ResourceKey) -> Result<(), 
         )?;
         insert_audit(
             conn,
-            now(),
-            "resource.deletion",
-            existing.provenance.as_str(),
-            Some(key),
-            "deletion.removed",
-            Some(existing.generation as i64),
-            None,
+            AuditWrite {
+                ts: now(),
+                subject: "resource.deletion",
+                provenance: existing.provenance.as_str(),
+                key: Some(key),
+                operation: "deletion.removed",
+                generation_before: Some(existing.generation as i64),
+                generation_after: None,
+            },
         )?;
         Ok(())
     })();
@@ -1021,7 +1042,7 @@ mod tests {
         assert_eq!(mode(&path), 0o600, "store file mode");
         assert_eq!(mode(&path.with_extension("db-wal")), 0o600, "wal mode");
         assert_eq!(mode(&path.with_extension("db-shm")), 0o600, "shm mode");
-        assert_eq!(mode(&path.parent().unwrap()), 0o700, "store dir mode");
+        assert_eq!(mode(path.parent().unwrap()), 0o700, "store dir mode");
     }
 
     /// The side files of the *actual* database path are the ones tightened

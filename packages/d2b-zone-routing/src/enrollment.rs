@@ -233,14 +233,16 @@ pub struct ZoneEnrollmentAdmission {
     state: Mutex<Option<EnrollmentAdmissionState>>,
 }
 
+struct EnrollmentAdmissionRuntime {
+    verifier: ZoneEnrollmentAdmissionVerifier,
+    evidence: ZoneEnrollmentAdmissionEvidence,
+    expected: ZoneEnrollmentExpectation,
+}
+
 enum EnrollmentAdmissionState {
-    Runtime {
-        verifier: ZoneEnrollmentAdmissionVerifier,
-        evidence: ZoneEnrollmentAdmissionEvidence,
-        expected: ZoneEnrollmentExpectation,
-    },
+    Runtime(Box<EnrollmentAdmissionRuntime>),
     #[cfg(any(test, feature = "test-support"))]
-    Test(ZoneEnrollmentExpectation),
+    Test(Box<ZoneEnrollmentExpectation>),
 }
 
 impl std::fmt::Debug for ZoneEnrollmentAdmission {
@@ -257,11 +259,13 @@ impl ZoneEnrollmentAdmission {
         expected: &ZoneEnrollmentExpectation,
     ) -> Result<Self, ZoneEnrollmentRefusal> {
         Ok(Self {
-            state: Mutex::new(Some(EnrollmentAdmissionState::Runtime {
-                verifier,
-                evidence,
-                expected: expected.clone(),
-            })),
+            state: Mutex::new(Some(EnrollmentAdmissionState::Runtime(Box::new(
+                EnrollmentAdmissionRuntime {
+                    verifier,
+                    evidence,
+                    expected: expected.clone(),
+                },
+            )))),
         })
     }
 
@@ -269,7 +273,7 @@ impl ZoneEnrollmentAdmission {
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_test(expected: ZoneEnrollmentExpectation) -> Self {
         Self {
-            state: Mutex::new(Some(EnrollmentAdmissionState::Test(expected))),
+            state: Mutex::new(Some(EnrollmentAdmissionState::Test(Box::new(expected)))),
         }
     }
 
@@ -294,11 +298,12 @@ impl ZoneEnrollmentAdmission {
             .take()
             .ok_or(ZoneEnrollmentRefusal::AdmissionConsumed)?;
         match state {
-            EnrollmentAdmissionState::Runtime {
-                verifier,
-                evidence,
-                expected,
-            } => {
+            EnrollmentAdmissionState::Runtime(runtime) => {
+                let EnrollmentAdmissionRuntime {
+                    verifier,
+                    evidence,
+                    expected,
+                } = *runtime;
                 let snapshot = verifier.verify(evidence)?;
                 verifier.check_current(&snapshot)?;
                 if snapshot.expected() != &expected {
@@ -307,7 +312,7 @@ impl ZoneEnrollmentAdmission {
                 Ok(snapshot.into_expected())
             }
             #[cfg(any(test, feature = "test-support"))]
-            EnrollmentAdmissionState::Test(expected) => Ok(expected),
+            EnrollmentAdmissionState::Test(expected) => Ok(*expected),
         }
     }
 }

@@ -12,7 +12,7 @@ use d2b_contracts_resource::v3::{
 };
 use std::sync::{Arc, Mutex};
 
-use crate::authz::AuthorizationLease;
+use crate::authz::{AuthorizationLease, AuthorizationLeaseTarget};
 
 #[derive(Debug)]
 struct AdmissionAuthority;
@@ -176,8 +176,10 @@ impl AdmissionPermit {
         AuthorizationLease::issue(
             self.authorization.subject_uid,
             zone_uid,
-            Some(object_uid),
-            Some(object_generation),
+            AuthorizationLeaseTarget {
+                uid: Some(object_uid),
+                generation: Some(object_generation),
+            },
             target.verb,
             self.zone_policy_revision
                 .max(self.policy_snapshot.policy_revision),
@@ -238,8 +240,10 @@ impl AdmissionPermit {
                 AuthorizationLease::issue(
                     self.authorization.subject_uid.clone(),
                     zone_uid,
-                    mutation.expected_uid.clone(),
-                    object_generation,
+                    AuthorizationLeaseTarget {
+                        uid: mutation.expected_uid.clone(),
+                        generation: object_generation,
+                    },
                     target.verb,
                     self.zone_policy_revision
                         .max(self.policy_snapshot.policy_revision),
@@ -349,7 +353,6 @@ impl StoreAdmissionBinding {
             authorization,
             policy_snapshot,
             operation,
-            authorization_lease: _,
             ..
         } = admitted;
         let mutations = mutations

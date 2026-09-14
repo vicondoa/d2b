@@ -86,7 +86,6 @@ fn public_enforcement_posture(cap: &AudioProviderCapability) -> AudioEnforcement
 
 /// Result of a host-side audio enforcement call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum HostEnforcementResult {
     Applied,
     Unsupported,

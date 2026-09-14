@@ -434,7 +434,7 @@ mod tests {
         nix::unistd::write(&write_end, b"x").expect("write to the pipe");
         let mut buffer = [0_u8; 1];
         let read = nix::unistd::read(fds[0].as_raw_fd(), &mut buffer).expect("read the pipe");
-        assert_eq!((read, buffer), (1, [b'x']));
+        assert_eq!((read, buffer), (1, *b"x"));
     }
 
     /// A dial nothing is listening on refuses at once; it is the dial that

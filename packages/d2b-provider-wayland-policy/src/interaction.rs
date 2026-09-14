@@ -648,7 +648,7 @@ impl<T: InteractionType> InteractionDriver<T> {
         Ok(InteractionEffectRequest {
             target: ctx.key().clone(),
             uid: resource_uid(ctx.uid())
-                .map_err(|_| self.error(InteractionDriverErrorKind::SpecInvalid, op))?,
+                .ok_or_else(|| self.error(InteractionDriverErrorKind::SpecInvalid, op))?,
             generation: ctx.generation(),
             controller_generation: self.controller_generation.get(),
             spec: envelope.base().clone(),
@@ -841,8 +841,8 @@ pub fn key_ref(key: &ResourceKey) -> ResourceRef {
 /// Convert one durable 16-byte uid to its canonical identity (the manager
 /// persists the uid as bytes; the Provider effects key on the canonical
 /// string).
-pub fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
-    ResourceUid::from_bytes(bytes).map_err(|_| ())
+pub fn resource_uid(bytes: &[u8; 16]) -> Option<ResourceUid> {
+    ResourceUid::from_bytes(bytes).ok()
 }
 
 /// Teardown ranks: endpoints retire before their producing processes.

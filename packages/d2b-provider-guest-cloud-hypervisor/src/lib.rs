@@ -19,9 +19,10 @@ pub mod state;
 
 pub use adoption::ProcessAdoptionStatus;
 pub use bootstrap_graph::{
-    BootstrapGraph, DependencyReadiness, GuestChildGraphPlan, VmmLifecycleEligibility,
+    BootstrapGraph, BootstrapGraphError, DependencyReadiness, GuestChildGraphPlan,
+    VmmLifecycleEligibility,
 };
-pub use config::CloudHypervisorConfig;
+pub use config::{CloudHypervisorConfig, ConfigValidationError};
 pub use controller::{CLOUD_HYPERVISOR_REPAIR_INTERVAL_SECS, GUEST_CONTROLLER_FINALIZER};
 pub use controller::{
     AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, ChildSpecUpdate,

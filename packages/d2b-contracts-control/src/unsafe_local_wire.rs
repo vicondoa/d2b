@@ -308,7 +308,7 @@ pub struct HelperOperationRejected {
 pub enum DaemonToUnsafeLocalHelper {
     HelloAccepted(HelperHelloAccepted),
     Heartbeat(HelperHeartbeat),
-    Launch(HelperLaunchRequest),
+    Launch(Box<HelperLaunchRequest>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
