@@ -22,7 +22,6 @@
             Self::OpenFuse,
             Self::OpenKvm,
             Self::OpenVhostNet,
-            Self::MigrateLegacySwtpmState,
             Self::SetBridgePortFlags,
             Self::UpdateHostsFile,
             Self::UsbipBindFirewallRule,

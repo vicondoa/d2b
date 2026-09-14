@@ -1,7 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::RuntimeMetadata;
 use d2b_contracts_resource::v3::IfName;
 
 /// Private host topology and host-owned capability contract.
@@ -24,12 +23,6 @@ pub struct HostJson {
     pub kernel_modules: Vec<KernelModulesEntry>,
     /// Broker-opened file descriptor ownership table.
     pub fd_ownership: Vec<FdOwnershipEntry>,
-    /// Runtime/provider catalog advertised by this host bundle.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub runtime_providers: Vec<RuntimeMetadata>,
-    /// Per-VM runtime/provider rows plus provider-neutral host topology.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub vm_runtimes: Vec<VmRuntimeRow>,
     /// QEMU media runtime contract. Physical USB rows carry only opaque media
     /// refs and root-owned registry/rule locations; direct image-file rows may
     /// carry operator-authored absolute image paths from Nix config. Raw USB
@@ -74,20 +67,6 @@ pub struct SecurityKeySelector {
     pub product_id: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
-}
-
-/// Per-VM runtime row emitted in host.json for daemon lifecycle/status joins.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct VmRuntimeRow {
-    pub vm: String,
-    pub runtime: RuntimeMetadata,
-    pub env: Option<String>,
-    pub state_dir: String,
-    pub tap: String,
-    pub bridge: Option<String>,
-    pub static_ip: Option<String>,
-    pub net_vm: Option<String>,
 }
 
 /// Host-side QEMU media registry/rule contract.
@@ -605,48 +584,11 @@ mod tests {
                 "registryScope": "root-only-runtime-state"
             }]
         });
-        value["runtimeProviders"] = serde_json::json!([{
-            "kind": "qemu-media",
-            "provider": {
-                "id": "local-qemu-media",
-                "type": "local",
-                "driver": "qemu"
-            },
-            "capabilities": {
-                "lifecycle": true,
-                "storeSync": false,
-                "exec": false,
-                "configSync": false,
-                "display": true,
-                "usbHotplug": true,
-                "inGuestObservability": false,
-                "keys": false,
-                "ssh": false
-            }
-        }]);
-        value["vmRuntimes"] = serde_json::json!([{
-            "vm": "dark-live",
-            "env": "dark",
-            "runtime": value["runtimeProviders"][0].clone(),
-            "stateDir": "/var/lib/d2b/vms/dark-live",
-            "staticIp": "10.50.0.10",
-            "bridge": "br-dark-lan",
-            "tap": "dark-l10",
-            "netVm": "sys-dark-net"
-        }]);
         let parsed: HostJson =
             serde_json::from_value(value).expect("qemu/runtime extension fields parse");
         let qemu = parsed.qemu_media.expect("qemuMedia present");
         assert_eq!(qemu.registry_dir, "/var/lib/d2b/media-registry");
         assert_eq!(qemu.sources[0].vm, "dark-live");
-        assert!(matches!(
-            parsed.runtime_providers[0].provider.driver,
-            crate::runtime::RuntimeProviderDriver::Qemu
-        ));
-        assert!(matches!(
-            parsed.vm_runtimes[0].runtime.kind,
-            crate::runtime::RuntimeKind::QemuMedia
-        ));
     }
 
     #[test]

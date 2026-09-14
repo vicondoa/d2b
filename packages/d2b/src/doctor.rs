@@ -56,9 +56,7 @@ use crate::context::{CliContext, socket_connectable, system_tool_command};
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 
-/// Stable per-check severity. Mirrors `host_check::HostCheckSeverity`
-/// to keep the schema vocabulary identical across `host check` and
-/// `host doctor`.
+/// Stable per-check severity for `d2b host doctor` output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DoctorStatus {

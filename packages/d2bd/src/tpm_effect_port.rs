@@ -28,13 +28,12 @@
 
 use std::sync::Mutex;
 
-use d2b_contracts::types::{BundleOpId, PathClass, VmId};
+use d2b_contracts::types::{PathClass, VmId};
 use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest, BrokerResponse};
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
-use d2b_core_controller::migration::LegacyTpmMigrationDecision;
 use d2b_provider_device_tpm::{
-    LegacyMigrationOutcome, TpmResourceController, TpmResourceEffectError, TpmResourceEffectPort,
-    TpmResourceOutcome, build_tpm_state_volume_resource,
+    TpmResourceController, TpmResourceEffectError, TpmResourceEffectPort, TpmResourceOutcome,
+    build_tpm_state_volume_resource,
 };
 use d2b_resource_runtime::context::ChildEnsure;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
@@ -43,35 +42,6 @@ use serde_json::Value;
 
 use crate::provider_effects::{GuestLifecycleOperation, LifecycleAuthorization};
 use d2b_provider_toolkit::SharedProviderChildSurface;
-
-fn map_legacy_migration_outcome(
-    outcome: d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome,
-) -> LegacyMigrationOutcome {
-    match outcome {
-        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Migrated => {
-            LegacyMigrationOutcome::Migrated
-        }
-        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated => {
-            LegacyMigrationOutcome::AlreadyMigrated
-        }
-        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable => {
-            LegacyMigrationOutcome::NotApplicable
-        }
-        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Pending => {
-            LegacyMigrationOutcome::Pending
-        }
-        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Failed => {
-            LegacyMigrationOutcome::Failed
-        }
-        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous => {
-            LegacyMigrationOutcome::Ambiguous
-        }
-        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::AdoptionRequired
-        | d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::NeverProvisioned => {
-            LegacyMigrationOutcome::Ambiguous
-        }
-    }
-}
 
 /// Fail closed (retryable) while a declared row is absent or still
 /// converging, and terminally when its controller reported `Failed`.
@@ -270,15 +240,12 @@ enum TpmLifecycleAdmission {
 /// Concrete daemon-side TPM resource effect port.
 ///
 /// The port holds no broker spawn surface by construction: every effect is a
-/// manager child mutation or a manager view of a Device-owned row. The two
-/// broker calls that remain are the one-time legacy state adoption and the
-/// broker-owned state-directory preparation, neither of which launches a
-/// process.
+/// manager child mutation or a manager view of a Device-owned row. The one
+/// broker call that remains is the broker-owned state-directory preparation,
+/// which does not launch a process.
 struct LiveTpmResourceEffectPort<'a> {
     state: &'a crate::ServerState,
     vm_id: VmId,
-    migration_intent_ref: BundleOpId,
-    migration_decision: LegacyTpmMigrationDecision,
     caller_role: BrokerCallerRole,
     rows: DeclaredTpmRows<'a>,
     device_uid: ResourceUid,
@@ -379,34 +346,6 @@ impl LiveTpmResourceEffectPort<'_> {
         Ok(())
     }
 
-    /// Complete or resume the broker-owned one-time legacy state adoption.
-    /// Not a spawn: the broker migrates the trusted on-disk inventory and
-    /// answers with the closed outcome.
-    fn migrate_legacy_state(&self) -> Result<(), TpmResourceEffectError> {
-        if !self.migration_decision.requires_migration()
-            || !self
-                .migration_decision
-                .validates_binding(self.vm_id.as_str(), self.migration_intent_ref.as_str())
-        {
-            return Err(TpmResourceEffectError::StateIntegrity);
-        }
-        let outcome = crate::dispatch_broker_legacy_tpm_migration(
-            self.state,
-            self.vm_id.clone(),
-            self.migration_intent_ref.clone(),
-        )
-        .map_err(|_| TpmResourceEffectError::Transient)?;
-        match map_legacy_migration_outcome(outcome) {
-            LegacyMigrationOutcome::Migrated
-            | LegacyMigrationOutcome::AlreadyMigrated
-            | LegacyMigrationOutcome::NotApplicable => Ok(()),
-            LegacyMigrationOutcome::Pending => Err(TpmResourceEffectError::Transient),
-            LegacyMigrationOutcome::Failed | LegacyMigrationOutcome::Ambiguous => {
-                Err(TpmResourceEffectError::StateIntegrity)
-            }
-        }
-    }
-
     /// The broker-owned state-directory preparation (the trusted marker and
     /// hardening step the legacy TPM connector supplies). Not a spawn.
     fn prepare_state_dir(&self) -> Result<(), TpmResourceEffectError> {
@@ -444,9 +383,6 @@ impl TpmResourceEffectPort for LiveTpmResourceEffectPort<'_> {
         execution_ref: &ResourceRef,
     ) -> Result<ResourceRef, TpmResourceEffectError> {
         self.identity_matches(device_uid, device_ref, execution_ref)?;
-        if self.migration_decision.requires_migration() {
-            self.migrate_legacy_state()?;
-        }
         self.prepare_state_dir()?;
         // The Volume row is committed before the flush and swtpm rows can use
         // it, so the caller waits for its own controller here.
@@ -570,16 +506,12 @@ impl AdmittedTpmDevice {
         self,
         state: &'a crate::ServerState,
         vm_id: VmId,
-        migration_intent_ref: BundleOpId,
-        migration_decision: LegacyTpmMigrationDecision,
         caller_role: BrokerCallerRole,
         children: &'a dyn SharedProviderChildSurface,
     ) -> LiveTpmResourceEffectPort<'a> {
         LiveTpmResourceEffectPort {
             state,
             vm_id,
-            migration_intent_ref,
-            migration_decision,
             caller_role,
             rows: DeclaredTpmRows {
                 children,
@@ -601,21 +533,13 @@ impl AdmittedTpmDevice {
 pub(crate) fn reconcile_device_tpm_controller(
     state: &crate::ServerState,
     vm_id: VmId,
-    migration_intent_ref: BundleOpId,
-    migration_decision: LegacyTpmMigrationDecision,
     admitted_device: AdmittedTpmDevice,
     caller_role: BrokerCallerRole,
     children: &dyn SharedProviderChildSurface,
     controller: &mut TpmResourceController,
 ) -> Result<TpmResourceOutcome, d2b_provider_device_tpm::TpmResourceControllerError> {
-    let resource_effect = admitted_device.into_port(
-        state,
-        vm_id,
-        migration_intent_ref,
-        migration_decision,
-        caller_role,
-        children,
-    );
+    let resource_effect =
+        admitted_device.into_port(state, vm_id, caller_role, children);
     crate::block_on_future(controller.reconcile(&resource_effect))
 }
 
@@ -623,21 +547,13 @@ pub(crate) fn reconcile_device_tpm_controller(
 pub(crate) fn finalize_device_tpm_controller(
     state: &crate::ServerState,
     vm_id: VmId,
-    migration_intent_ref: BundleOpId,
-    migration_decision: LegacyTpmMigrationDecision,
     admitted_device: AdmittedTpmDevice,
     caller_role: BrokerCallerRole,
     children: &dyn SharedProviderChildSurface,
     controller: &mut TpmResourceController,
 ) -> Result<TpmResourceOutcome, d2b_provider_device_tpm::TpmResourceControllerError> {
-    let resource_effect = admitted_device.into_port(
-        state,
-        vm_id,
-        migration_intent_ref,
-        migration_decision,
-        caller_role,
-        children,
-    );
+    let resource_effect =
+        admitted_device.into_port(state, vm_id, caller_role, children);
     crate::block_on_future(controller.finalize(&resource_effect))
 }
 
@@ -645,7 +561,6 @@ pub(crate) fn finalize_device_tpm_controller(
 mod tests {
     use std::collections::HashMap;
 
-    use d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome;
     use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance};
     use d2b_resource_runtime::spec_store::EnsureOutcome;
@@ -658,38 +573,6 @@ mod tests {
     const DEVICE_REF: &str = "Device/tpm-0";
     const EXECUTION_REF: &str = "Host/host-system";
     const STATE_VOLUME: &str = "Volume/device-123e4567e89b42d3a456426614174000-tpm-state";
-
-    #[test]
-    fn broker_migration_outcomes_are_preserved_at_the_provider_boundary() {
-        for (broker, provider) in [
-            (
-                LegacySwtpmMigrationOutcome::Migrated,
-                LegacyMigrationOutcome::Migrated,
-            ),
-            (
-                LegacySwtpmMigrationOutcome::AlreadyMigrated,
-                LegacyMigrationOutcome::AlreadyMigrated,
-            ),
-            (
-                LegacySwtpmMigrationOutcome::NotApplicable,
-                LegacyMigrationOutcome::NotApplicable,
-            ),
-            (
-                LegacySwtpmMigrationOutcome::Pending,
-                LegacyMigrationOutcome::Pending,
-            ),
-            (
-                LegacySwtpmMigrationOutcome::Failed,
-                LegacyMigrationOutcome::Failed,
-            ),
-            (
-                LegacySwtpmMigrationOutcome::Ambiguous,
-                LegacyMigrationOutcome::Ambiguous,
-            ),
-        ] {
-            assert_eq!(map_legacy_migration_outcome(broker), provider);
-        }
-    }
 
     /// Scripted manager-over-child-surface double: rows keyed by canonical
     /// reference, plus the ensure/delete call log.

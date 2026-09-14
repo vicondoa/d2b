@@ -1,10 +1,10 @@
 //! Shared CLI-contract integration-test harness.
 //!
 //! Most CLI-contract cases drive the `d2b` binary against static fixtures
-//! and need nothing here. A handful of cases (audit / host-check daemon-backed
-//! paths) must talk to a real, KVM-free `d2bd` over `AF_UNIX` +
-//! `SO_PEERCRED`. This module spawns such a daemon in `--once` mode with a
-//! synthetic config and a caller-chosen test peer identity.
+//! and need nothing here. A handful of cases (audit daemon-backed paths) must
+//! talk to a real, KVM-free `d2bd` over `AF_UNIX` + `SO_PEERCRED`. This
+//! module spawns such a daemon in `--once` mode with a synthetic config and a
+//! caller-chosen test peer identity.
 //!
 //! The d2bd binary path is delivered out-of-band via
 //! `D2B_TEST_D2BD_BIN` (the gated rust-workspace-checks.sh step builds
@@ -107,34 +107,10 @@ fn current_username() -> String {
 /// the caller should run a single `d2b` invocation against
 /// `socket_path` and then call [`DaemonOnce::wait`].
 pub fn spawn_d2bd_once(peer: &TestPeer) -> Option<DaemonOnce> {
-    spawn_d2bd_inner(peer, None, None)
+    spawn_d2bd_inner(peer)
 }
 
-/// Spawn `d2bd serve --once` wired to read its bundle/host/closure
-/// artifacts from `artifacts_dir` and to drive every `host check` probe from
-/// the JSON `fixture_path` (`D2B_HOST_CHECK_FIXTURE`). Used by the
-/// daemon-backed `hostCheck` cases migrated from
-/// tests/cli-rust-native-host-check.sh.
-///
-/// `artifacts_dir` must contain a `bundle.json` whose `hostPath` /
-/// `processesPath` resolve (relative to the dir) to fixture artifacts that
-/// live there too, plus a `closures/` subdir - see
-/// `host_check_contract::build_hermetic_bundle_tree`, which rewrites the
-/// committed fixture-smoke bundle so the absolute `/etc/d2b/*` paths can
-/// never leak the real host's artifacts into the test.
-pub fn spawn_d2bd_host_check(
-    artifacts_dir: &Path,
-    fixture_path: &Path,
-    peer: &TestPeer,
-) -> Option<DaemonOnce> {
-    spawn_d2bd_inner(peer, Some(artifacts_dir), Some(fixture_path))
-}
-
-fn spawn_d2bd_inner(
-    peer: &TestPeer,
-    artifacts_dir: Option<&Path>,
-    fixture_path: Option<&Path>,
-) -> Option<DaemonOnce> {
+fn spawn_d2bd_inner(peer: &TestPeer) -> Option<DaemonOnce> {
     let bin = d2bd_bin()?;
 
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -157,7 +133,7 @@ fn spawn_d2bd_inner(
     let group = lifecycle_group_name();
     // Keep optional config inputs inside the test-owned run tree. Host-installed
     // realm files may still contain fields removed by the current contract.
-    let mut config = serde_json::json!({
+    let config = serde_json::json!({
         "publicSocketPath": socket_path,
         "brokerSocketPath": run.join("priv.sock"),
         "stateLockPath": state_lock,
@@ -184,18 +160,6 @@ fn spawn_d2bd_inner(
         "realmControllersConfigPath": run.join("realm-controllers.json"),
         "realmIdentityConfigPath": run.join("realm-identity.json")
     });
-    if let Some(dir) = artifacts_dir {
-        config.as_object_mut().unwrap().insert(
-            "artifacts".to_owned(),
-            serde_json::json!({
-                "publicManifestPath": dir.join("manifest.json"),
-                "bundlePath": dir.join("bundle.json"),
-                "hostPath": dir.join("host.json"),
-                "processesPath": dir.join("processes.json"),
-                "closuresDir": dir.join("closures"),
-            }),
-        );
-    }
     {
         let mut f = std::fs::File::create(&config_json).expect("write config.json");
         f.write_all(serde_json::to_string_pretty(&config).unwrap().as_bytes())
@@ -219,19 +183,14 @@ fn spawn_d2bd_inner(
             "--allow-unprivileged-runtime-dir",
             "--no-drop-privileges",
         ])
-        // The daemon's startup kernel-module gate reads the real /proc/modules
-        // (NOT the host-check fixture); bypass it so the daemon starts on any
-        // host. The host-check dispatch itself still runs entirely from
-        // D2B_HOST_CHECK_FIXTURE.
+        // The daemon's startup kernel-module gate reads the real /proc/modules;
+        // bypass it so the daemon starts on any host.
         .env("D2B_SKIP_KERNEL_MODULE_CHECK", "1")
         // Quiet the daemon's startup/autostart tracing so it does not pollute
         // test output; assertions over the CLI response give the signal.
         .env("RUST_LOG", "off")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    if let Some(fixture) = fixture_path {
-        command.env("D2B_HOST_CHECK_FIXTURE", fixture);
-    }
     let child = command.spawn().expect("spawn d2bd serve --once");
 
     wait_for_socket(&socket_path, Duration::from_secs(15));
@@ -242,43 +201,6 @@ fn spawn_d2bd_inner(
         daemon_state_dir,
         _tmp: tmp,
     })
-}
-
-/// Drive one daemon `hostCheck` round-trip through the bundled `d2bd
-/// test-client` (the daemon binary's own subcommand) and return the parsed
-/// `hostCheckResponse`.
-///
-/// The client opens a single `AF_UNIX`/`SOCK_SEQPACKET` connection, sends a
-/// `hello` frame followed by `{"type":"hostCheck","strict":<strict>}`, and
-/// prints one JSON line per response frame. The LAST line is the
-/// `hostCheckResponse`. Panics if the harness binary is unavailable - callers
-/// that obtained a [`DaemonOnce`] from [`spawn_d2bd_host_check`] already
-/// know `d2bd_bin()` is `Some`.
-pub fn daemon_host_check_response(socket_path: &Path, strict: bool) -> serde_json::Value {
-    let bin = d2bd_bin().expect("d2bd test-client binary");
-    let host_check_frame = format!("{{\"type\":\"hostCheck\",\"strict\":{strict}}}");
-    let out = Command::new(&bin)
-        .arg("test-client")
-        .arg("--socket")
-        .arg(socket_path)
-        .arg("--frame-json")
-        .arg(r#"{"type":"hello","clientVersion":">=0.4.0, <0.5.0","supportedFeatures":[]}"#)
-        .arg("--frame-json")
-        .arg(&host_check_frame)
-        .output()
-        .expect("spawn d2bd test-client");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let last = stdout
-        .lines()
-        .rfind(|line| !line.trim().is_empty())
-        .unwrap_or_else(|| {
-            panic!(
-                "d2bd test-client produced no response line; stderr:\n{}",
-                String::from_utf8_lossy(&out.stderr)
-            )
-        });
-    serde_json::from_str(last)
-        .unwrap_or_else(|err| panic!("hostCheckResponse was not valid JSON: {err}\nline: {last}"))
 }
 
 /// Poll until `path` is a socket or the timeout elapses.

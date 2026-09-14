@@ -244,19 +244,6 @@ _arguments "${_arguments_options[@]}" : \
 ':name:_default' \
 && ret=0
 ;;
-(check)
-_arguments "${_arguments_options[@]}" : \
-'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
-'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
-'--read-only[]' \
-'--strict[]' \
-'(--human)--json[Emit the stable JSON envelope]' \
-'(--json)--human[Force human-readable terminal output]' \
-'(--deadline)--no-deadline[Suppress the command default deadline]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
 (prepare)
 _arguments "${_arguments_options[@]}" : \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
@@ -288,22 +275,6 @@ _arguments "${_arguments_options[@]}" : \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
 '--read-only[]' \
-'(--human)--json[Emit the stable JSON envelope]' \
-'(--json)--human[Force human-readable terminal output]' \
-'(--deadline)--no-deadline[Suppress the command default deadline]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(install)
-_arguments "${_arguments_options[@]}" : \
-'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
-'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
-'(--apply --enable --start --no-start)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--dry-run)--enable[]' \
-'(--dry-run --no-start)--start[]' \
-'(--dry-run --start)--no-start[]' \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \
@@ -3884,117 +3855,6 @@ _arguments "${_arguments_options[@]}" : \
 ':guest_ref:_default' \
 && ret=0
 ;;
-(gc)
-_arguments "${_arguments_options[@]}" : \
-'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
-'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[Emit the stable JSON envelope]' \
-'(--json)--human[Force human-readable terminal output]' \
-'(--deadline)--no-deadline[Suppress the command default deadline]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(migrate)
-_arguments "${_arguments_options[@]}" : \
-'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
-'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[Emit the stable JSON envelope]' \
-'(--json)--human[Force human-readable terminal output]' \
-'(--deadline)--no-deadline[Suppress the command default deadline]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(keys)
-_arguments "${_arguments_options[@]}" : \
-'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
-'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
-'(--human)--json[Emit the stable JSON envelope]' \
-'(--json)--human[Force human-readable terminal output]' \
-'(--deadline)--no-deadline[Suppress the command default deadline]' \
-'-h[Print help]' \
-'--help[Print help]' \
-":: :_d2b__subcmd__activation__subcmd__keys_commands" \
-"*::: :->keys" \
-&& ret=0
-
-    case $state in
-    (keys)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-activation-keys-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
-'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
-'(--human)--json[Emit the stable JSON envelope]' \
-'(--json)--human[Force human-readable terminal output]' \
-'(--deadline)--no-deadline[Suppress the command default deadline]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(show)
-_arguments "${_arguments_options[@]}" : \
-'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
-'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
-'(--human)--json[Emit the stable JSON envelope]' \
-'(--json)--human[Force human-readable terminal output]' \
-'(--deadline)--no-deadline[Suppress the command default deadline]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':name:_default' \
-&& ret=0
-;;
-(rotate)
-_arguments "${_arguments_options[@]}" : \
-'--to-generation=[]:TO_GENERATION:_default' \
-'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
-'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[Emit the stable JSON envelope]' \
-'(--json)--human[Force human-readable terminal output]' \
-'(--deadline)--no-deadline[Suppress the command default deadline]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':guest_ref:_default' \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-(trust)
-_arguments "${_arguments_options[@]}" : \
-'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
-'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
-'(--human)--json[Emit the stable JSON envelope]' \
-'(--json)--human[Force human-readable terminal output]' \
-'(--deadline)--no-deadline[Suppress the command default deadline]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':name:_default' \
-&& ret=0
-;;
-(rotate-known-host)
-_arguments "${_arguments_options[@]}" : \
-'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
-'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
-'(--human)--json[Emit the stable JSON envelope]' \
-'(--json)--human[Force human-readable terminal output]' \
-'(--deadline)--no-deadline[Suppress the command default deadline]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':name:_default' \
-&& ret=0
-;;
 (config)
 _arguments "${_arguments_options[@]}" : \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
@@ -4282,11 +4142,6 @@ _d2b__subcmd__activation_commands() {
 'test:' \
 'rollback:' \
 'adopt:' \
-'gc:' \
-'migrate:' \
-'keys:' \
-'trust:' \
-'rotate-known-host:' \
 'config:' \
     )
     _describe -t commands 'd2b activation commands' commands "$@"
@@ -4347,54 +4202,15 @@ _d2b__subcmd__activation__subcmd__config__subcmd__sync_commands() {
     local commands; commands=()
     _describe -t commands 'd2b activation config sync commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__activation__subcmd__gc_commands] )) ||
-_d2b__subcmd__activation__subcmd__gc_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b activation gc commands' commands "$@"
-}
 (( $+functions[_d2b__subcmd__activation__subcmd__generations_commands] )) ||
 _d2b__subcmd__activation__subcmd__generations_commands() {
     local commands; commands=()
     _describe -t commands 'd2b activation generations commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__activation__subcmd__keys_commands] )) ||
-_d2b__subcmd__activation__subcmd__keys_commands() {
-    local commands; commands=(
-'list:' \
-'show:' \
-'rotate:' \
-    )
-    _describe -t commands 'd2b activation keys commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__activation__subcmd__keys__subcmd__list_commands] )) ||
-_d2b__subcmd__activation__subcmd__keys__subcmd__list_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b activation keys list commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__activation__subcmd__keys__subcmd__rotate_commands] )) ||
-_d2b__subcmd__activation__subcmd__keys__subcmd__rotate_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b activation keys rotate commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__activation__subcmd__keys__subcmd__show_commands] )) ||
-_d2b__subcmd__activation__subcmd__keys__subcmd__show_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b activation keys show commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__activation__subcmd__migrate_commands] )) ||
-_d2b__subcmd__activation__subcmd__migrate_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b activation migrate commands' commands "$@"
-}
 (( $+functions[_d2b__subcmd__activation__subcmd__rollback_commands] )) ||
 _d2b__subcmd__activation__subcmd__rollback_commands() {
     local commands; commands=()
     _describe -t commands 'd2b activation rollback commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__activation__subcmd__rotate-known-host_commands] )) ||
-_d2b__subcmd__activation__subcmd__rotate-known-host_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b activation rotate-known-host commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__activation__subcmd__switch_commands] )) ||
 _d2b__subcmd__activation__subcmd__switch_commands() {
@@ -4405,11 +4221,6 @@ _d2b__subcmd__activation__subcmd__switch_commands() {
 _d2b__subcmd__activation__subcmd__test_commands() {
     local commands; commands=()
     _describe -t commands 'd2b activation test commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__activation__subcmd__trust_commands] )) ||
-_d2b__subcmd__activation__subcmd__trust_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b activation trust commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__audio_commands] )) ||
 _d2b__subcmd__audio_commands() {
@@ -5038,20 +4849,13 @@ _d2b__subcmd__host_commands() {
 'get:' \
 'list:' \
 'status:' \
-'check:' \
 'prepare:' \
 'destroy:' \
 'doctor:' \
-'install:' \
 'reconcile:' \
 'validate:' \
     )
     _describe -t commands 'd2b host commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__host__subcmd__check_commands] )) ||
-_d2b__subcmd__host__subcmd__check_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b host check commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__host__subcmd__destroy_commands] )) ||
 _d2b__subcmd__host__subcmd__destroy_commands() {
@@ -5067,11 +4871,6 @@ _d2b__subcmd__host__subcmd__doctor_commands() {
 _d2b__subcmd__host__subcmd__get_commands() {
     local commands; commands=()
     _describe -t commands 'd2b host get commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__host__subcmd__install_commands] )) ||
-_d2b__subcmd__host__subcmd__install_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b host install commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__host__subcmd__list_commands] )) ||
 _d2b__subcmd__host__subcmd__list_commands() {

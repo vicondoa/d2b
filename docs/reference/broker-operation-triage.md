@@ -18,7 +18,7 @@ no resource family.
 - `transport-excluded` - the name is a transport-layer concern the
 operation envelope does not carry.
 
-Counts: 78 family-owned, 4 broker-generic, 0 transport-excluded (80 rows carry a wire discriminant, 2 rows do not).
+Counts: 66 family-owned, 4 broker-generic, 0 transport-excluded (68 rows carry a wire discriminant, 2 rows do not).
 
 | Operation | Owner | Family | Declaring provider | Profiles | Disposition | Target | Justification |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -35,7 +35,6 @@ Counts: 78 family-owned, 4 broker-generic, 0 transport-excluded (80 rows carry a
 | PollChildReaped | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
 | PrepareRuntimeDir | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
 | PrepareStateDir | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
-| SetupMountNamespace | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
 | CgroupKill | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
 | SignalRunner | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
 | DeregisterRunnerPidfd | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
@@ -73,21 +72,11 @@ Counts: 78 family-owned, 4 broker-generic, 0 transport-excluded (80 rows carry a
 | inspect-process-family | family | process | d2b-provider-process | host | callable-read-only | live read-only callable | - |
 | PipeWireAudio | family | audio | d2b-provider-audio-service | host | promoted-live | live in production broker | - |
 | OpenVhostNet | family | device | d2b-provider-device | host | promoted-live | live in production broker | - |
-| MigrateLegacySwtpmState | family | device-tpm | d2b-provider-device-tpm | host | promoted-live | live in production broker | - |
 | ReconcileStorageScope | family | volume-binding | d2b-provider-volume-binding | host | promoted-live | live in production broker | - |
 | ValidateLockSpec | family | volume-binding | d2b-provider-volume-binding | host | promoted-live | live in production broker | - |
-| PrepareStoreView | family | volume | d2b-provider-volume-local | host | promoted-live | live in production broker | - |
 | StoreSync | family | volume | d2b-provider-volume-local | host | promoted-live | live in production broker | - |
-| StoreVerify | family | volume | d2b-provider-volume-local | host | promoted-live | live in production broker | - |
 | ReadSecretById | family | credential | d2b-provider-credential | host | stubbed-unimplemented | future work | - |
 | RotateSecretById | family | credential | d2b-provider-credential | host | stubbed-unimplemented | future work | - |
-| RunHostInstall | family | host | d2b-provider-host | host | promoted-live | live in production broker | - |
-| RunMigrate | family | host | d2b-provider-host | host | promoted-live | live in production broker | - |
-| RunActivation | family | activation | d2b-provider-activation-nixos | host | promoted-live | live in production broker | - |
-| RunGc | family | volume | d2b-provider-volume-local | host | promoted-live | live in production broker | - |
-| RunKeysRotate | family | host | d2b-provider-host | host | promoted-live | live in production broker | - |
-| RunHostKeyTrust | family | host | d2b-provider-host | host | promoted-live | live in production broker | - |
-| RunRotateKnownHost | family | host | d2b-provider-host | host | promoted-live | live in production broker | - |
 | SetBridgePortFlags | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
 | UpdateHostsFile | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
 | UsbipBind | family | device-usbip | d2b-provider-device-usbip | host | promoted-live | live in production broker | - |
@@ -97,7 +86,6 @@ Counts: 78 family-owned, 4 broker-generic, 0 transport-excluded (80 rows carry a
 | UsbipExplicitBind | family | device-usbip | d2b-provider-device-usbip | host | promoted-live | live in production broker | - |
 | UsbipExplicitFirewallRule | family | device-usbip | d2b-provider-device-usbip | host | promoted-live | live in production broker | - |
 | SeedDnsmasqLease | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| BindMountFromHardlinkFarm | family | volume | d2b-provider-volume-local | host | promoted-live | live in production broker | - |
 | OwnershipMatrixCheck | family | volume | d2b-provider-volume-local | host | stubbed-unimplemented | future work | - |
 | SshHostKeyPreflight | family | device-security-key | d2b-provider-device-security-key | host | stubbed-unimplemented | future work | - |
 | DiskInit | family | volume | d2b-provider-volume-local | host | promoted-live | live in production broker | - |

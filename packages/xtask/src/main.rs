@@ -17,8 +17,8 @@ use d2b_contracts::identity_config::RealmIdentityConfigJson;
 use d2b_contracts::launcher::RealmWorkloadsLauncherV2Json;
 use d2b_contracts_broker::broker_wire;
 use d2b_contracts_control::cli_output::{
-    AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, OpInspectOutputV1,
-    StatusOutputV2, StoreVerifyOutputV2, UsbProbeOutputV1,
+    AuditOutputV2, AuthStatusOutputV2, ListOutputV2, OpInspectOutputV1, StatusOutputV2,
+    UsbProbeOutputV1,
 };
 use d2b_contracts_control::public_wire;
 use d2b_contracts_control::unsafe_local_wire::UnsafeLocalHelperWireSchema;
@@ -762,7 +762,7 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("docs/reference/cli-output");
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 8] = [
+    let schemas: [(&str, RootSchema); 6] = [
         ("list.schema.json", schemars::schema_for!(ListOutputV2)),
         ("status.schema.json", schemars::schema_for!(StatusOutputV2)),
         (
@@ -775,16 +775,8 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         ),
         ("audit.schema.json", schemars::schema_for!(AuditOutputV2)),
         (
-            "host-check.schema.json",
-            schemars::schema_for!(HostCheckOutputV2),
-        ),
-        (
             "auth-status.schema.json",
             schemars::schema_for!(AuthStatusOutputV2),
-        ),
-        (
-            "store-verify.schema.json",
-            schemars::schema_for!(StoreVerifyOutputV2),
         ),
     ];
 

@@ -1758,13 +1758,10 @@ mod tests {
         use d2b_contracts_zone_session::v3::resource_bundle::{
             BundleResource, BundleResourceMetadata, ResourceBundle,
         };
-        use d2b_core::bundle::{Bundle, BundleGeneration};
-        use d2b_core::bundle_resolver::BundleResolver;
-        use d2b_core::host::HostJson;
-        use d2b_core::manifest_v04::ManifestV04;
-        use d2b_core::processes::ProcessesJson;
+        use d2b_core::bundle_resolver::{BundleResolver, BundleVerifyPolicy};
 
-        let zone = ZoneId::parse("dev").expect("zone");
+        let zone_name = "dev";
+        let zone = ZoneId::parse(zone_name).expect("zone");
         let provider_ref =
             ResourceRef::parse("Provider/device-tpm").expect("provider ref");
         let device_ref = ResourceRef::parse("Device/tpm").expect("device ref");
@@ -1909,48 +1906,113 @@ mod tests {
             }
         ]);
         let bytes = serde_json::to_vec(&value).expect("resource bundle bytes");
-        let host = serde_json::from_str::<HostJson>(include_str!(
-            "../../../tests/fixtures/deny-unknown/host-valid.json"
-        ))
-        .expect("host fixture");
-        let manifest = ManifestV04::from_slice(
-            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+
+        // Materialise the fixture as a verified on-disk v3 zone-native
+        // bundle and load it through the production loader, so the resolver
+        // is built exactly as the daemon's trusted-bundle path builds it -
+        // integrity-pinned per-Zone artifacts, sealed topology, and no
+        // hand-rolled v2 Bundle literal.
+        let root = tempfile::tempdir().expect("tempdir for zone-native bundle fixture");
+        write_fixture_artifact(
+            &root.path().join(format!("zones/{zone_name}/resource-bundle.json")),
+            &bytes,
+        );
+        let index_bytes = zone_topology_index_bytes(zone_name);
+        write_fixture_artifact(&root.path().join("index.json"), &index_bytes);
+        let artifact_hashes = BTreeMap::from([
+            (
+                format!("zones/{zone_name}/resource-bundle.json"),
+                fixture_sha256_hex(&bytes),
+            ),
+            ("index.json".to_owned(), fixture_sha256_hex(&index_bytes)),
+        ]);
+        write_fixture_artifact(
+            &root.path().join("bundle.json"),
+            &zone_native_bundle_index_bytes(zone_name, &artifact_hashes),
+        );
+        let resolver = BundleResolver::load_with_policy(
+            &root.path().join("bundle.json"),
+            &BundleVerifyPolicy::for_tests(),
         )
-        .expect("manifest fixture");
-        BundleBackedLaunchResolver::new(BundleResolver::from_artifacts_with_zone_resource_bundles(
-            Bundle {
-                bundle_version: 11,
-                schema_version: "v2".to_owned(),
-                public_manifest_path: "vms.json".to_owned(),
-                host_path: "host.json".to_owned(),
-                processes_path: "processes.json".to_owned(),
-                privileges_path: "privileges.json".to_owned(),
-                storage_path: None,
-                sync_path: None,
-                allocator_path: None,
-                realm_controllers_path: None,
-                realm_identity_path: None,
-                realm_workloads_launcher_v2_path: None,
-                unsafe_local_workloads_path: None,
-                closures: Vec::new(),
-                minijail_profiles: Vec::new(),
-                managed_keys: Default::default(),
-                generation: BundleGeneration {
-                    generator: "test".to_owned(),
-                    source_revision: None,
-                    generated_at: None,
-                },
-                bundle_hash: Some("sha256:bundle".to_owned()),
-                artifact_hashes: None,
+        .expect("zone-native broker fixture bundle loads");
+        BundleBackedLaunchResolver::new(resolver)
+    }
+
+    /// Write one bundle artifact with the production verifier's 0640 posture.
+    fn write_fixture_artifact(path: &Path, bytes: &[u8]) {
+        use std::os::unix::fs::PermissionsExt as _;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create fixture directory");
+        }
+        std::fs::write(path, bytes).expect("write fixture artifact");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o640))
+            .expect("chmod fixture artifact to 0640");
+    }
+
+    fn fixture_sha256_hex(bytes: &[u8]) -> String {
+        let raw: [u8; 32] = Sha256::digest(bytes).into();
+        let hex: String = raw.iter().map(|byte| format!("{byte:02x}")).collect();
+        format!("sha256:{hex}")
+    }
+
+    /// The sealed zone topology index for a single-root Zone set.
+    ///
+    /// The parent-map digest pins the single-root topology `{"dev": null}`
+    /// (`framed_canonical_digest("d2b:v3:parent-topology", canonical(parent_map))`).
+    fn zone_topology_index_bytes(zone_name: &str) -> Vec<u8> {
+        let parent_map = BTreeMap::from([(zone_name.to_owned(), None::<String>)]);
+        let parent_map_value = serde_json::to_value(&parent_map).expect("parent map value");
+        let mut zones = serde_json::Map::new();
+        zones.insert(zone_name.to_owned(), serde_json::Value::Object(Default::default()));
+        let mut generation_by_zone = serde_json::Map::new();
+        generation_by_zone.insert(
+            zone_name.to_owned(),
+            serde_json::Value::String(format!("sha256:{}", "a".repeat(64))),
+        );
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": "v1",
+            "zones": zones,
+            "topology": {
+                "sealed": true,
+                "parentMap": parent_map_value,
+                "parentMapDigest": "sha256:a6236cbb470f08d01b75b0282cf349f0521a49a620661c7279bca7b828c46ca1",
+                "generationByZone": generation_by_zone
             },
-            host,
-            ProcessesJson {
-                schema_version: "v2".to_owned(),
-                vms: Vec::new(),
-            },
-            manifest,
-            BTreeMap::from([("dev".to_owned(), bytes)]),
-        ))
+            "executionIndex": {},
+            "networkIndex": {},
+            "closureIndex": {}
+        }))
+        .expect("topology index serializes")
+    }
+
+    /// The v3 `bundle.json` index whose `bundleHash` is the canonical hash
+    /// (artifacts nullified), matching the production verifier.
+    fn zone_native_bundle_index_bytes(
+        zone_name: &str,
+        artifact_hashes: &BTreeMap<String, String>,
+    ) -> Vec<u8> {
+        let mut value = serde_json::json!({
+            "artifactHashes": artifact_hashes,
+            "bundleVersion": 1,
+            "schemaVersion": "v3",
+            "privilegesPath": "privileges.json",
+            "zones": [{
+                "zone": zone_name,
+                "path": format!("zones/{zone_name}/resource-bundle.json")
+            }],
+            "generation": {
+                "generator": "test",
+                "sourceRevision": null,
+                "generatedAt": null
+            }
+        });
+        let preimage = {
+            let mut with_nulled_hashes = value.clone();
+            with_nulled_hashes["artifactHashes"] = serde_json::Value::Null;
+            serde_json::to_vec(&with_nulled_hashes).expect("bundle hash preimage serializes")
+        };
+        value["bundleHash"] = serde_json::Value::String(fixture_sha256_hex(&preimage));
+        serde_json::to_vec(&value).expect("bundle index serializes")
     }
 
     /// Build one typed Device-owned worker ticket against the declared

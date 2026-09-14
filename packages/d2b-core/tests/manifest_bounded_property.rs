@@ -1,5 +1,5 @@
 use d2b_core::{
-    bundle::Bundle, host::HostJson, manifest_v04::ManifestV04, privileges::PrivilegesJson,
+    host::HostJson, manifest_v04::ManifestV04, privileges::PrivilegesJson,
 };
 use std::{fs, path::PathBuf};
 
@@ -13,16 +13,6 @@ fn manifest_v04_bounded_byte_inputs_do_not_panic() {
     });
     run_generated("manifest_v04", 0x4d41_4e49_4645_5354, |input| {
         let _ = ManifestV04::from_slice(input);
-    });
-}
-
-#[test]
-fn bundle_bounded_byte_inputs_do_not_panic() {
-    run_corpus("bundle", |input| {
-        let _ = serde_json::from_slice::<Bundle>(input);
-    });
-    run_generated("bundle", 0x4255_4e44_4c45_0001, |input| {
-        let _ = serde_json::from_slice::<Bundle>(input);
     });
 }
 

@@ -577,47 +577,6 @@ pub struct AuditUsbipEnvOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostCheckOutputV2 {
-    pub mode: String,
-    pub strict: bool,
-    pub summary: HostCheckSummaryV2,
-    pub exit_code: u8,
-    pub findings: Vec<HostCheckFindingV2>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostCheckSummaryV2 {
-    pub pass: u32,
-    pub warn: u32,
-    pub fail: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostCheckFindingV2 {
-    pub id: String,
-    pub severity: HostCheckSeverityV2,
-    pub message: String,
-    pub remediation: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vm: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub details: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum HostCheckSeverityV2 {
-    Pass,
-    Warn,
-    Fail,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuthStatusOutputV2 {
     pub role: AuthRoleV2,
     pub effective_uid: u32,
@@ -648,19 +607,6 @@ pub struct AuthSocketStatusV2 {
 pub struct AuthDeniedSubcommandV2 {
     pub name: String,
     pub reason: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct StoreVerifyOutputV2 {
-    pub vm: String,
-    pub status: d2b_contracts::store_verify_wire::StoreVerifyStatus,
-    pub checked: u32,
-    pub drifted: u32,
-    pub repaired: u32,
-    pub unknown_reason: Option<String>,
-    pub audit_ref: Option<String>,
-    pub remediation: Option<String>,
 }
 
 // ---- Audio CLI output (ADR 0041) --------------------------------------------

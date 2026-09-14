@@ -28,7 +28,6 @@ pub mod guest_resource_runtime;
 pub mod host_mode;
 pub mod json_io;
 pub mod kernel_module_check;
-pub mod known_hosts_refresh;
 pub mod metrics;
 pub mod otel_host_bridge_readiness;
 pub mod ownership_preflight;

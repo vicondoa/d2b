@@ -64,7 +64,6 @@ use d2b_core_controller::controllers::HandlerPhase;
 use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupStage,
 };
-use d2b_core_controller::migration::LegacyTpmMigrationDecision;
 use d2b_provider_zone::zone_status::{
     SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
 };
@@ -8870,61 +8869,6 @@ impl ZoneResourceRuntime {
         }
     }
 
-    /// Verify the trusted persisted Device row used by the TPM reconcile
-    /// adapter and return Core's sealed legacy-state decision. The VM binding
-    /// is read from the authenticated Device record, while the legacy-state
-    /// decision comes from the trusted Core bundle resolver; request fields
-    /// cannot select either independently.
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    pub(crate) async fn tpm_device_is_admitted(
-        &self,
-        device_uid: &ResourceUid,
-        device_ref: &ResourceRef,
-        vm_id: &str,
-        operation_id: &str,
-        legacy_intent_anchor: Option<&str>,
-    ) -> Result<LegacyTpmMigrationDecision, ResourceRuntimeError> {
-        let resource = self
-            .committed_resource_stored(device_ref, operation_id)
-            .await
-            .inspect_err(|error| {
-                tracing::warn!(
-                    device = %device_ref,
-                    error = %error,
-                    "legacy TPM device admission read failed",
-                );
-            })
-            .ok();
-        let Some(resource) = resource.filter(|resource| {
-            resource.uid == *device_uid
-                && resource.resource_ref == *device_ref
-                && resource.resource_ref.resource_type().as_str() == "Device"
-        }) else {
-            return Err(ResourceRuntimeError::AuthenticationUnavailable);
-        };
-        let value = serde_json::from_slice::<Value>(&resource.canonical_json)
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
-        let spec = value
-            .get("spec")
-            .and_then(Value::as_object)
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
-        if spec.get("providerRef").and_then(Value::as_str)
-            != Some(d2b_provider_device_tpm::PROVIDER_REF)
-        {
-            return Err(ResourceRuntimeError::AuthenticationUnavailable);
-        }
-        if !Self::tpm_device_targets_vm(&value, vm_id) {
-            return Err(ResourceRuntimeError::AuthenticationUnavailable);
-        }
-        let intent = format!("legacy-swtpm:vm:{vm_id}");
-        Ok(Self::tpm_migration_decision(
-            vm_id,
-            &intent,
-            legacy_intent_anchor,
-        ))
-    }
-
     /// Load and validate the committed Device record before a security-key
     /// provider constructs its one-use admission. Request fields select a
     /// candidate only; the returned values all originate from the manager row.
@@ -9033,20 +8977,6 @@ impl ZoneResourceRuntime {
             .and_then(|selector| selector.get("label"))
             .and_then(Value::as_str)
             == Some(selector_id)
-    }
-
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    fn tpm_migration_decision(
-        vm_id: &str,
-        intent: &str,
-        legacy_intent_anchor: Option<&str>,
-    ) -> LegacyTpmMigrationDecision {
-        if let Some(anchor) = legacy_intent_anchor {
-            LegacyTpmMigrationDecision::adoption_required(vm_id, intent, anchor)
-        } else {
-            LegacyTpmMigrationDecision::not_applicable(vm_id, intent)
-        }
     }
 
     /// Close the production Zone runtime's background tasks before it is
@@ -11902,22 +11832,11 @@ mod tests {
         .unwrap();
         let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
             Bundle {
-                bundle_version: 11,
-                schema_version: "v2".to_owned(),
-                public_manifest_path: "vms.json".to_owned(),
-                host_path: "host.json".to_owned(),
-                processes_path: "processes.json".to_owned(),
+                bundle_version: 1,
+                schema_version: "v3".to_owned(),
                 privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
-                sync_path: None,
-                allocator_path: None,
-                realm_controllers_path: None,
-                realm_identity_path: None,
                 realm_workloads_launcher_v2_path: None,
-                unsafe_local_workloads_path: None,
-                closures: Vec::new(),
-                minijail_profiles: Vec::new(),
-                managed_keys: Default::default(),
                 generation: BundleGeneration {
                     generator: "test".to_owned(),
                     source_revision: None,
@@ -12695,23 +12614,6 @@ mod tests {
             "vm-a",
             "key-secondary",
         ));
-    }
-
-    #[test]
-    fn trusted_bundle_inventory_selects_fresh_or_legacy_tpm_path() {
-        let fresh =
-            ZoneResourceRuntime::tpm_migration_decision("vm-a", "legacy-swtpm:vm:vm-a", None);
-        assert!(!fresh.requires_migration());
-        assert!(fresh.validates_binding("vm-a", "legacy-swtpm:vm:vm-a"));
-
-        let legacy = ZoneResourceRuntime::tpm_migration_decision(
-            "vm-a",
-            "legacy-swtpm:vm:vm-a",
-            Some("legacy-swtpm:vm:vm-a"),
-        );
-        assert!(legacy.requires_migration());
-        assert!(legacy.validates_binding("vm-a", "legacy-swtpm:vm:vm-a"));
-        assert!(!legacy.validates_binding("vm-b", "legacy-swtpm:vm:vm-a"));
     }
 
     fn network_admission_intent(

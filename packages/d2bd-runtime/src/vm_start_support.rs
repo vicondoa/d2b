@@ -86,12 +86,13 @@ pub fn node_requires_disk_init_dispatch(node: &ProcessNode) -> bool {
         .any(|op| matches!(op, SpawnRunnerPlanOp::DiskInit { .. }))
 }
 
-pub fn resolve_store_view_intent_for_vm<'a>(
+pub fn resolve_store_view_intent_for_guest<'a>(
     resolver: &'a BundleResolver,
-    vm: &str,
+    zone: &d2b_contracts_resource::v3::ZoneId,
+    guest: &str,
 ) -> Result<&'a ResolvedStoreViewIntent, String> {
     resolver
-        .find_legacy_store_view_intent(vm)
+        .find_store_view_intent_for_zone(zone, guest)
         .ok_or_else(|| "bundle-intent-missing:store-view".to_owned())
 }
 

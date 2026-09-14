@@ -5208,22 +5208,11 @@ mod tests {
         .expect("manifest fixture");
         let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
             Bundle {
-                bundle_version: 11,
-                schema_version: "v2".to_owned(),
-                public_manifest_path: "vms.json".to_owned(),
-                host_path: "host.json".to_owned(),
-                processes_path: "processes.json".to_owned(),
+                bundle_version: 1,
+                schema_version: "v3".to_owned(),
                 privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
-                sync_path: None,
-                allocator_path: None,
-                realm_controllers_path: None,
-                realm_identity_path: None,
                 realm_workloads_launcher_v2_path: None,
-                unsafe_local_workloads_path: None,
-                closures: Vec::new(),
-                minijail_profiles: Vec::new(),
-                managed_keys: Default::default(),
                 generation: BundleGeneration {
                     generator: "test".to_owned(),
                     source_revision: None,
@@ -5315,22 +5304,11 @@ mod tests {
         .expect("manifest fixture");
         let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
             Bundle {
-                bundle_version: 11,
-                schema_version: "v2".to_owned(),
-                public_manifest_path: "vms.json".to_owned(),
-                host_path: "host.json".to_owned(),
-                processes_path: "processes.json".to_owned(),
+                bundle_version: 1,
+                schema_version: "v3".to_owned(),
                 privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
-                sync_path: None,
-                allocator_path: None,
-                realm_controllers_path: None,
-                realm_identity_path: None,
                 realm_workloads_launcher_v2_path: None,
-                unsafe_local_workloads_path: None,
-                closures: Vec::new(),
-                minijail_profiles: Vec::new(),
-                managed_keys: Default::default(),
                 generation: BundleGeneration {
                     generator: "test".to_owned(),
                     source_revision: None,
@@ -5496,22 +5474,11 @@ mod tests {
         .expect("manifest fixture");
         let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
             Bundle {
-                bundle_version: 11,
-                schema_version: "v2".to_owned(),
-                public_manifest_path: "vms.json".to_owned(),
-                host_path: "host.json".to_owned(),
-                processes_path: "processes.json".to_owned(),
+                bundle_version: 1,
+                schema_version: "v3".to_owned(),
                 privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
-                sync_path: None,
-                allocator_path: None,
-                realm_controllers_path: None,
-                realm_identity_path: None,
                 realm_workloads_launcher_v2_path: None,
-                unsafe_local_workloads_path: None,
-                closures: Vec::new(),
-                minijail_profiles: Vec::new(),
-                managed_keys: Default::default(),
                 generation: BundleGeneration {
                     generator: "test".to_owned(),
                     source_revision: None,
@@ -5715,22 +5682,11 @@ mod tests {
         .expect("manifest fixture");
         let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
             Bundle {
-                bundle_version: 11,
-                schema_version: "v2".to_owned(),
-                public_manifest_path: "vms.json".to_owned(),
-                host_path: "host.json".to_owned(),
-                processes_path: "processes.json".to_owned(),
+                bundle_version: 1,
+                schema_version: "v3".to_owned(),
                 privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
-                sync_path: None,
-                allocator_path: None,
-                realm_controllers_path: None,
-                realm_identity_path: None,
                 realm_workloads_launcher_v2_path: None,
-                unsafe_local_workloads_path: None,
-                closures: Vec::new(),
-                minijail_profiles: Vec::new(),
-                managed_keys: Default::default(),
                 generation: BundleGeneration {
                     generator: "test".to_owned(),
                     source_revision: None,

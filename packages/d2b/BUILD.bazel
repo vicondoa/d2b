@@ -26,8 +26,6 @@ _daemon_data = [
     "//packages/d2bd:d2bd",
 ]
 
-_fixture_daemon_data = _fixture_data + _daemon_data
-
 rust_library(
     name = "d2b_lib",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
@@ -173,32 +171,6 @@ rust_test(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "host_check_contract",
-    srcs = [
-        "tests/common/mod.rs",
-        "tests/host_check_contract.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    crate_root = "tests/host_check_contract.rs",
-    data = [":d2b"] + _fixture_daemon_data,
-    env = {
-        "CARGO_BIN_EXE_d2b": "$(rootpath :d2b)",
-        "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
-        "D2B_TEST_D2BD_BIN": "$(rootpath //packages/d2bd:d2bd)",
-    },
-    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-contracts-broker:d2b_contracts_broker",
-        "//packages/d2b-contracts-control:d2b_contracts_control",
-        "//packages/d2b-core:d2b_core",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

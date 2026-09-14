@@ -22,7 +22,6 @@ test_suite(
         "//packages/d2b-broker:security_key_broker",
         "//packages/d2b-broker:socket_activation",
         "//packages/d2b-broker:w12_fd_passing_response",
-        "//packages/d2b-broker:w15_install_migrate",
     ],
 )
 

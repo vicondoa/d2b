@@ -1211,6 +1211,7 @@ pub fn fake_backend() -> FakeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use d2b_contracts_resource::v3::IfName as BundleIfName;
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::host::{
@@ -1275,20 +1276,9 @@ mod tests {
         let bundle = Bundle {
             bundle_version: 4,
             schema_version: "v2".to_owned(),
-            public_manifest_path: "vms.json".to_owned(),
-            host_path: "host.json".to_owned(),
-            processes_path: "processes.json".to_owned(),
             privileges_path: "privileges.json".to_owned(),
             storage_path: None,
-            sync_path: None,
-            allocator_path: None,
-            realm_controllers_path: None,
-            realm_identity_path: None,
             realm_workloads_launcher_v2_path: None,
-            unsafe_local_workloads_path: None,
-            closures: Vec::new(),
-            minijail_profiles: Vec::new(),
-            managed_keys: Default::default(),
             generation: BundleGeneration {
                 generator: "test".to_owned(),
                 source_revision: None,
@@ -1366,8 +1356,6 @@ mod tests {
             },
             kernel_modules: Vec::new(),
             fd_ownership: Vec::new(),
-            runtime_providers: Vec::new(),
-            vm_runtimes: Vec::new(),
             cloud_hypervisor_capabilities: Vec::new(),
             if_name_mappings: vec![
                 IfNameMapping {
@@ -1390,7 +1378,7 @@ mod tests {
             firewall_coexistence_policy: None,
         };
         let manifest = ManifestV04::from_slice(br#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/d2b/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"corp-vm":{"apiSocket":"/run/d2b/corp-vm.sock","audio":false,"audioService":"d2b-corp-vm-snd.service","audioStateFile":"/var/lib/d2b/vms/corp-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/run/d2b/corp-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"corp-vm","netVm":"sys-work-net","observability":{"agentSocket":"/run/d2b/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/run/d2b/corp-vm-vsock.sock"},"runtime":{"kind":"nixos","provider":{"id":"local-cloud-hypervisor","type":"local","driver":"cloud-hypervisor"},"capabilities":{"lifecycle":true,"display":true,"usbHotplug":true,"exec":true,"configSync":true,"ssh":true,"storeSync":true,"keys":true,"inGuestObservability":true}},"sshUser":"alice","stateDir":"/var/lib/d2b/vms/corp-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/swtpm/corp-vm/sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"}}"#.as_slice()).expect("manifest");
-        BundleResolver::from_artifacts(
+        BundleResolver::from_artifacts_with_zone_resource_bundles(
             bundle,
             host,
             ProcessesJson {
@@ -1398,6 +1386,7 @@ mod tests {
                 vms: Vec::new(),
             },
             manifest,
+            BTreeMap::new(),
         )
     }
 

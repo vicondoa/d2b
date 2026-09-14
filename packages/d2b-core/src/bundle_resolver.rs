@@ -63,9 +63,8 @@
 //!   `processes.json`, but the current Guest VMM path requires the complete
 //!   descriptor-bound private intent emitted by the artifact catalog.
 
-use crate::allocator_config::{AllocatorJson, AllocatorZoneTopology};
+use crate::allocator_config::AllocatorZoneTopology;
 use crate::bundle::{Bundle, BundleGeneration};
-use crate::closures::ClosureMetadata;
 use crate::error::Error;
 use crate::host::{
     ChNetHandoffMode, HostJson, HostsFileOwnership, ModuleRequirement, NetEnv,
@@ -73,7 +72,7 @@ use crate::host::{
     TapRole, UsbipBusidLock, VendorProductPair,
 };
 use crate::host_w3::{ModuleRequirementW3, TapRoleW3};
-use crate::manifest_v04::{ManifestV04, VmEntry};
+use crate::manifest_v04::ManifestV04;
 use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet, WritablePath};
 use crate::processes::{
     ProcessExecutionDomain, ProcessMacvtapMode, ProcessNetworkInterfaceType, ProcessNode,
@@ -81,12 +80,7 @@ use crate::processes::{
 };
 use crate::site::SiteJson;
 use crate::storage::StorageJson;
-use crate::sync::SyncJson;
-use crate::unsafe_local_workloads::{UnsafeLocalWorkload, UnsafeLocalWorkloadsJson};
-use d2b_contracts::{
-    RealmIdentityConfigJson, controller_config::RealmControllersJson,
-    launcher::RealmWorkloadsLauncherV2Json,
-};
+use d2b_contracts::launcher::RealmWorkloadsLauncherV2Json;
 use d2b_contracts_resource::v3::{
     IfName, NetworkIfRole, NetworkProvenance, ResourceRef, ResourceUid, ZoneId,
     derive_network_ifname, derive_network_route_name,
@@ -95,7 +89,7 @@ use d2b_contracts_resource::v3::{
     storage::ZoneStoreStorageRow,
 };
 use d2b_contracts_zone_session::v3::resource_bundle::{
-    ARTIFACT_CATALOG_DOMAIN_TAG, ProcessTemplateBinding, ResourceBundle,
+    ARTIFACT_CATALOG_DOMAIN_TAG, BundleResource, ProcessTemplateBinding, ResourceBundle,
 };
 use serde::Deserialize;
 use sha2::Digest as _;
@@ -111,25 +105,22 @@ use std::path::{Path, PathBuf};
 #[derive(Clone)]
 pub struct BundleResolver {
     pub bundle: Bundle,
-    pub allocator: Option<AllocatorJson>,
     zone_topology: Option<AllocatorZoneTopology>,
     pub host: HostJson,
     pub processes: ProcessesJson,
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
+    /// Parsed zone-tagged v3 resource bundles keyed by canonical Zone id.
+    parsed_zone_resources: BTreeMap<String, ResourceBundle>,
     guest_setup_descriptors: BTreeMap<(String, String), Vec<u8>>,
     guest_setup_descriptor_catalog_keys: BTreeMap<(String, String), String>,
     guest_vmm_intents: BTreeMap<(String, String), ResolvedRunnerIntent>,
     guest_vmm_zone_uids: BTreeMap<(String, String), ResourceUid>,
     zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
     pub storage: Option<StorageJson>,
-    pub sync: Option<SyncJson>,
-    pub realm_controllers: Option<RealmControllersJson>,
-    pub realm_identity: Option<RealmIdentityConfigJson>,
     /// Trusted site-runtime contract (`site.json`); `None` for a bundle that
     /// predates the artifact, which leaves its consumers unbound.
     pub site: Option<SiteJson>,
     pub realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
-    pub unsafe_local_workloads: Option<UnsafeLocalWorkloadsJson>,
     pub manifest: ManifestV04,
     audit_bundle_version: String,
     audit_bundle_hash: String,
@@ -145,15 +136,7 @@ pub struct BundleResolver {
     usbip_firewall_intents: BTreeMap<String, ResolvedUsbipFirewallIntent>,
     usbip_bind_intents: BTreeMap<String, ResolvedUsbipBindIntent>,
     runner_intents: BTreeMap<String, ResolvedRunnerIntent>,
-    installer_intents: BTreeMap<String, ResolvedInstallerIntent>,
-    migrate_intents: BTreeMap<String, ResolvedMigrateIntent>,
-    activation_intents: BTreeMap<String, ResolvedActivationIntent>,
     store_view_intents: BTreeMap<String, ResolvedStoreViewIntent>,
-    gc_intents: BTreeMap<String, ResolvedGcIntent>,
-    closure_toplevels: BTreeMap<String, String>,
-    keys_rotate_intents: BTreeMap<String, ResolvedKeysRotateIntent>,
-    host_key_trust_intents: BTreeMap<String, ResolvedHostKeyTrustIntent>,
-    rotate_known_host_intents: BTreeMap<String, ResolvedRotateKnownHostIntent>,
 }
 
 impl fmt::Debug for BundleResolver {
@@ -173,7 +156,6 @@ impl fmt::Debug for BundleResolver {
 }
 
 struct ParsedBundleArtifacts {
-    allocator: Option<AllocatorJson>,
     host: HostJson,
     processes: ProcessesJson,
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
@@ -185,14 +167,9 @@ struct ParsedBundleArtifacts {
     provider_controller_templates: Vec<ProcessTemplateBinding>,
     zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
     storage: Option<StorageJson>,
-    sync: Option<SyncJson>,
-    realm_controllers: Option<RealmControllersJson>,
-    realm_identity: Option<RealmIdentityConfigJson>,
     site: Option<SiteJson>,
     realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
-    unsafe_local_workloads: Option<UnsafeLocalWorkloadsJson>,
     manifest: ManifestV04,
-    closures: Vec<ClosureMetadata>,
 }
 
 #[derive(Deserialize)]
@@ -383,7 +360,6 @@ pub struct ResolvedUsbipBindIntent {
 pub enum ResolvedVmStartAction {
     PrepareRuntimeDir(ResolvedPrepareDirIntent),
     PrepareStateDir(ResolvedPrepareDirIntent),
-    PrepareStoreView(ResolvedStoreViewIntent),
 }
 
 /// Resolved startup plan for a process-DAG node.
@@ -1197,8 +1173,6 @@ fn empty_zone_native_host() -> HostJson {
         },
         kernel_modules: Vec::new(),
         fd_ownership: Vec::new(),
-        runtime_providers: Vec::new(),
-        vm_runtimes: Vec::new(),
         qemu_media: None,
         security_key_selectors: Vec::new(),
         cloud_hypervisor_capabilities: Vec::new(),
@@ -1249,23 +1223,7 @@ impl BundleResolver {
         {
             return Self::load_zone_native_bundle(bundle_path, &bundle_bytes, policy);
         }
-        let bundle: Bundle = serde_json::from_slice(&bundle_bytes).map_err(|e| {
-            Error::manifest_parse_error("bundle.json", manifest_parse_reason(&e.to_string()))
-        })?;
-        let bundle_hash = stable_digest_bytes(&bundle_bytes);
-        let bundle_root = bundle_path.parent().unwrap_or_else(|| Path::new("/"));
-        let host_path = resolve_bundle_ref(bundle_root, &bundle.host_path);
-        let processes_path = resolve_bundle_ref(bundle_root, &bundle.processes_path);
-        let manifest_path = resolve_bundle_ref(bundle_root, &bundle.public_manifest_path);
-        Self::load_with_paths(
-            bundle,
-            bundle_hash,
-            &host_path,
-            &processes_path,
-            &manifest_path,
-            bundle_root,
-            policy,
-        )
+        Err(Error::manifest_parse_error("bundle.json", "manifest-version-mismatch"))
     }
 
     /// Load the bundle on the bounded loader worker
@@ -1335,31 +1293,17 @@ impl BundleResolver {
         let bundle = Bundle {
             bundle_version: index.bundle_version,
             schema_version: index.schema_version,
-            public_manifest_path: bundle_root.join("vms.json").to_string_lossy().into_owned(),
-            host_path: bundle_root.join("host.json").to_string_lossy().into_owned(),
-            processes_path: bundle_root
-                .join("processes.json")
-                .to_string_lossy()
-                .into_owned(),
             privileges_path: normalize_zone_native_ref(bundle_root, &index.privileges_path)?,
             storage_path: index
                 .storage_path
                 .as_deref()
                 .map(|path| normalize_zone_native_ref(bundle_root, path))
                 .transpose()?,
-            sync_path: None,
-            allocator_path: None,
-            realm_controllers_path: None,
-            realm_identity_path: None,
             realm_workloads_launcher_v2_path: index
                 .realm_workloads_launcher_v2_path
                 .as_deref()
                 .map(|path| normalize_zone_native_ref(bundle_root, path))
                 .transpose()?,
-            unsafe_local_workloads_path: None,
-            closures: Vec::new(),
-            minijail_profiles: Vec::new(),
-            managed_keys: Default::default(),
             generation: index.generation,
             bundle_hash: Some(index.bundle_hash),
             artifact_hashes: Some(artifact_hashes),
@@ -1393,7 +1337,6 @@ impl BundleResolver {
             bundle,
             bundle_hash,
             ParsedBundleArtifacts {
-                allocator: None,
                 host,
                 processes,
                 zone_resource_bundles,
@@ -1405,82 +1348,14 @@ impl BundleResolver {
                 provider_controller_templates,
                 zone_storage_rows,
                 storage,
-                sync: None,
-                realm_controllers: None,
-                realm_identity: None,
                 site,
                 realm_workloads_launcher_v2,
-                unsafe_local_workloads: None,
                 manifest,
-                closures: Vec::new(),
             },
             false,
         );
         resolver.zone_topology = zone_topology;
         Ok(resolver)
-    }
-
-    /// Construct a resolver from already-parsed artifacts; used by
-    /// unit tests + by the broker when it has already validated
-    /// the artifacts.
-    pub fn from_artifacts(
-        bundle: Bundle,
-        host: HostJson,
-        processes: ProcessesJson,
-        manifest: ManifestV04,
-    ) -> Self {
-        let bundle_hash = stable_digest_bytes(
-            serde_json::to_vec(&bundle)
-                .expect("bundle serialization for audit hashing must succeed")
-                .as_slice(),
-        );
-        Self::from_artifacts_with_closures(
-            bundle,
-            bundle_hash,
-            host,
-            processes,
-            manifest,
-            Vec::new(),
-        )
-    }
-
-    /// Variant for test fixtures that also accepts parsed
-    /// `closures/<vm>.json` artifacts.
-    pub fn from_artifacts_with_closures(
-        bundle: Bundle,
-        bundle_hash: String,
-        host: HostJson,
-        processes: ProcessesJson,
-        manifest: ManifestV04,
-        closures: Vec<ClosureMetadata>,
-    ) -> Self {
-        Self::from_parsed_artifacts(
-            bundle,
-            bundle_hash,
-            ParsedBundleArtifacts {
-                allocator: None,
-                host,
-                processes,
-                zone_resource_bundles: BTreeMap::new(),
-                guest_setup_descriptors: BTreeMap::new(),
-                guest_setup_descriptor_catalog_keys: BTreeMap::new(),
-                guest_vmm_intents: BTreeMap::new(),
-                guest_vmm_zone_uids: BTreeMap::new(),
-                guest_store_view_intents: BTreeMap::new(),
-                provider_controller_templates: Vec::new(),
-                zone_storage_rows: BTreeMap::new(),
-                storage: None,
-                sync: None,
-                realm_controllers: None,
-                realm_identity: None,
-                site: None,
-                realm_workloads_launcher_v2: None,
-                unsafe_local_workloads: None,
-                manifest,
-                closures,
-            },
-            true,
-        )
     }
 
     /// Variant for tests and embedded callers that already hold verified
@@ -1509,7 +1384,6 @@ impl BundleResolver {
             bundle,
             bundle_hash,
             ParsedBundleArtifacts {
-                allocator: None,
                 host,
                 processes,
                 zone_resource_bundles,
@@ -1521,14 +1395,9 @@ impl BundleResolver {
                 provider_controller_templates,
                 zone_storage_rows: BTreeMap::new(),
                 storage: None,
-                sync: None,
-                realm_controllers: None,
-                realm_identity: None,
                 site: None,
                 realm_workloads_launcher_v2: None,
-                unsafe_local_workloads: None,
                 manifest,
-                closures: Vec::new(),
             },
             true,
         )
@@ -1541,7 +1410,6 @@ impl BundleResolver {
         include_fixture_network_intents: bool,
     ) -> Self {
         let ParsedBundleArtifacts {
-            allocator,
             host,
             processes,
             zone_resource_bundles,
@@ -1553,18 +1421,15 @@ impl BundleResolver {
             provider_controller_templates,
             zone_storage_rows,
             storage,
-            sync,
-            realm_controllers,
-            realm_identity,
             site,
             realm_workloads_launcher_v2,
-            unsafe_local_workloads,
             manifest,
-            closures,
         } = artifacts;
-        let zone_topology = allocator
-            .as_ref()
-            .and_then(|allocator| allocator.zone_topology.clone());
+        let parsed_zone_resources = zone_resource_bundles
+            .iter()
+            .filter_map(|(_path, bytes)| ResourceBundle::from_json(bytes).ok())
+            .map(|bundle| (bundle.zone.to_canonical_string(), bundle))
+            .collect();
         let installed_generation_identity = build_installed_generation_identity(&bundle);
         let nft_intents = if include_fixture_network_intents {
             build_nft_intents(&host)
@@ -1647,41 +1512,25 @@ impl BundleResolver {
                 .cloned()
                 .map(|intent| (intent.intent_id.clone(), intent)),
         );
-        let installer_intents = build_installer_intents(&bundle);
-        let migrate_intents = build_migrate_intents(&processes);
-        let activation_intents = build_activation_intents(&closures, &manifest);
-        let mut store_view_intents = build_store_view_intents(&closures, &manifest);
-        store_view_intents.extend(guest_store_view_intents);
-        let gc_intents = build_gc_intents(&closures);
-        let closure_toplevels = closures
-            .iter()
-            .map(|closure| (closure.vm.clone(), closure.toplevel.clone()))
-            .collect();
-        let keys_rotate_intents = build_keys_rotate_intents(&bundle, &manifest);
-        let host_key_trust_intents = build_host_key_trust_intents(&bundle, &manifest);
-        let rotate_known_host_intents = build_rotate_known_host_intents(&bundle, &manifest);
+        let store_view_intents = guest_store_view_intents;
         Self {
             audit_bundle_version: format!("v{}", bundle.bundle_version),
             audit_bundle_hash: bundle_hash,
             installed_generation_identity,
             bundle,
-            allocator,
-            zone_topology,
+            zone_topology: None,
             host,
             processes,
             zone_resource_bundles,
+            parsed_zone_resources,
             guest_setup_descriptors,
             guest_setup_descriptor_catalog_keys,
             guest_vmm_intents,
             guest_vmm_zone_uids,
             zone_storage_rows,
             storage,
-            sync,
-            realm_controllers,
-            realm_identity,
             site,
             realm_workloads_launcher_v2,
-            unsafe_local_workloads,
             manifest,
             nft_intents,
             nft_projection_intents,
@@ -1694,144 +1543,8 @@ impl BundleResolver {
             usbip_firewall_intents,
             usbip_bind_intents,
             runner_intents,
-            installer_intents,
-            migrate_intents,
-            activation_intents,
             store_view_intents,
-            gc_intents,
-            closure_toplevels,
-            keys_rotate_intents,
-            host_key_trust_intents,
-            rotate_known_host_intents,
         }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_artifacts_with_optional_contracts(
-        bundle: Bundle,
-        host: HostJson,
-        processes: ProcessesJson,
-        storage: Option<StorageJson>,
-        sync: Option<SyncJson>,
-        realm_controllers: Option<RealmControllersJson>,
-        realm_identity: Option<RealmIdentityConfigJson>,
-        manifest: ManifestV04,
-    ) -> Self {
-        let bundle_hash = stable_digest_bytes(
-            serde_json::to_vec(&bundle)
-                .expect("bundle serialization for audit hashing must succeed")
-                .as_slice(),
-        );
-        Self::from_parsed_artifacts(
-            bundle,
-            bundle_hash,
-            ParsedBundleArtifacts {
-                allocator: None,
-                host,
-                processes,
-                zone_resource_bundles: BTreeMap::new(),
-                guest_setup_descriptors: BTreeMap::new(),
-                guest_setup_descriptor_catalog_keys: BTreeMap::new(),
-                guest_vmm_intents: BTreeMap::new(),
-                guest_vmm_zone_uids: BTreeMap::new(),
-                guest_store_view_intents: BTreeMap::new(),
-                provider_controller_templates: Vec::new(),
-                zone_storage_rows: BTreeMap::new(),
-                storage,
-                sync,
-                realm_controllers,
-                realm_identity,
-                site: None,
-                realm_workloads_launcher_v2: None,
-                unsafe_local_workloads: None,
-                manifest,
-                closures: Vec::new(),
-            },
-            true,
-        )
-    }
-
-    fn load_with_paths(
-        bundle: Bundle,
-        bundle_hash: String,
-        host_path: &Path,
-        processes_path: &Path,
-        manifest_path: &Path,
-        bundle_root: &Path,
-        policy: &BundleVerifyPolicy,
-    ) -> Result<Self, Error> {
-        let host_bytes = secure_open_and_read(host_path, policy)?;
-        verify_artifact_hash(
-            host_path,
-            &host_bytes,
-            bundle.artifact_hashes.as_ref(),
-            &bundle.host_path,
-        )?;
-        let host: HostJson = serde_json::from_slice(&host_bytes).map_err(|e| {
-            Error::manifest_parse_error("host.json", manifest_parse_reason(&e.to_string()))
-        })?;
-        let processes_bytes = secure_open_and_read(processes_path, policy)?;
-        verify_artifact_hash(
-            processes_path,
-            &processes_bytes,
-            bundle.artifact_hashes.as_ref(),
-            &bundle.processes_path,
-        )?;
-        let processes: ProcessesJson = serde_json::from_slice(&processes_bytes).map_err(|e| {
-            Error::manifest_parse_error("processes.json", manifest_parse_reason(&e.to_string()))
-        })?;
-        let (zone_resource_bundles, provider_controller_templates) =
-            load_zone_resource_bundles(&bundle, bundle_root, policy)?;
-        let (
-            guest_setup_descriptors,
-            guest_setup_descriptor_catalog_keys,
-            guest_vmm_intents,
-            guest_vmm_zone_uids,
-            guest_store_view_intents,
-        ) = load_guest_setup_descriptors(&zone_resource_bundles, bundle_root, policy)?;
-        let zone_storage_rows = load_zone_storage_rows(&bundle, bundle_root, policy)?;
-        let allocator = load_optional_allocator_artifact(&bundle, bundle_root, policy)?;
-        let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
-        let sync = load_optional_sync_artifact(&bundle, bundle_root, policy)?;
-        let realm_controllers =
-            load_optional_realm_controllers_artifact(&bundle, bundle_root, policy)?;
-        let realm_identity = load_optional_realm_identity_artifact(&bundle, bundle_root, policy)?;
-        let site = load_optional_site_artifact(&bundle, bundle_root, None, policy)?;
-        let realm_workloads_launcher_v2 =
-            load_optional_realm_workloads_launcher_v2_artifact(&bundle, bundle_root, policy)?;
-        let unsafe_local_workloads =
-            load_optional_unsafe_local_workloads_artifact(&bundle, bundle_root, policy)?;
-        // The public manifest (vms.json) lives under /run/current-system/…
-        // which is root-owned 0444; skip the private-artifact policy for it.
-        let manifest = ManifestV04::from_path(manifest_path)?;
-        let closures = load_closure_metadata_verified(&bundle, bundle_root, policy)?;
-        Ok(Self::from_parsed_artifacts(
-            bundle,
-            bundle_hash,
-            ParsedBundleArtifacts {
-                allocator,
-                host,
-                processes,
-                zone_resource_bundles,
-                guest_setup_descriptors,
-                guest_setup_descriptor_catalog_keys,
-                guest_vmm_intents,
-                guest_vmm_zone_uids,
-                guest_store_view_intents,
-                provider_controller_templates,
-                zone_storage_rows,
-                storage,
-                sync,
-                realm_controllers,
-                realm_identity,
-                site,
-                realm_workloads_launcher_v2,
-                unsafe_local_workloads,
-                manifest,
-                closures,
-            },
-            false,
-        ))
     }
 
     pub fn audit_bundle_version(&self) -> &str {
@@ -1911,14 +1624,6 @@ impl BundleResolver {
 
     pub fn audit_bundle_hash(&self) -> &str {
         &self.audit_bundle_hash
-    }
-
-    pub fn find_unsafe_local_workload(&self, target: &str) -> Option<&UnsafeLocalWorkload> {
-        self.unsafe_local_workloads
-            .as_ref()?
-            .workloads
-            .iter()
-            .find(|workload| workload.identity.canonical_target.to_canonical() == target)
     }
 
     pub fn find_nft_intent(&self, id: &str) -> Option<&ResolvedNftIntent> {
@@ -2497,62 +2202,6 @@ impl BundleResolver {
         matches.next().is_none().then_some(first)
     }
 
-    pub fn find_installer_intent(&self, id: &str) -> Option<&ResolvedInstallerIntent> {
-        self.installer_intents.get(id)
-    }
-
-    pub fn find_migrate_intent(&self, id: &str) -> Option<&ResolvedMigrateIntent> {
-        self.migrate_intents.get(id)
-    }
-
-    pub fn find_activation_intent(&self, id: &str) -> Option<&ResolvedActivationIntent> {
-        self.activation_intents.get(id)
-    }
-
-    /// Find a store-view intent by its exact opaque bundle key.
-    ///
-    /// Zone-native callers must pass the Zone-qualified
-    /// [`intent_id_store_view`] result; the legacy VM-only key is accepted
-    /// only through [`Self::find_legacy_store_view_intent`].
-    pub fn find_store_view_intent(&self, intent_id: &str) -> Option<&ResolvedStoreViewIntent> {
-        self.store_view_intents.get(intent_id)
-    }
-
-    pub fn find_store_view_intent_for_zone(
-        &self,
-        zone: &ZoneId,
-        vm: &str,
-    ) -> Option<&ResolvedStoreViewIntent> {
-        self.find_store_view_intent(&intent_id_store_view(zone, vm))
-    }
-
-    pub fn find_legacy_store_view_intent(&self, vm: &str) -> Option<&ResolvedStoreViewIntent> {
-        self.find_store_view_intent(&intent_id_legacy_store_view(vm))
-    }
-
-    pub fn find_guest_closure_out_path(&self, vm: &str) -> Option<&str> {
-        self.closure_toplevels.get(vm).map(String::as_str)
-    }
-
-    pub fn find_gc_intent(&self, id: &str) -> Option<&ResolvedGcIntent> {
-        self.gc_intents.get(id)
-    }
-
-    pub fn find_keys_rotate_intent(&self, id: &str) -> Option<&ResolvedKeysRotateIntent> {
-        self.keys_rotate_intents.get(id)
-    }
-
-    pub fn find_host_key_trust_intent(&self, id: &str) -> Option<&ResolvedHostKeyTrustIntent> {
-        self.host_key_trust_intents.get(id)
-    }
-
-    pub fn find_rotate_known_host_intent(
-        &self,
-        id: &str,
-    ) -> Option<&ResolvedRotateKnownHostIntent> {
-        self.rotate_known_host_intents.get(id)
-    }
-
     /// Resolve a QEMU media source by VM + opaque ref.
     ///
     /// Raw physical identity is deliberately absent from the bundle; callers
@@ -2616,16 +2265,108 @@ impl BundleResolver {
         Some(path)
     }
 
-    pub fn find_sync_lock_spec(&self, id: &str) -> Option<&crate::sync::LockSpec> {
-        self.sync
-            .as_ref()?
-            .locks
-            .iter()
-            .find(|spec| spec.id.as_str() == id)
+    /// Yield the zone-tagged v3 Guest (VM) resources from every verified
+    /// per-Zone resource bundle.
+    ///
+    /// `Guest` is the v3 ResourceType for VMs (there is no separate `Vm`
+    /// type); each yielded pair carries the enclosing `ZoneId` and the
+    /// `BundleResource` whose `spec()` holds the provider identity
+    /// (`spec.providerRef`) plus the ExecutionPolicy base. Parsing happens
+    /// on each call over the verified bytes the resolver holds; the
+    /// `ResourceBundle::from_json` parse rejects malformed bytes.
+    pub fn guest_vm_resources(&self) -> impl Iterator<Item = (&ZoneId, &BundleResource)> {
+        self.parsed_zone_resources
+            .values()
+            .flat_map(|bundle| {
+                bundle
+                    .resources
+                    .iter()
+                    .filter(|resource| resource.resource_type().as_str() == "Guest")
+                    .map(move |resource| (&bundle.zone, resource))
+            })
     }
 
-    pub fn find_manifest_vm(&self, vm_id: &str) -> Option<&VmEntry> {
-        self.manifest.vms.get(vm_id)
+    /// Look up one zone-tagged v3 Guest (VM) resource by Zone + name.
+    pub fn find_guest_resource(&self, zone: &ZoneId, name: &str) -> Option<&BundleResource> {
+        self.parsed_zone_resources.get(zone.as_str()).and_then(|bundle| {
+            bundle.resources.iter().find(|resource| {
+                resource.resource_type().as_str() == "Guest"
+                    && resource.metadata().name().as_str() == name
+            })
+        })
+    }
+
+    /// Find a store-view intent by its exact opaque bundle key.
+    ///
+    /// Zone-native callers pass the Zone-qualified
+    /// [`intent_id_store_view`] result; legacy VM-only keys have no
+    /// corresponding intent under the v3 zone-native contract.
+    pub fn find_store_view_intent(&self, intent_id: &str) -> Option<&ResolvedStoreViewIntent> {
+        self.store_view_intents.get(intent_id)
+    }
+
+    /// Test-support hook: inject a resolved store-view intent under its
+    /// canonical Zone-qualified id. Broker store-sync tests use this to
+    /// wire the v3 catalog-independent sync path (the on-disk artifact
+    /// catalog is not materialised in unit tests).
+    #[cfg(feature = "test-support")]
+    pub fn test_inject_store_view_intent(&mut self, intent: ResolvedStoreViewIntent) {
+        self.store_view_intents
+            .insert(intent.intent_id.clone(), intent);
+    }
+
+    /// Test-support hook: inject a verified zone resource bundle under its
+    /// `zones/<zone>/resource-bundle.json` key and refresh the parsed zone
+    /// resource cache so `guest_vm_resources`/`find_guest_resource` see it.
+    #[cfg(feature = "test-support")]
+    pub fn test_inject_zone_resource_bundle(&mut self, key: String, bytes: Vec<u8>) {
+        self.zone_resource_bundles.insert(key, bytes.clone());
+        if let Ok(bundle) = ResourceBundle::from_json(&bytes) {
+            self.parsed_zone_resources
+                .insert(bundle.zone.to_canonical_string(), bundle);
+        }
+    }
+
+    /// Test-support hook: replace the per-VM USBIP allowlist and rebuild the
+    /// resolved USBIP bind intents from the (mutated) host contract.
+    #[cfg(feature = "test-support")]
+    pub fn test_set_usbip_allowlist(
+        &mut self,
+        vm: &str,
+        allowlist: Vec<crate::host::VendorProductPair>,
+    ) {
+        for env in &mut self.host.environments {
+            for lock in &mut env.usbip_busid_locks {
+                if lock.vm == vm {
+                    lock.vendor_product_allowlist = allowlist.clone();
+                }
+            }
+        }
+        self.usbip_bind_intents = build_usbip_bind_intents(&self.host);
+    }
+
+    /// Test-support hook: rebuild resolved runner intents after a test
+    /// mutates `processes` in place (the v3 constructor builds intents once;
+    /// broker unit tests inject DAG nodes the same way the v2 disk-reload
+    /// path picked them up).
+    #[cfg(feature = "test-support")]
+    pub fn test_rebuild_runner_intents(&mut self) {
+        let mut runner_intents = build_runner_intents(&self.processes);
+        runner_intents.extend(
+            self.guest_vmm_intents
+                .values()
+                .cloned()
+                .map(|intent| (intent.intent_id.clone(), intent)),
+        );
+        self.runner_intents = runner_intents;
+    }
+
+    pub fn find_store_view_intent_for_zone(
+        &self,
+        zone: &ZoneId,
+        vm: &str,
+    ) -> Option<&ResolvedStoreViewIntent> {
+        self.find_store_view_intent(&intent_id_store_view(zone, vm))
     }
 
     pub fn find_process_vm(&self, vm_id: &str) -> Option<&VmProcessDag> {
@@ -2690,11 +2431,6 @@ impl BundleResolver {
                 }
                 if let Some(intent) = self.resolve_prepare_dir_intent(vm_id, false) {
                     actions.push(ResolvedVmStartAction::PrepareStateDir(intent));
-                }
-            }
-            ProcessRole::StoreVirtiofsPreflight => {
-                if let Some(intent) = self.find_legacy_store_view_intent(vm_id).cloned() {
-                    actions.push(ResolvedVmStartAction::PrepareStoreView(intent));
                 }
             }
             _ => {}
@@ -2884,7 +2620,7 @@ impl BundleResolver {
         vm_id: &str,
         runtime_dir: bool,
     ) -> Option<ResolvedPrepareDirIntent> {
-        let vm = self.find_manifest_vm(vm_id)?;
+        let vm = self.manifest.vms.get(vm_id)?;
         let base_dir = if runtime_dir {
             PathBuf::from(format!("/run/d2b/vms/{vm_id}"))
         } else {
@@ -2897,28 +2633,6 @@ impl BundleResolver {
             owner_uid,
             owner_gid,
             mode: if runtime_dir { 0o755 } else { 0o750 },
-        })
-    }
-
-    /// Resolve the one migration-required legacy swtpm row for a VM.
-    pub fn resolve_legacy_swtpm_intent(&self, vm_id: &str) -> Option<ResolvedLegacySwtpmIntent> {
-        let vm = self.find_manifest_vm(vm_id)?;
-        if !vm.tpm {
-            return None;
-        }
-        let state_dir = PathBuf::from(&vm.state_dir);
-        let destination = state_dir.join("swtpm");
-        let (owner_uid, owner_gid) = self.resolve_path_owner(vm_id, &destination)?;
-        let marker_root = state_dir.parent()?.parent()?.join("swtpm-markers");
-        Some(ResolvedLegacySwtpmIntent {
-            intent_id: intent_id_legacy_swtpm(vm_id),
-            vm: vm_id.to_owned(),
-            source: state_dir.join("swtpm-legacy"),
-            destination,
-            journal: state_dir.join(".d2b-legacy-swtpm.journal"),
-            marker: marker_root.join(vm_id),
-            owner_uid,
-            owner_gid,
         })
     }
 
@@ -3087,171 +2801,8 @@ impl BundleResolver {
         self.runner_intents.keys().map(String::as_str)
     }
 
-    pub fn installer_intent_ids(&self) -> impl Iterator<Item = &str> {
-        self.installer_intents.keys().map(String::as_str)
-    }
 
-    pub fn migrate_intent_ids(&self) -> impl Iterator<Item = &str> {
-        self.migrate_intents.keys().map(String::as_str)
-    }
-
-    pub fn activation_intent_ids(&self) -> impl Iterator<Item = &str> {
-        self.activation_intents.keys().map(String::as_str)
-    }
-
-    pub fn gc_intent_ids(&self) -> impl Iterator<Item = &str> {
-        self.gc_intents.keys().map(String::as_str)
-    }
-
-    pub fn keys_rotate_intent_ids(&self) -> impl Iterator<Item = &str> {
-        self.keys_rotate_intents.keys().map(String::as_str)
-    }
-
-    pub fn host_key_trust_intent_ids(&self) -> impl Iterator<Item = &str> {
-        self.host_key_trust_intents.keys().map(String::as_str)
-    }
-
-    pub fn rotate_known_host_intent_ids(&self) -> impl Iterator<Item = &str> {
-        self.rotate_known_host_intents.keys().map(String::as_str)
-    }
-
-    /// Per-role minijail profile validator. Walks every profile the
-    /// bundle ships (via `processes.json` role profiles) and asserts
-    /// the invariants:
-    ///
-    /// 1. uid and gid are non-zero unless a NON-EMPTY `adr_carve_out`
-    ///    ref explicitly documents a root carve-out (an empty or
-    ///    whitespace-only carve-out is treated as no carve-out);
-    /// 2. mount_policy.nix_store_read_only is `true` for every
-    ///    non-root role;
-    /// 3. cgroup_placement.subtree starts with `d2b/` or `d2b.slice/`;
-    /// 4. profile_id is non-empty.
-    ///
-    /// Returns the first violation as `Err`, or `Ok(profile_count)`
-    /// when every profile passes. The integrator must add a
-    /// corresponding fix to the Nix profile emitter for any reported
-    /// violation.
-    ///
-    /// Migration note (supersedes tests/static-invariant-uid0.sh): the
-    /// retired bash gate additionally coupled a uid-0 long-lived profile to
-    /// `requiresStartRoot = true`. `requires_start_root` lives on the
-    /// minijail-profile metadata, not on the `processes::RoleProfile` this
-    /// validator walks, and per ADR 0021 virtiofsd now runs fake-root inside
-    /// a broker-established user namespace with `requiresStartRoot = false` -
-    /// so the carve-out reference, not `requiresStartRoot`, is the live
-    /// security gate. The schema-shape part of the bash gate (root-capable
-    /// shapes must declare an ADR carve-out field) is structurally
-    /// guaranteed: `RoleProfile` carries `adr_carve_out` alongside `uid`/`gid`
-    /// (so the negative unit tests would fail to compile if it were removed)
-    /// and `bundle-drift` keeps the committed v2 schema in sync with the DTO.
-    pub fn validate_minijail_profiles(&self) -> Result<usize, MinijailProfileViolation> {
-        let mut count = 0usize;
-        for dag in &self.processes.vms {
-            for node in &dag.nodes {
-                let p = &node.profile;
-                if p.profile_id.is_empty() {
-                    return Err(MinijailProfileViolation::EmptyProfileId {
-                        vm: dag.vm.clone(),
-                        node: node.id.0.clone(),
-                    });
-                }
-                // An ADR carve-out justifies a uid/gid 0 or writable-store
-                // profile, but only if it is a real reference - an empty or
-                // whitespace-only `adr_carve_out` is treated as NO carve-out
-                // (the bash static-invariant-uid0 gate required an ADR-like
-                // reference; matching that here closes a fail-open where
-                // `Some("")` would satisfy the gate).
-                let root_carve_out = p
-                    .adr_carve_out
-                    .as_deref()
-                    .is_some_and(|s| !s.trim().is_empty());
-                if !root_carve_out && (p.uid == 0 || p.gid == 0) {
-                    return Err(MinijailProfileViolation::RootWithoutCarveOut {
-                        profile_id: p.profile_id.clone(),
-                        vm: dag.vm.clone(),
-                        uid: p.uid,
-                        gid: p.gid,
-                    });
-                }
-                if !root_carve_out && !p.mount_policy.nix_store_read_only {
-                    return Err(MinijailProfileViolation::NixStoreNotReadOnly {
-                        profile_id: p.profile_id.clone(),
-                        vm: dag.vm.clone(),
-                    });
-                }
-                if !p.cgroup_placement.subtree.starts_with("d2b/")
-                    && !p.cgroup_placement.subtree.starts_with("d2b.slice/")
-                    && !p.cgroup_placement.subtree.is_empty()
-                {
-                    return Err(MinijailProfileViolation::CgroupSubtreeOutsideD2b {
-                        profile_id: p.profile_id.clone(),
-                        subtree: p.cgroup_placement.subtree.clone(),
-                    });
-                }
-                count += 1;
-            }
-        }
-        Ok(count)
-    }
 }
-
-/// Minijail profile validator violations.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MinijailProfileViolation {
-    EmptyProfileId {
-        vm: String,
-        node: String,
-    },
-    RootWithoutCarveOut {
-        profile_id: String,
-        vm: String,
-        uid: u32,
-        gid: u32,
-    },
-    NixStoreNotReadOnly {
-        profile_id: String,
-        vm: String,
-    },
-    CgroupSubtreeOutsideD2b {
-        profile_id: String,
-        subtree: String,
-    },
-}
-
-impl std::fmt::Display for MinijailProfileViolation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::EmptyProfileId { vm, node } => {
-                write!(
-                    f,
-                    "minijail profile for vm={vm} node={node} has empty profile_id"
-                )
-            }
-            Self::RootWithoutCarveOut {
-                profile_id,
-                vm,
-                uid,
-                gid,
-            } => write!(
-                f,
-                "minijail profile {profile_id} for vm={vm} runs as uid={uid} gid={gid} without adr_carve_out ref"
-            ),
-            Self::NixStoreNotReadOnly { profile_id, vm } => write!(
-                f,
-                "minijail profile {profile_id} for vm={vm} has nix_store_read_only=false without adr_carve_out"
-            ),
-            Self::CgroupSubtreeOutsideD2b {
-                profile_id,
-                subtree,
-            } => write!(
-                f,
-                "minijail profile {profile_id} cgroup subtree {subtree} is outside the delegated d2b root"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for MinijailProfileViolation {}
 
 fn module_requirement_w3(requirement: &ModuleRequirement) -> ModuleRequirementW3 {
     match requirement {
@@ -3322,49 +2873,16 @@ fn role_device_classes(
 // Installer + migrate intent ID helpers.
 // ---------------------------------------------------------------
 
-pub fn intent_id_installer_host() -> String {
-    "installer:host".to_owned()
-}
-
-pub fn intent_id_migrate_host() -> String {
-    "migrate:host".to_owned()
-}
-
-pub fn intent_id_activation(vm: &str) -> String {
-    format!("activation:vm:{vm}")
-}
 
 pub fn intent_id_store_view(zone: &ZoneId, vm: &str) -> String {
     format!("store-view:zone:{}:vm:{vm}", zone.as_str())
 }
 
-pub fn intent_id_legacy_store_view(vm: &str) -> String {
-    format!("store-view:vm:{vm}")
-}
 
 pub fn intent_id_vm_start(vm: &str, role_id: &str) -> String {
     format!("vm-start:vm:{vm}:role:{role_id}")
 }
 
-pub fn intent_id_legacy_swtpm(vm: &str) -> String {
-    format!("legacy-swtpm:vm:{vm}")
-}
-
-pub fn intent_id_gc_host() -> String {
-    "gc:host".to_owned()
-}
-
-pub fn intent_id_keys_rotate(vm: &str) -> String {
-    format!("keys-rotate:vm:{vm}")
-}
-
-pub fn intent_id_trust(vm: &str) -> String {
-    format!("trust:vm:{vm}")
-}
-
-pub fn intent_id_rotate_known_host(vm: &str) -> String {
-    format!("rotate-known-host:vm:{vm}")
-}
 
 // ---------------------------------------------------------------
 // Intent ID format helpers (deterministic, public).
@@ -5095,223 +4613,6 @@ fn user_visible_ifname_for(
         .map(|mapping| mapping.user_visible_name.clone())
 }
 
-fn build_installer_intents(bundle: &Bundle) -> BTreeMap<String, ResolvedInstallerIntent> {
-    let mut out = BTreeMap::new();
-    let bundle_path = PathBuf::from("/var/lib/d2b/current-bundle/manifest.json");
-    let artifacts = vec![
-        InstallerArtifact {
-            path: PathBuf::from("/etc/systemd/system/d2bd.service"),
-            mode: 0o644,
-            purpose: "d2bd systemd unit (non-NixOS host)".to_owned(),
-        },
-        InstallerArtifact {
-            path: PathBuf::from("/etc/d2b/daemon-config.json"),
-            mode: 0o640,
-            purpose: "daemon configuration file consumed by d2bd".to_owned(),
-        },
-        InstallerArtifact {
-            path: PathBuf::from(&bundle.public_manifest_path),
-            mode: 0o644,
-            purpose: "public vms.json manifest (bundle entry point)".to_owned(),
-        },
-    ];
-    out.insert(
-        intent_id_installer_host(),
-        ResolvedInstallerIntent {
-            intent_id: intent_id_installer_host(),
-            unit_path: PathBuf::from("/etc/systemd/system/d2bd.service"),
-            service_name: "d2bd.service".to_owned(),
-            daemon_config_path: PathBuf::from("/etc/d2b/daemon-config.json"),
-            bundle_path,
-            artifacts,
-        },
-    );
-    out
-}
-
-fn build_migrate_intents(processes: &ProcessesJson) -> BTreeMap<String, ResolvedMigrateIntent> {
-    let mut out = BTreeMap::new();
-    let vms: Vec<String> = processes
-        .vms
-        .iter()
-        .filter(|dag| !is_per_env_usbipd_scope(&dag.vm))
-        .map(|dag| dag.vm.clone())
-        .collect();
-    let notes = vec![
-        "migrate plan synthesised from processes.json vm list".to_owned(),
-        format!("{} VM(s) eligible for daemon-owned migration", vms.len()),
-        "Per-VM systemd unit `microvm@<vm>` will be stopped and replaced by the daemon supervisor's pidfd table entry".to_owned(),
-    ];
-    out.insert(
-        intent_id_migrate_host(),
-        ResolvedMigrateIntent {
-            intent_id: intent_id_migrate_host(),
-            vms,
-            notes,
-        },
-    );
-    out
-}
-
-fn is_per_env_usbipd_scope(vm: &str) -> bool {
-    vm.starts_with("sys-") && vm.ends_with("-usbipd")
-}
-
-fn build_activation_intents(
-    closures: &[ClosureMetadata],
-    manifest: &ManifestV04,
-) -> BTreeMap<String, ResolvedActivationIntent> {
-    let mut out = BTreeMap::new();
-    for closure in closures {
-        if !manifest.vms.contains_key(&closure.vm) {
-            continue;
-        }
-        let intent_id = intent_id_activation(&closure.vm);
-        out.insert(
-            intent_id.clone(),
-            ResolvedActivationIntent {
-                intent_id,
-                vm: closure.vm.clone(),
-                target_generation_path: PathBuf::from(&closure.toplevel),
-                generation_number: closure.generation.host_generation,
-            },
-        );
-    }
-    out
-}
-
-fn build_store_view_intents(
-    closures: &[ClosureMetadata],
-    manifest: &ManifestV04,
-) -> BTreeMap<String, ResolvedStoreViewIntent> {
-    let mut out = BTreeMap::new();
-    for closure in closures {
-        let Some(vm) = manifest.vms.get(&closure.vm) else {
-            continue;
-        };
-        let Some(generation) = closure.generation.host_generation else {
-            continue;
-        };
-        let Some(target_name) = Path::new(&closure.toplevel).file_name() else {
-            continue;
-        };
-        let hardlink_farm_path = PathBuf::from(&vm.state_dir).join("store-view");
-        let live_view_path = hardlink_farm_path.join("live");
-        let target_view_path = live_view_path.join(target_name);
-        let mut closure_paths: Vec<PathBuf> =
-            closure.closure_paths.iter().map(PathBuf::from).collect();
-        let toplevel_path = PathBuf::from(&closure.toplevel);
-        if !closure_paths.iter().any(|path| path == &toplevel_path) {
-            closure_paths.push(toplevel_path);
-        }
-        let intent_id = intent_id_legacy_store_view(&closure.vm);
-        out.insert(
-            intent_id.clone(),
-            ResolvedStoreViewIntent {
-                intent_id,
-                vm: closure.vm.clone(),
-                generation,
-                hardlink_farm_path,
-                target_view_path,
-                closure_paths,
-                db_dump_path: PathBuf::from(&closure.db_dump_path),
-            },
-        );
-    }
-    out
-}
-
-fn build_gc_intents(closures: &[ClosureMetadata]) -> BTreeMap<String, ResolvedGcIntent> {
-    let mut retained = BTreeMap::<String, PathBuf>::new();
-    for closure in closures {
-        for store_path in &closure.closure_paths {
-            retained
-                .entry(store_path.clone())
-                .or_insert_with(|| PathBuf::from(store_path));
-        }
-        retained
-            .entry(closure.toplevel.clone())
-            .or_insert_with(|| PathBuf::from(&closure.toplevel));
-    }
-    let mut out = BTreeMap::new();
-    out.insert(
-        intent_id_gc_host(),
-        ResolvedGcIntent {
-            intent_id: intent_id_gc_host(),
-            retained_store_paths: retained.into_values().collect(),
-        },
-    );
-    out
-}
-
-fn build_keys_rotate_intents(
-    bundle: &Bundle,
-    manifest: &ManifestV04,
-) -> BTreeMap<String, ResolvedKeysRotateIntent> {
-    let mut out = BTreeMap::new();
-    for vm in manifest.vms.keys() {
-        let intent_id = intent_id_keys_rotate(vm);
-        out.insert(
-            intent_id.clone(),
-            ResolvedKeysRotateIntent {
-                intent_id,
-                vm: vm.clone(),
-                key_path: bundle.managed_keys.effective_key_path(vm),
-            },
-        );
-    }
-    out
-}
-
-fn build_host_key_trust_intents(
-    bundle: &Bundle,
-    manifest: &ManifestV04,
-) -> BTreeMap<String, ResolvedHostKeyTrustIntent> {
-    let mut out = BTreeMap::new();
-    for (vm, entry) in &manifest.vms {
-        let Some(static_ip) = entry.static_ip.as_ref() else {
-            continue;
-        };
-        let intent_id = intent_id_trust(vm);
-        out.insert(
-            intent_id.clone(),
-            ResolvedHostKeyTrustIntent {
-                intent_id,
-                vm: vm.clone(),
-                static_ip: static_ip.clone(),
-                known_hosts_path: bundle.managed_keys.known_hosts_path_buf(),
-                host_public_key_path: PathBuf::from(&entry.state_dir)
-                    .join("sshd-host-keys")
-                    .join("ssh_host_ed25519_key.pub"),
-            },
-        );
-    }
-    out
-}
-
-fn build_rotate_known_host_intents(
-    bundle: &Bundle,
-    manifest: &ManifestV04,
-) -> BTreeMap<String, ResolvedRotateKnownHostIntent> {
-    let mut out = BTreeMap::new();
-    for (vm, entry) in &manifest.vms {
-        let Some(static_ip) = entry.static_ip.as_ref() else {
-            continue;
-        };
-        let intent_id = intent_id_rotate_known_host(vm);
-        out.insert(
-            intent_id.clone(),
-            ResolvedRotateKnownHostIntent {
-                intent_id,
-                vm: vm.clone(),
-                static_ip: static_ip.clone(),
-                known_hosts_path: bundle.managed_keys.known_hosts_path_buf(),
-            },
-        );
-    }
-    out
-}
-
 fn resolve_bundle_ref(bundle_root: &Path, artifact_path: &str) -> PathBuf {
     let path = Path::new(artifact_path);
     if path.is_absolute() {
@@ -5319,55 +4620,6 @@ fn resolve_bundle_ref(bundle_root: &Path, artifact_path: &str) -> PathBuf {
     } else {
         bundle_root.join(path)
     }
-}
-
-/// Load closure metadata without tamper-resistance checks.
-///
-/// Used when artifacts have already been validated by the caller
-/// (e.g. `from_artifacts_with_closures` test path) or when the
-/// bundle root is known-trusted (Nix store).
-#[allow(dead_code)]
-fn load_closure_metadata(
-    bundle: &Bundle,
-    bundle_root: &Path,
-) -> Result<Vec<ClosureMetadata>, Error> {
-    let mut closures = Vec::new();
-    for closure_ref in &bundle.closures {
-        let closure_path = resolve_bundle_ref(bundle_root, &closure_ref.path);
-        let closure_bytes =
-            std::fs::read(&closure_path).map_err(|_| Error::internal_io("bundle-closure-read"))?;
-        let closure: ClosureMetadata = serde_json::from_slice(&closure_bytes).map_err(|e| {
-            Error::manifest_parse_error("closure.json", manifest_parse_reason(&e.to_string()))
-        })?;
-        closures.push(closure);
-    }
-    Ok(closures)
-}
-
-/// Like `load_closure_metadata` but applies the tamper-resistance policy to
-/// every `closures/<vm>.json` artifact and verifies each
-/// file's SHA-256 against `bundle.artifact_hashes`.
-fn load_closure_metadata_verified(
-    bundle: &Bundle,
-    bundle_root: &Path,
-    policy: &BundleVerifyPolicy,
-) -> Result<Vec<ClosureMetadata>, Error> {
-    let mut closures = Vec::new();
-    for closure_ref in &bundle.closures {
-        let closure_path = resolve_bundle_ref(bundle_root, &closure_ref.path);
-        let closure_bytes = secure_open_and_read(&closure_path, policy)?;
-        verify_artifact_hash(
-            &closure_path,
-            &closure_bytes,
-            bundle.artifact_hashes.as_ref(),
-            &closure_ref.path,
-        )?;
-        let closure: ClosureMetadata = serde_json::from_slice(&closure_bytes).map_err(|e| {
-            Error::manifest_parse_error("closure.json", manifest_parse_reason(&e.to_string()))
-        })?;
-        closures.push(closure);
-    }
-    Ok(closures)
 }
 
 /// Load the integrity-pinned per-Zone Resource bundles emitted by Nix.
@@ -6210,38 +5462,10 @@ fn load_zone_native_topology(
     }))
 }
 
-fn load_optional_allocator_artifact(
-    bundle: &Bundle,
-    bundle_root: &Path,
-    policy: &BundleVerifyPolicy,
-) -> Result<Option<AllocatorJson>, Error> {
-    let Some(allocator_ref) = bundle.allocator_path.as_deref() else {
-        return Ok(None);
-    };
-    let allocator_path = resolve_bundle_ref(bundle_root, allocator_ref);
-    let bytes = secure_open_and_read(&allocator_path, policy)?;
-    verify_artifact_hash(
-        &allocator_path,
-        &bytes,
-        bundle.artifact_hashes.as_ref(),
-        allocator_ref,
-    )?;
-    let allocator: AllocatorJson = serde_json::from_slice(&bytes).map_err(|error| {
-        Error::manifest_parse_error("allocator.json", manifest_parse_reason(&error.to_string()))
-    })?;
-    Ok(Some(allocator))
-}
-
-/// Conventional bundle-root name of the optional site artifact.
-///
-/// Zone-native (v3) bundles declare the path in their index (`sitePath`);
-/// legacy bundles have no field for it, so the loader accepts the artifact
-/// beside `bundle.json` when it ships one.
-const SITE_ARTIFACT_FILE_NAME: &str = "site.json";
-
 /// Load the optional private site-runtime contract (`site.json`).
 ///
-/// A bundle that predates the artifact yields `None`: the site facts are
+/// Zone-native (v3) bundles declare the path in their index (`sitePath`);
+/// a bundle that predates the artifact yields `None`: the site facts are
 /// simply absent, and consumers refuse by name rather than inventing a path.
 fn load_optional_site_artifact(
     bundle: &Bundle,
@@ -6249,24 +5473,16 @@ fn load_optional_site_artifact(
     declared_ref: Option<&str>,
     policy: &BundleVerifyPolicy,
 ) -> Result<Option<SiteJson>, Error> {
-    let site_ref = match declared_ref {
-        Some(declared_ref) => declared_ref.to_owned(),
-        None => {
-            let conventional = bundle_root.join(SITE_ARTIFACT_FILE_NAME);
-            match std::fs::symlink_metadata(&conventional) {
-                Ok(_) => SITE_ARTIFACT_FILE_NAME.to_owned(),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(_) => return Err(Error::internal_io("site-artifact-metadata")),
-            }
-        }
+    let Some(site_ref) = declared_ref else {
+        return Ok(None);
     };
-    let site_path = resolve_bundle_ref(bundle_root, &site_ref);
+    let site_path = resolve_bundle_ref(bundle_root, site_ref);
     let bytes = secure_open_and_read(&site_path, policy)?;
     verify_artifact_hash(
         &site_path,
         &bytes,
         bundle.artifact_hashes.as_ref(),
-        &site_ref,
+        site_ref,
     )?;
     let site: SiteJson = serde_json::from_slice(&bytes).map_err(|error| {
         Error::manifest_parse_error("site.json", manifest_parse_reason(&error.to_string()))
@@ -6296,109 +5512,6 @@ fn load_optional_storage_artifact(
         Error::manifest_parse_error("storage.json", manifest_parse_reason(&e.to_string()))
     })?;
     Ok(Some(storage))
-}
-
-fn load_optional_sync_artifact(
-    bundle: &Bundle,
-    bundle_root: &Path,
-    policy: &BundleVerifyPolicy,
-) -> Result<Option<SyncJson>, Error> {
-    let Some(sync_ref) = bundle.sync_path.as_deref() else {
-        return Ok(None);
-    };
-    let sync_path = resolve_bundle_ref(bundle_root, sync_ref);
-    let bytes = secure_open_and_read(&sync_path, policy)?;
-    verify_artifact_hash(
-        &sync_path,
-        &bytes,
-        bundle.artifact_hashes.as_ref(),
-        sync_ref,
-    )?;
-    let sync: SyncJson = serde_json::from_slice(&bytes).map_err(|e| {
-        Error::manifest_parse_error("sync.json", manifest_parse_reason(&e.to_string()))
-    })?;
-    Ok(Some(sync))
-}
-
-fn load_optional_realm_controllers_artifact(
-    bundle: &Bundle,
-    bundle_root: &Path,
-    policy: &BundleVerifyPolicy,
-) -> Result<Option<RealmControllersJson>, Error> {
-    let Some(realm_controllers_ref) = bundle.realm_controllers_path.as_deref() else {
-        return Ok(None);
-    };
-    let realm_controllers_path = resolve_bundle_ref(bundle_root, realm_controllers_ref);
-    let bytes = secure_open_and_read(&realm_controllers_path, policy)?;
-    verify_artifact_hash(
-        &realm_controllers_path,
-        &bytes,
-        bundle.artifact_hashes.as_ref(),
-        realm_controllers_ref,
-    )?;
-    let realm_controllers: RealmControllersJson = serde_json::from_slice(&bytes).map_err(|e| {
-        Error::manifest_parse_error(
-            "realm-controllers.json",
-            manifest_parse_reason(&e.to_string()),
-        )
-    })?;
-    realm_controllers
-        .validate_metadata_only()
-        .map_err(|err| Error::manifest_parse_error("realm-controllers.json", err.to_string()))?;
-    Ok(Some(realm_controllers))
-}
-
-fn load_optional_realm_identity_artifact(
-    bundle: &Bundle,
-    bundle_root: &Path,
-    policy: &BundleVerifyPolicy,
-) -> Result<Option<RealmIdentityConfigJson>, Error> {
-    let Some(realm_identity_ref) = bundle.realm_identity_path.as_deref() else {
-        return Ok(None);
-    };
-    let realm_identity_path = resolve_bundle_ref(bundle_root, realm_identity_ref);
-    let bytes = secure_open_and_read(&realm_identity_path, policy)?;
-    verify_artifact_hash(
-        &realm_identity_path,
-        &bytes,
-        bundle.artifact_hashes.as_ref(),
-        realm_identity_ref,
-    )?;
-    let realm_identity: RealmIdentityConfigJson = serde_json::from_slice(&bytes).map_err(|e| {
-        Error::manifest_parse_error("realm-identity.json", manifest_parse_reason(&e.to_string()))
-    })?;
-    realm_identity
-        .validate_metadata_only()
-        .map_err(|err| Error::manifest_parse_error("realm-identity.json", err.to_string()))?;
-    Ok(Some(realm_identity))
-}
-
-fn load_optional_unsafe_local_workloads_artifact(
-    bundle: &Bundle,
-    bundle_root: &Path,
-    policy: &BundleVerifyPolicy,
-) -> Result<Option<UnsafeLocalWorkloadsJson>, Error> {
-    let Some(unsafe_local_workloads_ref) = bundle.unsafe_local_workloads_path.as_deref() else {
-        return Ok(None);
-    };
-    let path = resolve_bundle_ref(bundle_root, unsafe_local_workloads_ref);
-    let bytes = secure_open_and_read(&path, policy)?;
-    verify_artifact_hash(
-        &path,
-        &bytes,
-        bundle.artifact_hashes.as_ref(),
-        unsafe_local_workloads_ref,
-    )?;
-    let artifact: UnsafeLocalWorkloadsJson = serde_json::from_slice(&bytes).map_err(|e| {
-        Error::manifest_parse_error(
-            "unsafe-local-workloads.json",
-            manifest_parse_reason(&e.to_string()),
-        )
-    })?;
-    artifact
-        .validate()
-        .map_err(|error| Error::manifest_parse_error("unsafe-local-workloads.json", error))?;
-    Ok(Some(artifact))
 }
 
 fn load_optional_realm_workloads_launcher_v2_artifact(
@@ -6478,8 +5591,7 @@ const _ASSERT_TAPROLE: Option<TapRole> = None;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bundle::{Bundle, BundleClosureRef, BundleGeneration};
-    use crate::closures::{ClosureGeneration, ClosureMetadata};
+    use crate::bundle::{Bundle, BundleGeneration};
     use crate::host::{
         BridgePortFlags, ChNetHandoffMode, HostChConfig, HostJson, HostsFileOwnership,
         IfNameMapping, LanPolicy, NetEnv, NetworkManagerUnmanaged, NftablesModel, OwnershipRule,
@@ -6504,7 +5616,6 @@ mod tests {
     use d2b_contracts_zone_session::v3::resource_bundle::{
         BundleResource, BundleResourceMetadata, ResourceBundle,
     };
-    use serde::Serialize;
     use std::collections::BTreeMap;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -6531,24 +5642,16 @@ mod tests {
             include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
         )
         .expect("manifest fixture parses");
-        let resolver = BundleResolver::from_artifacts(
+        let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
             Bundle {
                 bundle_version: 4,
                 schema_version: "v2".to_owned(),
-                public_manifest_path: "vms.json".to_owned(),
-                host_path: "host.json".to_owned(),
-                processes_path: "processes.json".to_owned(),
+
                 privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
-                sync_path: None,
-                allocator_path: None,
-                realm_controllers_path: None,
-                realm_identity_path: None,
+
                 realm_workloads_launcher_v2_path: None,
-                unsafe_local_workloads_path: None,
-                closures: Vec::new(),
-                minijail_profiles: Vec::new(),
-                managed_keys: Default::default(),
+
                 generation: BundleGeneration {
                     generator: "test".to_owned(),
                     source_revision: None,
@@ -6563,6 +5666,7 @@ mod tests {
                 vms: Vec::new(),
             },
             manifest,
+            BTreeMap::new(),
         );
         assert_eq!(
             resolver.host_runtime().nft_applied_hash.as_deref(),
@@ -6582,19 +5686,10 @@ mod tests {
         base.join(format!("{test_name}-{}-{unique}", std::process::id()))
     }
 
-    fn write_json<T: Serialize>(path: &Path, value: &T) {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("create json parent");
-        }
-        let mut body = serde_json::to_vec_pretty(value).expect("serialize test json");
-        body.push(b'\n');
-        fs::write(path, body).expect("write test json");
-    }
-
     #[test]
     fn production_bundle_does_not_load_legacy_env_nft_projection() {
         let root = test_root("nft-projection");
-        let resolver = build_personal_dev_bundle(&root);
+        let resolver = build_personal_dev_bundle_with_fixture_network(&root, false);
         assert!(
             resolver
                 .find_nft_projection_intent(&intent_id_nft_projection_env("personal"))
@@ -6776,20 +5871,12 @@ mod tests {
             Bundle {
                 bundle_version: 11,
                 schema_version: "v2".to_owned(),
-                public_manifest_path: "vms.json".to_owned(),
-                host_path: "host.json".to_owned(),
-                processes_path: "processes.json".to_owned(),
+
                 privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
-                sync_path: None,
-                allocator_path: None,
-                realm_controllers_path: None,
-                realm_identity_path: None,
+
                 realm_workloads_launcher_v2_path: None,
-                unsafe_local_workloads_path: None,
-                closures: Vec::new(),
-                minijail_profiles: Vec::new(),
-                managed_keys: Default::default(),
+
                 generation: BundleGeneration {
                     generator: "test".to_owned(),
                     source_revision: None,
@@ -7219,20 +6306,12 @@ mod tests {
             Bundle {
                 bundle_version: 11,
                 schema_version: "v2".to_owned(),
-                public_manifest_path: "vms.json".to_owned(),
-                host_path: "host.json".to_owned(),
-                processes_path: "processes.json".to_owned(),
+
                 privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
-                sync_path: None,
-                allocator_path: None,
-                realm_controllers_path: None,
-                realm_identity_path: None,
+
                 realm_workloads_launcher_v2_path: None,
-                unsafe_local_workloads_path: None,
-                closures: Vec::new(),
-                minijail_profiles: Vec::new(),
-                managed_keys: Default::default(),
+
                 generation: BundleGeneration {
                     generator: "test".to_owned(),
                     source_revision: None,
@@ -7341,14 +6420,19 @@ mod tests {
         );
     }
 
-    fn build_personal_dev_bundle(root: &Path) -> BundleResolver {
-        let bundle_dir = root.join("bundle");
-        let bundle_path = bundle_dir.join("bundle.json");
-        let manifest_path = bundle_dir.join("vms.json");
-        let host_path = bundle_dir.join("host.json");
-        let processes_path = bundle_dir.join("processes.json");
-        let closure_path = bundle_dir.join("closures/personal-dev.json");
+        fn build_personal_dev_bundle(root: &Path) -> BundleResolver {
+        build_personal_dev_bundle_with_fixture_network(root, true)
+    }
 
+    /// Fixture builder with explicit fixture-network-intent mode: `true`
+    /// synthesizes the fixture bridge/route/sysctl/hosts/projection intents
+    /// for host-derived tests; `false` mirrors the production load path
+    /// (`load_zone_native_bundle`), which emits only the host nft intent.
+    fn build_personal_dev_bundle_with_fixture_network(
+        root: &Path,
+        include_fixture_network_intents: bool,
+    ) -> BundleResolver {
+        let _ = root;
         let host = HostJson {
             schema_version: "v2".to_owned(),
             site: SitePolicy {
@@ -7410,8 +6494,6 @@ mod tests {
             },
             kernel_modules: Vec::new(),
             fd_ownership: Vec::new(),
-            runtime_providers: Vec::new(),
-            vm_runtimes: Vec::new(),
             security_key_selectors: Vec::new(),
             cloud_hypervisor_capabilities: Vec::new(),
             if_name_mappings: Vec::<IfNameMapping>::new(),
@@ -7570,43 +6652,15 @@ mod tests {
             )]),
         };
 
-        let closure = ClosureMetadata {
-            schema_version: "v2".to_owned(),
-            vm: "personal-dev".to_owned(),
-            toplevel: "/nix/store/personal-dev-system".to_owned(),
-            closure_paths: vec!["/nix/store/personal-dev-system".to_owned()],
-            db_dump_path: "/nix/store/personal-dev-registration".to_owned(),
-            declared_runner: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
-            runner_parity_path: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
-            runner_parity_ok: true,
-            generation: ClosureGeneration {
-                host_generation: Some(7),
-                vm_generation: Some("7".to_owned()),
-                source_revision: Some("deadbeef".to_owned()),
-                generated_at: Some("2026-01-01T00:00:00Z".to_owned()),
-            },
-        };
-
         let bundle = Bundle {
-            bundle_version: 3,
-            schema_version: "v2".to_owned(),
-            public_manifest_path: "vms.json".to_owned(),
-            host_path: "host.json".to_owned(),
-            processes_path: "processes.json".to_owned(),
+            bundle_version: 1,
+            schema_version: "v3".to_owned(),
+
             privileges_path: "privileges.json".to_owned(),
             storage_path: None,
-            sync_path: None,
-            allocator_path: None,
-            realm_controllers_path: None,
-            realm_identity_path: None,
+
             realm_workloads_launcher_v2_path: None,
-            unsafe_local_workloads_path: None,
-            closures: vec![BundleClosureRef {
-                vm: "personal-dev".to_owned(),
-                path: "closures/personal-dev.json".to_owned(),
-            }],
-            minijail_profiles: Vec::new(),
-            managed_keys: Default::default(),
+
             generation: BundleGeneration {
                 generator: "test".to_owned(),
                 source_revision: Some("deadbeef".to_owned()),
@@ -7616,84 +6670,32 @@ mod tests {
             artifact_hashes: None,
         };
 
-        write_json(&manifest_path, &manifest);
-        write_json(&host_path, &host);
-        write_json(&processes_path, &processes);
-        write_json(&closure_path, &closure);
-
-        // schemaVersion v2 bundles MUST carry bundleHash. Replicate the
-        // bundle_resolver verify path:
-        // bundleHash = sha256( serde_json::to_vec( bundle as Value
-        // with artifactHashes set to null and no bundleHash field ) ).
-        // serde_json (no preserve_order) emits sorted keys, matching
-        // builtins.toJSON on the Nix side.
-        let mut as_value: serde_json::Value =
-            serde_json::to_value(&bundle).expect("serialize bundle to value");
-        if let serde_json::Value::Object(map) = &mut as_value {
-            map.remove("bundleHash");
-            map.insert("artifactHashes".to_owned(), serde_json::Value::Null);
-        }
-        let canonical =
-            serde_json::to_vec(&as_value).expect("canonical-serialize bundle for hashing");
-        let digest = {
-            use sha2::Digest as _;
-            let raw: [u8; 32] = sha2::Sha256::digest(&canonical).into();
-            let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-            format!("sha256:{hex}")
-        };
-        if let serde_json::Value::Object(map) = &mut as_value {
-            map.insert("bundleHash".to_owned(), serde_json::Value::String(digest));
-        }
-        let with_hash = serde_json::to_vec(&as_value).expect("re-serialize bundle");
-        fs::write(&bundle_path, with_hash).expect("write bundle with hash");
-
-        // Production policy requires root:d2bd owner + 0640 mode;
-        // use a current-user policy so the test runs as
-        // a non-root developer too (matches the pattern in
-        // tests/bundle_resolver_tamper.rs current_user_policy()).
-        // fs::write defaults to 0644 (minus umask); chmod the bundle
-        // to 0640 to satisfy the verifier's mode check.
-        use std::os::unix::fs::PermissionsExt as _;
-        for p in [
-            &bundle_path,
-            &manifest_path,
-            &host_path,
-            &processes_path,
-            &closure_path,
-        ] {
-            fs::set_permissions(p, fs::Permissions::from_mode(0o640))
-                .expect("chmod test bundle artifact");
-        }
-        let test_policy = BundleVerifyPolicy {
-            required_uid: rustix::process::getuid().as_raw(),
-            required_gid: Some(rustix::process::getgid().as_raw()),
-            required_mode: 0o640,
-        };
-        BundleResolver::load_with_policy(&bundle_path, &test_policy)
-            .expect("load personal-dev test bundle")
-    }
-
-    fn write_hashed_test_bundle(bundle_path: &Path, mut as_value: serde_json::Value) {
-        if let serde_json::Value::Object(map) = &mut as_value {
-            map.remove("bundleHash");
-            map.insert("artifactHashes".to_owned(), serde_json::Value::Null);
-        }
-        let canonical =
-            serde_json::to_vec(&as_value).expect("canonical-serialize bundle for hashing");
-        let digest = {
-            use sha2::Digest as _;
-            let raw: [u8; 32] = sha2::Sha256::digest(&canonical).into();
-            let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-            format!("sha256:{hex}")
-        };
-        if let serde_json::Value::Object(map) = &mut as_value {
-            map.insert("bundleHash".to_owned(), serde_json::Value::String(digest));
-        }
-        fs::write(
-            bundle_path,
-            serde_json::to_vec(&as_value).expect("serialize bundle with hash"),
+                let bundle_hash = stable_digest_bytes(
+            serde_json::to_vec(&bundle)
+                .expect("serialize fixture bundle")
+                .as_slice(),
+        );
+        BundleResolver::from_parsed_artifacts(
+            bundle,
+            bundle_hash,
+            ParsedBundleArtifacts {
+                host,
+                processes,
+                zone_resource_bundles: BTreeMap::new(),
+                guest_setup_descriptors: BTreeMap::new(),
+                guest_setup_descriptor_catalog_keys: BTreeMap::new(),
+                guest_vmm_intents: BTreeMap::new(),
+                guest_vmm_zone_uids: BTreeMap::new(),
+                guest_store_view_intents: BTreeMap::new(),
+                provider_controller_templates: Vec::new(),
+                zone_storage_rows: BTreeMap::new(),
+                storage: None,
+                site: None,
+                realm_workloads_launcher_v2: None,
+                manifest,
+            },
+            include_fixture_network_intents,
         )
-        .expect("write bundle with hash");
     }
 
     fn current_user_bundle_policy() -> BundleVerifyPolicy {
@@ -7750,10 +6752,6 @@ mod tests {
                 .expect("Zone-native bundle index loads");
         assert_eq!(resolver.bundle.bundle_version, 1);
         assert_eq!(resolver.bundle.schema_version, "v3");
-        assert_eq!(
-            Path::new(&resolver.bundle.host_path).parent(),
-            Some(root.as_path())
-        );
         assert!(resolver.zone_resource_bundles.is_empty());
         assert_eq!(
             resolver
@@ -7806,9 +6804,12 @@ mod tests {
             None,
             &current_user_bundle_policy(),
         )
-        .expect("the conventional site artifact loads")
-        .expect("the site artifact is present");
-        assert_eq!(conventional, declared);
+        .expect("a sitePath-less v3 bundle is not an error");
+        assert!(
+            conventional.is_none(),
+            "the legacy conventional (beside-the-artifacts) site.json scan was removed; \
+             only a declared v3 index.sitePath resolves the artifact"
+        );
 
         let empty_root = test_root("site-artifact-absent");
         fs::create_dir_all(&empty_root).expect("create empty bundle root");
@@ -7846,20 +6847,12 @@ mod tests {
         Bundle {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
-            public_manifest_path: "vms.json".to_owned(),
-            host_path: "host.json".to_owned(),
-            processes_path: "processes.json".to_owned(),
+
             privileges_path: "privileges.json".to_owned(),
             storage_path: None,
-            sync_path: None,
-            allocator_path: None,
-            realm_controllers_path: None,
-            realm_identity_path: None,
+
             realm_workloads_launcher_v2_path: None,
-            unsafe_local_workloads_path: None,
-            closures: Vec::new(),
-            minijail_profiles: Vec::new(),
-            managed_keys: Default::default(),
+
             generation: BundleGeneration {
                 generator: "test".to_owned(),
                 source_revision: None,
@@ -7916,20 +6909,12 @@ mod tests {
         let bundle = Bundle {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
-            public_manifest_path: "vms.json".to_owned(),
-            host_path: "host.json".to_owned(),
-            processes_path: "processes.json".to_owned(),
+
             privileges_path: "privileges.json".to_owned(),
             storage_path: None,
-            sync_path: None,
-            allocator_path: None,
-            realm_controllers_path: None,
-            realm_identity_path: None,
+
             realm_workloads_launcher_v2_path: None,
-            unsafe_local_workloads_path: None,
-            closures: Vec::new(),
-            minijail_profiles: Vec::new(),
-            managed_keys: Default::default(),
+
             generation: BundleGeneration {
                 generator: "test".to_owned(),
                 source_revision: None,
@@ -7963,238 +6948,6 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    fn realm_controllers_artifact_value(no_systemd_units_materialized: bool) -> serde_json::Value {
-        serde_json::json!({
-            "schemaVersion": "v2",
-            "runtimeState": "metadata-only",
-            "controllers": [
-                {
-                    "realmName": "Home",
-                    "realmId": "home",
-                    "realmPath": "home",
-                    "placement": "host-local",
-                    "daemon": {
-                        "user": "d2br-0123456789abcdef",
-                        "group": "d2br-0123456789abcdef",
-                        "publicSocketGroup": "d2bra-0123456789abcdef",
-                        "serviceName": "d2b-realm-0123456789abcdef-daemon.service",
-                        "configPath": "/etc/d2b/realms/home/daemon-config.json",
-                        "stateLockPath": "/run/d2b/realms/home/daemon.lock",
-                        "locksDir": "/run/d2b/realms/home/locks",
-                        "socketActivated": false,
-                        "materializedService": !no_systemd_units_materialized
-                    },
-                    "broker": {
-                        "enabled": true,
-                        "hostMutation": true,
-                        "user": "root",
-                        "group": "d2br-0123456789abcdef",
-                        "socketPath": "/run/d2b/realms/home/broker.sock",
-                        "socketUnitName": "d2b-realm-0123456789abcdef-priv-broker.socket",
-                        "serviceUnitName": "d2b-realm-0123456789abcdef-priv-broker.service",
-                        "auditDir": "/var/lib/d2b/realms/home/audit",
-                        "materializedSocket": !no_systemd_units_materialized,
-                        "materializedService": !no_systemd_units_materialized
-                    },
-                    "paths": {
-                        "runDir": "/run/d2b/realms/home",
-                        "stateDir": "/var/lib/d2b/realms/home",
-                        "auditDir": "/var/lib/d2b/realms/home/audit"
-                    },
-                    "sockets": {
-                        "publicSocketPath": "/run/d2b/realms/home/public.sock",
-                        "brokerSocketPath": "/run/d2b/realms/home/broker.sock"
-                    },
-                    "allocator": {
-                        "kind": "local-root-metadata",
-                        "configPath": "/etc/d2b/allocator.json",
-                        "rootSocket": "/run/d2b/allocator/local-root.sock",
-                        "resourceRequestRefs": ["realm-home-state"]
-                    },
-                    "access": {
-                        "allowedUsers": ["alice"],
-                        "allowedGroups": ["realm-home"],
-                        "inheritedAdminUsers": []
-                    },
-                    "providers": []
-                }
-            ],
-            "invariants": {
-                "metadataOnly": true,
-                "noSystemdUnitsMaterialized": no_systemd_units_materialized,
-                "preservesGlobalDaemonBehavior": true,
-                "preservesDirectUnixSocketSemantics": true
-            }
-        })
-    }
-
-    fn realm_identity_artifact_value() -> serde_json::Value {
-        serde_json::json!({
-            "schemaVersion": "v2",
-            "runtimeState": "metadata-only",
-            "realms": [
-                {
-                    "realm": ["home"],
-                    "realmIdentityRef": "idref-home",
-                    "realmIdentityFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                    "controllerCredentialRef": "cgref-home",
-                    "controllerCredentialFingerprint": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
-                    "trustBundleRef": "trust-home",
-                    "enrollmentRef": "enroll-home",
-                    "rotationPolicyRef": "rotate-home"
-                }
-            ],
-            "invariants": {
-                "metadataOnly": true,
-                "noSecretMaterial": true,
-                "preservesRuntimeBehavior": true
-            }
-        })
-    }
-
-    #[test]
-    fn bundle_resolver_loads_realm_controller_artifact() {
-        let root = test_root("realm-controller-artifact");
-        let _baseline = build_personal_dev_bundle(&root);
-        let bundle_dir = root.join("bundle");
-        let bundle_path = bundle_dir.join("bundle.json");
-        let realm_controllers_path = bundle_dir.join("realm-controllers.json");
-
-        write_json(
-            &realm_controllers_path,
-            &realm_controllers_artifact_value(false),
-        );
-
-        let mut bundle_value: serde_json::Value =
-            serde_json::from_slice(&fs::read(&bundle_path).expect("read bundle json"))
-                .expect("bundle json parses");
-        if let serde_json::Value::Object(map) = &mut bundle_value {
-            map.insert(
-                "realmControllersPath".to_owned(),
-                serde_json::Value::String("realm-controllers.json".to_owned()),
-            );
-        }
-        write_hashed_test_bundle(&bundle_path, bundle_value);
-
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o640)).expect("chmod bundle");
-        fs::set_permissions(&realm_controllers_path, fs::Permissions::from_mode(0o640))
-            .expect("chmod realm controllers");
-
-        let resolver =
-            BundleResolver::load_with_policy(&bundle_path, &current_user_bundle_policy())
-                .expect("load bundle with realm controllers");
-        let controllers = resolver
-            .realm_controllers
-            .as_ref()
-            .expect("realm controller artifact loaded");
-        assert_eq!(controllers.controllers.len(), 1);
-        assert_eq!(controllers.controllers[0].realm_path.as_str(), "home");
-        assert!(controllers.controllers[0].daemon.materialized_service);
-
-        let mut invalid = realm_controllers_artifact_value(true);
-        invalid["controllers"][0]["daemon"]["materializedService"] = serde_json::Value::Bool(true);
-        write_json(&realm_controllers_path, &invalid);
-        fs::set_permissions(&realm_controllers_path, fs::Permissions::from_mode(0o640))
-            .expect("chmod invalid realm controllers");
-        let err = BundleResolver::load_with_policy(&bundle_path, &current_user_bundle_policy())
-            .expect_err("bundle resolver rejects invalid realm controller metadata");
-        assert!(
-            err.to_string().contains("realm-controllers.json"),
-            "error names realm-controller artifact: {err}"
-        );
-    }
-
-    #[test]
-    fn bundle_resolver_loads_realm_identity_artifact() {
-        let root = test_root("realm-identity-artifact");
-        let _baseline = build_personal_dev_bundle(&root);
-        let bundle_dir = root.join("bundle");
-        let bundle_path = bundle_dir.join("bundle.json");
-        let realm_identity_path = bundle_dir.join("realm-identity.json");
-
-        write_json(&realm_identity_path, &realm_identity_artifact_value());
-
-        let mut bundle_value: serde_json::Value =
-            serde_json::from_slice(&fs::read(&bundle_path).expect("read bundle json"))
-                .expect("bundle json parses");
-        if let serde_json::Value::Object(map) = &mut bundle_value {
-            map.insert(
-                "realmIdentityPath".to_owned(),
-                serde_json::Value::String("realm-identity.json".to_owned()),
-            );
-        }
-        write_hashed_test_bundle(&bundle_path, bundle_value);
-
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o640)).expect("chmod bundle");
-        fs::set_permissions(&realm_identity_path, fs::Permissions::from_mode(0o640))
-            .expect("chmod realm identity");
-
-        let resolver =
-            BundleResolver::load_with_policy(&bundle_path, &current_user_bundle_policy())
-                .expect("load bundle with realm identity");
-        let identity = resolver
-            .realm_identity
-            .as_ref()
-            .expect("realm identity artifact loaded");
-        assert_eq!(identity.realms.len(), 1);
-        assert_eq!(identity.realms[0].realm.target_form(), "home");
-        assert!(identity.realms[0].realm_identity_ref.is_some());
-
-        let mut invalid = realm_identity_artifact_value();
-        invalid["invariants"]["noSecretMaterial"] = serde_json::Value::Bool(false);
-        write_json(&realm_identity_path, &invalid);
-        fs::set_permissions(&realm_identity_path, fs::Permissions::from_mode(0o640))
-            .expect("chmod invalid realm identity");
-        let err = BundleResolver::load_with_policy(&bundle_path, &current_user_bundle_policy())
-            .expect_err("bundle resolver rejects invalid realm identity metadata");
-        let err_text = err.to_string();
-        assert!(
-            err_text.contains("realm-identity.json"),
-            "error names realm-identity artifact: {err}"
-        );
-        assert!(
-            !err_text.contains(realm_identity_path.to_string_lossy().as_ref()),
-            "realm identity parse errors must not expose host paths: {err_text}"
-        );
-    }
-
-    #[test]
-    fn bundle_resolver_defaults_absent_realm_identity_to_none() {
-        let root = test_root("realm-identity-absent");
-        let resolver = build_personal_dev_bundle(&root);
-
-        assert!(resolver.bundle.realm_identity_path.is_none());
-        assert!(resolver.realm_identity.is_none());
-        assert!(
-            !root.join("bundle/realm-identity.json").exists(),
-            "baseline bundles without realmIdentityPath must not require a realm-identity file"
-        );
-    }
-
-    #[test]
-    fn closure_identity_uses_toplevel_basename() {
-        let intent = ResolvedStoreViewIntent {
-            intent_id: intent_id_legacy_store_view("corp-vm"),
-            vm: "corp-vm".to_owned(),
-            generation: 42,
-            hardlink_farm_path: PathBuf::from("/var/lib/d2b/vms/corp-vm/store-view"),
-            target_view_path: PathBuf::from(
-                "/var/lib/d2b/vms/corp-vm/store-view/live/abc123-nixos-system-corp",
-            ),
-            closure_paths: Vec::new(),
-            db_dump_path: PathBuf::from("/nix/store/corp-vm-registration"),
-        };
-        // Identity is the toplevel basename (carries the Nix input hash),
-        // so two distinct closures of one VM never share an identity even
-        // if their u32 generation numbers collide.
-        assert_eq!(
-            intent.closure_identity(),
-            "toplevel:abc123-nixos-system-corp"
-        );
-    }
-
     #[test]
     fn host_reconcile_and_store_preflight_emit_executable_vm_start_intents() {
         let root = test_root("vm-start-intents");
@@ -8216,21 +6969,26 @@ mod tests {
         let store = resolver
             .resolve_vm_start_intent("personal-dev", "store-virtiofs-preflight")
             .expect("store preflight intent");
-        assert!(!store.is_readiness_only());
-        assert!(matches!(
-            store.actions.as_slice(),
-            [ResolvedVmStartAction::PrepareStoreView(intent)]
-                if intent.hardlink_farm_path == Path::new("/var/lib/d2b/vms/personal-dev/store-view")
-        ));
+        // The v2 hardlink-farm store-view preflight action is removed; the
+        // store-virtiofs-preflight role now contributes readiness only (no
+        // executable prepare-dir actions), so the intent is readiness-only.
+        assert!(
+            store.is_readiness_only(),
+            "store preflight must be readiness-only without a legacy store-view action"
+        );
 
         let prerequisites =
             resolver.resolve_vm_start_prerequisites("personal-dev", "virtiofsd-ro-store");
+        // The store-virtiofs-preflight role is readiness-only (no legacy
+        // store-view action), and the prerequisite walk treats a
+        // readiness-only node as a traversal terminator, so no executable
+        // prerequisite is reported for virtiofsd-ro-store.
         assert_eq!(
             prerequisites
                 .iter()
                 .map(|intent| intent.role_id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["host-reconcile", "store-virtiofs-preflight"]
+            Vec::<&str>::new()
         );
 
         let _ = fs::remove_dir_all(&root);
@@ -8641,156 +7399,6 @@ mod tests {
             d2b_contracts_resource::v3::derive_network_ownership_marker(&provenance, "firewall",)
         );
         let _ = fs::remove_dir_all(root);
-    }
-
-    // W3: negative-case coverage for BundleResolver::validate_minijail_profiles.
-    // The static-invariant-uid0 / minijail-validator bash gates were the ONLY
-    // coverage of these rejection paths; these unit tests bring the invariant
-    // logic into Rust so those gates can retire to a Rust successor (plus the
-    // positive contract test over the rendered fixture bundle in
-    // owner-local rendered fixture contract). Each
-    // mutates ONE invariant on the first node of the otherwise-valid
-    // personal-dev bundle and asserts the matching violation (validate returns
-    // on the first violation, and vms[0].nodes[0] is iterated first).
-    #[test]
-    fn validate_minijail_profiles_accepts_the_rendered_personal_dev_bundle() {
-        let root = test_root("minijail-valid-baseline");
-        let resolver = build_personal_dev_bundle(&root);
-        assert!(
-            resolver.validate_minijail_profiles().is_ok(),
-            "the rendered personal-dev bundle must pass every minijail invariant"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn validate_minijail_profiles_rejects_empty_profile_id() {
-        let root = test_root("minijail-empty-id");
-        let mut resolver = build_personal_dev_bundle(&root);
-        resolver.processes.vms[0].nodes[0].profile.profile_id = String::new();
-        assert!(
-            matches!(
-                resolver.validate_minijail_profiles(),
-                Err(MinijailProfileViolation::EmptyProfileId { .. })
-            ),
-            "an empty profile_id must be rejected"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn validate_minijail_profiles_rejects_root_uid_without_carve_out() {
-        let root = test_root("minijail-root-no-carveout");
-        let mut resolver = build_personal_dev_bundle(&root);
-        {
-            let p = &mut resolver.processes.vms[0].nodes[0].profile;
-            p.uid = 0;
-            p.adr_carve_out = None;
-        }
-        assert!(
-            matches!(
-                resolver.validate_minijail_profiles(),
-                Err(MinijailProfileViolation::RootWithoutCarveOut { uid: 0, .. })
-            ),
-            "uid 0 without an ADR carve-out must be rejected"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn validate_minijail_profiles_rejects_writable_nix_store_without_carve_out() {
-        let root = test_root("minijail-store-rw");
-        let mut resolver = build_personal_dev_bundle(&root);
-        {
-            let p = &mut resolver.processes.vms[0].nodes[0].profile;
-            p.adr_carve_out = None;
-            p.mount_policy.nix_store_read_only = false;
-        }
-        assert!(
-            matches!(
-                resolver.validate_minijail_profiles(),
-                Err(MinijailProfileViolation::NixStoreNotReadOnly { .. })
-            ),
-            "a writable /nix/store without an ADR carve-out must be rejected"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn validate_minijail_profiles_rejects_cgroup_subtree_outside_d2b() {
-        let root = test_root("minijail-cgroup-foreign");
-        let mut resolver = build_personal_dev_bundle(&root);
-        resolver.processes.vms[0].nodes[0]
-            .profile
-            .cgroup_placement
-            .subtree = "system.slice/evil".to_owned();
-        assert!(
-            matches!(
-                resolver.validate_minijail_profiles(),
-                Err(MinijailProfileViolation::CgroupSubtreeOutsideD2b { .. })
-            ),
-            "a cgroup subtree outside d2b/ must be rejected"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn validate_minijail_profiles_accepts_root_uid_with_carve_out() {
-        let root = test_root("minijail-root-with-carveout");
-        let mut resolver = build_personal_dev_bundle(&root);
-        {
-            let p = &mut resolver.processes.vms[0].nodes[0].profile;
-            p.uid = 0;
-            p.adr_carve_out =
-                Some("ADR 0004 swtpm-flush requires uid 0 for /dev/tpm access".to_owned());
-        }
-        assert!(
-            resolver.validate_minijail_profiles().is_ok(),
-            "uid 0 WITH an ADR carve-out must be accepted (the swtpm-flush pattern)"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn validate_minijail_profiles_rejects_root_uid_with_empty_carve_out() {
-        let root = test_root("minijail-root-empty-carveout");
-        let mut resolver = build_personal_dev_bundle(&root);
-        {
-            let p = &mut resolver.processes.vms[0].nodes[0].profile;
-            p.uid = 0;
-            // An empty (or whitespace-only) carve-out is NOT a real ADR
-            // reference and must not satisfy the uid0 gate.
-            p.adr_carve_out = Some("   ".to_owned());
-        }
-        assert!(
-            matches!(
-                resolver.validate_minijail_profiles(),
-                Err(MinijailProfileViolation::RootWithoutCarveOut { uid: 0, .. })
-            ),
-            "uid 0 with an empty/whitespace adr_carve_out must be rejected"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn validate_minijail_profiles_rejects_root_gid_without_carve_out() {
-        let root = test_root("minijail-root-gid-no-carveout");
-        let mut resolver = build_personal_dev_bundle(&root);
-        {
-            let p = &mut resolver.processes.vms[0].nodes[0].profile;
-            // uid stays non-root (1100); gid 0 alone must also be rejected
-            // (the validator gates on uid == 0 || gid == 0).
-            p.gid = 0;
-            p.adr_carve_out = None;
-        }
-        assert!(
-            matches!(
-                resolver.validate_minijail_profiles(),
-                Err(MinijailProfileViolation::RootWithoutCarveOut { gid: 0, .. })
-            ),
-            "gid 0 without an ADR carve-out must be rejected"
-        );
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -46,7 +46,6 @@ test_suite(
         "//packages/d2b:cli_contract",
         "//packages/d2b:cli_json_contract",
         "//packages/d2b:cli_json_output_contract",
-        "//packages/d2b:host_check_contract",
         "//packages/d2b:status_contract",
         "//packages/d2b:usb_contract",
         "//packages/d2b:usb_sk_contract",

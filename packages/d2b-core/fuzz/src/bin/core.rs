@@ -2,16 +2,16 @@
 mod harness;
 
 use d2b_contracts_resource::v3::{IfName, IfNameError};
+use std::collections::BTreeMap;
 use d2b_core::{
-    bundle::{Bundle, BundleGeneration, BundleManagedKeys},
+    bundle::{Bundle, BundleGeneration},
     bundle_resolver::{
-        BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
-        intent_id_keys_rotate, intent_id_legacy_runner, intent_id_nft_env, intent_id_nft_host,
-        intent_id_nm_unmanaged_host, intent_id_rotate_known_host, intent_id_route_env,
-        intent_id_sysctl, intent_id_trust, intent_id_usbip_bind,
+        BundleResolver, intent_id_hosts_host,
+        intent_id_legacy_runner, intent_id_nft_env, intent_id_nft_host,
+        intent_id_nm_unmanaged_host, intent_id_route_env,
+        intent_id_sysctl, intent_id_usbip_bind,
         intent_id_usbip_firewall,
     },
-    closures::{ClosureGeneration, ClosureMetadata},
     error::{BrokerOp, Error, SemverRange, Version},
     host::{
         BridgePortFlags, HostJson, HostsFileOwnership, Ipv6SysctlEntry, LanPolicy, NetEnv,
@@ -113,54 +113,6 @@ fn main() {
         (
             "bundle_resolver_round_trips_runner_intents",
             bundle_resolver_round_trips_runner_intents,
-        ),
-        (
-            "bundle_resolver_round_trips_activation_intents",
-            bundle_resolver_round_trips_activation_intents,
-        ),
-        (
-            "bundle_resolver_round_trips_gc_intent",
-            bundle_resolver_round_trips_gc_intent,
-        ),
-        (
-            "bundle_resolver_round_trips_key_management_intents",
-            bundle_resolver_round_trips_key_management_intents,
-        ),
-        (
-            "bundle_resolver_unknown_intent_returns_none",
-            bundle_resolver_unknown_intent_returns_none,
-        ),
-        (
-            "bundle_resolver_intent_ids_are_sorted_and_deterministic",
-            bundle_resolver_intent_ids_are_sorted_and_deterministic,
-        ),
-        (
-            "bundle_resolver_minijail_profile_validator_passes_on_fixture",
-            bundle_resolver_minijail_profile_validator_passes_on_fixture,
-        ),
-        (
-            "bundle_resolver_minijail_profile_validator_rejects_root_without_carve_out",
-            bundle_resolver_minijail_profile_validator_rejects_root_without_carve_out,
-        ),
-        (
-            "bundle_resolver_minijail_profile_validator_rejects_writable_nix_store",
-            bundle_resolver_minijail_profile_validator_rejects_writable_nix_store,
-        ),
-        (
-            "bundle_resolver_minijail_validator_rejects_empty_profile_id",
-            bundle_resolver_minijail_validator_rejects_empty_profile_id,
-        ),
-        (
-            "bundle_resolver_minijail_validator_rejects_cgroup_outside_d2b",
-            bundle_resolver_minijail_validator_rejects_cgroup_outside_d2b,
-        ),
-        (
-            "bundle_resolver_minijail_validator_allows_empty_cgroup_subtree",
-            bundle_resolver_minijail_validator_allows_empty_cgroup_subtree,
-        ),
-        (
-            "bundle_resolver_minijail_validator_allows_root_with_carve_out",
-            bundle_resolver_minijail_validator_allows_root_with_carve_out,
         ),
         (
             "bundle_resolver_host_runtime_synthesizes_from_ifname_mappings",
@@ -285,16 +237,6 @@ fn bundle_op_id_format_strings_are_wire_stable() {
         intent_id_legacy_runner("work-vm", "ch-runner"),
         "runner:vm:work-vm:role:ch-runner"
     );
-    assert_eq!(intent_id_installer_host(), "installer:host");
-    assert_eq!(intent_id_migrate_host(), "migrate:host");
-    assert_eq!(intent_id_activation("work-vm"), "activation:vm:work-vm");
-    assert_eq!(intent_id_gc_host(), "gc:host");
-    assert_eq!(intent_id_keys_rotate("work-vm"), "keys-rotate:vm:work-vm");
-    assert_eq!(intent_id_trust("work-vm"), "trust:vm:work-vm");
-    assert_eq!(
-        intent_id_rotate_known_host("work-vm"),
-        "rotate-known-host:vm:work-vm"
-    );
 }
 
 // ---------------------------------------------------------------
@@ -305,20 +247,12 @@ fn build_synthetic_resolver() -> BundleResolver {
     let bundle = Bundle {
         bundle_version: 4,
         schema_version: "v2".to_owned(),
-        public_manifest_path: "/run/current-system/sw/share/d2b/vms.json".to_owned(),
-        host_path: "/etc/d2b/host.json".to_owned(),
-        processes_path: "/etc/d2b/processes.json".to_owned(),
+
         privileges_path: "/etc/d2b/privileges.json".to_owned(),
         storage_path: None,
-        sync_path: None,
-        allocator_path: None,
-        realm_controllers_path: None,
-        realm_identity_path: None,
+
         realm_workloads_launcher_v2_path: None,
-        unsafe_local_workloads_path: None,
-        closures: Vec::new(),
-        minijail_profiles: Vec::new(),
-        managed_keys: BundleManagedKeys::default(),
+
         generation: BundleGeneration {
             generator: "test-fixture".to_owned(),
             source_revision: None,
@@ -420,8 +354,6 @@ fn build_synthetic_resolver() -> BundleResolver {
         },
         kernel_modules: Vec::new(),
         fd_ownership: Vec::new(),
-        runtime_providers: Vec::new(),
-        vm_runtimes: Vec::new(),
         security_key_selectors: Vec::new(),
         qemu_media: None,
         cloud_hypervisor_capabilities: Vec::new(),
@@ -522,32 +454,12 @@ fn build_synthetic_resolver() -> BundleResolver {
     };
     const SYNTHETIC_MANIFEST: &str = r#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/d2b/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"work-vm":{"apiSocket":"/var/lib/d2b/vms/work-vm/work-vm.sock","audio":false,"audioService":"d2b-work-vm-snd.service","audioStateFile":"/var/lib/d2b/vms/work-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/var/lib/d2b/vms/work-vm/work-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"work-vm","netVm":"sys-work-net","observability":{"agentSocket":"/run/d2b/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/var/lib/d2b/vms/work-vm/vsock.sock"},"runtime":{"kind":"nixos","provider":{"id":"local-cloud-hypervisor","type":"local","driver":"cloud-hypervisor"},"capabilities":{"lifecycle":true,"display":true,"usbHotplug":true,"exec":true,"configSync":true,"ssh":true,"storeSync":true,"keys":true,"inGuestObservability":true}},"sshUser":"alice","stateDir":"/var/lib/d2b/vms/work-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/swtpm/work-vm/sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"},"sys-work-net":{"apiSocket":"/var/lib/d2b/vms/sys-work-net/sys-work-net.sock","audio":false,"audioService":"d2b-sys-work-net-snd.service","audioStateFile":"/var/lib/d2b/vms/sys-work-net/state/audio-state.json","bridge":"br-work-up","env":"work","gpuSocket":"/var/lib/d2b/vms/sys-work-net/sys-work-net-gpu.sock","graphics":false,"isNetVm":true,"name":"sys-work-net","netVm":null,"observability":{"agentSocket":"/run/d2b/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/var/lib/d2b/vms/sys-work-net/vsock.sock"},"runtime":{"kind":"nixos","provider":{"id":"local-cloud-hypervisor","type":"local","driver":"cloud-hypervisor"},"capabilities":{"lifecycle":true,"display":true,"usbHotplug":true,"exec":true,"configSync":true,"ssh":true,"storeSync":true,"keys":true,"inGuestObservability":true}},"sshUser":null,"stateDir":"/var/lib/d2b/vms/sys-work-net","staticIp":"192.0.2.2","tap":"work-u2","tpm":false,"tpmSocket":"/run/swtpm/sys-work-net/sock","usbipYubikey":false,"usbipdHostIp":null}}"#;
     let manifest = ManifestV04::from_slice(SYNTHETIC_MANIFEST.as_bytes()).expect("manifest parses");
-    let closures = vec![ClosureMetadata {
-        schema_version: "v2".to_owned(),
-        vm: "work-vm".to_owned(),
-        toplevel: "/nix/store/work-vm-system".to_owned(),
-        closure_paths: vec![
-            "/nix/store/work-vm-system".to_owned(),
-            "/nix/store/work-vm-runner".to_owned(),
-        ],
-        db_dump_path: "/nix/store/work-vm-registration".to_owned(),
-        declared_runner: "/nix/store/work-vm-runner".to_owned(),
-        runner_parity_path: "/nix/store/work-vm-runner".to_owned(),
-        runner_parity_ok: true,
-        generation: ClosureGeneration {
-            host_generation: Some(42),
-            vm_generation: Some("42".to_owned()),
-            source_revision: None,
-            generated_at: None,
-        },
-    }];
-    BundleResolver::from_artifacts_with_closures(
+    BundleResolver::from_artifacts_with_zone_resource_bundles(
         bundle,
-        "fnv1a64:synthetic-bundle".to_owned(),
         host,
         processes,
         manifest,
-        closures,
+        BTreeMap::new(),
     )
 }
 
@@ -698,184 +610,6 @@ fn bundle_resolver_round_trips_runner_intents() {
     assert!(intent.env.iter().any(|e| e == "D2B_VM=work-vm"));
 }
 
-fn bundle_resolver_round_trips_activation_intents() {
-    let r = build_synthetic_resolver();
-    let intent = r
-        .find_activation_intent(&intent_id_activation("work-vm"))
-        .expect("activation");
-    assert_eq!(intent.vm, "work-vm");
-    assert_eq!(intent.generation_number, Some(42));
-    assert_eq!(
-        intent.target_generation_path,
-        std::path::PathBuf::from("/nix/store/work-vm-system")
-    );
-}
-
-fn bundle_resolver_round_trips_gc_intent() {
-    let r = build_synthetic_resolver();
-    let intent = r.find_gc_intent(&intent_id_gc_host()).expect("gc");
-    assert_eq!(intent.retained_store_paths.len(), 2);
-    assert!(
-        intent
-            .retained_store_paths
-            .iter()
-            .any(|path| path == &std::path::PathBuf::from("/nix/store/work-vm-system"))
-    );
-}
-
-fn bundle_resolver_round_trips_key_management_intents() {
-    let r = build_synthetic_resolver();
-    let keys = r
-        .find_keys_rotate_intent(&intent_id_keys_rotate("work-vm"))
-        .expect("keys rotate");
-    assert_eq!(keys.vm, "work-vm");
-    assert!(keys.key_path.ends_with("work-vm_ed25519"));
-
-    let trust = r
-        .find_host_key_trust_intent(&intent_id_trust("work-vm"))
-        .expect("trust");
-    assert_eq!(trust.static_ip, "10.20.0.10");
-    assert!(trust.known_hosts_path.ends_with("known_hosts.d2b"));
-    assert!(
-        trust
-            .host_public_key_path
-            .ends_with("sshd-host-keys/ssh_host_ed25519_key.pub")
-    );
-
-    let rotate = r
-        .find_rotate_known_host_intent(&intent_id_rotate_known_host("work-vm"))
-        .expect("rotate-known-host");
-    assert_eq!(rotate.static_ip, "10.20.0.10");
-    assert!(rotate.known_hosts_path.ends_with("known_hosts.d2b"));
-}
-
-fn bundle_resolver_unknown_intent_returns_none() {
-    let r = build_synthetic_resolver();
-    assert!(r.find_nft_intent("nft:env:does-not-exist").is_none());
-    assert!(r.find_route_intent("route:env:work:9999").is_none());
-    assert!(
-        r.find_runner_intent("runner:vm:no-such-vm:role:x")
-            .is_none()
-    );
-    assert!(
-        r.find_activation_intent("activation:vm:no-such-vm")
-            .is_none()
-    );
-    assert!(r.find_gc_intent("gc:missing").is_none());
-    assert!(
-        r.find_keys_rotate_intent("keys-rotate:vm:no-such-vm")
-            .is_none()
-    );
-}
-
-fn bundle_resolver_intent_ids_are_sorted_and_deterministic() {
-    let r1 = build_synthetic_resolver();
-    let r2 = build_synthetic_resolver();
-    let ids1: Vec<&str> = r1.nft_intent_ids().collect();
-    let ids2: Vec<&str> = r2.nft_intent_ids().collect();
-    assert_eq!(ids1, ids2);
-    // BTreeMap iteration is sorted; just sanity check the order.
-    let mut sorted = ids1.clone();
-    sorted.sort();
-    assert_eq!(ids1, sorted);
-}
-
-// ---------------------------------------------------------------
-// Minijail profile validator + host-runtime tests.
-// ---------------------------------------------------------------
-
-fn bundle_resolver_minijail_profile_validator_passes_on_fixture() {
-    let r = build_synthetic_resolver();
-    let count = r
-        .validate_minijail_profiles()
-        .expect("fixture is well-formed");
-    assert_eq!(count, 1, "fixture has exactly one VM with one node");
-}
-
-fn bundle_resolver_minijail_profile_validator_rejects_root_without_carve_out() {
-    use d2b_core::bundle_resolver::MinijailProfileViolation;
-    let r = build_resolver_with_root_profile();
-    let err = r
-        .validate_minijail_profiles()
-        .expect_err("root without carve-out must be rejected");
-    assert!(matches!(
-        err,
-        MinijailProfileViolation::RootWithoutCarveOut { uid: 0, gid: 0, .. }
-    ));
-}
-
-fn bundle_resolver_minijail_profile_validator_rejects_writable_nix_store() {
-    use d2b_core::bundle_resolver::MinijailProfileViolation;
-    let r = build_resolver_with_writable_nix_store();
-    let err = r
-        .validate_minijail_profiles()
-        .expect_err("writable /nix/store must be rejected");
-    assert!(matches!(
-        err,
-        MinijailProfileViolation::NixStoreNotReadOnly { .. }
-    ));
-}
-
-fn bundle_resolver_minijail_validator_rejects_empty_profile_id() {
-    use d2b_core::bundle_resolver::MinijailProfileViolation;
-
-    let mut r = build_synthetic_resolver();
-    r.processes.vms[0].nodes[0].profile.profile_id = "".to_owned();
-
-    let err = r
-        .validate_minijail_profiles()
-        .expect_err("empty profile_id must be rejected");
-    assert_eq!(
-        err,
-        MinijailProfileViolation::EmptyProfileId {
-            vm: "work-vm".to_owned(),
-            node: "ch-runner".to_owned(),
-        }
-    );
-}
-
-fn bundle_resolver_minijail_validator_rejects_cgroup_outside_d2b() {
-    use d2b_core::bundle_resolver::MinijailProfileViolation;
-
-    let mut r = build_synthetic_resolver();
-    r.processes.vms[0].nodes[0].profile.cgroup_placement.subtree = "system.slice/foo".to_owned();
-
-    let err = r
-        .validate_minijail_profiles()
-        .expect_err("cgroup subtree outside d2b/ must be rejected");
-    assert_eq!(
-        err,
-        MinijailProfileViolation::CgroupSubtreeOutsideD2b {
-            profile_id: "ch-runner-default".to_owned(),
-            subtree: "system.slice/foo".to_owned(),
-        }
-    );
-}
-
-fn bundle_resolver_minijail_validator_allows_empty_cgroup_subtree() {
-    let mut r = build_synthetic_resolver();
-    r.processes.vms[0].nodes[0].profile.cgroup_placement.subtree = "".to_owned();
-
-    let count = r
-        .validate_minijail_profiles()
-        .expect("empty cgroup subtree is an intentional skip path");
-    assert_eq!(count, 1, "fixture has exactly one VM with one node");
-}
-
-fn bundle_resolver_minijail_validator_allows_root_with_carve_out() {
-    let mut r = build_synthetic_resolver();
-    let profile = &mut r.processes.vms[0].nodes[0].profile;
-    profile.uid = 0;
-    profile.gid = 0;
-    profile.adr_carve_out = Some("ADR-0003 swtpm pre-start flush".to_owned());
-    profile.mount_policy.nix_store_read_only = false;
-
-    let count = r
-        .validate_minijail_profiles()
-        .expect("root carve-out exempts root and nix-store invariants");
-    assert_eq!(count, 1, "fixture has exactly one VM with one node");
-}
-
 fn bundle_resolver_host_runtime_synthesizes_from_ifname_mappings() {
     let r = build_resolver_with_ifname_mappings();
     let runtime = r.host_runtime();
@@ -887,23 +621,6 @@ fn bundle_resolver_host_runtime_synthesizes_from_ifname_mappings() {
     assert_eq!(row.user_visible_name, "br-work-lan");
     assert_eq!(row.derived_ifname, "d2b-br-a1b2c3d4");
     assert_eq!(row.role_tag, "wkl");
-}
-
-fn build_resolver_with_root_profile() -> d2b_core::bundle_resolver::BundleResolver {
-    let mut bad_resolver = build_synthetic_resolver();
-    bad_resolver.processes.vms[0].nodes[0].profile.uid = 0;
-    bad_resolver.processes.vms[0].nodes[0].profile.gid = 0;
-    bad_resolver.processes.vms[0].nodes[0].profile.adr_carve_out = None;
-    bad_resolver
-}
-
-fn build_resolver_with_writable_nix_store() -> d2b_core::bundle_resolver::BundleResolver {
-    let mut bad_resolver = build_synthetic_resolver();
-    bad_resolver.processes.vms[0].nodes[0]
-        .profile
-        .mount_policy
-        .nix_store_read_only = false;
-    bad_resolver
 }
 
 fn build_resolver_with_ifname_mappings() -> d2b_core::bundle_resolver::BundleResolver {
@@ -925,5 +642,6 @@ fn build_resolver_with_usbip_bus_ids(
     let mut r = build_synthetic_resolver();
     r.host.environments[0].usbip_busid_locks[0].bus_ids =
         bus_ids.iter().map(|bus_id| (*bus_id).to_owned()).collect();
-    BundleResolver::from_artifacts(r.bundle, r.host, r.processes, r.manifest)
+    BundleResolver::from_artifacts_with_zone_resource_bundles(
+        r.bundle, r.host, r.processes, r.manifest, BTreeMap::new())
 }

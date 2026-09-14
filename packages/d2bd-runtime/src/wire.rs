@@ -2,21 +2,13 @@ use crate::typed_error::{ErrorEnvelope, TypedError};
 use d2b_contracts::{FeatureFlag, Hello, HelloOk, HelloRejected, HelloRejectedReason, Version};
 use d2b_contracts_broker::broker_wire::ExportBrokerAuditResponse;
 use d2b_contracts_control::public_wire::{self, AuditResponse, AuthStatusResponse};
-use d2b_contracts_resource::v3::{IfName, ResourceRef};
+use d2b_contracts_resource::v3::ResourceRef;
 use semver::{Version as SemverVersion, VersionReq};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 pub use d2b_contracts::MAX_FRAME_SIZE;
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostCheckRequestExt {
-    #[serde(flatten)]
-    pub request: public_wire::HostCheckRequest,
-    pub if_name: Option<IfName>,
-}
 
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -24,10 +16,7 @@ pub enum Request {
     List(public_wire::ListRequest),
     Status(public_wire::StatusRequest),
     Audit(public_wire::AuditRequest),
-    HostCheck(HostCheckRequestExt),
     AuthStatus,
-    KeysList,
-    KeysShow(public_wire::KeysShowRequest),
     // Mutating-verb dispatch entry points. Each variant carries
     // its public_wire request payload verbatim; `mutating_verb_preflight`
     // emits the typed dry-run/invalid-request envelope and apply
@@ -40,18 +29,11 @@ pub enum Request {
     Boot(public_wire::ActivationRequest),
     Test(public_wire::ActivationRequest),
     Rollback(public_wire::ActivationRequest),
-    Gc(public_wire::GcRequest),
-    KeysRotate(public_wire::KeysRotateRequest),
-    Trust(public_wire::TrustRequest),
-    RotateKnownHost(public_wire::RotateKnownHostRequest),
     UsbipBind(public_wire::UsbipBindCliRequest),
     UsbipUnbind(public_wire::UsbipUnbindCliRequest),
     UsbipProbe,
-    StoreVerify(public_wire::StoreVerifyRequest),
-    Migrate(public_wire::MigrateRequest),
     HostPrepare(public_wire::HostPrepareRequest),
     HostDestroy(public_wire::HostDestroyRequest),
-    HostInstall(public_wire::HostInstallRequest),
     HostReconcile(public_wire::HostReconcileRequest),
     Console(public_wire::ConsoleOp),
     Workload(public_wire::WorkloadOp),
@@ -87,10 +69,7 @@ impl Request {
             Self::List(_) => "list",
             Self::Status(_) => "status",
             Self::Audit(_) => "audit",
-            Self::HostCheck(_) => "hostCheck",
             Self::AuthStatus => "authStatus",
-            Self::KeysList => "keysList",
-            Self::KeysShow(_) => "keysShow",
             Self::VmStart(_) => "vmStart",
             Self::VmStop(_) => "vmStop",
             Self::VmRestart(_) => "vmRestart",
@@ -98,18 +77,11 @@ impl Request {
             Self::Boot(_) => "boot",
             Self::Test(_) => "test",
             Self::Rollback(_) => "rollback",
-            Self::Gc(_) => "gc",
-            Self::KeysRotate(_) => "keysRotate",
-            Self::Trust(_) => "trust",
-            Self::RotateKnownHost(_) => "rotateKnownHost",
             Self::UsbipBind(_) => "usbipBind",
             Self::UsbipUnbind(_) => "usbipUnbind",
             Self::UsbipProbe => "usbipProbe",
-            Self::StoreVerify(_) => "storeVerify",
-            Self::Migrate(_) => "migrate",
             Self::HostPrepare(_) => "hostPrepare",
             Self::HostDestroy(_) => "hostDestroy",
-            Self::HostInstall(_) => "hostInstall",
             Self::HostReconcile(_) => "hostReconcile",
             Self::Console(_) => "console",
             Self::Workload(_) => "workload",
@@ -136,16 +108,9 @@ impl Request {
             }
             Self::UsbipBind(req) => OpLockClass::PerVm(req.vm.clone()),
             Self::UsbipUnbind(req) => OpLockClass::PerVm(req.vm.clone()),
-            Self::StoreVerify(req) => OpLockClass::PerVm(req.vm.clone()),
-            Self::RotateKnownHost(req) => OpLockClass::PerVm(req.vm.clone()),
             // Global mutating verbs: mutually exclusive with all per-VM ops.
-            Self::Gc(_)
-            | Self::KeysRotate(_)
-            | Self::Trust(_)
-            | Self::Migrate(_)
-            | Self::HostPrepare(_)
+            Self::HostPrepare(_)
             | Self::HostDestroy(_)
-            | Self::HostInstall(_)
             | Self::HostReconcile(_) => OpLockClass::Global,
             // Per-VM audio set ops serialize on the named VM. Status is read-only.
             Self::Audio(public_wire::AudioOp::SetVolume(args)) => {
@@ -156,10 +121,7 @@ impl Request {
             Self::List(_)
             | Self::Status(_)
             | Self::Audit(_)
-            | Self::HostCheck(_)
             | Self::AuthStatus
-            | Self::KeysList
-            | Self::KeysShow(_)
             | Self::UsbipProbe
             | Self::Console(_)
             | Self::Workload(_)
@@ -319,9 +281,6 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
         "audit" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::Audit)
             .map_err(map_parse_error),
-        "hostCheck" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::HostCheck)
-            .map_err(map_parse_error),
         "authStatus" => {
             if object.is_empty() {
                 Ok(Request::AuthStatus)
@@ -331,18 +290,6 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
                 })
             }
         }
-        "keysList" => {
-            if object.is_empty() {
-                Ok(Request::KeysList)
-            } else {
-                Err(TypedError::WireUnknownField {
-                    detail: format!("keysList request must not contain extra fields: {object:?}"),
-                })
-            }
-        }
-        "keysShow" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::KeysShow)
-            .map_err(map_parse_error),
         "vmStart" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::VmStart)
             .map_err(map_parse_error),
@@ -364,18 +311,6 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
         "rollback" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::Rollback)
             .map_err(map_parse_error),
-        "gc" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::Gc)
-            .map_err(map_parse_error),
-        "keysRotate" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::KeysRotate)
-            .map_err(map_parse_error),
-        "trust" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::Trust)
-            .map_err(map_parse_error),
-        "rotateKnownHost" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::RotateKnownHost)
-            .map_err(map_parse_error),
         "usbipBind" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::UsbipBind)
             .map_err(map_parse_error),
@@ -391,20 +326,11 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
                 })
             }
         }
-        "storeVerify" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::StoreVerify)
-            .map_err(map_parse_error),
-        "migrate" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::Migrate)
-            .map_err(map_parse_error),
         "hostPrepare" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::HostPrepare)
             .map_err(map_parse_error),
         "hostDestroy" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::HostDestroy)
-            .map_err(map_parse_error),
-        "hostInstall" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::HostInstall)
             .map_err(map_parse_error),
         "hostReconcile" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::HostReconcile)
@@ -515,49 +441,12 @@ pub fn audit_response(payload: ExportBrokerAuditResponse) -> AuditResponseFrame 
     }
 }
 
-pub fn host_check_response(summary: Value, checks: Vec<Value>) -> Value {
-    json!({ "type": "hostCheckResponse", "summary": summary, "checks": checks })
-}
-
-pub fn keys_list_response(payload: public_wire::KeysListResponse) -> Value {
-    let mut value = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            "type".to_owned(),
-            Value::String("keysListResponse".to_owned()),
-        );
-    }
-    value
-}
-
-pub fn keys_show_response(payload: public_wire::KeysShowResponse) -> Value {
-    let mut value = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            "type".to_owned(),
-            Value::String("keysShowResponse".to_owned()),
-        );
-    }
-    value
-}
-
 pub fn usbip_probe_response(payload: public_wire::UsbipProbeResponse) -> Value {
     let mut value = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
     if let Some(obj) = value.as_object_mut() {
         obj.insert(
             "type".to_owned(),
             Value::String("usbipProbeResponse".to_owned()),
-        );
-    }
-    value
-}
-
-pub fn store_verify_response(payload: public_wire::StoreVerifyResponse) -> Value {
-    let mut value = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            "type".to_owned(),
-            Value::String("storeVerifyResponse".to_owned()),
         );
     }
     value

@@ -104,10 +104,6 @@ pub mod wire {
             #[serde(default)]
             opaque_target_id: Option<String>,
         },
-        PrepareStoreView {
-            #[serde(default)]
-            opaque_target_id: Option<String>,
-        },
         /// Store-sync bootstrap probe stub. Real dispatch lives in the
         /// production runtime; the bootstrap brokerage returns a typed
         /// `Unimplemented` target_wave envelope.
@@ -124,10 +120,6 @@ pub mod wire {
             opaque_target_id: Option<String>,
         },
         SetBridgePortFlags {
-            #[serde(default)]
-            opaque_target_id: Option<String>,
-        },
-        SetupMountNamespace {
             #[serde(default)]
             opaque_target_id: Option<String>,
         },
@@ -231,12 +223,10 @@ pub mod wire {
                 Self::OpenVhostNet { .. } => "OpenVhostNet",
                 Self::PrepareRuntimeDir { .. } => "PrepareRuntimeDir",
                 Self::PrepareStateDir { .. } => "PrepareStateDir",
-                Self::PrepareStoreView { .. } => "PrepareStoreView",
                 Self::StoreSync { .. } => "StoreSync",
                 Self::ReadSecretById { .. } => "ReadSecretById",
                 Self::RotateSecretById { .. } => "RotateSecretById",
                 Self::SetBridgePortFlags { .. } => "SetBridgePortFlags",
-                Self::SetupMountNamespace { .. } => "SetupMountNamespace",
                 Self::SpawnRunner { .. } => "SpawnRunner",
                 Self::UpdateHostsFile { .. } => "UpdateHostsFile",
                 Self::UsbipBind { .. } => "UsbipBind",
@@ -327,9 +317,6 @@ pub mod wire {
             "PrepareStateDir" => BrokerRequest::PrepareStateDir {
                 opaque_target_id: None,
             },
-            "PrepareStoreView" => BrokerRequest::PrepareStoreView {
-                opaque_target_id: None,
-            },
             "StoreSync" => BrokerRequest::StoreSync {
                 opaque_target_id: None,
             },
@@ -340,9 +327,6 @@ pub mod wire {
                 opaque_target_id: None,
             },
             "SetBridgePortFlags" => BrokerRequest::SetBridgePortFlags {
-                opaque_target_id: None,
-            },
-            "SetupMountNamespace" => BrokerRequest::SetupMountNamespace {
                 opaque_target_id: None,
             },
             "SpawnRunner" => BrokerRequest::SpawnRunner {

@@ -27,9 +27,6 @@ pub mod state_dir;
 pub mod storage_contract;
 // Per-VM swtpm state-dir first-run hardening (issue #64).
 pub mod swtpm_dir;
-// Broker-owned legacy swtpm adoption journal. The wire/bundle adapter remains
-// fail-closed until a trusted LegacyTpmState inventory contract is available.
-pub mod swtpm_migration;
 pub mod sysctl;
 pub mod tap;
 // Nftables + USBIP firewall skeleton ops.
@@ -79,18 +76,13 @@ pub mod store_sync_audit;
 // carries caller identity, retained generations, or any host path.
 pub mod store_sync_export;
 
-// Explicit StoreVerify operator surface for top-level live-pool
-// verification + host-only integrity state.
-pub mod store_verify;
-
 // Single-inode ownership/mode posture for broker-created store-view
 // metadata paths. Never recursive into the hardlinked live pool.
 pub mod store_view_posture;
 
 // Out-of-process, mount-namespace-isolated store-view hardlink farm
-// build. Used by `store_sync` and `exec_reconcile::prepare_store_view`
-// so the farm hardlinks succeed even when `/nix/store` is a separate
-// (bind) mount from `/var/lib/d2b`.
+// build. Used by `store_sync` so the farm hardlinks succeed even when
+// `/nix/store` is a separate (bind) mount from `/var/lib/d2b`.
 pub mod store_view_farm;
 
 // Per-VM writable store overlay disk-image provisioning. Runs before

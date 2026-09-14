@@ -516,7 +516,13 @@ pub fn live_delegate_cgroup_v2(
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<(), super::OpError> {
     let subject = req.scope_id.as_str().trim_start_matches("vm:");
-    if subject != "runtime" && resolver.find_manifest_vm(subject).is_none() {
+    // v3 subject authority: the subject is either the daemon `runtime`
+    // slice or a zone-native Guest (VM) resource declared in a verified
+    // Zone resource bundle.
+    let known_guest = resolver
+        .guest_vm_resources()
+        .any(|(_, resource)| resource.metadata().name().as_str() == subject);
+    if subject != "runtime" && !known_guest {
         return Err(super::OpError::UnknownSubject {
             operation: "DelegateCgroupV2",
             subject: req.scope_id.as_str().to_owned(),
@@ -555,7 +561,10 @@ pub fn live_open_cgroup_dir(
         }
         BrokerPathClass::Vm => {
             let vm_name = req.scope_id.as_str().trim_start_matches("vm:");
-            if resolver.find_manifest_vm(vm_name).is_none() {
+            if !resolver
+                .guest_vm_resources()
+                .any(|(_, resource)| resource.metadata().name().as_str() == vm_name)
+            {
                 return Err(super::OpError::UnknownSubject {
                     operation: "OpenCgroupDir",
                     subject: vm_name.to_owned(),

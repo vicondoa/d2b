@@ -149,41 +149,19 @@ pub fn reconcile_storage_scope(
     }
 }
 
+/// Fail-closed stub for the removed v2 sync-lock resolution surface.
+///
+/// The v2 sync-lock resolver accessor was removed with the v2 Bundle sync
+/// fields; no v3 lock-contract equivalent exists yet, so the op refuses every
+/// input rather than fabricating lock posture. The dispatch caller in
+/// `runtime.rs` maps the returned `UnknownLock` to a `BundleIntentMissing`
+/// error, so this stub keeps the audit/`ValidateLockSpec` surface wired while
+/// never trusting an identity it cannot resolve.
 pub fn validate_lock_spec(
-    resolver: &BundleResolver,
+    _resolver: &BundleResolver,
     lock_ref: &BundleOpId,
 ) -> Result<ValidateLockSpecResponse, StorageContractError> {
-    let spec = resolver
-        .find_sync_lock_spec(lock_ref.as_str())
-        .ok_or_else(|| StorageContractError::UnknownLock(lock_ref.as_str().to_owned()))?;
-    if spec.kind == d2b_core::sync::LockKind::Ofd && !spec.cloexec_required {
-        return Err(StorageContractError::Invalid {
-            subject: lock_ref.as_str().to_owned(),
-            detail: "ofd-lock-missing-cloexec".to_owned(),
-        });
-    }
-    if spec.fd_passing_policy.mechanism != d2b_core::sync::FdPassingMechanism::None
-        && !spec.fd_passing_policy.lease_transfer_record_required
-    {
-        return Err(StorageContractError::Invalid {
-            subject: lock_ref.as_str().to_owned(),
-            detail: "fd-transfer-missing-lease-record".to_owned(),
-        });
-    }
-    Ok(ValidateLockSpecResponse {
-        lock_ref: lock_ref.clone(),
-        scope: spec.scope.as_str().to_owned(),
-        kind: format!("{:?}", spec.kind),
-        cloexec_required: spec.cloexec_required,
-        fd_passing_mechanism: format!("{:?}", spec.fd_passing_policy.mechanism),
-        order_key: format!(
-            "{:?}:{}:{}:{}",
-            spec.acquire_order.scope_class,
-            spec.acquire_order.anchored_root,
-            spec.acquire_order.normalized_path,
-            spec.acquire_order.lock_id
-        ),
-    })
+    Err(StorageContractError::UnknownLock(lock_ref.as_str().to_owned()))
 }
 
 fn has_unexpanded_template(path: &str) -> bool {
@@ -360,6 +338,7 @@ pub(crate) fn row_posture(spec: &StoragePathSpec) -> Option<(u32, u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use d2b_contracts::types::BundleOpId;
     use d2b_core::bundle::Bundle;
     use d2b_core::bundle_resolver::BundleResolver;
@@ -372,11 +351,6 @@ mod tests {
         LedgerStorageClass, PrincipalKind, PrincipalRef, RepairPolicy, SensitivityClass,
         StorageAdoptionPolicy, StorageInvariant, StorageJson, StorageLifecycle, StoragePathSpec,
         StoragePersistence, StorageRestartPolicy,
-    };
-    use d2b_core::sync::{
-        FdPassingMechanism, FdPassingPolicy, InheritancePolicy, LockAcquireOrder,
-        LockAdoptionPolicy, LockKind, LockScopeClass, LockSpec, LockStaleKind, LockStalePolicy,
-        LockTimeoutKind, LockTimeoutPolicy, SyncJson,
     };
 
     #[test]
@@ -437,7 +411,6 @@ mod tests {
             "path:regular-file",
             "/var/lib/d2b/storage-contract-regular-file",
             StoragePathKind::RegularFile,
-            sync_with_lock(lock("lock:daemon", true, FdPassingMechanism::None, false)),
         );
 
         let err = reconcile_storage_scope(&resolver, &BundleOpId::new("path:regular-file"), true)
@@ -451,7 +424,6 @@ mod tests {
             "path:external-grant",
             "/sys/class/net/work-l2",
             StoragePathKind::ExternalGrantOnly,
-            sync_with_lock(lock("lock:daemon", true, FdPassingMechanism::None, false)),
         );
 
         let checked =
@@ -469,56 +441,11 @@ mod tests {
             "path:config-root",
             "/etc/d2b/bundle.json",
             StoragePathKind::Directory,
-            sync_with_lock(lock("lock:daemon", true, FdPassingMechanism::None, false)),
         );
 
         let err = reconcile_storage_scope(&resolver, &BundleOpId::new("path:config-root"), true)
             .expect_err("nix-managed config roots are not broker-mutated");
         assert_refused_reason(Err(err), "storage-config-root-is-nix-managed");
-    }
-
-    #[test]
-    fn validate_lock_spec_requires_ofd_cloexec_and_fd_transfer_lease_records() {
-        let missing_cloexec = resolver_with_storage_path(
-            "path:run-root",
-            "/run/d2b",
-            StoragePathKind::Directory,
-            sync_with_lock(lock("lock:daemon", false, FdPassingMechanism::None, false)),
-        );
-        let err = validate_lock_spec(&missing_cloexec, &BundleOpId::new("lock:daemon"))
-            .expect_err("OFD locks must require close-on-exec");
-        assert_invalid_detail(Err(err), "ofd-lock-missing-cloexec");
-
-        let missing_lease = resolver_with_storage_path(
-            "path:run-root",
-            "/run/d2b",
-            StoragePathKind::Directory,
-            sync_with_lock(lock(
-                "lock:daemon",
-                true,
-                FdPassingMechanism::ScmRights,
-                false,
-            )),
-        );
-        let err = validate_lock_spec(&missing_lease, &BundleOpId::new("lock:daemon"))
-            .expect_err("fd transfer locks must require lease transfer records");
-        assert_invalid_detail(Err(err), "fd-transfer-missing-lease-record");
-
-        let valid = resolver_with_storage_path(
-            "path:run-root",
-            "/run/d2b",
-            StoragePathKind::Directory,
-            sync_with_lock(lock(
-                "lock:daemon",
-                true,
-                FdPassingMechanism::ScmRights,
-                true,
-            )),
-        );
-        let response =
-            validate_lock_spec(&valid, &BundleOpId::new("lock:daemon")).expect("valid lock");
-        assert!(response.cloexec_required);
-        assert_eq!(response.fd_passing_mechanism, "ScmRights");
     }
 
     #[test]
@@ -590,18 +517,6 @@ mod tests {
         }
     }
 
-    fn assert_invalid_detail(
-        result: Result<ValidateLockSpecResponse, StorageContractError>,
-        expected_detail: &'static str,
-    ) {
-        match result {
-            Err(StorageContractError::Invalid { detail, .. }) => {
-                assert_eq!(detail, expected_detail);
-            }
-            other => panic!("expected invalid detail {expected_detail}, got {other:?}"),
-        }
-    }
-
     struct ScratchDir(PathBuf);
 
     impl ScratchDir {
@@ -636,26 +551,14 @@ mod tests {
         id: &str,
         path: &str,
         kind: StoragePathKind,
-        sync_contract: SyncJson,
     ) -> BundleResolver {
         let storage_contract = storage(id, path, kind);
         let bundle = Bundle {
             bundle_version: 6,
             schema_version: "v2".to_owned(),
-            public_manifest_path: "manifest.json".to_owned(),
-            host_path: "host.json".to_owned(),
-            processes_path: "processes.json".to_owned(),
             privileges_path: "privileges.json".to_owned(),
             storage_path: Some("storage.json".to_owned()),
-            sync_path: Some("sync.json".to_owned()),
-            allocator_path: None,
-            realm_controllers_path: None,
-            realm_identity_path: None,
             realm_workloads_launcher_v2_path: None,
-            unsafe_local_workloads_path: None,
-            closures: Vec::new(),
-            minijail_profiles: Vec::new(),
-            managed_keys: Default::default(),
             generation: d2b_core::bundle::BundleGeneration {
                 generator: "test".to_owned(),
                 source_revision: None,
@@ -664,19 +567,18 @@ mod tests {
             bundle_hash: None,
             artifact_hashes: None,
         };
-        BundleResolver::from_artifacts_with_optional_contracts(
+        let mut resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
             bundle,
             minimal_host(),
             ProcessesJson {
                 schema_version: "v2".to_owned(),
                 vms: Vec::new(),
             },
-            Some(storage_contract),
-            Some(sync_contract),
-            None,
-            None,
             manifest(),
-        )
+            BTreeMap::new(),
+        );
+        resolver.storage = Some(storage_contract);
+        resolver
     }
 
     fn storage(id: &str, path: &str, kind: StoragePathKind) -> StorageJson {
@@ -720,53 +622,6 @@ mod tests {
                 command: ContractText::parse("d2b vm status <vm>").unwrap(),
                 description: ContractText::parse("Inspect VM status").unwrap(),
             }],
-        }
-    }
-
-    fn sync_with_lock(lock: LockSpec) -> SyncJson {
-        SyncJson {
-            schema_version: "v2".to_owned(),
-            locks: vec![lock],
-        }
-    }
-
-    fn lock(
-        id: &str,
-        cloexec_required: bool,
-        mechanism: FdPassingMechanism,
-        lease_transfer_record_required: bool,
-    ) -> LockSpec {
-        LockSpec {
-            id: ContractId::parse(id).unwrap(),
-            scope: ContractId::parse("host").unwrap(),
-            path_template: Some(PathTemplate::parse("/run/d2b/daemon.lock").unwrap()),
-            resource_id: None,
-            kind: LockKind::Ofd,
-            owner_process: actor(ActorKind::Daemon, "d2bd"),
-            allowed_holders: vec![actor(ActorKind::Daemon, "d2bd")],
-            inheritance_policy: InheritancePolicy::CloseOnExec,
-            fd_passing_policy: FdPassingPolicy {
-                mechanism,
-                lease_transfer_record_required,
-            },
-            acquire_order: LockAcquireOrder {
-                scope_class: LockScopeClass::Global,
-                anchored_root: ContractId::parse("run").unwrap(),
-                normalized_path: ContractId::parse("daemon.lock").unwrap(),
-                lock_id: ContractId::parse(id).unwrap(),
-            },
-            timeout_policy: LockTimeoutPolicy {
-                kind: LockTimeoutKind::FailFast,
-                timeout_ms: None,
-            },
-            stale_policy: LockStalePolicy {
-                kind: LockStaleKind::PidfdProofRequired,
-                degraded_reason: DegradedReason::LockOwnerAmbiguous,
-            },
-            adoption_policy: LockAdoptionPolicy::ReacquireAfterProof,
-            degrade_scope: DegradeScope::Host,
-            release_authority: actor(ActorKind::Daemon, "d2bd"),
-            cloexec_required,
         }
     }
 

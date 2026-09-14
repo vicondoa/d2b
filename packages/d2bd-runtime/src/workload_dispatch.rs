@@ -6,7 +6,7 @@ use std::{
 
 use d2b_contracts::{
     LauncherItemKind, ProtocolToken, WorkloadProviderKind, WorkloadState,
-    controller_config::RealmControllerPlacement,
+    controller_config::{RealmControllerPlacement, RealmControllersJson},
     launcher::LauncherWorkloadSummary,
     workload_identity::{WorkloadIdentity, WorkloadTarget},
 };
@@ -280,7 +280,10 @@ pub struct WorkloadCatalog {
 }
 
 impl WorkloadCatalog {
-    pub fn from_resolver(resolver: &BundleResolver) -> Result<Self, CatalogError> {
+    pub fn from_resolver(
+        resolver: &BundleResolver,
+        realm_controllers: Option<&RealmControllersJson>,
+    ) -> Result<Self, CatalogError> {
         let public = resolver
             .realm_workloads_launcher_v2
             .as_ref()
@@ -289,7 +292,15 @@ impl WorkloadCatalog {
         let mut visible = std::collections::BTreeSet::new();
         for metadata in &public.workloads {
             let canonical = metadata.identity.canonical_target.to_canonical();
-            let direct_local = realm_is_direct_local(resolver, &metadata.identity);
+            let direct_local = realm_controllers.is_some_and(|controllers| {
+                controllers.controllers.iter().any(|controller| {
+                    controller_matches_direct_local(
+                        controller.realm_path.as_str(),
+                        controller.placement,
+                        &metadata.identity,
+                    )
+                })
+            });
             let route = if direct_local {
                 route_for_provider(
                     metadata.provider_kind,
@@ -534,21 +545,6 @@ fn route_for_provider(
         WorkloadProviderKind::UnsafeLocal => WorkloadRoute::UnsafeLocal,
         provider => WorkloadRoute::CapabilityUnavailable { provider },
     }
-}
-
-fn realm_is_direct_local(resolver: &BundleResolver, identity: &WorkloadIdentity) -> bool {
-    resolver
-        .realm_controllers
-        .as_ref()
-        .is_some_and(|controllers| {
-            controllers.controllers.iter().any(|controller| {
-                controller_matches_direct_local(
-                    controller.realm_path.as_str(),
-                    controller.placement,
-                    identity,
-                )
-            })
-        })
 }
 
 fn controller_matches_direct_local(

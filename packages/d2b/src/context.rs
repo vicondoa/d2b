@@ -30,10 +30,6 @@ use d2b_contracts_resource::v3::identity::{
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceErrorKind, ResourceRef, ResourceTypeName, RetryClass, ZoneId,
 };
-use d2b_core::{
-    bundle::Bundle, bundle_resolver::HostRuntime, closures::ClosureMetadata, host::HostJson,
-    processes::ProcessesJson,
-};
 use d2b_resource_client::{
     AssignmentIdentity, CallOptions, CancellationToken, ClientError, ConnectedSession,
     ConnectedZoneSession, MetadataInput, NamedStreamTransport, ProcessAttachClient,
@@ -130,59 +126,6 @@ impl CliContext {
             )
         })
     }
-
-    pub(crate) fn load_bundle_context(&self) -> Result<Option<BundleContext>, CliFailure> {
-        match self.bundle_path.try_exists() {
-            Ok(true) => {}
-            Ok(false) => return Ok(None),
-            Err(err) => {
-                return Err(CliFailure::new(
-                    1,
-                    format!("failed to inspect {}: {err}", self.bundle_path.display()),
-                ));
-            }
-        }
-        let bundle: Bundle = read_json_file(&self.bundle_path).map_err(|err| {
-            CliFailure::new(
-                1,
-                format!("failed to read {}: {err}", self.bundle_path.display()),
-            )
-        })?;
-        let base_dir = self
-            .bundle_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("/"));
-        let host = read_bundle_json::<HostJson>(&base_dir, &bundle.host_path)?;
-        let processes = read_bundle_json::<ProcessesJson>(&base_dir, &bundle.processes_path)?;
-        let mut closures = BTreeMap::new();
-        for closure_ref in &bundle.closures {
-            if let Some(closure) =
-                read_bundle_json::<ClosureMetadata>(&base_dir, &closure_ref.path)?
-            {
-                closures.insert(closure_ref.vm.clone(), closure);
-            }
-        }
-        let host_runtime = if self.host_runtime_path.exists() {
-            read_json_file::<HostRuntime>(&self.host_runtime_path).ok()
-        } else {
-            None
-        };
-        Ok(Some(BundleContext {
-            host,
-            processes,
-            closures,
-            host_runtime,
-        }))
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct BundleContext {
-    pub(crate) host: Option<HostJson>,
-    pub(crate) processes: Option<ProcessesJson>,
-    pub(crate) closures: BTreeMap<String, ClosureMetadata>,
-    pub(crate) host_runtime: Option<HostRuntime>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -296,28 +239,6 @@ where
 {
     let data = fs::read(path)?;
     serde_json::from_slice(&data).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
-}
-
-pub(crate) fn read_bundle_json<T>(base_dir: &Path, raw_path: &str) -> Result<Option<T>, CliFailure>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let raw = Path::new(raw_path);
-    let path = if raw.is_absolute() && raw.exists() {
-        raw.to_path_buf()
-    } else if raw.is_absolute() {
-        raw.file_name()
-            .map(|name| base_dir.join(name))
-            .unwrap_or_else(|| raw.to_path_buf())
-    } else {
-        base_dir.join(raw)
-    };
-    if !path.exists() {
-        return Ok(None);
-    }
-    read_json_file(&path)
-        .map(Some)
-        .map_err(|err| CliFailure::new(1, format!("failed to read {}: {err}", path.display())))
 }
 
 pub(crate) fn read_symlink_target(path: &Path) -> Option<String> {

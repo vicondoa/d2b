@@ -1,7 +1,7 @@
 //! W3 CLI-contract integration test, migrated from tests/cli-json.sh.
 //!
 //! The retired bash gate built a synthetic `nixosSystem` fixture and asserted
-//! the machine-readable JSON contract for `list` / `status` / activation keys
+//! the machine-readable JSON contract for `list` / `status`
 //! / `audit`.
 //! Its legacy inventory shape is no longer a v3 command. The pending-restart
 //! cases now exercise the typed `guest list` and `guest status` Zone resource
@@ -12,8 +12,7 @@
 //!   * `guest list --json` and `guest status <name> --json` with the supplied
 //!     fixture artifacts and no Zone runtime fail closed with the strict v3
 //!     `zone-unavailable` envelope rather than a legacy `pendingRestart` field;
-//!   * `activation keys list --json` with no Zone runtime: exit 1, empty
-//!     stderr, and the v3 `zone-unavailable` envelope on stdout;
+//!  //!     stderr, and the v3 `zone-unavailable` envelope on stdout;
 //!   * `audit --json` run under a PTY (a real TTY): stays JSON (not the human
 //!     stderr form) and returns the daemon-down envelope
 //!     `kind == "d2b audit requires d2bd"`, exit 1.
@@ -217,40 +216,6 @@ fn status_reports_pending_restart_with_consistent_current_booted() {
         )
     });
     assert_zone_unavailable_envelope(&envelope, &env.missing_public);
-}
-
-#[test]
-fn activation_keys_list_zone_down_returns_v3_envelope() {
-    // No fixture is needed: v3 activation keys first discovers a Zone runtime.
-    // Pointing the public socket at a missing path exercises the pre-dispatch
-    // zone-unavailable envelope rather than the retired daemon-down shape.
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let missing = tmp.path().join("missing-public.sock");
-    let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
-        .args(["activation", "keys", "list", "--json"])
-        .env("D2B_PUBLIC_SOCKET", &missing)
-        .env("D2B_BROKER_SOCKET", tmp.path().join("missing-priv.sock"))
-        .output()
-        .expect("spawn d2b activation keys list --json");
-
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "activation keys list --json Zone-down exits 1; stderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        out.stderr.is_empty(),
-        "activation keys list --json Zone-down: the envelope is on stdout, stderr is empty; got:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
-        panic!(
-            "activation keys list --json envelope: {err}\n{}",
-            String::from_utf8_lossy(&out.stdout)
-        )
-    });
-    assert_zone_unavailable_envelope(&envelope, &missing);
 }
 
 #[test]

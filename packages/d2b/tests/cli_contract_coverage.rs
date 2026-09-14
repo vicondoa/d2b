@@ -222,18 +222,11 @@ const V3_PARSER_PROBES: &[(&str, &[&str])] = &[
         ],
     ),
     (
-        "host check",
-        &["host", "check", "--read-only", "--strict", "--json"],
+        "host prepare",
+        &["host", "prepare", "--dry-run", "--json"],
     ),
-    ("host prepare", &["host", "prepare", "--dry-run", "--json"]),
     ("host destroy", &["host", "destroy", "--apply", "--json"]),
     ("host doctor", &["host", "doctor", "--read-only", "--json"]),
-    (
-        "host install",
-        &[
-            "host", "install", "--apply", "--enable", "--start", "--json",
-        ],
-    ),
     (
         "host reconcile",
         &["host", "reconcile", "--network", "--dry-run", "--json"],
@@ -478,10 +471,6 @@ const V3_PARSER_PROBES: &[(&str, &[&str])] = &[
     (
         "emergency policy status",
         &["emergency-policy", "status", "lockdown", "--json"],
-    ),
-    (
-        "activation keys list",
-        &["activation", "keys", "list", "--json"],
     ),
     ("audit", &["audit", "--strict", "--json"]),
     (

@@ -207,42 +207,14 @@ pub trait ReconcileExecutor: Send + Sync {
         bus_id: &str,
     ) -> Result<(), ReconcileExecError>;
 
-    /// Build or reconcile the per-VM hardlink farm generation that the
-    /// native activation flow runs from.
-    fn prepare_store_view(
-        &self,
-        intent: &ResolvedStoreViewIntent,
-    ) -> Result<(), ReconcileExecError>;
-
     /// Build or reconcile a store-view generation for in-guest activation
     /// without publishing generation metadata as current.
     fn prepare_activation_store_view(
         &self,
         intent: &ResolvedStoreViewIntent,
     ) -> Result<(), ReconcileExecError> {
-        self.prepare_store_view(intent)
+        materialize_store_view(intent)
     }
-
-    /// Prepare the per-role mount-namespace staging root under the VM's
-    /// state dir and return the bind-mount target path.
-    fn setup_mount_namespace(
-        &self,
-        vm: &str,
-        role_id: &str,
-        source_view_path: &Path,
-        mount_root: &Path,
-    ) -> Result<PathBuf, ReconcileExecError>;
-
-    /// Run the activation script from the prepared store view.
-    fn run_activation_script(
-        &self,
-        mode_arg: &str,
-        source_view_path: &Path,
-        mount_view_path: &Path,
-    ) -> Result<String, ReconcileExecError>;
-
-    /// Host GC fallback shellout.
-    fn run_gc(&self, keep_generations: Option<u32>) -> Result<String, ReconcileExecError>;
 
     /// Generate a replacement ed25519 keypair and atomically publish it
     /// at `key_path` + `key_path.pub`.
@@ -693,118 +665,11 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         wait_usbip_stream_fd_release(sysfs_root, bus_id, USBIP_STREAM_FD_RELEASE_GRACE)
     }
 
-    fn prepare_store_view(
-        &self,
-        intent: &ResolvedStoreViewIntent,
-    ) -> Result<(), ReconcileExecError> {
-        materialize_store_view(intent)?;
-        let generation_number =
-            u32::try_from(intent.generation).map_err(|_| ReconcileExecError::InvalidInput {
-                detail: format!("generation {} exceeds u32", intent.generation),
-            })?;
-        // Publish the freshly-built generation as the legacy activation
-        // pointer by atomically swapping
-        // `store-view/current -> generations/<N>`. Modern guest serving
-        // uses the split layout under `store-view/live`, `state/`, and
-        // `meta/`; live activation commit publishes those split pointers
-        // separately after the guest reports success. Keep this legacy
-        // pointer only while rollback/current compatibility code still
-        // reads it.
-        hardlink_farm::swap_current_symlink(&intent.hardlink_farm_path, generation_number)
-            .map_err(map_hardlink_farm_error)?;
-        Ok(())
-    }
-
     fn prepare_activation_store_view(
         &self,
         intent: &ResolvedStoreViewIntent,
     ) -> Result<(), ReconcileExecError> {
         materialize_store_view(intent)
-    }
-
-    fn setup_mount_namespace(
-        &self,
-        vm: &str,
-        role_id: &str,
-        source_view_path: &Path,
-        mount_root: &Path,
-    ) -> Result<PathBuf, ReconcileExecError> {
-        if vm.is_empty() || role_id.is_empty() {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: "mount-namespace vm/role_id must not be empty".to_owned(),
-            });
-        }
-        if !source_view_path.is_absolute() || !mount_root.is_absolute() {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!(
-                    "mount-namespace paths must be absolute, got source={} root={}",
-                    source_view_path.display(),
-                    mount_root.display(),
-                ),
-            });
-        }
-        if !source_view_path.exists() {
-            return Err(ReconcileExecError::MountNamespace {
-                detail: format!(
-                    "source store view does not exist: {}",
-                    source_view_path.display()
-                ),
-            });
-        }
-        let mount_view_path = mount_root.join("store-view");
-        std::fs::create_dir_all(&mount_view_path).map_err(|e| {
-            ReconcileExecError::MountNamespace {
-                detail: format!(
-                    "failed to create mount root {} for vm={} role={}: {e}",
-                    mount_view_path.display(),
-                    vm,
-                    role_id,
-                ),
-            }
-        })?;
-        Ok(mount_view_path)
-    }
-
-    fn run_activation_script(
-        &self,
-        mode_arg: &str,
-        source_view_path: &Path,
-        mount_view_path: &Path,
-    ) -> Result<String, ReconcileExecError> {
-        let _ = (mode_arg, source_view_path, mount_view_path);
-        Err(ReconcileExecError::InvalidInput {
-            detail: "broker-side VM activation script execution is disabled; run activation inside the guest and commit metadata with RunActivation phase=commit".to_owned(),
-        })
-    }
-
-    fn run_gc(&self, keep_generations: Option<u32>) -> Result<String, ReconcileExecError> {
-        if let Some(keep_generations) = keep_generations {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!(
-                    "keep_generations={keep_generations} is not supported by the v0.4 nix-collect-garbage fallback"
-                ),
-            });
-        }
-        let output = Command::new("/run/current-system/sw/bin/nix-collect-garbage")
-            .arg("-d")
-            .env_remove("NOTIFY_SOCKET")
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| ReconcileExecError::BinaryMissing {
-                which: "nix-collect-garbage".to_owned(),
-                detail: e.to_string(),
-            })?;
-        if !output.status.success() {
-            return Err(ReconcileExecError::NonZeroExit {
-                which: "nix-collect-garbage".to_owned(),
-                exit_code: output.status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            });
-        }
-        Ok(command_summary(
-            &output.stdout,
-            "nix-collect-garbage -d succeeded",
-        ))
     }
 
     fn run_ssh_keygen(
@@ -1270,16 +1135,6 @@ fn current_unix_ms() -> u128 {
         .as_millis()
 }
 
-fn command_summary(stdout: &[u8], fallback: &str) -> String {
-    let rendered = String::from_utf8_lossy(stdout);
-    rendered
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| line.trim().to_owned())
-        .unwrap_or_else(|| fallback.to_owned())
-}
-
 fn parse_fingerprint(stdout: &[u8]) -> Result<String, ReconcileExecError> {
     let rendered = String::from_utf8_lossy(stdout);
     let line = rendered
@@ -1393,28 +1248,6 @@ mod fake {
             binary: PathBuf,
             subcommand: UsbipSubcommand,
             bus_id: String,
-        },
-        PrepareStoreView {
-            vm: String,
-            generation: u64,
-            hardlink_farm_path: PathBuf,
-            target_view_path: PathBuf,
-        },
-        SetupMountNamespace {
-            vm: String,
-            role_id: String,
-            source_view_path: PathBuf,
-            mount_root: PathBuf,
-            mount_view_path: PathBuf,
-        },
-        RunActivationScript {
-            mode_arg: String,
-            source_view_path: PathBuf,
-            mount_view_path: PathBuf,
-            script_path: PathBuf,
-        },
-        RunGc {
-            keep_generations: Option<u32>,
         },
         RunSshKeygen {
             key_path: PathBuf,
@@ -1591,109 +1424,6 @@ mod fake {
                 return Err(error);
             }
             Ok(())
-        }
-
-        fn prepare_store_view(
-            &self,
-            intent: &ResolvedStoreViewIntent,
-        ) -> Result<(), ReconcileExecError> {
-            self.log
-                .lock()
-                .unwrap()
-                .push(ReconcileOp::PrepareStoreView {
-                    vm: intent.vm.clone(),
-                    generation: intent.generation,
-                    hardlink_farm_path: intent.hardlink_farm_path.clone(),
-                    target_view_path: intent.target_view_path.clone(),
-                });
-            let generation_number =
-                u32::try_from(intent.generation).map_err(|_| ReconcileExecError::InvalidInput {
-                    detail: format!("generation {} exceeds u32", intent.generation),
-                })?;
-            let marker = GenerationMarker {
-                closure_hash: intent.closure_identity(),
-                d2b_version: "fake".to_owned(),
-                activated_at: "fake".to_owned(),
-                vm: intent.vm.clone(),
-                generation_number,
-            };
-            hardlink_farm::build_farm(
-                &intent.hardlink_farm_path,
-                intent.generation,
-                &intent.closure_paths,
-                &marker,
-            )
-            .map_err(map_hardlink_farm_error)?;
-            let generation_id = hardlink_farm::generation_id(
-                &intent.closure_paths,
-                hardlink_farm::system_store_path(&intent.closure_paths),
-            );
-            hardlink_farm::build_store_view(
-                &intent.hardlink_farm_path,
-                &generation_id,
-                &intent.closure_paths,
-                &marker,
-            )
-            .map_err(map_hardlink_farm_error)?;
-            Ok(())
-        }
-
-        fn setup_mount_namespace(
-            &self,
-            vm: &str,
-            role_id: &str,
-            source_view_path: &Path,
-            mount_root: &Path,
-        ) -> Result<PathBuf, ReconcileExecError> {
-            let mount_view_path = mount_root.join("store-view");
-            self.log
-                .lock()
-                .unwrap()
-                .push(ReconcileOp::SetupMountNamespace {
-                    vm: vm.to_owned(),
-                    role_id: role_id.to_owned(),
-                    source_view_path: source_view_path.to_path_buf(),
-                    mount_root: mount_root.to_path_buf(),
-                    mount_view_path: mount_view_path.clone(),
-                });
-            std::fs::create_dir_all(&mount_view_path).map_err(|e| {
-                ReconcileExecError::MountNamespace {
-                    detail: e.to_string(),
-                }
-            })?;
-            Ok(mount_view_path)
-        }
-
-        fn run_activation_script(
-            &self,
-            mode_arg: &str,
-            source_view_path: &Path,
-            mount_view_path: &Path,
-        ) -> Result<String, ReconcileExecError> {
-            self.log
-                .lock()
-                .unwrap()
-                .push(ReconcileOp::RunActivationScript {
-                    mode_arg: mode_arg.to_owned(),
-                    source_view_path: source_view_path.to_path_buf(),
-                    mount_view_path: mount_view_path.to_path_buf(),
-                    script_path: mount_view_path.join("bin/switch-to-configuration"),
-                });
-            Ok(format!(
-                "{} {} succeeded",
-                mount_view_path
-                    .join("bin/switch-to-configuration")
-                    .display(),
-                mode_arg,
-            ))
-        }
-
-        fn run_gc(&self, keep_generations: Option<u32>) -> Result<String, ReconcileExecError> {
-            self.log
-                .lock()
-                .unwrap()
-                .push(ReconcileOp::RunGc { keep_generations });
-            Ok("nix-collect-garbage -d succeeded".to_owned())
         }
 
         fn run_ssh_keygen(
@@ -2085,37 +1815,11 @@ exit 0
     }
 
     #[test]
-    fn system_prepare_store_view_rejects_relative_paths() {
-        let exec = SystemReconcileExecutor;
-        let err = exec
-            .prepare_store_view(&ResolvedStoreViewIntent {
-                intent_id: "store-view:vm:vm-a".to_owned(),
-                vm: "vm-a".to_owned(),
-                generation: 1,
-                hardlink_farm_path: PathBuf::from("relative"),
-                target_view_path: PathBuf::from(
-                    "/var/lib/d2b/vms/vm-a/store-view/generations/1/vm-a-system",
-                ),
-                closure_paths: Vec::new(),
-                db_dump_path: PathBuf::from("/nix/store/vm-a-registration"),
-            })
-            .unwrap_err();
-        assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
-    }
-
-    #[test]
     fn system_run_ssh_keygen_rejects_relative_path() {
         let exec = SystemReconcileExecutor;
         let err = exec
             .run_ssh_keygen(Path::new("vm_ed25519"), "d2b:vm-a")
             .unwrap_err();
-        assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
-    }
-
-    #[test]
-    fn system_run_gc_rejects_keep_generations_hint() {
-        let exec = SystemReconcileExecutor;
-        let err = exec.run_gc(Some(3)).unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
     }
 
@@ -2180,88 +1884,6 @@ exit 0
             }
             other => panic!("unexpected op: {other:?}"),
         }
-    }
-
-    #[test]
-    fn fake_records_native_activation_ops() {
-        let root = tempfile::tempdir().unwrap();
-        let source_view = root.path().join("source-view/vm-a-system");
-        std::fs::create_dir_all(source_view.join("bin")).unwrap();
-        std::fs::write(
-            source_view.join("bin/switch-to-configuration"),
-            b"#!/bin/sh\n",
-        )
-        .unwrap();
-        let intent = ResolvedStoreViewIntent {
-            intent_id: "store-view:vm:vm-a".to_owned(),
-            vm: "vm-a".to_owned(),
-            generation: 7,
-            hardlink_farm_path: root.path().join("farm"),
-            target_view_path: root.path().join("farm/live/vm-a-system"),
-            closure_paths: vec![source_view.clone()],
-            db_dump_path: root.path().join("db.dump"),
-        };
-
-        let f = FakeReconcileExecutor::new();
-        f.prepare_store_view(&intent).unwrap();
-        let mount_view_path = f
-            .setup_mount_namespace(
-                "vm-a",
-                "activation",
-                &intent.target_view_path,
-                &root.path().join("mount/activation"),
-            )
-            .unwrap();
-        f.run_activation_script("switch", &intent.target_view_path, &mount_view_path)
-            .unwrap();
-
-        let log = f.take_log();
-        assert!(matches!(
-            &log[0],
-            ReconcileOp::PrepareStoreView { vm, generation, .. }
-                if vm == "vm-a" && *generation == 7
-        ));
-        assert!(matches!(
-            &log[1],
-            ReconcileOp::SetupMountNamespace { vm, role_id, .. }
-                if vm == "vm-a" && role_id == "activation"
-        ));
-        assert!(matches!(
-            &log[2],
-            ReconcileOp::RunActivationScript { mode_arg, script_path, .. }
-                if mode_arg == "switch"
-                    && script_path == &mount_view_path.join("bin/switch-to-configuration")
-        ));
-    }
-
-    #[test]
-    fn system_executor_run_activation_script_fails_closed() {
-        let exec = SystemReconcileExecutor;
-        let err = exec
-            .run_activation_script(
-                "switch",
-                Path::new("/var/lib/d2b/vms/vm-a/store-view/live/vm-a-system"),
-                Path::new("/var/lib/d2b/vms/vm-a/mount-ns/activation/store-view"),
-            )
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            ReconcileExecError::InvalidInput { ref detail }
-                if detail.contains("broker-side VM activation script execution is disabled")
-        ));
-    }
-
-    #[test]
-    fn fake_records_gc() {
-        let f = FakeReconcileExecutor::new();
-        f.run_gc(Some(3)).unwrap();
-        let log = f.take_log();
-        assert!(matches!(
-            &log[0],
-            ReconcileOp::RunGc {
-                keep_generations: Some(3)
-            }
-        ));
     }
 
     #[test]

@@ -2,7 +2,7 @@ mod common;
 
 mod daemon_version_negotiation {
     use super::common::{
-        DaemonFixture, HELLO_FRAME, TestPeer, assert_contains, spawn_d2bd_serve, test_client,
+        DaemonFixture, TestPeer, assert_contains, spawn_d2bd_serve, test_client,
     };
 
     fn run_case(frames: &[&str], expect_rc: i32, expect_a: &str, expect_b: &str) {
@@ -53,16 +53,4 @@ mod daemon_version_negotiation {
         );
     }
 
-    #[test]
-    fn invalid_ifname_is_rejected() {
-        run_case(
-            &[
-                HELLO_FRAME,
-                r#"{"type":"hostCheck","strict":false,"ifName":"abcdefghijklmnop"}"#,
-            ],
-            53,
-            r#""kind":"wire-ifname-invalid""#,
-            r#""type":"error""#,
-        );
-    }
 }

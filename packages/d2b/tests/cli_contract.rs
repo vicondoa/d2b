@@ -140,10 +140,6 @@ fn v3_mutations_fail_closed_with_the_zone_envelope() {
             &["host", "destroy", "--apply", "--json"][..],
         ),
         (
-            "host install",
-            &["host", "install", "--apply", "--json"][..],
-        ),
-        (
             "host reconcile",
             &["host", "reconcile", "--network", "--apply", "--json"][..],
         ),

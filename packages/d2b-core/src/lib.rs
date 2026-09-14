@@ -11,7 +11,6 @@ pub mod contract_id;
 pub mod device_usbip_adapter;
 pub mod error;
 pub mod host;
-pub mod host_check;
 pub mod host_generation;
 pub mod host_w3;
 pub mod loader_worker;
