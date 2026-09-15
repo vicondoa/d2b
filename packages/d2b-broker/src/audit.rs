@@ -22,6 +22,7 @@ use crate::{
     ops::audit_op::{BrokerAuditRecordClass, OpAuditRecord},
     sys::path_safe,
 };
+use d2b_audit::evidence_chain::{ChainLeg, ChainOutcome, ChainRecord, ChainRecordClass};
 use d2b_contracts_broker::broker_wire::{
     AuditExportCursor, AuditExportEntry, AuditExportErrorCode, BrokerAuditFilter,
     BrokerAuditSeverity, ExportBrokerAuditResponse,
@@ -649,6 +650,20 @@ impl AuditLog {
                 .push(OwnedOpAuditRecord::from(record));
         }
         Ok(())
+    }
+
+    /// Append one nested-call evidence-chain record (KTD6) to the day's
+    /// daily file.
+    ///
+    /// The record shape is the shared chain record (`d2b_audit::
+    /// evidence_chain::ChainRecord`): the broker writes it for the legs its
+    /// own process executes (in-broker executions only), the daemon writes
+    /// the same shape for the legs it executes, and the two sides never
+    /// both record one leg. A consumer restores the full picture of one
+    /// invocation by counting exactly one root record per invocation id
+    /// and keying the correlation records on the id plus depth.
+    pub fn write_chain_record(&self, record: &ChainRecord) -> io::Result<()> {
+        self.append_json_line(AuditWriteClass::Privileged, &record.operation, record)
     }
 
     /// Append a `ChildReaped` forensics record to the daily audit log.
@@ -3449,6 +3464,58 @@ mod tests {
         assert!(rendered.contains("\"peer_uid\":1000"));
         assert!(rendered.contains("\"peer_gid\":1000"));
         assert!(!rendered.contains("\"peer_pid\""));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_chain_record_round_trips_through_the_daily_file_with_its_correlation_key() {
+        // KTD6 writer contract: a chain record lands as one JSON line in
+        // the day's file under the broker's typed write path, and reading
+        // it back yields the same record - correlation key included - so
+        // audit consumers can count root records per invocation id and
+        // correlate nested legs by (invocation id, depth).
+        let root = target_scratch_root("audit-chain-record");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open chain audit log");
+        log.write_chain_record(&d2b_audit::evidence_chain::ChainRecord {
+            ts_ms: 1234,
+            record_class: d2b_audit::evidence_chain::ChainRecordClass::Correlation,
+            leg: d2b_audit::evidence_chain::ChainLeg::Broker,
+            invocation_id: "invocation-chain-1".to_owned(),
+            depth: 2,
+            initiating_identity: "provider-alpha".to_owned(),
+            invoking_identity: "provider-beta".to_owned(),
+            operation: "BetaService".to_owned(),
+            zone: "zone-a".to_owned(),
+            outcome: d2b_audit::evidence_chain::ChainOutcome::Refused,
+            code: Some(d2b_audit::evidence_chain::NESTED_DEPTH_EXCEEDED.to_owned()),
+        })
+        .expect("write chain record");
+        let line = fs::read_to_string(log.current_daily_path()).expect("read chain record");
+        let record: d2b_audit::evidence_chain::ChainRecord =
+            serde_json::from_str(line.lines().next().expect("record line"))
+                .expect("parse chain record");
+        assert_eq!(record.ts_ms, 1234);
+        assert_eq!(record.record_class, ChainRecordClass::Correlation);
+        assert_eq!(record.leg, ChainLeg::Broker);
+        assert_eq!(record.invocation_id, "invocation-chain-1");
+        assert_eq!(record.depth, 2);
+        assert_eq!(record.initiating_identity, "provider-alpha");
+        assert_eq!(record.invoking_identity, "provider-beta");
+        assert_eq!(record.operation, "BetaService");
+        // The typed write path applies the broker-wide redaction rule to
+        // zone strings that are not canonical digests - the same rule
+        // every other typed record lands under - so the zone is opaque
+        // here but the record still round-trips.
+        assert!(is_canonical_digest(&record.zone), "{}", record.zone);
+        assert_ne!(record.zone, "zone-a");
+        assert_eq!(record.outcome, ChainOutcome::Refused);
+        assert_eq!(
+            record.code.as_deref(),
+            Some(d2b_audit::evidence_chain::NESTED_DEPTH_EXCEEDED)
+        );
+        assert_eq!(record.correlation_key(), ("invocation-chain-1", 2));
+        assert!(!record.is_root());
         let _ = fs::remove_dir_all(&root);
     }
 }

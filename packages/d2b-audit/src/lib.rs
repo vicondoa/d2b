@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod evidence_chain;
 pub mod export;
 pub mod generated;
 pub mod hash_chain;
@@ -13,6 +14,10 @@ pub mod segment;
 pub mod sink;
 
 pub use d2b_telemetry::TraceContext;
+pub use evidence_chain::{
+    ChainAuditSink, ChainLeg, ChainOutcome, ChainRecord, ChainRecordClass, EvidenceChain,
+    MAX_NESTED_DEPTH, NESTED_DEPTH_EXCEEDED, root_record_count,
+};
 pub use export::{ExportLine, export_segments, export_segments_range, is_segment_name};
 pub use hash_chain::{
     AuditChainLink, AuditHash, AuditHashError, ChainVerificationError, genesis_hash,

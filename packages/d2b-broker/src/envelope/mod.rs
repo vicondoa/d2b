@@ -29,8 +29,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use d2b_audit::evidence_chain::{
+    ChainAuditSink, ChainLeg, ChainOutcome, ChainRecord, ChainRecordClass, EvidenceChain,
+    MAX_NESTED_DEPTH, root_record_count,
+};
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, DEFAULT_CONTEXT_DEADLINE_MS, FdKind, ForwardContext, MAX_FRAME_FDS,
     PublishTrustedContextValues, PublishTrustedContextResponse,
@@ -120,14 +124,23 @@ pub const HANDLER_CRASHED: &str = "handler-crashed";
 /// closed-set entry alone.
 pub const STALE_WIRE_VERSION: &str = "stale-wire-version";
 
+/// The refusal code for a nested call whose evidence chain exceeds the
+/// depth cap.
+///
+/// The code is the shared chain code (KTD6): a call loop trips this
+/// dedicated loop-refusal code instead of growing its chain without bound,
+/// and both execution legs refuse with the same spelling.
+pub const NESTED_DEPTH_EXCEEDED: &str = d2b_audit::evidence_chain::NESTED_DEPTH_EXCEEDED;
+
 /// The closed set of codes the envelope itself refuses with.
 ///
 /// The set is closed: the envelope codes above the dispatch failures that
 /// can name a refusal, the carrier's fd-leg and stale-context codes, the
-/// peer codes a dispatch failure can carry (KTD7), and the stale-wire-version
-/// code a retiring gate will refuse with. A code outside the set is never
-/// surfaced as the caller-visible code; it rides in the refusal's detail.
-pub const ENVELOPE_REFUSALS: [&str; 13] = [
+/// peer codes a dispatch failure can carry (KTD7), the stale-wire-version
+/// code a retiring gate will refuse with, and the nested-call depth-cap
+/// code (KTD6). A code outside the set is never surfaced as the
+/// caller-visible code; it rides in the refusal's detail.
+pub const ENVELOPE_REFUSALS: [&str; 14] = [
     UNKNOWN_OPERATION,
     UNCOMMITTED_OPERATION,
     UNGRANTED_CALLER,
@@ -141,6 +154,7 @@ pub const ENVELOPE_REFUSALS: [&str; 13] = [
     HANDLER_TIMED_OUT,
     HANDLER_CRASHED,
     STALE_WIRE_VERSION,
+    NESTED_DEPTH_EXCEEDED,
 ];
 
 /// One refused invocation, named.
@@ -200,6 +214,14 @@ pub enum CallerAuthority {
     Admin,
     /// A launcher-class caller.
     Launcher,
+    /// A provider's own authority: the provider-class name the committed
+    /// grants are written in.
+    ///
+    /// A provider-originated call (a handler's nested leg presenting its
+    /// provider's identity) is covered by the committed rows that grant
+    /// that provider by name - it never re-presents as the daemon class
+    /// (KTD6).
+    Provider(&'static str),
     /// A caller no committed grant admits.
     Unauthorized,
 }
@@ -210,12 +232,14 @@ impl CallerAuthority {
     ///
     /// Each class carries exactly the grants its class implies: a launcher
     /// is not the daemon, so a row granted to `d2bd` alone refuses it rather
-    /// than admitting it through the daemon's class.
+    /// than admitting it through the daemon's class. A provider class is
+    /// exactly the name the row grants.
     pub fn classes(self) -> BTreeSet<&'static str> {
         match self {
             Self::Daemon => BTreeSet::from(["d2bd"]),
             Self::Admin => BTreeSet::from(["d2bd", "d2b-admin"]),
             Self::Launcher => BTreeSet::from(["d2b-launcher"]),
+            Self::Provider(provider) => BTreeSet::from([provider]),
             Self::Unauthorized => BTreeSet::new(),
         }
     }
@@ -231,6 +255,23 @@ impl CallerAuthority {
         }
     }
 
+    /// Classify one attested identity back to the authority class the
+    /// broker could have attested it under.
+    ///
+    /// The broker-class identities map back to their classes; a provider
+    /// identity is not a broker class, so it classifies to `None` and is
+    /// checked by name against the committed grants instead (the identity
+    /// is the provider-class name the row grants, KTD6).
+    pub fn classify_identity(identity: &str) -> Option<Self> {
+        match identity {
+            "daemon" => Some(Self::Daemon),
+            "admin" => Some(Self::Admin),
+            "launcher" => Some(Self::Launcher),
+            "unauthorized" => Some(Self::Unauthorized),
+            _ => None,
+        }
+    }
+
     /// The initiating identity a broker-minted context carries for this
     /// caller: the stable class name the attestation records.
     ///
@@ -242,6 +283,7 @@ impl CallerAuthority {
             Self::Daemon => "daemon",
             Self::Admin => "admin",
             Self::Launcher => "launcher",
+            Self::Provider(provider) => provider,
             Self::Unauthorized => "unauthorized",
         }
     }
@@ -552,6 +594,13 @@ pub struct InvocationCtx<'a> {
     pub zone: &'a str,
     /// The invocation identifier the audit record carries.
     pub invocation_id: &'a str,
+    /// The evidence chain this leg runs under: the root invocation id and
+    /// the ordered identities, root first.
+    ///
+    /// A handler that calls another provider's service presents the chain
+    /// with its own invoking identity appended ([`EvidenceChain::nested`]),
+    /// never re-presenting as the daemon class (KTD6).
+    pub chain: &'a EvidenceChain,
 }
 
 /// The result of one dispatched invocation.
@@ -665,6 +714,17 @@ pub trait OperationDispatcher: Send + Sync {
     /// handler runs in the declaring process, and the call crosses to it over
     /// an async dial bounded by the forwarder's own round-trip budget.
     fn dispatch<'a>(&'a self, invocation: DirectInvocation<'a>) -> DispatchFuture<'a>;
+
+    /// Whether this dispatcher executes handlers inside the broker's own
+    /// process (the in-broker leg) rather than handing every dispatch to
+    /// the peer process (the forwarded leg).
+    ///
+    /// The audit rule (KTD6) reads this to decide which side records a
+    /// leg: in-broker executions audit broker-side only, forwarded ops
+    /// audit daemon-side only, never both.
+    fn serves_locally(&self) -> bool {
+        false
+    }
 }
 
 /// The broker-side operation envelope.
@@ -682,6 +742,17 @@ pub struct BrokerEnvelope {
     /// before dispatch, and a call the store cannot attest is refused with
     /// the stale-context code.
     context_store: Option<Arc<TrustedContextStore>>,
+    /// The sink the envelope's broker-side leg writes evidence-chain audit
+    /// records to, when one is wired.
+    ///
+    /// Absent, the envelope serves without chain records (the seam's
+    /// unwired state; the production broker wires its daily audit log at
+    /// its composition point). The audit rule (KTD6): the leg executing
+    /// the root operation writes exactly one root record per root
+    /// invocation, each nested leg writes a correlation record keyed by
+    /// the root invocation id and its depth, and forwarded ops never
+    /// produce broker-side records - they are the daemon side's alone.
+    chain_audit: Option<Arc<dyn ChainAuditSink>>,
 }
 
 impl std::fmt::Debug for BrokerEnvelope {
@@ -706,6 +777,7 @@ impl BrokerEnvelope {
             committed: Vec::new(),
             extras: Vec::new(),
             context_store: None,
+            chain_audit: None,
         }
     }
 
@@ -757,112 +829,291 @@ impl BrokerEnvelope {
             "invocation-{}",
             self.invocations.fetch_add(1, Ordering::AcqRel)
         );
-        let Some(row) = self.rows.iter().find(|row| row.operation == operation) else {
-            return Err(EnvelopeRefusal::new(
-                invocation_id,
-                operation,
-                UNKNOWN_OPERATION,
-            ));
-        };
-        if !self.committed.contains(row.operation) || !row.admits_profile(self.profile) {
-            return Err(EnvelopeRefusal::new(
-                invocation_id,
-                operation,
-                UNCOMMITTED_OPERATION,
-            ));
-        }
-        if row.payload_provenance == PayloadProvenance::Wire {
-            return Err(EnvelopeRefusal::new(
-                invocation_id,
-                operation,
-                WIRE_INHERITED_OPERATION,
-            ));
-        }
-        if !Self::granted(row, caller) {
-            return Err(EnvelopeRefusal::new(
-                invocation_id,
-                operation,
-                UNGRANTED_CALLER,
-            ));
-        }
-        if !Self::request_fds_admitted(row, fds) {
-            // An oversized-but-transport-legal leg (or a kind mismatch, or a
-            // row whose declared facet exceeds the frame ceiling) is refused
-            // here, so it never reaches the transport where the cmsg buffer would
-            // truncate an oversized set anonymously..
-            return Err(EnvelopeRefusal::new(invocation_id, operation, FD_LEG));
-        }
-        let payload = Self::validate(row, payload)
-            .map_err(|_| EnvelopeRefusal::new(invocation_id.clone(), operation, INVALID_PAYLOAD))?;
-        // The broker attests the call before dispatch when it holds a
-        // context store: the mint names the Zone's published revision and
-        // generations under the current broker epoch, the caller's identity
-        // as the broker classified it, and the operation's deadline budget.
-        // A store that holds no values for the Zone refuses to mint, and the
-        // call is refused with the stale-context code rather than attested
-        // blind. The budget is the row's declared deadline tier (KTD4): both
-        // execution legs serve the minted budget as the per-call handler
-        // deadline, so a row's tier binds here, on the forwarded leg, and on
-        // the local leg alike - never a flat per-leg constant.
-        let context = match &self.context_store {
-            Some(store) => Some(
-                store
-                    .mint(zone, caller.identity(), row.deadline_tier.budget_ms())
-                    .map_err(|_| {
-                        EnvelopeRefusal::new(invocation_id.clone(), operation, STALE_CONTEXT)
-                    })?,
-            ),
-            None => None,
-        };
-        let ctx = InvocationCtx {
-            operation: row.operation,
+        // The root chain: the broker-minted invocation id and the caller's
+        // attested identity. A root call is authorized against the caller's
+        // own class; a nested call presents a chain and is authorized
+        // against the chain's initiating principal instead (KTD6).
+        let chain = EvidenceChain::root(invocation_id, caller.identity().to_owned());
+        self.invoke_chain(
+            &chain,
+            |row| Self::granted(row, caller),
+            operation,
             zone,
-            invocation_id: &invocation_id,
-        };
-        let outcome = self
-            .dispatcher
-            .dispatch(DirectInvocation {
-                ctx,
-                payload: &payload,
-                context: context.as_ref(),
-                fds,
-                fd_kind: row.fd_kind,
-            })
+            payload,
+            fds,
+        )
+        .await
+    }
+
+    /// Invoke one operation as a handler's nested call, presenting the
+    /// evidence chain.
+    ///
+    /// The graft rule (KTD6): a handler may call another provider's service
+    /// only when a committed row and its grants cover the call under the
+    /// chain's initiating principal - the envelope's authz check applies to
+    /// the initiating principal, never the daemon class the handler's
+    /// process re-presents. A chain past the depth cap is refused with the
+    /// dedicated loop-refusal code before anything else, so a call loop
+    /// trips its own code rather than an authz or payload refusal.
+    pub async fn call_nested(
+        &self,
+        chain: EvidenceChain,
+        operation: &str,
+        zone: &str,
+        payload: &Value,
+    ) -> Result<Invocation, EnvelopeRefusal> {
+        self.call_nested_with_fds(chain, operation, zone, payload, &[])
             .await
-            .map_err(|failure| {
-                // Every dispatch failure keeps its own code: a refusal a
-                // handler chose, an error a handler hit, a budget a handler
-                // overran, and a crash a handler died in all name themselves
-                // (KTD7), so no dispatch failure is flattened into the
-                // missing-handler refusal. The peer codes are entries of the
-                // envelope's closed set; a failure that carries a code
-                // outside it (a non-conforming peer) is refused under the
-                // envelope's own errored code, and the peer's code rides in
-                // the record's detail so an operator still sees it.
-                match ENVELOPE_REFUSALS
-                    .iter()
-                    .find(|code| **code == failure.code)
-                    .copied()
-                {
-                    Some(code) => EnvelopeRefusal::with_detail(
-                        invocation_id.clone(),
-                        operation,
-                        code,
-                        failure.detail,
-                    ),
-                    None => EnvelopeRefusal::with_detail(
-                        invocation_id.clone(),
-                        operation,
-                        ERRORED,
-                        Some(failure.detail.unwrap_or(failure.code)),
-                    ),
-                }
+    }
+
+    /// Invoke one nested operation with descriptors attached to it.
+    pub async fn call_nested_with_fds(
+        &self,
+        chain: EvidenceChain,
+        operation: &str,
+        zone: &str,
+        payload: &Value,
+        fds: &[OwnedFd],
+    ) -> Result<Invocation, EnvelopeRefusal> {
+        if chain.depth() > MAX_NESTED_DEPTH {
+            // The refusing leg still records its correlation record when
+            // the broker's own process is the leg (the in-broker leg): the
+            // one-record-per-leg invariant covers refusals, so an operator
+            // sees the loop trip under the dedicated code. A forwarded
+            // leg's record is the daemon side's, never also written here
+            // (KTD6).
+            let record = ChainRecord {
+                ts_ms: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                record_class: ChainRecordClass::Correlation,
+                leg: ChainLeg::Broker,
+                invocation_id: chain.root_invocation_id().to_owned(),
+                depth: chain.depth() as u32,
+                initiating_identity: chain.initiating_identity().to_owned(),
+                invoking_identity: chain.invoking_identity().to_owned(),
+                operation: operation.to_owned(),
+                zone: zone.to_owned(),
+                outcome: ChainOutcome::Refused,
+                code: Some(NESTED_DEPTH_EXCEEDED.to_owned()),
+            };
+            if self.dispatcher.serves_locally() {
+                self.record_chain_outcome(record);
+            }
+            return Err(EnvelopeRefusal::new(
+                chain.root_invocation_id().to_owned(),
+                operation,
+                NESTED_DEPTH_EXCEEDED,
+            ));
+        }
+        self.invoke_chain(
+            &chain,
+            |row| Self::chain_granted(row, &chain),
+            operation,
+            zone,
+            payload,
+            fds,
+        )
+        .await
+    }
+
+    /// Run one admission and dispatch for a chain-bearing invocation.
+    ///
+    /// The admission is the same for a root call and a nested call - resolve
+    /// the row, authorize, validate, attest, dispatch - with the one
+    /// difference that `granted` decides the authorization: the caller's
+    /// own class for a root call, the chain's initiating principal for a
+    /// nested one. The whole admission runs in one block so the leg's audit
+    /// record is written exactly once per invocation, whatever the outcome
+    /// (KTD6).
+    async fn invoke_chain(
+        &self,
+        chain: &EvidenceChain,
+        granted: impl Fn(&BrokerOperationRow) -> bool,
+        operation: &str,
+        zone: &str,
+        payload: &Value,
+        fds: &[OwnedFd],
+    ) -> Result<Invocation, EnvelopeRefusal> {
+        // The audit rule needs the executing leg: the envelope writes
+        // broker-side records only for in-broker executions, and nothing
+        // for forwarded ops - those are the daemon side's records alone
+        // (KTD6).
+        let serves_locally = self.dispatcher.serves_locally();
+        let dispatched: Result<(DispatchOutcome, Option<String>), EnvelopeRefusal> = async {
+            let Some(row) = self.rows.iter().find(|row| row.operation == operation) else {
+                return Err(EnvelopeRefusal::new(
+                    chain.root_invocation_id().to_owned(),
+                    operation,
+                    UNKNOWN_OPERATION,
+                ));
+            };
+            if !self.committed.contains(row.operation) || !row.admits_profile(self.profile) {
+                return Err(EnvelopeRefusal::new(
+                    chain.root_invocation_id().to_owned(),
+                    operation,
+                    UNCOMMITTED_OPERATION,
+                ));
+            }
+            if row.payload_provenance == PayloadProvenance::Wire {
+                return Err(EnvelopeRefusal::new(
+                    chain.root_invocation_id().to_owned(),
+                    operation,
+                    WIRE_INHERITED_OPERATION,
+                ));
+            }
+            if !granted(row) {
+                return Err(EnvelopeRefusal::new(
+                    chain.root_invocation_id().to_owned(),
+                    operation,
+                    UNGRANTED_CALLER,
+                ));
+            }
+            if !Self::request_fds_admitted(row, fds) {
+                // An oversized-but-transport-legal leg (or a kind mismatch, or a
+                // row whose declared facet exceeds the frame ceiling) is refused
+                // here, so it never reaches the transport where the cmsg buffer would
+                // truncate an oversized set anonymously..
+                return Err(EnvelopeRefusal::new(
+                    chain.root_invocation_id().to_owned(),
+                    operation,
+                    FD_LEG,
+                ));
+            }
+            let payload = Self::validate(row, payload).map_err(|_| {
+                EnvelopeRefusal::new(
+                    chain.root_invocation_id().to_owned(),
+                    operation,
+                    INVALID_PAYLOAD,
+                )
             })?;
-        Ok(Invocation {
-            audit_join_identity: row.audit_join_identity(&payload),
-            invocation_id,
-            outcome,
-        })
+            // The broker attests the call before dispatch when it holds a
+            // context store: the mint names the Zone's published revision and
+            // generations under the current broker epoch, the caller's
+            // identity - the chain's invoking identity for a nested call, so
+            // the attestation never re-presents a handler's call as the
+            // daemon class (KTD6) - and the operation's deadline budget.
+            // A store that holds no values for the Zone refuses to mint, and
+            // the call is refused with the stale-context code rather than
+            // attested blind. The budget is the row's declared deadline tier
+            // (KTD4): both execution legs serve the minted budget as the
+            // per-call handler deadline, so a row's tier binds here, on the
+            // forwarded leg, and on the local leg alike - never a flat
+            // per-leg constant.
+            let context = match &self.context_store {
+                Some(store) => Some(
+                    store
+                        .mint(zone, chain.invoking_identity(), row.deadline_tier.budget_ms())
+                        .map_err(|_| {
+                            EnvelopeRefusal::new(
+                                chain.root_invocation_id().to_owned(),
+                                operation,
+                                STALE_CONTEXT,
+                            )
+                        })?,
+                ),
+                None => None,
+            };
+            let ctx = InvocationCtx {
+                operation: row.operation,
+                zone,
+                invocation_id: chain.root_invocation_id(),
+                chain,
+            };
+            let outcome = self
+                .dispatcher
+                .dispatch(DirectInvocation {
+                    ctx,
+                    payload: &payload,
+                    context: context.as_ref(),
+                    fds,
+                    fd_kind: row.fd_kind,
+                })
+                .await
+                .map_err(|failure| {
+                    // Every dispatch failure keeps its own code: a refusal a
+                    // handler chose, an error a handler hit, a budget a handler
+                    // overran, a crash a handler died in, and a depth cap a
+                    // nested chain tripped all name themselves (KTD7, KTD6),
+                    // so no dispatch failure is flattened into the
+                    // missing-handler refusal. The peer codes are entries of
+                    // the envelope's closed set; a failure that carries a code
+                    // outside it (a non-conforming peer) is refused under the
+                    // envelope's own errored code, and the peer's code rides
+                    // in the record's detail so an operator still sees it.
+                    match ENVELOPE_REFUSALS
+                        .iter()
+                        .find(|code| **code == failure.code)
+                        .copied()
+                    {
+                        Some(code) => EnvelopeRefusal::with_detail(
+                            chain.root_invocation_id().to_owned(),
+                            operation,
+                            code,
+                            failure.detail,
+                        ),
+                        None => EnvelopeRefusal::with_detail(
+                            chain.root_invocation_id().to_owned(),
+                            operation,
+                            ERRORED,
+                            Some(failure.detail.unwrap_or(failure.code)),
+                        ),
+                    }
+                })?;
+            Ok((outcome, row.audit_join_identity(&payload)))
+        }
+        .await;
+        if serves_locally {
+            // Exactly one record per invocation on the broker side: the
+            // root leg writes the root record, a nested leg writes its
+            // correlation record keyed by the root invocation id and
+            // its depth, and the outcome is the admission's - never a
+            // second record for one leg (KTD6).
+            let (outcome, code) = match &dispatched {
+                Ok(_) => (ChainOutcome::Succeeded, None),
+                Err(refusal) => (ChainOutcome::Refused, Some(refusal.code.to_owned())),
+            };
+            self.record_chain_outcome(ChainRecord {
+                ts_ms: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                record_class: if chain.is_nested() {
+                    ChainRecordClass::Correlation
+                } else {
+                    ChainRecordClass::Root
+                },
+                leg: ChainLeg::Broker,
+                invocation_id: chain.root_invocation_id().to_owned(),
+                depth: chain.depth() as u32,
+                initiating_identity: chain.initiating_identity().to_owned(),
+                invoking_identity: chain.invoking_identity().to_owned(),
+                operation: operation.to_owned(),
+                zone: zone.to_owned(),
+                outcome,
+                code,
+            });
+        }
+        match dispatched {
+            Ok((outcome, audit_join_identity)) => Ok(Invocation {
+                audit_join_identity,
+                invocation_id: chain.root_invocation_id().to_owned(),
+                outcome,
+            }),
+            Err(refusal) => Err(refusal),
+        }
+    }
+
+    /// Append one chain record to the wired sink, logging an append
+    /// failure rather than changing the call's outcome: the audit record
+    /// must never become a refusal the caller sees.
+    fn record_chain_outcome(&self, record: ChainRecord) {
+        if let Some(sink) = &self.chain_audit {
+            if let Err(error) = sink.record(&record) {
+                tracing::error!(error = %error, "broker-side chain audit record failed");
+            }
+        }
     }
 
     /// Whether the committed grants of one row cover one caller.
@@ -875,6 +1126,28 @@ impl BrokerEnvelope {
             .allowed_groups
             .iter()
             .any(|group| classes.contains(group))
+    }
+
+    /// Whether the committed grants of one row cover one presented evidence
+    /// chain.
+    ///
+    /// The graft rule (KTD6): a handler may call another provider's service
+    /// only when a committed row and its grants cover the call under the
+    /// chain's initiating principal - the envelope's authz check applies to
+    /// the initiating principal, never the daemon class the handler's
+    /// process re-presents. A broker-class identity is checked as its
+    /// class; a provider identity is the provider-class name the committed
+    /// grants are written in, so it is checked by name.
+    pub fn chain_granted(row: &BrokerOperationRow, chain: &EvidenceChain) -> bool {
+        let identity = chain.initiating_identity();
+        match CallerAuthority::classify_identity(identity) {
+            Some(authority) => Self::granted(row, authority),
+            None => row
+                .authz
+                .allowed_groups
+                .iter()
+                .any(|group| *group == identity),
+        }
     }
 
     /// Validate one payload against the row's declared shape.
@@ -953,6 +1226,7 @@ pub struct BrokerEnvelopeBuilder {
     committed: Vec<&'static str>,
     extras: Vec<BrokerOperationRow>,
     context_store: Option<Arc<TrustedContextStore>>,
+    chain_audit: Option<Arc<dyn ChainAuditSink>>,
 }
 
 impl BrokerEnvelopeBuilder {
@@ -964,6 +1238,20 @@ impl BrokerEnvelopeBuilder {
     /// rather than attested blind.
     pub fn with_trusted_context(mut self, store: Arc<TrustedContextStore>) -> Self {
         self.context_store = Some(store);
+        self
+    }
+
+    /// Write the chain audit records of the envelope's broker-side leg to
+    /// `sink`.
+    ///
+    /// The KTD6 audit rule: the leg executing the root operation writes
+    /// exactly one root record per root invocation, each nested leg writes
+    /// a correlation record keyed by the root invocation id and its depth,
+    /// and forwarded ops never produce broker-side records - they are the
+    /// daemon side's alone. A wire that executes no in-broker operations
+    /// (the fail-closed no-handler shape) writes nothing.
+    pub fn with_chain_audit(mut self, sink: Arc<dyn ChainAuditSink>) -> Self {
+        self.chain_audit = Some(sink);
         self
     }
 
@@ -1048,6 +1336,7 @@ impl BrokerEnvelopeBuilder {
             dispatcher: self.dispatcher,
             invocations: AtomicU64::new(1),
             context_store: self.context_store,
+            chain_audit: self.chain_audit,
         }
     }
 }
@@ -1101,12 +1390,13 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> Option<String> {
 ///
 /// A handler is handed borrowed invocation data; an abortable task owns its
 /// inputs, so the borrowed invocation is materialized - payload, context,
-/// and descriptor dups - at the task boundary, exactly as a spawned forward
-/// leg owns its frame.
+/// chain, and descriptor dups - at the task boundary, exactly as a spawned
+/// forward leg owns its frame.
 struct OwnedInvocation {
     operation: String,
     zone: String,
     invocation_id: String,
+    chain: EvidenceChain,
     payload: CanonicalJsonObject,
     context: Option<ForwardContext>,
     fds: Vec<OwnedFd>,
@@ -1187,6 +1477,13 @@ impl HandlerTable {
 }
 
 impl OperationDispatcher for HandlerTable {
+    /// The handler table executes its handlers in the broker's own process:
+    /// this is the in-broker leg, so the envelope audits its executions
+    /// broker-side (KTD6).
+    fn serves_locally(&self) -> bool {
+        true
+    }
+
     fn dispatch<'a>(&'a self, invocation: DirectInvocation<'a>) -> DispatchFuture<'a> {
         let Some((_, handler)) = self
             .handlers
@@ -1211,6 +1508,7 @@ impl OperationDispatcher for HandlerTable {
         let panic_fallback = format!("handler panicked dispatching {operation}");
         let zone = invocation.ctx.zone.to_owned();
         let invocation_id = invocation.ctx.invocation_id.to_owned();
+        let chain = invocation.ctx.chain.clone();
         let payload = invocation.payload.clone();
         let context = invocation.context.cloned();
         let fd_kind = invocation.fd_kind;
@@ -1242,6 +1540,7 @@ impl OperationDispatcher for HandlerTable {
                 operation,
                 zone,
                 invocation_id,
+                chain,
                 payload,
                 context,
                 fds,
@@ -1253,6 +1552,7 @@ impl OperationDispatcher for HandlerTable {
                         operation: &owned.operation,
                         zone: &owned.zone,
                         invocation_id: &owned.invocation_id,
+                        chain: &owned.chain,
                     },
                     payload: &owned.payload,
                     context: owned.context.as_ref(),
@@ -1299,6 +1599,7 @@ impl Default for BrokerEnvelope {
             dispatcher: Box::new(HandlerTable::new()),
             invocations: AtomicU64::new(1),
             context_store: None,
+            chain_audit: None,
         }
     }
 }
@@ -1346,6 +1647,7 @@ impl OperationDispatcher for ForwardingDispatcher {
                 operation: invocation.ctx.operation,
                 zone: invocation.ctx.zone,
                 invocation_id: invocation.ctx.invocation_id,
+                chain: invocation.ctx.chain,
                 payload: invocation.payload,
                 context: invocation.context,
                 fds: invocation.fds,
@@ -1358,7 +1660,7 @@ impl OperationDispatcher for ForwardingDispatcher {
 mod tests {
     use super::*;
     use crate::catalog::{BrokerAuthzFacets, DeadlineTier, OperationOwner};
-    use crate::forwarding::SocketForwarder;
+    use crate::forwarding::{ForwardFuture, ForwardedOperation, OperationForwarder, SocketForwarder};
     use std::io;
     use std::os::fd::{AsRawFd, OwnedFd};
     use std::path::PathBuf;
@@ -1455,11 +1757,23 @@ while let Ok(fd) = accept_peer(&listener) {
         };
         let payload: CanonicalJsonObject =
             serde_json::from_value(payload).expect("canonical payload");
+        // The loopback peer re-roots a chain from the carrier: the request's
+        // invocation id and the attestation's initiating identity (or the
+        // daemon class on the context-free carrier), exactly what the wire
+        // preserves for the daemon-side leg.
+        let chain = EvidenceChain::root(
+            invocation_id.to_owned(),
+            context
+                .map(|context| context.initiating_identity.as_str())
+                .unwrap_or("daemon")
+                .to_owned(),
+        );
         let (outcome, response_fds) = match runtime().block_on(dispatcher.dispatch(DirectInvocation {
             ctx: InvocationCtx {
                 operation,
                 zone,
                 invocation_id,
+                chain: &chain,
             },
             payload: &payload,
             context,
@@ -1686,6 +2000,7 @@ while let Ok(fd) = accept_peer(&listener) {
             HANDLER_TIMED_OUT,
             HANDLER_CRASHED,
             STALE_WIRE_VERSION,
+            NESTED_DEPTH_EXCEEDED,
         ] {
             assert!(
                 ENVELOPE_REFUSALS.contains(&code),
@@ -2602,5 +2917,401 @@ while let Ok(fd) = accept_peer(&listener) {
         assert_eq!(after.broker_epoch, 2);
         assert_ne!(before.broker_epoch, after.broker_epoch);
         assert_ne!(before, after, "the contexts differ in the epoch alone");
+    }
+
+    /// An in-memory chain audit sink that accumulates records for
+    /// assertion. Mirrors the daemon-side `RecordingChainSink` shape.
+    #[derive(Default)]
+    struct RecordingChainSink(Arc<Mutex<Vec<ChainRecord>>>);
+
+    impl RecordingChainSink {
+        fn snapshot(&self) -> Vec<ChainRecord> {
+            self.0.lock().expect("chain sink").clone()
+        }
+    }
+
+    impl ChainAuditSink for RecordingChainSink {
+        fn record(&self, record: &ChainRecord) -> io::Result<()> {
+            self.0.lock().expect("chain sink").push(record.clone());
+            Ok(())
+        }
+    }
+
+    /// A forwarder that captures the chain its peer would have answered
+    /// under and answers the call locally, so a test can assert exactly
+    /// what crossed the forward seam.
+    struct CapturingForwarder {
+        chains: Arc<Mutex<Vec<EvidenceChain>>>,
+    }
+
+    impl OperationForwarder for CapturingForwarder {
+        fn forward<'a>(&'a self, invocation: ForwardedOperation<'a>) -> ForwardFuture<'a> {
+            self.chains.lock().expect("chains").push(invocation.chain.clone());
+            Box::pin(async move {
+                Ok(DispatchOutcome {
+                    result: serde_json::from_value(serde_json::json!({ "forwarded": true }))
+                    .expect("canonical forwarded result"),
+                    fds: Vec::new(),
+                })
+            })
+        }
+    }
+
+    #[test]
+    fn a_nested_call_records_one_root_and_one_correlation_under_the_initiating_provider() {
+        // KTD6 happy path: a handler calls another provider's service and
+        // the audit records name the initiating provider - the root record
+        // once, the nested leg's correlation record keyed on the root
+        // invocation id and depth one - and the handler's trusted context
+        // carried the chain it was called under.
+        let recorder = Arc::new(RecordingChainSink::default());
+        let sink: Arc<dyn ChainAuditSink> = Arc::clone(&recorder) as Arc<dyn ChainAuditSink>;
+        let captured: Arc<Mutex<Vec<EvidenceChain>>> = Arc::default();
+        let captured_handle = Arc::clone(&captured);
+        let table = HandlerTable::new().with("AlphaService", move |invocation| {
+            captured_handle
+                .lock()
+                .expect("captured")
+                .push(invocation.ctx.chain.clone());
+            Ok(DispatchOutcome {
+                result: serde_json::from_value(serde_json::json!({ "label": "x" }))
+                    .expect("canonical result"),
+                fds: Vec::new(),
+            })
+        }).with("BetaService", |invocation| {
+            Ok(DispatchOutcome {
+                result: serde_json::from_value(serde_json::json!({ "label": invocation.ctx.zone }))
+                    .expect("canonical result"),
+                fds: Vec::new(),
+            })
+        });
+        let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(table))
+            .with_chain_audit(Arc::clone(&sink))
+            .declare(declared_row("AlphaService", &["label"], &["label"], &["provider-alpha"]))
+            .declare(declared_row("BetaService", &["label"], &["label"], &["provider-alpha"]))
+            .build();
+        let root = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Provider("provider-alpha"),
+                "AlphaService",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect("the provider-rooted call dispatches");
+        let root_id = root.invocation_id.clone();
+        let seen = captured
+            .lock()
+            .expect("captured")
+            .last()
+            .expect("the handler saw a chain")
+            .clone();
+        assert_eq!(seen.root_invocation_id(), root_id);
+        assert!(!seen.is_nested());
+        assert_eq!(seen.initiating_identity(), "provider-alpha");
+        assert_eq!(seen.invoking_identity(), "provider-alpha");
+        let chain = EvidenceChain::root(root_id.clone(), "provider-alpha")
+            .nested("provider-alpha")
+            .nested("provider-beta");
+        let nested = runtime()
+            .block_on(envelope.call_nested(
+                chain,
+                "BetaService",
+                "zone-a",
+                &serde_json::json!({ "label": "y" }),
+            ))
+            .expect("a covered nested call dispatches");
+        assert_eq!(
+            nested.invocation_id, root_id,
+            "a nested leg shares the root invocation id"
+        );
+        let records = recorder.snapshot();
+        assert_eq!(records.len(), 2, "{records:?}");
+        let root_record = records
+            .iter()
+            .find(|record| record.is_root())
+            .expect("one root record");
+        assert_eq!(root_record.invocation_id, root_id);
+        assert_eq!(root_record.depth, 0);
+        assert_eq!(root_record.leg, ChainLeg::Broker);
+        assert_eq!(root_record.initiating_identity, "provider-alpha");
+        assert_eq!(root_record.invoking_identity, "provider-alpha");
+        assert_eq!(root_record.operation, "AlphaService");
+        assert_eq!(root_record.outcome, ChainOutcome::Succeeded);
+        let correlation = records
+            .iter()
+            .find(|record| !record.is_root())
+            .expect("one correlation record");
+        assert_eq!(correlation.correlation_key(), (root_id.as_str(), 2));
+        assert_eq!(correlation.initiating_identity, "provider-alpha");
+        assert_eq!(correlation.invoking_identity, "provider-beta");
+        assert_eq!(correlation.operation, "BetaService");
+        assert_eq!(correlation.outcome, ChainOutcome::Succeeded);
+        assert_eq!(
+            root_record_count(&records, &root_id),
+            1,
+            "exactly one root record per invocation"
+        );
+    }
+
+    #[test]
+    fn a_self_reentrant_call_without_a_granting_row_refuses_under_the_initiating_principal() {
+        // Graft rule (KTD6): a handler may call another provider's service
+        // only when a committed row and its grants cover the call under
+        // the chain's initiating principal. The daemon-rooted chain covers
+        // rows granted to the daemon class; the handler's own provider-only
+        // row is not among them, so the self-re-entrant call refuses with
+        // the ungranted-caller code and still records its refusing leg.
+        let recorder = Arc::new(RecordingChainSink::default());
+        let sink: Arc<dyn ChainAuditSink> = Arc::clone(&recorder) as Arc<dyn ChainAuditSink>;
+        let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(echo_table()))
+            .with_chain_audit(Arc::clone(&sink))
+            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .declare(declared_row("GraftService", &[], &[], &["provider-alpha"]))
+            .build();
+        let root = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect("the daemon-rooted call dispatches");
+        // The handler (provider-alpha) re-enters its own service: the chain
+        // is [daemon, provider-alpha], and the daemon's grants do not cover
+        // a row granted to the provider alone.
+        let chain = EvidenceChain::root(root.invocation_id.clone(), "daemon")
+            .nested("provider-alpha");
+        let refusal = runtime()
+            .block_on(envelope.call_nested(
+                chain,
+                "GraftService",
+                "zone-a",
+                &serde_json::json!({}),
+            ))
+            .expect_err("a self-re-entrant call without a granting row refuses");
+        assert_eq!(refusal.code, UNGRANTED_CALLER);
+        let records = recorder.snapshot();
+        assert_eq!(records.len(), 2, "{records:?}");
+        let refused = records
+            .iter()
+            .find(|record| !record.is_root())
+            .expect("the refused leg recorded");
+        assert_eq!(refused.correlation_key(), (root.invocation_id.as_str(), 1));
+        assert_eq!(refused.leg, ChainLeg::Broker);
+        assert_eq!(refused.initiating_identity, "daemon");
+        assert_eq!(refused.invoking_identity, "provider-alpha");
+        assert_eq!(refused.outcome, ChainOutcome::Refused);
+        assert_eq!(refused.code.as_deref(), Some(UNGRANTED_CALLER));
+        assert_eq!(root_record_count(&records, &root.invocation_id), 1);
+    }
+
+    #[test]
+    fn a_nested_loop_trips_the_depth_cap_with_the_loop_code_and_never_a_second_root() {
+        // KTD6 loop rule: a chain deeper than the cap refuses with the
+        // dedicated closed-set code, every admitted leg recorded exactly
+        // one correlation record, and the root record is never repeated.
+        let recorder = Arc::new(RecordingChainSink::default());
+        let sink: Arc<dyn ChainAuditSink> = Arc::clone(&recorder) as Arc<dyn ChainAuditSink>;
+        let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(echo_table()))
+            .with_chain_audit(Arc::clone(&sink))
+            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .build();
+        let root = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect("the daemon-rooted call dispatches");
+        let root_id = root.invocation_id.clone();
+        let mut chain = EvidenceChain::root(root_id.clone(), "daemon");
+        for depth in 1..=(MAX_NESTED_DEPTH + 1) {
+            chain = chain.nested("provider-alpha");
+            let call = runtime().block_on(envelope.call_nested(
+                chain.clone(),
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ));
+            if depth <= MAX_NESTED_DEPTH {
+                call.expect("a chain within the cap dispatches");
+            } else {
+                let refusal = call.expect_err("a chain past the cap is refused");
+                assert_eq!(refusal.code, NESTED_DEPTH_EXCEEDED);
+                assert_eq!(refusal.invocation_id, root_id);
+            }
+        }
+        let records = recorder.snapshot();
+        let max = MAX_NESTED_DEPTH as u32;
+        assert_eq!(
+            records.len(),
+            1 + (MAX_NESTED_DEPTH + 1) as usize,
+            "one root, one correlation per admitted leg, one refusing leg: {records:?}"
+        );
+        for depth in 0..=max {
+            assert!(
+                records
+                    .iter()
+                    .any(|record| record.correlation_key() == (root_id.as_str(), depth)
+                        || (depth == 0 && record.is_root())),
+                "depth {depth} recorded"
+            );
+        }
+        let refusing = records
+            .iter()
+            .find(|record| record.depth == max + 1)
+            .expect("the refusing leg recorded");
+        assert_eq!(refusing.outcome, ChainOutcome::Refused);
+        assert_eq!(refusing.code.as_deref(), Some(NESTED_DEPTH_EXCEEDED));
+        assert_eq!(refusing.leg, ChainLeg::Broker);
+        assert_eq!(
+            root_record_count(&records, &root_id),
+            1,
+            "a loop never writes a second root record"
+        );
+    }
+
+    #[test]
+    fn a_mixed_leg_chain_records_one_root_for_the_in_broker_leg_only() {
+        // KTD6 mixed-leg shape (in-broker root, forwarded nested leg): the
+        // in-broker leg writes the one root record; the forwarded leg
+        // crosses the forward seam carrying the chain the daemon-side leg
+        // will correlate under, and the broker writes nothing for the
+        // forwarded leg (forwarded ops audit daemon-side only, KTD6).
+        let recorder = Arc::new(RecordingChainSink::default());
+        let sink: Arc<dyn ChainAuditSink> = Arc::clone(&recorder) as Arc<dyn ChainAuditSink>;
+        let chains: Arc<Mutex<Vec<EvidenceChain>>> = Arc::default();
+        let table = HandlerTable::new().with("RootService", |_invocation| {
+            Ok(DispatchOutcome {
+                result: serde_json::from_value(serde_json::json!({ "root": true }))
+                    .expect("canonical result"),
+                fds: Vec::new(),
+            })
+        });
+        let root_envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(table))
+            .with_chain_audit(Arc::clone(&sink))
+            .declare(declared_row("RootService", &[], &[], &["d2bd"]))
+            .build();
+        let root = runtime()
+            .block_on(root_envelope.call(
+                CallerAuthority::Daemon,
+                "RootService",
+                "zone-a",
+                &serde_json::json!({}),
+            ))
+            .expect("the in-broker root dispatches");
+        let root_id = root.invocation_id.clone();
+        let nested_chain = EvidenceChain::root(root_id.clone(), "daemon")
+            .nested("provider-alpha");
+        let forwarded_envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(CapturingForwarder {
+                chains: Arc::clone(&chains),
+            })),
+        )
+        .with_chain_audit(Arc::clone(&sink))
+        .declare(declared_row("ForwardedService", &[], &[], &["d2bd"]))
+        .build();
+        let nested = runtime()
+            .block_on(forwarded_envelope.call_nested(
+                nested_chain,
+                "ForwardedService",
+                "zone-a",
+                &serde_json::json!({}),
+            ))
+            .expect("the forwarded nested call is answered by its forwarder");
+        assert_eq!(nested.invocation_id, root_id);
+        let records = recorder.snapshot();
+        assert_eq!(
+            records.len(),
+            1,
+            "the broker wrote only the in-broker root record: {records:?}"
+        );
+        assert!(records[0].is_root());
+        assert_eq!(records[0].invocation_id, root_id);
+        assert_eq!(records[0].leg, ChainLeg::Broker);
+        assert_eq!(root_record_count(&records, &root_id), 1);
+        // The forwarded leg crossed the seam with the chain; the daemon-side
+        // leg records its correlation under exactly this key (covered on
+        // the daemon side by forward_rendezvous tests).
+        let chains = chains.lock().expect("chains");
+        assert_eq!(chains.len(), 1, "the forwarder saw the one nested call");
+        assert_eq!(chains[0].root_invocation_id(), root_id);
+        assert_eq!(chains[0].depth(), 1);
+        assert_eq!(chains[0].initiating_identity(), "daemon");
+        assert_eq!(chains[0].invoking_identity(), "provider-alpha");
+    }
+
+    #[test]
+    fn in_broker_refusals_record_exactly_one_root_record_each() {
+        // The one-record-per-invocation invariant holds across outcomes:
+        // a successful call, a refused call, and an unknown operation
+        // each leave exactly one root record under their own invocation id.
+        let recorder = Arc::new(RecordingChainSink::default());
+        let sink: Arc<dyn ChainAuditSink> = Arc::clone(&recorder) as Arc<dyn ChainAuditSink>;
+        let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(echo_table()))
+            .with_chain_audit(Arc::clone(&sink))
+            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .build();
+        let ok = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect("the granted call dispatches");
+        let refused = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Provider("provider-alpha"),
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "y" }),
+            ))
+            .expect_err("a provider without a granting row is refused");
+        assert_eq!(refused.code, UNGRANTED_CALLER);
+        let unknown = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "NoSuchService",
+                "zone-a",
+                &serde_json::json!({}),
+            ))
+            .expect_err("an undeclared operation is refused");
+        assert_eq!(unknown.code, UNKNOWN_OPERATION);
+        let records = recorder.snapshot();
+        assert_eq!(records.len(), 3, "{records:?}");
+        let ok_record = records
+            .iter()
+            .find(|record| record.invocation_id == ok.invocation_id)
+            .expect("the successful call recorded");
+        assert!(ok_record.is_root());
+        assert_eq!(ok_record.outcome, ChainOutcome::Succeeded);
+        let refused_record = records
+            .iter()
+            .find(|record| record.invocation_id == refused.invocation_id)
+            .expect("the refused call recorded");
+        assert!(refused_record.is_root());
+        assert_eq!(refused_record.outcome, ChainOutcome::Refused);
+        assert_eq!(refused_record.code.as_deref(), Some(UNGRANTED_CALLER));
+        let unknown_record = records
+            .iter()
+            .find(|record| record.invocation_id == unknown.invocation_id)
+            .expect("the unknown call recorded");
+        assert!(unknown_record.is_root());
+        assert_eq!(unknown_record.outcome, ChainOutcome::Refused);
+        assert_eq!(unknown_record.code.as_deref(), Some(UNKNOWN_OPERATION));
+        for invocation_id in [
+            &ok.invocation_id,
+            &refused.invocation_id,
+            &unknown.invocation_id,
+        ] {
+            assert_eq!(
+                root_record_count(&records, invocation_id),
+                1,
+                "exactly one root record per invocation"
+            );
+        }
     }
 }

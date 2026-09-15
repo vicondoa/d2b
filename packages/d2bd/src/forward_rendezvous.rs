@@ -73,8 +73,12 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use d2b_audit::evidence_chain::{
+    ChainAuditSink, ChainLeg, ChainOutcome, ChainRecord, ChainRecordClass, EvidenceChain,
+    MAX_NESTED_DEPTH, NESTED_DEPTH_EXCEEDED, root_record_count,
+};
 use d2b_contracts_broker::FORWARD_SOCKET_ENV;
 use d2b_contracts_broker::broker_wire::{
     DEFAULT_CONTEXT_DEADLINE_MS, FD_LEG, FdKind, ForwardContext, ForwardOperationOutcome,
@@ -207,6 +211,16 @@ pub(crate) struct ForwardRendezvous {
     /// Zero means no publication has been acknowledged yet: no context can
     /// be verified, so every attested call is refused fail-closed.
     broker_epoch: AtomicU64,
+    /// The sink this process's daemon-side leg writes evidence-chain audit
+    /// records to, when one is wired.
+    ///
+    /// Absent, the leg serves without chain records (the seam's unwired
+    /// state; the production daemon wires its audit log at its composition
+    /// point). The audit rule (KTD6): the leg executing the root operation
+    /// writes exactly one root record per root invocation, each nested leg
+    /// writes a correlation record keyed by the root invocation id and its
+    /// depth, and forwarded ops audit here alone - never also broker-side.
+    chain_audit: Mutex<Option<Arc<dyn ChainAuditSink>>>,
 }
 
 impl ForwardRendezvous {
@@ -279,6 +293,40 @@ impl ForwardRendezvous {
     /// equality.
     pub(crate) fn set_broker_epoch(&self, epoch: u64) {
         self.broker_epoch.store(epoch, Ordering::SeqCst);
+    }
+
+    /// Wire this rendezvous's daemon-side chain audit records to `sink`.
+    ///
+    /// The daemon calls this once at its composition point; a rendezvous
+    /// without a sink serves without chain records. The seam's consumers
+    /// are its tests and the future composition wiring (U9 note: the
+    /// composition seam owns this call).
+    #[allow(dead_code)]
+    pub(crate) fn set_chain_audit(&self, sink: Arc<dyn ChainAuditSink>) {
+        *self
+            .chain_audit
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sink);
+    }
+
+    /// Write one chain record through the wired sink, logging an append
+    /// failure rather than changing the call's outcome.
+    fn record_chain(&self, record: ChainRecord) {
+        let Some(sink) = self
+            .chain_audit
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        if let Err(error) = sink.record(&record) {
+            tracing::error!(
+                error = %error,
+                operation = %record.operation,
+                "daemon-side chain audit record failed"
+            );
+        }
     }
 
     /// Whether one attested context block is fresh against this process's
@@ -372,6 +420,97 @@ impl ForwardRendezvous {
         }
     }
 
+    /// Serve one nested invocation a handler presented, under its evidence
+    /// chain.
+    ///
+    /// The chain is the trusted-context evidence (KTD6): the nested call
+    /// presents the chain with the invoking handler's identity appended and
+    /// never re-presents as the daemon class. This endpoint refuses a chain
+    /// past the depth cap with the dedicated loop-refusal code - so a call
+    /// loop trips its own code, never an uncommitted or resolution refusal
+    /// - and records the leg's correlation record keyed on the root
+    /// invocation id and the leg's depth. Resolution and dispatch are the
+    /// same as a forwarded call's, so a nested leg is served by the same
+    /// resolution (effect services first, then the declaring provider).
+    /// The graft rule's committed-row check is the broker side's: this
+    /// process holds no committed rows, so the chain's admission and grants
+    /// were decided where the rows live, and this leg enforces the cap and
+    /// records the correlation key.
+    #[allow(dead_code)] // U9 seam: its tests drive it; the composition seam owns the production call
+    pub(crate) async fn invoke_nested(
+        &self,
+        chain: &EvidenceChain,
+        operation: &str,
+        zone: &str,
+        payload: &serde_json::Value,
+    ) -> ForwardOperationResponse {
+        if chain.depth() > MAX_NESTED_DEPTH {
+            let response = refused(NESTED_DEPTH_EXCEEDED);
+            self.record_chain(self.chain_record(
+                ChainRecordClass::Correlation,
+                chain,
+                operation,
+                zone,
+                &response,
+            ));
+            return response;
+        }
+        let request = ForwardOperationRequest {
+            operation: operation.to_owned(),
+            zone: zone.to_owned(),
+            invocation_id: chain.root_invocation_id().to_owned(),
+            payload: payload.clone(),
+            context: None,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        };
+        let response = self.invoke(&request, &[]).await;
+        self.record_chain(self.chain_record(
+            ChainRecordClass::Correlation,
+            chain,
+            operation,
+            zone,
+            &response,
+        ));
+        response
+    }
+
+    /// The chain record one leg of an invocation writes on this side: a
+    /// root record for the root invocation, a correlation record for a
+    /// nested leg, both on the shared shape and keyed on the root
+    /// invocation id plus the leg's depth (KTD6).
+    fn chain_record(
+        &self,
+        record_class: ChainRecordClass,
+        chain: &EvidenceChain,
+        operation: &str,
+        zone: &str,
+        response: &ForwardOperationResponse,
+    ) -> ChainRecord {
+        let (outcome, code) = match response.outcome {
+            ForwardOperationOutcome::Refused { ref code } => {
+                (ChainOutcome::Refused, Some(code.clone()))
+            }
+            ForwardOperationOutcome::Result { .. } => (ChainOutcome::Succeeded, None),
+        };
+        ChainRecord {
+            ts_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            record_class,
+            leg: ChainLeg::Daemon,
+            invocation_id: chain.root_invocation_id().to_owned(),
+            depth: chain.depth() as u32,
+            initiating_identity: chain.initiating_identity().to_owned(),
+            invoking_identity: chain.invoking_identity().to_owned(),
+            operation: operation.to_owned(),
+            zone: zone.to_owned(),
+            outcome,
+            code,
+        }
+    }
+
     /// Answer one admitted connection: read one request frame, invoke the
     /// declared handler under the handler deadline, write one reply frame.
     ///
@@ -397,12 +536,33 @@ impl ForwardRendezvous {
                     "forwarded request frame is not a ForwardOperationRequest: {error}"
                 ),
             })?;
+        // The forwarded call's evidence chain, re-rooted from the carrier:
+        // the wire preserves the root invocation id and the attestation's
+        // initiating identity, so this side records the invocation as its
+        // root leg (KTD6). The full chain crosses once the carrier's
+        // request shape grows; until then this is the daemon-side leg's
+        // root anchor.
+        let chain = EvidenceChain::root(
+            request.invocation_id.clone(),
+            request
+                .context
+                .as_ref()
+                .map(|context| context.initiating_identity.clone())
+                .unwrap_or_else(|| "daemon".to_owned()),
+        );
         if !request_fds_admitted(&request, fds.as_slice()) {
             // The declared leg and the attached leg disagree - not in the
             // count, not in index order, not in kernel kind - so the call is
             // refused with the carrier's own fd-leg code rather than letting
             // an anonymous truncation pass as the invocation.
             let response = refused(FD_LEG);
+            self.record_chain(self.chain_record(
+                ChainRecordClass::Root,
+                &chain,
+                &request.operation,
+                &request.zone,
+                &response,
+            ));
             return connection
                 .write_frame_with_fds(&encode_reply(&response)?, &[], FORWARD_REPLY_DEADLINE)
                 .await;
@@ -424,6 +584,13 @@ impl ForwardRendezvous {
                         "forwarded call carries a stale or mismatched broker context; refusing"
                     );
                     let response = refused(STALE_CONTEXT);
+                    self.record_chain(self.chain_record(
+                        ChainRecordClass::Root,
+                        &chain,
+                        &request.operation,
+                        &request.zone,
+                        &response,
+                    ));
                     return connection
                         .write_frame_with_fds(
                             &encode_reply(&response)?,
@@ -443,6 +610,7 @@ impl ForwardRendezvous {
         // read as a round-trip timeout. The call's artifacts move with it,
         // exactly as a spawned forward leg owns its frame.
         let operation = request.operation.clone();
+        let zone = request.zone.clone();
         let rendezvous = Arc::clone(self);
         let dispatch = tokio::spawn(async move {
             rendezvous.invoke(&request, fds.as_slice()).await
@@ -488,6 +656,16 @@ impl ForwardRendezvous {
                 refused(FORWARD_TIMEOUT)
             }
         };
+        // The forwarded invocation's daemon-side root record: exactly one
+        // per root invocation, whatever the outcome - the leg executing the
+        // root operation records its result or its refusal (KTD6).
+        self.record_chain(self.chain_record(
+            ChainRecordClass::Root,
+            &chain,
+            &operation,
+            &zone,
+            &response,
+        ));
         // The response leg is JSON-only until a provider can mint descriptors
         // (a later unit's work), so the reply frame carries no attachments.
         connection
@@ -1500,6 +1678,9 @@ mod tests {
         socket_path: PathBuf,
         _scratch: tempfile::TempDir,
         _providers: Arc<ProviderRuntime>,
+        /// The serving rendezvous itself, so a test can attach audit sinks
+        /// and drive nested calls at the seam.
+        rendezvous: Arc<ForwardRendezvous>,
     }
 
     impl ServingRendezvous {
@@ -1542,11 +1723,12 @@ mod tests {
         {
             let (rendezvous, socket_path, scratch, providers) = Self::fixture().await;
             let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
-            serve(rendezvous, listener).expect("start the rendezvous server");
+            serve(Arc::clone(&rendezvous), listener).expect("start the rendezvous server");
             Self {
                 socket_path,
                 _scratch: scratch,
                 _providers: providers,
+                rendezvous,
             }
         }
 
@@ -1579,11 +1761,12 @@ mod tests {
             let (rendezvous, socket_path, scratch, providers) =
                 effect_fixture_with(factory).await;
             let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
-            serve(rendezvous, listener).expect("start the rendezvous server");
+            serve(Arc::clone(&rendezvous), listener).expect("start the rendezvous server");
             Self {
                 socket_path,
                 _scratch: scratch,
                 _providers: providers,
+                rendezvous,
             }
         }
 
@@ -1664,7 +1847,7 @@ mod tests {
         zone: &str,
         payload: serde_json::Value,
     ) -> ForwardOperationResponse {
-        let request = ForwardOperationRequest {
+        forward_request_async(socket_path, ForwardOperationRequest {
             operation: operation.to_owned(),
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
@@ -1672,7 +1855,16 @@ mod tests {
             context: None,
             fd_indexes: vec![],
             fd_kinds: vec![],
-        };
+        })
+        .await
+    }
+
+    /// Forward one explicit request frame, so a test controls the invocation
+    /// id and the broker-attested context its call carries.
+    async fn forward_request_async(
+        socket_path: PathBuf,
+        request: ForwardOperationRequest,
+    ) -> ForwardOperationResponse {
         let encoded =
             canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
         let socket = connect_seqpacket(&socket_path).expect("dial the rendezvous");
@@ -1688,6 +1880,67 @@ mod tests {
             .await
             .expect("read the reply frame");
         serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
+    }
+
+    /// The request the broker mints for one attested call, with the fields a
+    /// context test controls.
+    fn attested_request(
+        invocation_id: &str,
+        operation: &str,
+        initiating_identity: &str,
+    ) -> ForwardOperationRequest {
+        ForwardOperationRequest {
+            operation: operation.to_owned(),
+            zone: "test".to_owned(),
+            invocation_id: invocation_id.to_owned(),
+            payload: serde_json::json!({}),
+            // Matches the attestation state `start_attesting` publishes:
+            // epoch 5, revision 1, generations (1, 1), default budget.
+            context: Some(ForwardContext {
+                broker_epoch: 5,
+                zone: "test".to_owned(),
+                provider_set_revision: 1,
+                controller_generation: 1,
+                guest_generation: 1,
+                initiating_identity: initiating_identity.to_owned(),
+                deadline_ms: DEFAULT_CONTEXT_DEADLINE_MS,
+            }),
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        }
+    }
+
+    /// An in-memory chain audit sink the tests assert on: every record the
+    /// daemon-side leg writes lands here.
+    #[derive(Default)]
+    struct RecordingChainSink {
+        records: Mutex<Vec<ChainRecord>>,
+    }
+
+    impl RecordingChainSink {
+        fn snapshot(&self) -> Vec<ChainRecord> {
+            self.records
+                .lock()
+                .expect("chain sink")
+                .clone()
+        }
+    }
+
+    impl ChainAuditSink for RecordingChainSink {
+        fn record(&self, record: &ChainRecord) -> std::io::Result<()> {
+            self.records
+                .lock()
+                .expect("chain sink")
+                .push(record.clone());
+            Ok(())
+        }
+    }
+
+    /// Wire `sink` into `serving`'s rendezvous and return it.
+    fn attached_sink(serving: &ServingRendezvous) -> Arc<RecordingChainSink> {
+        let sink = Arc::new(RecordingChainSink::default());
+        serving.rendezvous.set_chain_audit(sink.clone());
+        sink
     }
 
     /// The threads this process is running, one per task entry.
@@ -3362,5 +3615,211 @@ assert_eq!(
             }),
             UNCOMMITTED_OPERATION
         );
+    }
+
+    /// A forwarded root invocation is recorded by the daemon-side leg
+    /// exactly once, whatever its outcome (KTD6): the leg executing the
+    /// root operation writes one root record per root invocation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_forwarded_root_writes_exactly_one_daemon_side_root_record_per_outcome() {
+        let serving = ServingRendezvous::start().await;
+        let sink = attached_sink(&serving);
+
+        let refused = forward_request_async(
+            serving.socket_path.clone(),
+            ForwardOperationRequest {
+                operation: "error-boom".to_owned(),
+                zone: "test".to_owned(),
+                invocation_id: "invocation-root-1".to_owned(),
+                payload: serde_json::json!({}),
+                context: None,
+                fd_indexes: vec![],
+                fd_kinds: vec![],
+            },
+        )
+        .await;
+        assert!(matches!(
+            refused.outcome,
+            ForwardOperationOutcome::Refused { .. }
+        ));
+
+        let succeeded = forward_request_async(
+            serving.socket_path.clone(),
+            ForwardOperationRequest {
+                operation: "inspect-process-family".to_owned(),
+                zone: "test".to_owned(),
+                invocation_id: "invocation-root-2".to_owned(),
+                payload: serde_json::json!({ "resourceType": "Process" }),
+                context: None,
+                fd_indexes: vec![],
+                fd_kinds: vec![],
+            },
+        )
+        .await;
+        assert!(matches!(
+            succeeded.outcome,
+            ForwardOperationOutcome::Result { .. }
+        ));
+
+        let records = sink.snapshot();
+        assert_eq!(
+            records.len(),
+            2,
+            "one record per root invocation: {records:?}"
+        );
+        let first = records
+            .iter()
+            .find(|record| record.invocation_id == "invocation-root-1")
+            .expect("the refused invocation was recorded");
+        assert!(first.is_root());
+        assert_eq!(first.depth, 0);
+        assert_eq!(first.leg, ChainLeg::Daemon);
+        assert_eq!(first.outcome, ChainOutcome::Refused);
+        assert_eq!(first.code.as_deref(), Some("handler-errored"));
+        assert_eq!(first.initiating_identity, "daemon");
+        let second = records
+            .iter()
+            .find(|record| record.invocation_id == "invocation-root-2")
+            .expect("the succeeded invocation was recorded");
+        assert!(second.is_root());
+        assert_eq!(second.outcome, ChainOutcome::Succeeded);
+        assert_eq!(second.code, None);
+        // The consumer invariant: exactly one root record per invocation
+        // id, whichever way the leg ended.
+        assert_eq!(root_record_count(&records, "invocation-root-1"), 1);
+        assert_eq!(root_record_count(&records, "invocation-root-2"), 1);
+    }
+
+    /// One nested leg writes one correlation record keyed on the root
+    /// invocation id and its own depth - and never a second root record
+    /// for the invocation, which is the mixed-leg invariant (KTD6).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_nested_leg_writes_one_correlation_record_and_never_a_second_root() {
+        let serving = ServingRendezvous::start().await;
+        let sink = attached_sink(&serving);
+
+        let refused_chain =
+            EvidenceChain::root("invocation-nested-1", "daemon").nested("provider-alpha");
+        let refused = serving
+            .rendezvous
+            .invoke_nested(&refused_chain, "error-boom", "test", &serde_json::json!({}))
+            .await;
+        assert!(matches!(
+            refused.outcome,
+            ForwardOperationOutcome::Refused { .. }
+        ));
+
+        let succeeded_chain =
+            EvidenceChain::root("invocation-nested-2", "provider-beta").nested("provider-alpha");
+        let succeeded = serving
+            .rendezvous
+            .invoke_nested(
+                &succeeded_chain,
+                "inspect-process-family",
+                "test",
+                &serde_json::json!({ "resourceType": "Process" }),
+            )
+            .await;
+        assert!(matches!(
+            succeeded.outcome,
+            ForwardOperationOutcome::Result { .. }
+        ));
+
+        let records = sink.snapshot();
+        assert_eq!(records.len(), 2, "one correlation record per leg: {records:?}");
+        for record in &records {
+            assert_eq!(
+                record.record_class,
+                ChainRecordClass::Correlation,
+                "a nested leg never writes a root record: {record:?}"
+            );
+            assert_eq!(record.leg, ChainLeg::Daemon);
+        }
+        let first = records
+            .iter()
+            .find(|record| record.invocation_id == "invocation-nested-1")
+            .expect("the refused nested leg was recorded");
+        assert_eq!(first.correlation_key(), ("invocation-nested-1", 1));
+        assert_eq!(first.outcome, ChainOutcome::Refused);
+        assert_eq!(first.code.as_deref(), Some("handler-errored"));
+        assert_eq!(first.initiating_identity, "daemon");
+        assert_eq!(first.invoking_identity, "provider-alpha");
+        let second = records
+            .iter()
+            .find(|record| record.invocation_id == "invocation-nested-2")
+            .expect("the succeeded nested leg was recorded");
+        assert_eq!(second.correlation_key(), ("invocation-nested-2", 1));
+        assert_eq!(second.outcome, ChainOutcome::Succeeded);
+        assert_eq!(second.code, None);
+        assert_eq!(second.initiating_identity, "provider-beta");
+        assert_eq!(second.invoking_identity, "provider-alpha");
+        // The mixed-leg consumer invariant: zero root records for the ids
+        // the nested legs alone carried.
+        assert_eq!(root_record_count(&records, "invocation-nested-1"), 0);
+        assert_eq!(root_record_count(&records, "invocation-nested-2"), 0);
+    }
+
+    /// A nested chain past the depth cap is refused with the dedicated
+    /// loop-refusal code before any dispatch, and the refusing leg still
+    /// writes its correlation record with the code (KTD6).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_nested_chain_past_the_depth_cap_is_refused_with_the_loop_code() {
+        let serving = ServingRendezvous::start().await;
+        let sink = attached_sink(&serving);
+
+        let mut chain = EvidenceChain::root("invocation-loop-1", "daemon");
+        for _ in 0..=MAX_NESTED_DEPTH {
+            chain = chain.nested("provider-alpha");
+        }
+        assert_eq!(chain.depth(), MAX_NESTED_DEPTH + 1);
+        let response = serving
+            .rendezvous
+            .invoke_nested(
+                &chain,
+                "inspect-process-family",
+                "test",
+                &serde_json::json!({ "resourceType": "Process" }),
+            )
+            .await;
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: NESTED_DEPTH_EXCEEDED.to_owned()
+            }
+        );
+        let records = sink.snapshot();
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(
+            records[0].correlation_key(),
+            ("invocation-loop-1", (MAX_NESTED_DEPTH + 1) as u32)
+        );
+        assert_eq!(records[0].code.as_deref(), Some(NESTED_DEPTH_EXCEEDED));
+        assert_eq!(root_record_count(&records, "invocation-loop-1"), 0);
+    }
+
+    /// An attested forwarded root is recorded under the identity the
+    /// broker attested, never the daemon class the socket peer re-presents:
+    /// the record names the initiating provider (KTD6).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_attested_forwarded_root_is_recorded_under_the_initiating_identity() {
+        let serving = ServingRendezvous::start_attesting().await;
+        let sink = attached_sink(&serving);
+        let response = forward_request_async(
+            serving.socket_path.clone(),
+            attested_request("invocation-attr-1", "error-boom", "provider-alpha"),
+        )
+        .await;
+        assert!(matches!(
+            response.outcome,
+            ForwardOperationOutcome::Refused { .. }
+        ));
+        let records = sink.snapshot();
+        assert_eq!(records.len(), 1, "{records:?}");
+        let record = &records[0];
+        assert!(record.is_root());
+        assert_eq!(record.initiating_identity, "provider-alpha");
+        assert_eq!(record.invoking_identity, "provider-alpha");
+        assert_eq!(record.leg, ChainLeg::Daemon);
+        assert_eq!(root_record_count(&records, "invocation-attr-1"), 1);
     }
     }

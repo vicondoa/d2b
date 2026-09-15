@@ -62,6 +62,11 @@ pub struct ForwardedOperation<'a> {
     pub zone: &'a str,
     /// The invocation identifier the broker's audit record carries.
     pub invocation_id: &'a str,
+    /// The evidence chain this leg runs under (KTD6): the root invocation
+    /// id and the ordered identities, root first. A nested call's chain
+    /// travels with the forwarded invocation so the peer's leg records its
+    /// correlation key the same way the broker's leg would.
+    pub chain: &'a d2b_audit::evidence_chain::EvidenceChain,
     /// The validated canonical payload.
     pub payload: &'a CanonicalJsonObject,
     /// The descriptors the caller attached to this invocation,when any.
@@ -146,6 +151,14 @@ impl OperationForwarder for UnroutedForwarder {
 /// answering peer decides what a name means inside its own process; the
 /// broker contributes the committed name, the Zone, the invocation
 /// identifier, and the payload it validated, and nothing else.
+///
+/// The evidence chain is a seam object, not a socket field: the committed
+/// request shape carries the root invocation id and the minted context's
+/// initiating identity, so the wire preserves the root anchor and the
+/// invoking identity of a nested call while the full chain crosses once
+/// the carrier's request shape grows (a later carrier unit's wire change).
+/// Until then the daemon-side leg re-roots a chain from the request's id,
+/// context, and the attestation it validates.
 ///
 /// One connection carries one invocation. A dial that fails, a peer that
 /// closes without answering, and a malformed or oversized frame are all
@@ -479,10 +492,12 @@ mod tests {
         invocation_id: &str,
         payload: &CanonicalJsonObject,
     ) -> Result<DispatchOutcome, DispatchFailure> {
+        let chain = d2b_audit::evidence_chain::EvidenceChain::root(invocation_id, "daemon");
         runtime().block_on(forwarder.forward(ForwardedOperation {
             operation,
             zone: "work",
             invocation_id,
+            chain: &chain,
             payload,
             fds: &[],
             fd_kind: None,
@@ -578,11 +593,13 @@ mod tests {
 
     #[test]
     fn an_unrouted_forwarder_refuses_every_operation() {
+        let chain = d2b_audit::evidence_chain::EvidenceChain::root("invocation-10", "daemon");
         let failure = runtime()
             .block_on(UnroutedForwarder.forward(ForwardedOperation {
                 operation: "UsbipBind",
                 zone: "work",
                 invocation_id: "invocation-10",
+                chain: &chain,
                 payload: &payload(),
                 fds: &[],
                 fd_kind: None,
@@ -731,10 +748,12 @@ mod tests {
             initiating_identity: "daemon".to_owned(),
             deadline_ms: 25_000,
         };
+        let chain = d2b_audit::evidence_chain::EvidenceChain::root("invocation-16", "daemon");
         let outcome = runtime().block_on(peer.forwarder().forward(ForwardedOperation {
             operation: "UsbipBind",
             zone: "work",
             invocation_id: "invocation-16",
+            chain: &chain,
             payload: &payload(),
             fds: &[],
             fd_kind: None,
