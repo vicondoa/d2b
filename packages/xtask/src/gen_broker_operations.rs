@@ -69,6 +69,8 @@ struct Row {
     authz: Authz,
     audit: Audit,
     payload: Payload,
+    #[serde(default)]
+    fds: Fds,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,6 +103,20 @@ struct Payload {
     provenance: String,
     #[serde(default)]
     schema: Option<serde_json::Value>,
+}
+
+/// The fd-carrying facet of one committed operation row..
+///
+/// A row with no carriage declares `maxFds: 0` and no `fdKind`,which
+/// admits only the empty leg;a row that declares carriage names the ceiling
+/// and the single kernel kind every attached descriptor must present.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Fds {
+    #[serde(default)]
+    max_fds: u32,
+    #[serde(default)]
+    fd_kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -520,6 +536,14 @@ fn generate_catalog(catalog: &Catalog) -> String {
         rows.push_str(&format!(
             "        audit_join: {},\n",
             optional_str_list(&row.audit.join)
+        ));
+        rows.push_str(&format!("        max_fds: {},\n", row.fds.max_fds));
+        rows.push_str(&format!(
+            "        fd_kind: {},\n",
+            match row.fds.fd_kind.as_deref() {
+                Some(kind) => format!("Some(FdKind::{kind}),"),
+                None => "None".to_owned(),
+            }
         ));
         rows.push_str("    },\n");
     }

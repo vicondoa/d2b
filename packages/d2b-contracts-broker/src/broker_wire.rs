@@ -283,6 +283,79 @@ pub struct ApplyHostGenerationHandoffResponse {
 /// that path. Neither side may invent a second spelling.
 pub const FORWARD_SOCKET_ENV: &str = "D2B_BROKER_FORWARD_SOCKET";
 
+/// The refusal code for a forwarded request or response whose fd
+/// attachments disagree with their declarations, or whose declared set
+/// exceeds the bounded ceiling.
+///
+/// The code is shared by both legs of the forward carrier,so the broker
+/// and the rendezvous cannot drift apart on how an fd-leg failure is named.
+
+pub const FD_LEG: &str = "fd-leg";
+
+/// The most SCM_RIGHTS descriptors one forward frame can carry.
+
+
+///
+/// The receive-side ancillary buffers on both legs are sized
+/// `cmsg_space!([RawFd; MAX_FRAME_FDS])`, so a frame with more attachments
+/// would be truncated by the transport. A declared set is therefore
+/// capped at this constant before dispatch,and a larger declaration is
+/// refused with [`FD_LEG`], never delivered as a transport truncation。
+
+
+pub const MAX_FRAME_FDS: usize =8;
+
+/// The kernel kind one forwarded descriptor must present.from
+///
+/// The kind is declared per descriptor on the wire,index-aligned with the
+/// fd-index declarations,and validated against the received descriptor's
+/// fstat mode on the receiving leg;a mismatch is the [`FD_LEG`] refusal。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum FdKind {
+    /// A FIFO (pipe) end。
+
+
+
+    Fifo,
+    /// A socket。
+
+
+
+    Socket,
+    /// A character device。
+
+
+
+
+
+    CharDevice,
+    /// A block device。
+
+
+
+
+
+    BlockDevice,
+    /// A regular file。
+
+
+
+
+
+
+
+    Regular,
+    /// A directory。
+
+
+
+
+
+
+    Directory,
+}
+
 /// One validated, authorized operation forwarded to the process that
 /// declares it.
 ///
@@ -307,6 +380,17 @@ pub struct ForwardOperationRequest {
     pub invocation_id: String,
     /// The canonical payload object the row validated.
     pub payload: serde_json::Value,
+    /// The positions,in the frame's SCM_RIGHTS attachment list,of the
+    /// descriptors this request carries. Empty when the request carries none.
+
+
+    #[serde(default)]
+    pub fd_indexes: Vec<u32>,
+    /// The kernel kind each declared descriptor must present,index-aligned
+    /// with [`Self::fd_indexes`]。
+
+    #[serde(default)]
+    pub fd_kinds: Vec<FdKind>,
 }
 
 /// How one forwarded invocation ended.
@@ -323,6 +407,19 @@ pub enum ForwardOperationOutcome {
     Result {
         /// The canonical result payload the handler returned.
         result: serde_json::Value,
+        /// The positions,in the frame's SCM_RIGHTS attachment list,of the
+        /// descriptors the answering peer returned. Empty when the response
+        /// carries none.
+
+
+        #[serde(default)]
+        fd_indexes: Vec<u32>,
+        /// The kernel kind each declared descriptor must present,index-aligned
+        /// with the fd-index declarations.
+
+
+        #[serde(default)]
+        fd_kinds: Vec<FdKind>,
     },
     /// The invocation reached no handler, or the handler refused it.
     Refused {
@@ -4300,5 +4397,62 @@ mod tests {
             }
             other => panic!("expected BrokerResponse::SpawnRunner, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn forwarded_fd_declarations_round_trip() {
+        let request = ForwardOperationRequest {
+            operation: "ProbeOperation".to_owned(),
+            zone: "zone-a".to_owned(),
+            invocation_id: "invocation-1".to_owned(),
+            payload: serde_json::json!({ "label": "x" }),
+            fd_indexes: vec![0, 1],
+            fd_kinds: vec![FdKind::Fifo, FdKind::Fifo],
+        };
+        let frame = encode_frame(&request).expect("encodes");
+        let decoded = decode_frame::<ForwardOperationRequest>("ForwardOperationRequest", &frame).expect("decodes");
+        assert_eq!(decoded, request);
+
+        let outcome = ForwardOperationOutcome::Result {
+            result: serde_json::json!({ "ok": true }),
+            fd_indexes: vec![0],
+            fd_kinds: vec![FdKind::CharDevice],
+        };
+        let response = ForwardOperationResponse {
+            outcome,
+        };
+        let frame = encode_frame(&response).expect("encodes");
+        let decoded = decode_frame::<ForwardOperationResponse>("ForwardOperationResponse", &frame).expect("decodes");
+        assert_eq!(
+            decoded.outcome,
+            ForwardOperationOutcome::Result {
+                result: serde_json::json!({ "ok": true }),
+                fd_indexes: vec![0],
+                fd_kinds: vec![FdKind::CharDevice],
+            }
+        );
+    }
+
+    #[test]
+    fn forwarded_frames_without_fd_declarations_decode_as_empty_sets() {
+        // The two binaries swap within one generation: an old sender's
+        // frame carries no fd fields, and the receiving side must read it as
+        // the valid empty set rather than a malformed unknown field.
+        let frame = encode_frame(&serde_json::json!({
+            "operation": "ProbeOperation",
+            "zone": "zone-a",
+            "invocationId": "invocation-2",
+            "payload": { "label": "x" },
+        }))
+        .expect("encodes");
+        let decoded = decode_frame::<ForwardOperationRequest>("ForwardOperationRequest", &frame).expect("decodes");
+        assert!(decoded.fd_indexes.is_empty());
+        assert!(decoded.fd_kinds.is_empty());
+    }
+
+    #[test]
+    fn the_fd_leg_refusal_code_is_the_shared_carrier_code() {
+        assert_eq!(FD_LEG, "fd-leg");
+        assert_eq!(MAX_FRAME_FDS, 8);
     }
 }

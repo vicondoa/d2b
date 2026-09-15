@@ -24,7 +24,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_broker::broker_wire::BrokerRequest;
+use d2b_contracts_broker::broker_wire::{BrokerRequest, FdKind};
 use d2b_contracts_resource::v3::{CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes};
 
 use crate::ops::audit_op::OperationFields;
@@ -141,6 +141,14 @@ pub struct BrokerOperationRow {
     /// The payload property names the operation's audit join is derived
     /// from, when the operation declares a durable per-invocation identity.
     pub audit_join: Option<&'static [&'static str]>,
+    /// The most descriptors one invocation of this operation may carry in
+    /// the forward frame. 0 when the operation declares no fd carriage.
+
+
+    pub max_fds: u8,
+    /// The kernel kind every descriptor this operation carries must present,
+    /// required when [`Self::max_fds`] is nonzero. 
+    pub fd_kind: Option<FdKind>,
 }
 
 include!("generated/broker_operation_catalog.rs");

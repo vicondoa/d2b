@@ -26,9 +26,10 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use d2b_contracts_broker::broker_wire::BrokerCallerRole;
+use d2b_contracts_broker::broker_wire::{BrokerCallerRole, FdKind, MAX_FRAME_FDS};
 use d2b_contracts_resource::v3::CanonicalJsonObject;
 use serde_json::Value;
+use std::os::fd::{AsRawFd, OwnedFd};
 
 use crate::catalog::{
     BROKER_OPERATION_CATALOG, BrokerOperationRow, BrokerProfileId, OperationOwner,
@@ -53,14 +54,24 @@ pub const UNREGISTERED_HANDLER: &str = "unregistered-handler";
 /// The failure code for a dispatch the broker could not complete.
 pub const ERRORED: &str = "errored";
 
+/// The refusal code for a request or response whose forward-carrier fd
+/// attachments disagree with their declarations, or exceed the bounded
+/// ceiling.
+ ///
+/// The code is the shared carrier code (`d2b_contracts_broker::broker_wire::
+/// FD_LEG`), declared once beside the wire shapes both legs carry.
+
+pub const FD_LEG: &str = d2b_contracts_broker::broker_wire::FD_LEG;
+
 /// The closed set of codes the envelope itself refuses with.
-pub const ENVELOPE_REFUSALS: [&str; 6] = [
+pub const ENVELOPE_REFUSALS: [&str; 7] = [
     UNKNOWN_OPERATION,
     UNCOMMITTED_OPERATION,
     UNGRANTED_CALLER,
     WIRE_INHERITED_OPERATION,
     INVALID_PAYLOAD,
     UNREGISTERED_HANDLER,
+    FD_LEG,
 ];
 
 /// One refused invocation, named.
@@ -164,10 +175,20 @@ pub struct InvocationCtx<'a> {
 }
 
 /// The result of one dispatched invocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct DispatchOutcome {
     /// The canonical result payload.
     pub result: CanonicalJsonObject,
+    /// The descriptors the answering peer minted this invocation,when the
+    /// operation's result carries any.where
+    ///
+    /// Formal fd provenance tracking is the answering peer's job (KTD7):the
+    /// carrier only refuses a descriptor that is one of the call's own attached
+    /// fds, never a fresh mint. The caller owns the returned descriptors;the
+    /// forwarder closes them on any refusal.
+
+
+    pub fds: Vec<OwnedFd>,
 }
 
 /// Why one dispatch produced no result.
@@ -208,7 +229,7 @@ impl DispatchFailure {
 }
 
 /// One granted invocation as the caller and the audit log see it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Invocation {
     /// The invocation identifier the audit record carries.
     pub invocation_id: String,
@@ -229,6 +250,12 @@ pub struct DirectInvocation<'a> {
     pub ctx: InvocationCtx<'a>,
     /// The canonical payload the envelope validated against the row.
     pub payload: &'a CanonicalJsonObject,
+    /// The descriptors the caller attached to this invocation,when any.
+    /// The caller owns them;the invocation borrows them for its duration.
+    pub fds: &'a [OwnedFd],
+
+    /// The kernel kind the row's fd facet declares,when it declares one.
+    pub fd_kind: Option<FdKind>,
 }
 
 /// The handler-table seam of one committed operation.
@@ -314,6 +341,24 @@ impl BrokerEnvelope {
         zone: &str,
         payload: &Value,
     ) -> Result<Invocation, EnvelopeRefusal> {
+        self.call_with_fds(caller, operation, zone, payload, &[]).await
+    }
+
+    /// Invoke one operation through the envelope with descriptors attached to it.
+    ///
+    /// The fd leg rides the forward carrier:zero-or-more of the request
+    /// frame's SCM_RIGHTS attachments are the operation's descriptors,validated
+    /// here against the row's declared fd facet before dispatch,so an
+    /// oversized-but-transport-legal set is refused with the fd-leg code
+    /// rather than truncated by the transport.where
+    pub async fn call_with_fds(
+        &self,
+        caller: CallerAuthority,
+        operation: &str,
+        zone: &str,
+        payload: &Value,
+        fds: &[OwnedFd],
+    ) -> Result<Invocation, EnvelopeRefusal> {
         let invocation_id = format!(
             "invocation-{}",
             self.invocations.fetch_add(1, Ordering::AcqRel)
@@ -346,6 +391,13 @@ impl BrokerEnvelope {
                 UNGRANTED_CALLER,
             ));
         }
+        if !Self::request_fds_admitted(row, fds) {
+            // An oversized-but-transport-legal leg (or a kind mismatch, or a
+            // row whose declared facet exceeds the frame ceiling) is refused
+            // here, so it never reaches the transport where the cmsg buffer would
+            // truncate an oversized set anonymously..
+            return Err(EnvelopeRefusal::new(invocation_id, operation, FD_LEG));
+        }
         let payload = Self::validate(row, payload)
             .map_err(|_| EnvelopeRefusal::new(invocation_id.clone(), operation, INVALID_PAYLOAD))?;
         let ctx = InvocationCtx {
@@ -358,15 +410,26 @@ impl BrokerEnvelope {
             .dispatch(DirectInvocation {
                 ctx,
                 payload: &payload,
+                fds,
+                fd_kind: row.fd_kind,
             })
             .await
             .map_err(|failure| {
                 // The envelope's refusals are a closed set of broker-side
-                // codes; a failure a forwarder raised carries the peer's own
-                // code, which is not one of them. The closed code the caller
-                // sees stays the fail-closed missing-handler refusal, and the
-                // peer's code rides along as the detail the audit record
-                // keeps for an operator.
+                // codes. The fd-leg refusal is one of them (and is exactly the
+                // carrier's own refusal name, so it surfaces as the closed code
+                // the caller sees); a failure a forwarder raised carries the
+                // peer's own code, which is otherwise not one of them. The
+                // closed code the caller sees stays the fail-closed
+                // missing-handler refusal, and the peer's code rides along as
+                // the detail the audit record keeps for an operator..
+                if failure.code == FD_LEG {
+                    return EnvelopeRefusal::new(
+                        invocation_id.clone(),
+                        operation,
+                        FD_LEG,
+                    );
+                }
                 EnvelopeRefusal::with_detail(
                     invocation_id.clone(),
                     operation,
@@ -417,6 +480,48 @@ impl BrokerEnvelope {
             }
         }
         serde_json::from_value(payload.clone()).map_err(|_| INVALID_PAYLOAD)
+    }
+
+    /// Whether one request's attached fd set is admitted by the row's fd
+    /// facet, before dispatch。
+    ///
+    /// A row that declares no fd carriage admits only the empty set;an
+    /// oversized-but-transport-legal set (count over the row's declared max,
+    /// kind mismatch, or a row whose facet exceeds the frame ceiling) is
+    /// refused with the fd-leg code rather than let the transport truncate an
+    /// anonymous oversized frame.where
+    fn request_fds_admitted(row: &BrokerOperationRow, fds: &[OwnedFd]) -> bool {
+        if fds.len() > usize::from(row.max_fds) {
+            return false;
+        }
+        if !fds.is_empty() {
+            if row.max_fds as usize > MAX_FRAME_FDS {
+                return false;
+            }
+            let Some(kind) = row.fd_kind else {
+                return false;
+            };
+            if !fds.iter().all(|fd| Self::fd_kind_of(fd) == Some(kind)) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The kernel kind one descriptor presents,or None when its fstat
+    /// reports a kind the carrier vocabulary does not carry..
+    fn fd_kind_of(fd: &OwnedFd) -> Option<FdKind> {
+        use nix::libc;
+        let stat = nix::sys::stat::fstat(fd.as_raw_fd()).ok()?;
+        match stat.st_mode & libc::S_IFMT {
+            libc::S_IFIFO => Some(FdKind::Fifo),
+            libc::S_IFSOCK => Some(FdKind::Socket),
+            libc::S_IFCHR => Some(FdKind::CharDevice),
+            libc::S_IFBLK => Some(FdKind::BlockDevice),
+            libc::S_IFREG => Some(FdKind::Regular),
+            libc::S_IFDIR => Some(FdKind::Directory),
+            _ => None,
+        }
     }
 }
 
@@ -632,6 +737,8 @@ impl OperationDispatcher for ForwardingDispatcher {
                 zone: invocation.ctx.zone,
                 invocation_id: invocation.ctx.invocation_id,
                 payload: invocation.payload,
+                fds: invocation.fds,
+                fd_kind: invocation.fd_kind,
             })
     }
 }
@@ -691,24 +798,28 @@ mod tests {
         let observed = Arc::clone(&calls);
         let dispatcher: Box<dyn OperationDispatcher> = Box::new(dispatcher);
         std::thread::spawn(move || {
-            while let Ok(fd) = accept_peer(&listener) {
-                let Some(request) = crate::protocol::recv_json_frame::<
-                    d2b_contracts_broker::broker_wire::ForwardOperationRequest,
-                >(fd.as_raw_fd())
-                .expect("read forwarded call") else {
-                    continue;
-                };
-                observed.fetch_add(1, Ordering::AcqRel);
-                let response = answer_from(
-                    dispatcher.as_ref(),
-                    &request.operation,
-                    &request.zone,
-                    &request.invocation_id,
-                    request.payload,
-                );
-                crate::protocol::send_json_frame(fd.as_raw_fd(), &response)
-                    .expect("write forward reply");
-            }
+while let Ok(fd) = accept_peer(&listener) {
+            let Some((request, request_fds)) = crate::protocol::recv_json_frame_with_fds::<
+                d2b_contracts_broker::broker_wire::ForwardOperationRequest,
+            >(fd.as_raw_fd())
+            .expect("read forwarded call") else {
+                continue;
+            };
+            observed.fetch_add(1, Ordering::AcqRel);
+            let (response, response_fds) = answer_from(
+                dispatcher.as_ref(),
+                &request.operation,
+                &request.zone,
+                &request.invocation_id,
+                request.payload,
+                &request_fds,
+                request.fd_kinds.first().copied(),
+            );
+            let raw: Vec<std::os::fd::RawFd> =
+                response_fds.iter().map(|fd| fd.as_raw_fd()).collect();
+            crate::protocol::send_json_frame_with_fds(fd.as_raw_fd(), &response, &raw)
+                .expect("write forward reply");
+        }
         });
         LoopbackPeer {
             path,
@@ -723,28 +834,49 @@ mod tests {
         zone: &str,
         invocation_id: &str,
         payload: Value,
-    ) -> d2b_contracts_broker::broker_wire::ForwardOperationResponse {
+        fds: &[OwnedFd],
+        fd_kind: Option<FdKind>,
+    ) -> (d2b_contracts_broker::broker_wire::ForwardOperationResponse, Vec<OwnedFd>) {
         use d2b_contracts_broker::broker_wire::{
             ForwardOperationOutcome, ForwardOperationResponse,
         };
         let payload: CanonicalJsonObject =
             serde_json::from_value(payload).expect("canonical payload");
-        let outcome = match runtime().block_on(dispatcher.dispatch(DirectInvocation {
+        let (outcome, response_fds) = match runtime().block_on(dispatcher.dispatch(DirectInvocation {
             ctx: InvocationCtx {
                 operation,
                 zone,
                 invocation_id,
             },
             payload: &payload,
+            fds,
+            fd_kind,
         })) {
-            Ok(DispatchOutcome { result }) => ForwardOperationOutcome::Result {
-                result: serde_json::to_value(&result).expect("render result"),
-            },
-            Err(failure) => ForwardOperationOutcome::Refused {
-                code: failure.code,
-            },
+            Ok(DispatchOutcome { result, fds: result_fds }) => {
+                let kinds = result_fds
+                    .iter()
+                    .map(|fd| {
+                        BrokerEnvelope::fd_kind_of(fd)
+                            .expect("a test peer returns a known-kernel-kind fd")
+                    })
+                    .collect::<Vec<_>>();
+                (
+                    ForwardOperationOutcome::Result {
+                        result: serde_json::to_value(&result).expect("render result"),
+                        fd_indexes: (0..result_fds.len() as u32).collect(),
+                        fd_kinds: kinds,
+                    },
+                    result_fds,
+                )
+            }
+            Err(failure) => (
+                ForwardOperationOutcome::Refused {
+                    code: failure.code,
+                },
+                Vec::new(),
+            ),
         };
-        ForwardOperationResponse { outcome }
+        (ForwardOperationResponse { outcome }, response_fds)
     }
 
     fn accept_peer(listener: &OwnedFd) -> io::Result<OwnedFd> {
@@ -787,6 +919,8 @@ mod tests {
             payload_fields: fields,
             payload_required: required,
             audit_join: None,
+            max_fds: 0,
+            fd_kind: None,
         }
     }
 
@@ -800,6 +934,7 @@ mod tests {
                     "fields": invocation.payload.len(),
                 }))
                 .expect("canonical result"),
+                fds: Vec::new(),
             })
         })
     }
@@ -1152,12 +1287,229 @@ mod tests {
         for row in BROKER_OPERATION_CATALOG
             .iter()
             .filter(|row| row.declaring_provider.is_none())
-        {
+       {
             assert!(
                 !committed.contains(row.operation) || row.owner == OperationOwner::BrokerGeneric,
                 "{} names no declaring process and must not be committed",
                 row.operation
             );
         }
+    }
+
+    use d2b_contracts_broker::broker_wire::{FD_LEG as WIRE_FD_LEG, FdKind, MAX_FRAME_FDS};
+
+    /// A row a test declares plus the fd-leg facets a forward carrier
+    /// test needs.
+
+    /// The closure returns the row as the carrier: the two fd-leg facets
+    /// (max count + kernel kind) live on the committed row like every
+    /// other per-operation facet, so a test sets them the same way it sets
+    /// an audit join.
+
+    fn fd_declared_row(max_fds: u8, kind: FdKind) -> BrokerOperationRow {
+        let mut row = declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]);
+        row.max_fds = max_fds;
+
+        row.fd_kind = Some(kind);
+        row
+    }
+
+    #[test]
+    fn fd_round_trips_through_the_loopback_peer_and_reads_back() {
+        use nix::unistd::{pipe, read, write};
+        let (request_read, request_write) = pipe().expect("request pipe");
+        write(&request_write, b"ping").expect("write request bytes");
+
+        // The answering peer mints its own response descriptor and keeps its
+        // write end, so the broker caller can read back what it wrote.
+
+        let returned_write_end: Arc<std::sync::Mutex<Option<OwnedFd>>> = Arc::default();
+        let write_slot = Arc::clone(&returned_write_end);
+        let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", move |invocation| {
+            // Request leg:the descriptor the caller attached crossed the socket
+            // and reads back what the caller wrote.to
+            let mut echoed = [0_u8; 4];
+            let n = read(invocation.fds[0].as_raw_fd(), &mut echoed).expect("read request fd");
+            assert_eq!(&echoed[..n], b"ping");
+            // Response leg:answer with a fresh descriptor the peer minted.to
+            let (answer_read, answer_write) = pipe().expect("answer pipe");
+            *Arc::clone(&returned_write_end).lock().expect("slot") = Some(answer_write);
+            Ok(DispatchOutcome {
+                result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
+                    .expect("canonical"),
+                fds: vec![answer_read],
+            })
+        }));
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
+        )
+        .declare(fd_declared_row(1, FdKind::Fifo))
+        .build();
+        let invocation = runtime()
+            .block_on(envelope.call_with_fds(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+                &[request_read],
+            ))
+            .expect("the peer answered with the fd leg");
+        assert_eq!(peer.calls(), 1, "the call must have crossed the socket");
+        assert_eq!(invocation.outcome.fds.len(), 1, "the peer's minted descriptor must cross back");
+
+        // Read back what the peer wrote through the returned descriptor:the
+        // minted write end stays on the peer's side,and the returned read end
+        // is a working duplicated handle, exactly as w12 asserts.to
+        let write_end = write_slot.lock().expect("slot").take().expect("peer minted write end");
+        write(&write_end, b"pong").expect("write answer bytes");
+        let mut read_back = [0_u8; 4];
+        let n = read(invocation.outcome.fds[0].as_raw_fd(), &mut read_back)
+            .expect("read returned fd");
+        assert_eq!(&read_back[..n], b"pong");
+    }
+
+    #[test]
+    fn a_zero_fd_response_to_an_fd_declaring_operation_is_a_valid_empty_set() {
+        let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", |_invocation| {
+            Ok(DispatchOutcome {
+                result: serde_json::from_value(serde_json::json!({ "echo": "none" }))
+                    .expect("canonical"),
+                fds: Vec::new(),
+            })
+        }));
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
+        )
+        .declare(fd_declared_row(1, FdKind::Fifo))
+        .build();
+        let invocation = runtime()
+            .block_on(envelope.call_with_fds(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+                &[],
+            ))
+            .expect("an fd-declaring operation may answer with zero fds");
+        assert!(invocation.outcome.fds.is_empty());
+        assert_eq!(peer.calls(), 1);
+    }
+
+    #[test]
+    fn an_oversized_request_fd_set_is_refused_with_the_fd_leg_code_before_dispatch() {
+        use nix::unistd::pipe;
+        let peer = loopback_peer(echo_table());
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
+        )
+        .declare(fd_declared_row(2, FdKind::Fifo))
+        .build();
+        let mut fds = Vec::new();
+        for _ in 0..3 {
+            let fd = pipe().expect("pipe").0;
+            fds.push(fd);
+        }
+        let refusal = runtime()
+            .block_on(envelope.call_with_fds(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+                &fds,
+            ))
+            .expect_err("an oversized leg is refused before dispatch");
+        assert_eq!(refusal.code, FD_LEG);
+        assert_eq!(peer.calls(), 0, "the oversized leg must not reach the peer");
+    }
+
+    #[test]
+    fn a_row_declaring_more_than_the_frame_ceiling_refuses_an_fd_leg_with_the_fd_leg_code() {
+        use nix::unistd::pipe;
+        let peer = loopback_peer(echo_table());
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
+        )
+        .declare(fd_declared_row(MAX_FRAME_FDS as u8 + 1, FdKind::Fifo))
+        .build();
+        let fd = pipe().expect("pipe").0;
+        let refusal = runtime()
+            .block_on(envelope.call_with_fds(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+                &[fd],
+            ))
+            .expect_err("a row over the frame ceiling cannot carry fds");
+        assert_eq!(refusal.code, FD_LEG);
+        assert_eq!(peer.calls(), 0);
+    }
+
+    #[test]
+    fn a_request_fd_that_mismatches_the_declared_kind_is_refused_with_the_fd_leg_code() {
+        use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+        let peer = loopback_peer(echo_table());
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
+        )
+        .declare(fd_declared_row(1, FdKind::Fifo))
+        .build();
+        let (socket, _peer) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        let refusal = runtime()
+            .block_on(envelope.call_with_fds(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+                &[socket],
+            ))
+            .expect_err("a socket where the row declares a fifo is refused");
+        assert_eq!(refusal.code, FD_LEG);
+        assert_eq!(peer.calls(), 0);
+    }
+
+    #[test]
+    fn a_peer_that_returns_an_fd_it_did_not_mint_this_call_is_refused_with_the_fd_leg_code() {
+        use nix::unistd::pipe;
+        let (request_read, _request_write) = pipe().expect("request pipe");
+        let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", move |invocation| {
+            Ok(DispatchOutcome {
+                result: serde_json::from_value(serde_json::json!({ "echo": "stolen" }))
+                    .expect("canonical"),
+                // Return the call's own descriptor - a descriptor the peer did
+                // not mint this call. The carrier spoils the theft at the wire
+                // boundary rather than at the handler.se
+                fds: vec![invocation.fds[0].try_clone().expect("dup request fd")],
+            })
+        }));
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
+        )
+        .declare(fd_declared_row(1, FdKind::Fifo))
+        .build();
+        let refusal = runtime()
+            .block_on(envelope.call_with_fds(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+                &[request_read],
+            ))
+            .expect_err("returning the call's own descriptor is not minting");
+        assert_eq!(refusal.code, FD_LEG);  // (also = WIRE_FD_LEG)
+        assert_eq!(WIRE_FD_LEG, "fd-leg");
+        assert_eq!(peer.calls(), 1);
     }
 }

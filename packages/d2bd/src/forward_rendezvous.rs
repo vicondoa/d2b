@@ -40,20 +40,22 @@
 
 use std::collections::BTreeMap;
 use std::io;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use d2b_contracts_broker::FORWARD_SOCKET_ENV;
 use d2b_contracts_broker::broker_wire::{
-    ForwardOperationOutcome, ForwardOperationRequest, ForwardOperationResponse,
+    FD_LEG, FdKind, MAX_FRAME_FDS, ForwardOperationOutcome, ForwardOperationRequest,
+    ForwardOperationResponse,
 };
 use d2b_contracts_resource::v3::CanonicalJsonObject;
 use d2b_provider_toolkit::operations::{UNCOMMITTED_OPERATION, UNGRANTED_CALLER};
 use d2bd_runtime::concurrency::DEFAULT_MAX_INFLIGHT_CONNECTIONS;
 use d2bd_runtime::runtime_process::{RuntimeIdentity, bind_public_socket};
 use d2bd_runtime::typed_error::TypedError;
+use d2bd_runtime::unix_transport::{close_received_fds, read_frame_with_fds, write_frame_with_fds};
 use d2bd_runtime::wire::MAX_FRAME_SIZE;
 use nix::sys::socket::{MsgFlags, getsockopt, recv, send, sockopt};
 use socket2::Socket;
@@ -148,6 +150,7 @@ impl ForwardRendezvous {
     pub(crate) async fn invoke(
         &self,
         request: &ForwardOperationRequest,
+        fds: &[RawFd],
     ) -> ForwardOperationResponse {
         let providers = self
             .zones
@@ -168,13 +171,15 @@ impl ForwardRendezvous {
             return refused(INVALID_PAYLOAD);
         };
         match provider
-            .invoke(&request.operation, &request.invocation_id, payload)
+            .invoke(&request.operation, &request.invocation_id, payload, fds)
             .await
         {
             Ok(result) => ForwardOperationResponse {
                 outcome: ForwardOperationOutcome::Result {
                     result: serde_json::to_value(result.object())
                         .expect("canonical JSON objects always serialize"),
+                    fd_indexes: vec![],
+                    fd_kinds: vec![],
                 },
             },
             Err(failure) => refused(failure.code()),
@@ -191,14 +196,35 @@ impl ForwardRendezvous {
         connection: &AsyncSeqpacket,
         handler_deadline: Duration,
     ) -> Result<(), TypedError> {
-        let frame = connection.read_frame(FORWARD_REQUEST_DEADLINE).await?;
+        let (frame, request_fds) = connection
+            .read_frame_with_fds(FORWARD_REQUEST_DEADLINE)
+            .await?;
+        // The frame's descriptors belong to this call:they are closed
+        // whether the call is served or refused, after the reply frame has
+        // gone (or when this connection errors out).
+        let fds = ScmFds::new(request_fds);
         let request: ForwardOperationRequest =
             serde_json::from_slice(&frame).map_err(|error| TypedError::WireInvalidFrame {
                 detail: format!(
                     "forwarded request frame is not a ForwardOperationRequest: {error}"
                 ),
             })?;
-        let response = match tokio::time::timeout(handler_deadline, self.invoke(&request)).await {
+        if !request_fds_admitted(&request, fds.as_slice()) {
+            // The declared leg and the attached leg disagree - not in the
+            // count, not in index order, not in kernel kind - so the call is
+            // refused with the carrier's own fd-leg code rather than letting
+            // an anonymous truncation pass as the invocation.
+            let response = refused(FD_LEG);
+            return connection
+                .write_frame_with_fds(&encode_reply(&response)?, &[], FORWARD_REPLY_DEADLINE)
+                .await;
+        }
+        let response = match tokio::time::timeout(
+            handler_deadline,
+            self.invoke(&request, fds.as_slice()),
+        )
+        .await
+        {
             Ok(response) => response,
             Err(_) => {
                 // A handler that never finished is the daemon's answer to
@@ -212,9 +238,79 @@ impl ForwardRendezvous {
                 refused(FORWARD_TIMEOUT)
             }
         };
+        // The response leg is JSON-only until a provider can mint descriptors
+        // (a later unit's work), so the reply frame carries no attachments.
         connection
-            .write_frame(&encode_reply(&response)?, FORWARD_REPLY_DEADLINE)
+            .write_frame_with_fds(
+                &encode_reply(&response)?,
+                &[],
+                FORWARD_REPLY_DEADLINE,
+            )
             .await
+    }
+}
+
+struct ScmFds(Vec<RawFd>);
+
+impl ScmFds {
+
+    fn new(fds: Vec<RawFd>) -> Self {
+        Self(fds)
+    }
+
+    /// The received descriptors,borrowed across the invocation..
+    fn as_slice(&self) -> &[RawFd] {
+        &self.0
+    }
+}
+
+impl Drop for ScmFds {
+
+    fn drop(&mut self) {
+        close_received_fds(&self.0);
+    }
+}
+
+/// Whether one request's declared fd leg is admitted by the descriptors the
+/// frame actually attached:count equal (never truncated), indexes in frame
+/// order, kinds against the kernel stat of each received descriptor,and the
+/// whole leg within the carrier's frame ceiling.
+
+fn request_fds_admitted(request: &ForwardOperationRequest, fds: &[RawFd]) -> bool {
+    if request.fd_indexes.len() != request.fd_kinds.len() {
+        return false;
+    }
+    if request.fd_indexes.len() > MAX_FRAME_FDS {
+        return false;
+    }
+    if request.fd_indexes
+        .iter()
+        .enumerate()
+        .any(|(position, declared)| *declared != position as u32)
+    {
+        return false;
+    }
+    if fds.len() != request.fd_indexes.len() {
+        return false;
+    }
+    fds
+        .iter()
+        .zip(&request.fd_kinds)
+        .all(|(fd, declared)| fd_kind_of(*fd) == Some(*declared))
+}
+
+/// The kernel kind one descriptor presents,or None when its fstat reports
+/// a kind the carrier vocabulary does not carry..
+fn fd_kind_of(fd: RawFd) -> Option<FdKind> {
+    let stat = nix::sys::stat::fstat(fd).ok()?;
+    match stat.st_mode & nix::libc::S_IFMT {
+        nix::libc::S_IFIFO => Some(FdKind::Fifo),
+        nix::libc::S_IFSOCK => Some(FdKind::Socket),
+        nix::libc::S_IFCHR => Some(FdKind::CharDevice),
+        nix::libc::S_IFBLK => Some(FdKind::BlockDevice),
+        nix::libc::S_IFREG => Some(FdKind::Regular),
+        nix::libc::S_IFDIR => Some(FdKind::Directory),
+        _ => None,
     }
 }
 
@@ -485,6 +581,68 @@ impl AsyncSeqpacket {
             )));
         }
         Ok(())
+    }
+
+    /// Read one frame and the descriptors its SCM_RIGHTS attachments carried,
+    /// waiting at most `deadline` for it to arrive.
+    ///
+    /// A frame and its attachments arrive together or not at all,so the
+    /// received descriptor count is exactly what the sender put on the
+    /// carrier;an oversized cmsg set is capped by the kernel at the receive
+    /// buffer's ceiling,which is why the caller-side declaration check
+    /// refuses a count over that ceiling rather than let a truncation pass..
+    async fn read_frame_with_fds(&self, deadline: Duration) -> Result<(Vec<u8>, Vec<RawFd>), TypedError> {
+        // The blocking transport read the prefixed frame and stripped the
+        // length prefix itself, so the returned body is already the frame
+        // payload,length-checked and cmsg-truncation-checked.
+        match tokio::time::timeout(deadline, self.recv_frame_with_fds()).await {
+            Ok(Ok(pair)) => Ok(pair),
+            Ok(Err(error)) => Err(recv_failure(error.to_string())),
+            Err(_) => Err(recv_failure(format!("no frame within {deadline:?}"))),
+        }
+    }
+
+    /// Write one frame,attaching `fds` to it,waiting at most `deadline`
+    /// for the peer to take it.
+    async fn write_frame_with_fds(
+        &self,
+        body: &[u8],
+        fds: &[RawFd],
+        deadline: Duration,
+    ) -> Result<(), TypedError> {
+        // The transport writes the length prefix itself,so the body crosses
+        // as-is;the receiving transport strips the same prefix back off..
+        match tokio::time::timeout(deadline, self.send_datagram_with_fds(body, fds)).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(send_failure(error.to_string())),
+            Err(_) => Err(send_failure(format!("no write within {deadline:?}"))),
+        }
+    }
+
+    /// One datagram read with its attachments,awaited for readiness.
+
+    /// The blocking transport's `recvmsg` owns the control-message buffer for
+    /// this read,and MSG_CMSG_CLOEXEC is set there,so the received descriptors
+    /// arrive close-on-exec exactly as they do on the broker leg.
+
+    async fn recv_frame_with_fds(&self) -> io::Result<(Vec<u8>, Vec<RawFd>)> {
+        self.io
+            .async_io(Interest::READABLE, |socket| {
+                read_frame_with_fds(socket)
+                    .map_err(|error| io::Error::new(io::ErrorKind::Other, format!("{error:?}")))
+            })
+            .await
+    }
+
+    /// One datagram write with its attachments,awaited for readiness..
+    async fn send_datagram_with_fds(&self, frame: &[u8], fds: &[RawFd]) -> io::Result<()> {
+        self.io
+            .async_io(Interest::WRITABLE, |socket| {
+                write_frame_with_fds(socket, frame, fds)
+                    .map(|()| ())
+                    .map_err(|error| io::Error::new(io::ErrorKind::Other, format!("{error:?}")))
+            })
+            .await
     }
 
     /// One datagram read, awaited for readiness.
@@ -828,8 +986,44 @@ mod tests {
     };
     static STALLED_HANDLER: StalledHandler = StalledHandler;
 
-    /// The stall operations the fixture's EphemeralProcess driver declares.
-    static STALL_OPERATIONS: LazyLock<[OperationDef; 3]> = LazyLock::new(|| {
+    /// A handler that reads the descriptor the carrier attached to its call.
+
+    /// The forwarded request leg carries the caller's descriptor over
+    /// SCM_RIGHTS;the rendezvous validates it against the wire declarations
+    /// and hands it to the declared handler,so this handler reading it back
+    /// proves the round trip through the real socket and the provider envelope.to
+    struct FdEchoHandler;
+
+    #[async_trait::async_trait]
+    impl OperationHandler for FdEchoHandler {
+        async fn execute(
+            &self,
+            ctx: OperationCtx<'_>,
+            _payload: ValidatedPayload,
+        ) -> Result<OperationResult, OperationFailure> {
+            use std::os::fd::AsRawFd;
+            use nix::unistd::read;
+            let fd = ctx.fds.first().ok_or_else(|| OperationFailure::new(FD_LEG))?;
+            let mut buf = [0_u8; 4];
+            let n = read(fd.as_raw_fd(), &mut buf)
+                .map_err(|error| OperationFailure::with_detail(FD_LEG, error.to_string()))?;
+            let bytes = buf[..n].to_vec();
+            let result = CanonicalJsonObject::parse(
+                &canonical_json_bytes(&serde_json::json!({ "read": String::from_utf8_lossy(&bytes).to_string() }))
+                    .expect("the read-back result is canonical JSON"),
+            )
+            .expect("the read-back result is a JSON object");
+            Ok(OperationResult::new(result))
+        }
+    }
+
+    static FD_ECHO_HANDLER: FdEchoHandler = FdEchoHandler;
+
+    /// The stall operations plus the fd-echo operation the fixture's
+    /// EphemeralProcess driver declares.
+
+
+    static STALL_OPERATIONS: LazyLock<[OperationDef; 4]> = LazyLock::new(|| {
         [
             OperationDef {
                 operation_ref: operation_ref(STALL_THREADS),
@@ -842,6 +1036,10 @@ mod tests {
             OperationDef {
                 operation_ref: operation_ref(STALL_FOREVER),
                 handler: &STALLED_HANDLER,
+            },
+            OperationDef {
+                operation_ref: operation_ref("fd-echo"),
+                handler: &FD_ECHO_HANDLER,
             },
         ]
     });
@@ -951,6 +1149,8 @@ mod tests {
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
             payload,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
         };
         let encoded =
             canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
@@ -1001,6 +1201,8 @@ mod tests {
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
             payload,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
         };
         // The broker encodes the request with the canonical profile, so the
         // endpoint is exercised against the exact bytes the broker sends.
@@ -1009,11 +1211,65 @@ mod tests {
         d2bd_runtime::unix_transport::write_frame(&socket, &encoded)
             .expect("write the request frame");
         let frame = read_frame(&socket).expect("read the reply frame");
+serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
+    }
+
+    use std::os::fd::{AsRawFd, RawFd};
+    use d2b_contracts_broker::broker_wire::{FD_LEG, FdKind, MAX_FRAME_FDS};
+    use d2bd_runtime::unix_transport::write_frame_with_fds;
+    /// Forward one invocation with SCM_RIGHTS attachments on the request
+    /// frame, the way the broker's forwarder does once the request leg
+    /// carries fds.to
+    fn forward_with_fds(
+        socket_path: &Path,
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+        fds: &[RawFd],
+    ) -> ForwardOperationResponse {
+        let request = ForwardOperationRequest {
+            operation: operation.to_owned(),
+            zone: zone.to_owned(),
+            invocation_id: "invocation-7".to_owned(),
+            payload,
+            fd_indexes: (0..fds.len() as u32).collect(),
+            fd_kinds: vec![FdKind::Fifo; fds.len()],
+        };
+        let encoded =
+            canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
+        let socket = connect_seqpacket(socket_path).expect("dial the rendezvous");
+        write_frame_with_fds(&socket, &encoded, fds).expect("write the request frame with fds");
+        let frame = read_frame(&socket).expect("read the reply frame");
+        serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
+    }
+
+    /// Forward one invocation with explicit fd declarations, so a test can
+    /// drive a request whose declarations disagree with its frame.
+
+    fn forward_raw_declared(
+        socket_path: &Path,
+        fd_indexes: Vec<u32>,
+        fd_kinds: Vec<FdKind>,
+        fds: &[RawFd],
+    ) -> ForwardOperationResponse {
+        let request = ForwardOperationRequest {
+            operation: "fd-echo".to_owned(),
+            zone: "test".to_owned(),
+            invocation_id: "invocation-7".to_owned(),
+            payload: serde_json::json!({}),
+            fd_indexes,
+            fd_kinds,
+        };
+        let encoded =
+            canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
+        let socket = connect_seqpacket(socket_path).expect("dial the rendezvous");
+        write_frame_with_fds(&socket, &encoded, fds).expect("write the request frame");
+        let frame = read_frame(&socket).expect("read the reply frame");
         serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     }
 
     /// A forwarded call crosses a real socket and the declared handler
-    /// answers it: the result carries the family's own declaration, the Zone,
+    /// answers it:the result carries the family's own declaration, the Zone,
     /// and the invocation identifier the caller forwarded. A carrier that
     /// never reached the handler could not produce these values.
     #[tokio::test(flavor = "multi_thread")]
@@ -1025,7 +1281,7 @@ mod tests {
             "test",
             serde_json::json!({ "resourceType": "Process" }),
         );
-        let ForwardOperationOutcome::Result { result } = response.outcome else {
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
             panic!("the declared operation must answer, got a refusal");
         };
         assert_eq!(result["family"], "process");
@@ -1265,4 +1521,88 @@ mod tests {
             "the dialing process is not the accepted peer"
         );
     }
-}
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_fd_carrying_request_crosses_the_socket_and_the_declared_handler_reads_it_back() {
+        use nix::unistd::{pipe, write};
+        let serving = ServingRendezvous::start().await;
+        let (read_end, write_end) = pipe().expect("pipe");
+        write(&write_end, b"ok").expect("write the payload bytes");
+        drop(write_end);
+        let response = forward_with_fds(
+            &serving.socket_path,
+            "fd-echo",
+            "test",
+            serde_json::json!({}),
+            &[read_end.as_raw_fd()],
+        );
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
+            panic!("the fd-echo operation must answer, got a refusal");
+        };
+        assert_eq!(
+            result["read"],
+            "ok",
+            "the handler must have read the caller's bytes through the received descriptor"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_whose_fd_count_mismatches_is_refused_with_the_fd_leg_code() {
+        use nix::unistd::{pipe, write};
+        let serving = ServingRendezvous::start().await;
+        let (read_end, write_end) = pipe().expect("pipe");
+        write(&write_end, b"x").expect("write payload bytes");
+        let response = forward_raw_declared(
+            &serving.socket_path,
+            vec![0, 1],
+            vec![FdKind::Fifo, FdKind::Fifo],
+            &[read_end.as_raw_fd()],
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: FD_LEG.to_owned(),
+            },
+            "a declared count that disagrees with the frame is refused with the fd-leg code"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_whose_fd_kind_mismatches_is_refused_with_the_fd_leg_code() {
+        use nix::unistd::pipe;
+        let serving = ServingRendezvous::start().await;
+        let (read_end, _write_end) = pipe().expect("pipe");
+        let response = forward_raw_declared(
+            &serving.socket_path,
+            vec![0],
+            vec![FdKind::Socket],
+            &[read_end.as_raw_fd()],
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: FD_LEG.to_owned(),
+            },
+            "a descriptor whose kernel kind mismatches the declaration is refused"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_whose_fd_declarations_exceed_the_frame_ceiling_is_refused_with_the_fd_leg_code() {
+        let serving = ServingRendezvous::start().await;
+        let response = forward_raw_declared(
+            &serving.socket_path,
+            (0..=MAX_FRAME_FDS as u32).collect(),
+            vec![FdKind::Fifo; MAX_FRAME_FDS + 1],
+            &[],
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: FD_LEG.to_owned(),
+            },
+            "declarations over the frame ceiling are refused with the fd-leg code, never truncated"
+        );
+    }
+
+    }

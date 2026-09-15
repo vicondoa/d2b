@@ -25,6 +25,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -236,7 +237,7 @@ impl OperationEnvelope {
             return Err(OperationFailure::new(UNCOMMITTED_OPERATION));
         };
         let invocation_id = self.next_invocation_id();
-        self.run(&invocation_id, caller, entry, payload).await
+        self.run(&invocation_id, caller, entry, payload, &[]).await
     }
 
     /// Whether a declared handler serves this operation name.
@@ -263,6 +264,24 @@ impl OperationEnvelope {
         caller: &ResourceRef,
         payload: CanonicalJsonObject,
     ) -> Result<OperationResult, OperationFailure> {
+        self.invoke_named_with_fds(operation, invocation_id, caller, payload, &[])
+            .await
+    }
+
+    /// Invoke as [`Self::invoke_named`], with the descriptors the request
+    /// frame attached to this invocation.
+    ///
+    /// The descriptors belong to the transport's frame,not to the handler:
+    /// they are borrowed for the invocation only, and the caller closes them
+    /// once it has read the reply.
+    pub async fn invoke_named_with_fds(
+        &self,
+        operation: &str,
+        invocation_id: &str,
+        caller: &ResourceRef,
+        payload: CanonicalJsonObject,
+        fds: &[RawFd],
+    ) -> Result<OperationResult, OperationFailure> {
         let Some(entry) = self
             .handlers
             .iter()
@@ -271,7 +290,7 @@ impl OperationEnvelope {
             self.audit_named(operation, ProviderAgentAuditOutcome::Denied);
             return Err(OperationFailure::new(UNCOMMITTED_OPERATION));
         };
-        self.run(invocation_id, caller, entry, payload).await
+        self.run(invocation_id, caller, entry, payload, fds).await
     }
 
     async fn run(
@@ -280,6 +299,7 @@ impl OperationEnvelope {
         caller: &ResourceRef,
         entry: &HandlerEntry,
         payload: CanonicalJsonObject,
+        fds: &[RawFd],
     ) -> Result<OperationResult, OperationFailure> {
         let operation = &entry.operation;
         if !self.is_granted(caller, operation) {
@@ -291,6 +311,7 @@ impl OperationEnvelope {
             caller,
             operation,
             invocation_id,
+            fds,
         };
         let result = entry
             .handler

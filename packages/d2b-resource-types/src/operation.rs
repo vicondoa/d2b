@@ -1,5 +1,7 @@
 //! Broker operation declarations and the handler contract they carry.
 
+use std::os::fd::RawFd;
+
 use async_trait::async_trait;
 
 use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
@@ -51,6 +53,10 @@ pub struct OperationCtx<'a> {
     pub operation: &'a ResourceRef,
     /// The invocation identifier the audit record carries.
     pub invocation_id: &'a str,
+    /// The descriptors the caller attached to this invocation,when any.
+    /// They belong to the transport's frame,not to the handler;the handler
+    /// borrows them for the duration of the invocation only.
+    pub fds: &'a [RawFd],
 }
 
 /// The canonical payload of one invocation, already validated against the

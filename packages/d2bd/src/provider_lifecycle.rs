@@ -21,6 +21,7 @@
 //! of an anonymous `attach-refused`.
 
 use std::collections::BTreeMap;
+use std::os::fd::RawFd;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -333,9 +334,10 @@ impl ProviderOperations {
         operation: &str,
         invocation_id: &str,
         payload: CanonicalJsonObject,
+        fds: &[RawFd],
     ) -> Result<OperationResult, OperationFailure> {
         self.envelope
-            .invoke_named(operation, invocation_id, &self.caller, payload)
+            .invoke_named_with_fds(operation, invocation_id, &self.caller, payload, fds)
             .await
     }
 }

@@ -30,6 +30,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ExportBrokerAudit",
@@ -57,6 +59,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "OpenPidfd",
@@ -84,6 +88,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "OpenPeerPidfdFromAcceptedSocket",
@@ -111,6 +117,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ObserveRunner",
@@ -138,6 +146,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "StartSystemdUnit",
@@ -165,6 +175,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "CheckSystemdUserManager",
@@ -192,6 +204,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ObserveSystemdUnit",
@@ -219,6 +233,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "OpenSystemdUnitPidfd",
@@ -246,6 +262,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "StopSystemdUnit",
@@ -273,6 +291,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "PollChildReaped",
@@ -300,6 +320,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "PrepareRuntimeDir",
@@ -327,6 +349,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "PrepareStateDir",
@@ -354,6 +378,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "CgroupKill",
@@ -381,6 +407,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "SignalRunner",
@@ -408,6 +436,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "DeregisterRunnerPidfd",
@@ -435,6 +465,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "SpawnRunner",
@@ -462,6 +494,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ApplyHostGenerationHandoff",
@@ -489,6 +523,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ApplyNftables",
@@ -516,6 +552,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ApplyNftablesProjection",
@@ -543,6 +581,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ApplyNmUnmanaged",
@@ -570,6 +610,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ApplyRoute",
@@ -597,6 +639,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ApplySysctl",
@@ -624,6 +668,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "CreateOrReconcileUsersGroups",
@@ -651,6 +697,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "CreateBridge",
@@ -678,6 +726,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "DeleteBridge",
@@ -705,6 +755,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "CreatePersistentTap",
@@ -732,6 +784,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "DeletePersistentTap",
@@ -759,6 +813,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "CreateTapFd",
@@ -786,6 +842,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "DelegateCgroupV2",
@@ -813,6 +871,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "InjectSecretById",
@@ -840,6 +900,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "LaunchMinijailChild",
@@ -867,6 +929,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ModprobeIfAllowed",
@@ -894,6 +958,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "OpenCgroupDir",
@@ -921,6 +987,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "OpenDevice",
@@ -948,6 +1016,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "OpenFuse",
@@ -975,6 +1045,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "OpenHidrawSecurityKey",
@@ -1002,6 +1074,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "OpenKvm",
@@ -1029,6 +1103,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaEnroll",
@@ -1056,6 +1132,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaRefreshRegistry",
@@ -1083,6 +1161,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaBoot",
@@ -1110,6 +1190,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaSystemPowerdown",
@@ -1137,6 +1219,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaQueryStatus",
@@ -1164,6 +1248,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaQuit",
@@ -1191,6 +1277,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaAttach",
@@ -1218,6 +1306,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "QemuMediaDetach",
@@ -1245,6 +1335,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ConsumeLifecycleLease",
@@ -1272,6 +1364,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "inspect-process-family",
@@ -1299,6 +1393,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &["resourceType"],
         payload_required: &["resourceType"],
         audit_join: Some(&["resourceType"]),
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "PipeWireAudio",
@@ -1326,6 +1422,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "OpenVhostNet",
@@ -1353,6 +1451,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ReconcileStorageScope",
@@ -1380,6 +1480,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ValidateLockSpec",
@@ -1407,6 +1509,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "StoreSync",
@@ -1434,6 +1538,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "ReadSecretById",
@@ -1461,6 +1567,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "RotateSecretById",
@@ -1488,6 +1596,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "SetBridgePortFlags",
@@ -1515,6 +1625,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "UpdateHostsFile",
@@ -1542,6 +1654,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "UsbipBind",
@@ -1569,6 +1683,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "UsbipBindFirewallRule",
@@ -1596,6 +1712,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "UsbipProxyReconcile",
@@ -1623,6 +1741,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "UsbipUnbind",
@@ -1650,6 +1770,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "UsbipExplicitBind",
@@ -1677,6 +1799,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "UsbipExplicitFirewallRule",
@@ -1704,6 +1828,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "SeedDnsmasqLease",
@@ -1731,6 +1857,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "OwnershipMatrixCheck",
@@ -1758,6 +1886,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "SshHostKeyPreflight",
@@ -1785,6 +1915,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "DiskInit",
@@ -1812,6 +1944,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "SecurityKeyOpenDevice",
@@ -1839,6 +1973,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "SecurityKeyApplyUdevRules",
@@ -1866,6 +2002,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
     BrokerOperationRow {
         operation: "PrepareSwtpmDir",
@@ -1893,6 +2031,8 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         payload_fields: &[],
         payload_required: &[],
         audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
     },
 ];
 
