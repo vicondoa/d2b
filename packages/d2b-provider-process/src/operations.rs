@@ -724,6 +724,7 @@ fn typed_process_identity(
 }
 
 /// The typed control identity completeness fence of the control operations.
+#[allow(clippy::too_many_arguments)]
 fn typed_control_identity_complete(
     resource_ref: Option<&ResourceRef>,
     resource_uid: Option<&ResourceUid>,

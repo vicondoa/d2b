@@ -249,9 +249,7 @@ impl SocketForwarder {
                 invocation
                     .chain
                     .identities()
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<String>>()
+                    .to_vec()
             }),
             fd_indexes,
             fd_kinds,
@@ -466,8 +464,6 @@ mod tests {
 
         /// A raw peer that answers with descriptor attachments, so a test
         /// can drive a response whose declarations disagree with its frame.
-
-
         fn spawn_raw(
             answer: impl FnMut(ForwardOperationRequest) -> (ForwardOperationResponse, std::os::fd::OwnedFd) + Send + 'static,
         ) -> Self {

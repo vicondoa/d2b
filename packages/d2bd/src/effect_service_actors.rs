@@ -309,10 +309,13 @@ impl Actor for EffectServiceActor {
         state: &mut EffectServiceActorState,
     ) -> Result<(), ActorProcessingErr> {
         // First poll after the timeout; every poll handler reschedules the
-        // next (ractor::time timers, never threads).
-        let _ = ractor::time::send_after(state.poll_interval, myself.get_cell(), || {
-            EffectServiceMsg::Poll
-        });
+        // next (ractor::time timers, never threads). The timer future must
+        // be driven, not dropped - a bare `let _` would cancel the poll.
+        tokio::spawn(ractor::time::send_after(
+            state.poll_interval,
+            myself.get_cell(),
+            || EffectServiceMsg::Poll,
+        ));
         Ok(())
     }
 
@@ -331,9 +334,11 @@ impl Actor for EffectServiceActor {
             }
             EffectServiceMsg::Poll => {
                 state.service.poll().await;
-                let _ = ractor::time::send_after(state.poll_interval, myself.get_cell(), || {
-                    EffectServiceMsg::Poll
-                });
+                tokio::spawn(ractor::time::send_after(
+                    state.poll_interval,
+                    myself.get_cell(),
+                    || EffectServiceMsg::Poll,
+                ));
             }
         }
         Ok(())

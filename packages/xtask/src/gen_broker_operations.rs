@@ -417,13 +417,13 @@ fn parse_text(text: &str) -> Result<Catalog, Box<dyn std::error::Error>> {
                 None => unreachable!("validated pairing above"),
             }
         }
-        if let Some(tier) = row.deadline.tier.as_deref() {
-            if !DEADLINE_TIERS.contains(&tier) {
-                return Err(render_error(format!(
-                    "{POLICY_PATH}: {} declares unknown deadline tier {tier:?}",
-                    row.operation
-                )));
-            }
+        if let Some(tier) = row.deadline.tier.as_deref()
+            && !DEADLINE_TIERS.contains(&tier)
+        {
+            return Err(render_error(format!(
+                "{POLICY_PATH}: {} declares unknown deadline tier {tier:?}",
+                row.operation
+            )));
         }
         if !["deny-only", "errors", "yes"].contains(&row.audit.mode.as_str()) {
             return Err(render_error(format!(

@@ -826,7 +826,7 @@ fn apply_nftables(
     } else {
         desired_hash
             .or(persisted_hash)
-            .or_else(|| table_hash_after_apply.map(String::from))
+            .or(table_hash_after_apply)
     };
     crate::ops::nft::apply_with_coexistence(
         &exec,
@@ -1295,8 +1295,8 @@ fn typed_payload<T: serde::de::DeserializeOwned>(
 }
 
 /// The optional string field of one payload.
-fn optional_str<'a>(
-    payload: &'a CanonicalJsonObject,
+fn optional_str(
+    payload: &CanonicalJsonObject,
     key: &str,
 ) -> Result<Option<String>, DispatchFailure> {
     let Some(value) = payload.get(key) else {

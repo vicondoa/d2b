@@ -72,7 +72,6 @@ pub const ERRORED: &str = "errored";
  ///
 /// The code is the shared carrier code (`d2b_contracts_broker::broker_wire::
 /// FD_LEG`), declared once beside the wire shapes both legs carry.
-
 pub const FD_LEG: &str = d2b_contracts_broker::broker_wire::FD_LEG;
 
 /// The refusal code for a broker-attested context the envelope cannot mint
@@ -83,7 +82,6 @@ pub const FD_LEG: &str = d2b_contracts_broker::broker_wire::FD_LEG;
 /// values for the Zone a call names (minting is impossible until the daemon
 /// publishes), and the rendezvous refuses with it when a context's epoch,
 /// Zone, revision, or generations do not match its own current values.
-
 pub const STALE_CONTEXT: &str = d2b_contracts_broker::broker_wire::STALE_CONTEXT;
 
 /// The refusal code for a handler that deliberately refused its invocation.
@@ -448,13 +446,12 @@ impl TrustedContextStore {
         values: &PublishTrustedContextValues,
     ) -> Result<u64, TrustedContextStoreError> {
         let mut state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(existing) = state.zones.get(&values.zone) {
-            if existing.provider_set_revision > values.provider_set_revision
+        if let Some(existing) = state.zones.get(&values.zone)
+            && (existing.provider_set_revision > values.provider_set_revision
                 || existing.controller_generation > values.controller_generation
-                || existing.guest_generation > values.guest_generation
-            {
-                return Err(TrustedContextStoreError::StaleFreshness(STALE_CONTEXT));
-            }
+                || existing.guest_generation > values.guest_generation)
+        {
+            return Err(TrustedContextStoreError::StaleFreshness(STALE_CONTEXT));
         }
         let inserted = ZoneAttestation {
             provider_set_revision: values.provider_set_revision,
@@ -1138,10 +1135,10 @@ impl BrokerEnvelope {
     /// failure rather than changing the call's outcome: the audit record
     /// must never become a refusal the caller sees.
     fn record_chain_outcome(&self, record: ChainRecord) {
-        if let Some(sink) = &self.chain_audit {
-            if let Err(error) = sink.record(&record) {
-                tracing::error!(error = %error, "broker-side chain audit record failed");
-            }
+        if let Some(sink) = &self.chain_audit
+            && let Err(error) = sink.record(&record)
+        {
+            tracing::error!(error = %error, "broker-side chain audit record failed");
         }
     }
 
@@ -1171,11 +1168,7 @@ impl BrokerEnvelope {
         let identity = chain.initiating_identity();
         match CallerAuthority::classify_identity(identity) {
             Some(authority) => Self::granted(row, authority),
-            None => row
-                .authz
-                .allowed_groups
-                .iter()
-                .any(|group| *group == identity),
+            None => row.authz.allowed_groups.contains(&identity),
         }
     }
 
@@ -1412,12 +1405,9 @@ fn handler_worker_set() -> &'static tokio::runtime::Runtime {
 
 /// The message one handler panic carried, when it carried a message.
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> Option<String> {
-    if let Some(&message) = payload.downcast_ref::<&str>() {
-        Some(message.to_owned())
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        Some(message.clone())
-    } else {
-        None
+    match payload.downcast_ref::<&str>() {
+        Some(message) => Some((*message).to_owned()),
+        None => payload.downcast_ref::<String>().cloned(),
     }
 }
 
@@ -2581,12 +2571,11 @@ while let Ok(fd) = accept_peer(&listener) {
 
     /// A row a test declares plus the fd-leg facets a forward carrier
     /// test needs.
-
+    ///
     /// The closure returns the row as the carrier: the two fd-leg facets
     /// (max count + kernel kind) live on the committed row like every
     /// other per-operation facet, so a test sets them the same way it sets
     /// an audit join.
-
     fn fd_declared_row(max_fds: u8, kind: FdKind) -> BrokerOperationRow {
         let mut row = declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]);
         row.max_fds = max_fds;
@@ -3263,7 +3252,7 @@ while let Ok(fd) = accept_peer(&listener) {
         let max = MAX_NESTED_DEPTH as u32;
         assert_eq!(
             records.len(),
-            1 + (MAX_NESTED_DEPTH + 1) as usize,
+            1 + MAX_NESTED_DEPTH + 1,
             "one root, one correlation per admitted leg, one refusing leg: {records:?}"
         );
         for depth in 0..=max {

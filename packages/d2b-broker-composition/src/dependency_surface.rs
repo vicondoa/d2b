@@ -1,6 +1,11 @@
 //! Dependency-surface audit for handler crates linked into the broker
 //! binary (U6 approach item 3 - defense-in-depth, never the boundary).
 //!
+//! This is a build-time SYNC audit tool: the U13 async-gate deny list
+//! (clippy.toml `disallowed_methods`) targets blocking calls on runtime
+//! workers, not this tool's own document/process reads.
+#![allow(clippy::disallowed_methods)]
+//!
 //! The broker process is the system's trust concentrator: provider handler
 //! code shares the broker's uid-0 address space. The composition-root
 //! routing rule (KTD1) keeps effectful and privileged handlers off the
@@ -117,12 +122,9 @@ pub fn crate_dir(crate_name: &str) -> Option<PathBuf> {
         candidates.push(current.join("packages").join(crate_name));
         candidates.push(current.join("../packages").join(crate_name));
     }
-    for candidate in candidates {
-        if candidate.join("Cargo.toml").is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.join("Cargo.toml").is_file())
 }
 
 /// The workspace root, when it can be located from the environment.

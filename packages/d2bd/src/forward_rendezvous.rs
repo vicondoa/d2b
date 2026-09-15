@@ -469,8 +469,8 @@ impl ForwardRendezvous {
     /// presents the chain with the invoking handler's identity appended and
     /// never re-presents as the daemon class. This endpoint refuses a chain
     /// past the depth cap with the dedicated loop-refusal code - so a call
-    /// loop trips its own code, never an uncommitted or resolution refusal
-    /// - and records the leg's correlation record keyed on the root
+    /// loop trips its own code, never an uncommitted or resolution
+    /// refusal, and records the leg's correlation record keyed on the root
     /// invocation id and the leg's depth. Resolution and dispatch are the
     /// same as a forwarded call's, so a nested leg is served by the same
     /// resolution (effect services first, then the declaring provider).
@@ -938,7 +938,6 @@ impl Drop for ScmFds {
 /// frame actually attached:count equal (never truncated), indexes in frame
 /// order, kinds against the kernel stat of each received descriptor,and the
 /// whole leg within the carrier's frame ceiling.
-
 fn request_fds_admitted(request: &ForwardOperationRequest, fds: &[RawFd]) -> bool {
     if request.fd_indexes.len() != request.fd_kinds.len() {
         return false;
@@ -992,12 +991,9 @@ fn refused(code: &str) -> ForwardOperationResponse {
 
 /// The message one dispatch panic carried, when it carried a message.
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> Option<String> {
-    if let Some(&message) = payload.downcast_ref::<&str>() {
-        Some(message.to_owned())
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        Some(message.clone())
-    } else {
-        None
+    match payload.downcast_ref::<&str>() {
+        Some(message) => Some((*message).to_owned()),
+        None => payload.downcast_ref::<String>().cloned(),
     }
 }
 
@@ -1297,17 +1293,15 @@ impl AsyncSeqpacket {
         }
     }
 
-    /// One datagram read with its attachments,awaited for readiness.
-
-    /// The blocking transport's `recvmsg` owns the control-message buffer for
+    /// One datagram read with its attachments,awaited for readiness. The
+    /// blocking transport's `recvmsg` owns the control-message buffer for
     /// this read,and MSG_CMSG_CLOEXEC is set there,so the received descriptors
     /// arrive close-on-exec exactly as they do on the broker leg.
-
     async fn recv_frame_with_fds(&self) -> io::Result<(Vec<u8>, Vec<RawFd>)> {
         self.io
             .async_io(Interest::READABLE, |socket| {
                 read_frame_with_fds(socket)
-                    .map_err(|error| io::Error::new(io::ErrorKind::Other, format!("{error:?}")))
+                    .map_err(|error| io::Error::other(format!("{error:?}")))
             })
             .await
     }
@@ -1317,8 +1311,7 @@ impl AsyncSeqpacket {
         self.io
             .async_io(Interest::WRITABLE, |socket| {
                 write_frame_with_fds(socket, frame, fds)
-                    .map(|()| ())
-                    .map_err(|error| io::Error::new(io::ErrorKind::Other, format!("{error:?}")))
+                    .map_err(|error| io::Error::other(format!("{error:?}")))
             })
             .await
     }
@@ -1728,9 +1721,8 @@ mod tests {
 
     static ERRORING_HANDLER: ErroringHandler = ErroringHandler;
 
-    /// A handler that reads the descriptor the carrier attached to its call.
-
-    /// The forwarded request leg carries the caller's descriptor over
+    /// A handler that reads the descriptor the carrier attached to its
+    /// call. The forwarded request leg carries the caller's descriptor over
     /// SCM_RIGHTS;the rendezvous validates it against the wire declarations
     /// and hands it to the declared handler,so this handler reading it back
     /// proves the round trip through the real socket and the provider envelope.to
@@ -1763,8 +1755,6 @@ mod tests {
 
     /// The stall operations plus the fd-echo operation the fixture's
     /// EphemeralProcess driver declares.
-
-
     static STALL_OPERATIONS: LazyLock<[OperationDef; 7]> = LazyLock::new(|| {
         [
             OperationDef {
@@ -2167,7 +2157,6 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
     /// Forward one invocation with explicit fd declarations, so a test can
     /// drive a request whose declarations disagree with its frame.
-
     fn forward_raw_declared(
         socket_path: &Path,
         fd_indexes: Vec<u32>,

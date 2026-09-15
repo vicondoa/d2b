@@ -843,7 +843,7 @@ impl BundleBackedLaunchResolver {
         // the Zone whose verified bundle declares its VM scope. A launch
         // whose scope resolves to no Zone can never be served and is
         // refused here.
-        let zone = self.zone_for_launch_vm(&launch_vm_name).ok_or_else(|| {
+        let zone = self.zone_for_launch_vm(launch_vm_name).ok_or_else(|| {
             warn!(
                 provider = "supervisor",
                 resource = %ticket.process_ref().to_canonical_string(),

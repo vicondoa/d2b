@@ -3831,7 +3831,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             })
             .await
             .unwrap_or_else(|join| {
-                Err(std::io::Error::new(std::io::ErrorKind::Other, join.to_string()))
+                Err(std::io::Error::other(join.to_string()))
             });
             match removed {
                 Ok(()) => {}
@@ -17748,8 +17748,8 @@ const OWNERSHIP_PREFLIGHT_ROUND_TRIP_BUDGET: Duration =
 /// Timeouts are reported as the unknown-outcome case: when the broker does
 /// not answer within the budget, the daemon cannot know whether the
 /// preflight ran, so the failure carries the `internal-broker-timeout` code
-/// - never a definitive refusal such as `unregistered-handler`, which the
-/// broker itself reports when the envelope holds no serving handler (the
+/// (never a definitive refusal such as `unregistered-handler`, which the
+/// broker itself reports when the envelope holds no serving handler - the
 /// documented prebind gap: calls before the daemon binds its forwarding leg
 /// refuse fail-closed with `unregistered-handler`, no transparent queue).
 fn dispatch_ownership_matrix_preflight(

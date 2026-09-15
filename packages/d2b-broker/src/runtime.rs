@@ -17096,7 +17096,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     // U10 retired the typed `SpawnRunner` wire arm: runner-intent
     // validation (role/bridge/vm closed-set matching, the
     // `OtelHostBridge` fences) moved to the daemon-side family handler,
@@ -17105,12 +17104,10 @@ mod tests {
     // The broker kernel executes a fully resolved plan and carries no
     // bundle knowledge, so these two broker-side intent-fence tests are
     // retired with the arm; the daemon-side equivalent belongs to the
-    // declaring provider's tests (U10d2).
-
-    // (The `spawn_runner_rejects_otel_host_bridge_intent_for_non_obs_vm`
-    // broker-side test was retired with the typed `SpawnRunner` arm;
-    // see the note above the previous test.)
-
+    // declaring provider's tests (U10d2). The
+    // `spawn_runner_rejects_otel_host_bridge_intent_for_non_obs_vm`
+    // broker-side test was retired with the typed `SpawnRunner` arm.
+    #[cfg(not(feature = "layer1-bootstrap"))]
     #[cfg(not(feature = "layer1-bootstrap"))]
     // The retired `SignalRunner` arm refused a runner the broker's
     // metadata registry did not know (`NoPidfd`). The U10 kernel surface

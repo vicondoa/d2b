@@ -378,6 +378,9 @@ impl OperationEnvelope {
     /// carries the broker socket, the caller role, the Zone's trusted
     /// bundle, and the daemon-side runner lookup; absent for direct and
     /// test invocations.
+    // The parameter set is the documented kernel-carrier surface; bundling
+    // it would obscure the wire mapping each field names (KTD6 chain graft).
+    #[allow(clippy::too_many_arguments)]
     pub async fn invoke_named_with_fds_under_chain(
         &self,
         operation: &str,
@@ -413,6 +416,7 @@ impl OperationEnvelope {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,
         invocation_id: &str,
@@ -500,16 +504,16 @@ const DEADLINE_TIERS: [&str; 2] = ["standard", "extended"];
 /// today) is untouched. Two or more candidates fail the build: a row two
 /// methods claim would dispatch arbitrarily.
 fn resolve_method(
-    services: &'static [ServiceDecl],
-    operation: &ResourceRef,
-) -> Result<Option<ResolvedMethod>, ProviderToolkitError> {
+        services: &'static [ServiceDecl],
+        operation: &ResourceRef,
+    ) -> Result<Option<ResolvedMethod>, ProviderToolkitError> {
     let mut candidates = services
         .iter()
         .flat_map(|service| {
             service
                 .methods
                 .iter()
-                .filter(|method| method.operation.as_deref() == Some(operation.name().as_str()))
+                .filter(|method| method.operation == Some(operation.name().as_str()))
                 .map(move |method| ResolvedMethod {
                     service: service.id,
                     method,

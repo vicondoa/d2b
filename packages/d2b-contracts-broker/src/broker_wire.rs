@@ -246,21 +246,16 @@ pub const FORWARD_SOCKET_ENV: &str = "D2B_BROKER_FORWARD_SOCKET";
 ///
 /// The code is shared by both legs of the forward carrier,so the broker
 /// and the rendezvous cannot drift apart on how an fd-leg failure is named.
-
 pub const FD_LEG: &str = "fd-leg";
 
 /// The most SCM_RIGHTS descriptors one forward frame can carry.
-
-
 ///
 /// The receive-side ancillary buffers on both legs are sized
 /// `cmsg_space!([RawFd; MAX_FRAME_FDS])`, so a frame with more attachments
 /// would be truncated by the transport. A declared set is therefore
 /// capped at this constant before dispatch,and a larger declaration is
-/// refused with [`FD_LEG`], never delivered as a transport truncation。
-
-
-pub const MAX_FRAME_FDS: usize =8;
+/// refused with [`FD_LEG`], never delivered as a transport truncation.
+pub const MAX_FRAME_FDS: usize = 8;
 
 /// The kernel kind one forwarded descriptor must present.from
 ///
@@ -335,7 +330,6 @@ pub enum FdKind {
 /// the rendezvous refuses a request whose context's broker epoch, Zone,
 /// provider-set revision, controller generation, or guest generation does
 /// not match its own current values.
-
 pub const STALE_CONTEXT: &str = "stale-context";
 
 /// The deadline budget a minted context carries when the operation's
@@ -346,7 +340,6 @@ pub const STALE_CONTEXT: &str = "stale-context";
 /// deployment keeps the same per-call bound while the row-level deadline-
 /// tier facet (KTD4) is wired; the receiving leg serves the budget the
 /// context declares, not a private constant.
-
 pub const DEFAULT_CONTEXT_DEADLINE_MS: u64 = 25_000;
 
 /// The absolute ceiling a context's deadline budget must sit under.
@@ -355,7 +348,6 @@ pub const DEFAULT_CONTEXT_DEADLINE_MS: u64 = 25_000;
 /// block was not minted as the broker wrote it; the receiving leg refuses
 /// the call with [`STALE_CONTEXT`] rather than serve an unbounded or
 /// oversized handler grant.
-
 pub const MAX_CONTEXT_DEADLINE_MS: u64 = 60_000;
 
 /// The broker-attested context block riding one forwarded request.
@@ -4680,6 +4672,10 @@ mod tests {
     }
 
     #[test]
+    // The constants are WIRE-visible contract strings shared between the
+    // broker and the rendezvous; the literal pins exist so a refactor that
+    // renames a constant cannot silently change the wire code.
+    #[allow(clippy::assertions_on_constants)]
     fn the_stale_context_code_is_the_shared_carrier_code() {
         assert_eq!(STALE_CONTEXT, "stale-context");
         // The default budget is the receiving leg's historical fixed

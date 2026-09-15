@@ -139,7 +139,7 @@ pub fn envelope_invoke_kernel(
         chain_root_invocation_id: invocation.chain_root_invocation_id.map(str::to_owned),
         chain_identities: invocation
             .chain_identities
-            .map(|identities| identities.iter().cloned().collect()),
+            .map(|identities| identities.to_vec()),
         fd_indexes: (0..invocation.fds.len() as u32).collect(),
         // The kernel rows declare `Any` for their pidfd legs; the
         // receiving envelope re-checks the actual kernel kinds against the

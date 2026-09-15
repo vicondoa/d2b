@@ -178,9 +178,11 @@ fn scan_line(
                 };
                 let on_worker = !state.parens.iter().any(|blocking| *blocking);
                 let token_start = i == 0 || !is_ident_char(bytes[i - 1]);
-                if let Some(context) = context {
-                    if on_worker && token_start {
-                        for entry in entries {
+                if let Some(context) = context
+                    && on_worker
+                    && token_start
+                {
+                    for entry in entries {
                             if flagged.contains(&entry.path.as_str()) {
                                 continue;
                             }
@@ -199,7 +201,6 @@ fn scan_line(
                                 });
                             }
                         }
-                    }
                 }
                 let ch = code[i..].chars().next().expect("i stays on a char boundary");
                 state.segment.push(ch);
@@ -379,17 +380,15 @@ fn sanitize(line: &str, state: &mut ScanState) -> String {
             Mode::Normal => {
                 if let Some(hashes) = raw_hashes {
                     if b == b'"' && raw_string_closes(&bytes[i..], hashes) {
-                        for _ in 0..=hashes {
-                            out.push(b' ');
-                            i += 1;
-                        }
+                        out.extend(std::iter::repeat_n(b' ', hashes + 1));
+                        i += hashes + 1;
                         raw_hashes = None;
                     } else {
                         out.push(b' ');
                         i += 1;
                     }
                 } else if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
-                    out.extend(std::iter::repeat(b' ').take(bytes.len() - i));
+                    out.extend(vec![b' '; bytes.len() - i]);
                     break;
                 } else if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
                     out.extend_from_slice(b"  ");

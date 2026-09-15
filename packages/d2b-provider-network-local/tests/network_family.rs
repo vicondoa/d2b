@@ -6,9 +6,9 @@
 //! call. These tests drive the real handlers against a fake kernel socket:
 //! the server leg answers the exact `EnvelopeInvoke` frame the kernel client
 //! sends, so the assertions are grounded in what actually crossed the socket
-//! - the operation name, the zone, the resolved payload, and the evidence
-//! chain (root invocation id plus ordered identities with the handler's own
-//! caller identity appended).
+//!   - the operation name, the zone, the resolved payload, and the evidence
+//!     chain (root invocation id plus ordered identities with the handler's
+//!     own caller identity appended).
 
 use std::collections::BTreeMap;
 use std::io::IoSlice;
@@ -416,7 +416,6 @@ fn seed_dnsmasq_lease_invokes_the_kernel_nested_with_the_typed_request() {
 
 #[test]
 fn create_tap_fd_returns_the_kernel_descriptor_over_the_fd_leg() {
-    use std::os::fd::OwnedFd;
 
     let root = tempfile::tempdir().expect("temp dir");
     let mut server = KernelServer::spawn(&root);
@@ -426,7 +425,7 @@ fn create_tap_fd_returns_the_kernel_descriptor_over_the_fd_leg() {
             "create-tap-fd",
             serde_json::json!({ "bridge": null, "tap": "tap-work", "fdIndex": 0 }),
         ),
-        vec![OwnedFd::from(read_end)],
+        vec![read_end],
     );
 
     let result = invoke(
