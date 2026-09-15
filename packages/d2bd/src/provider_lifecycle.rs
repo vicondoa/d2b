@@ -506,9 +506,9 @@ impl ProviderSet {
     /// re-creates its drivers from the committed spec row. A provider that
     /// declares a service without a factory refuses startup.
     ///
-    /// Composition feeds this seam when a family declares services; until
-    /// then the hosting-site tests are its only consumers (same marker as
-    /// `effect_service_actors.rs`).
+    /// Composition feeds this seam when a family declares services (U10
+    /// pilot and later); until then the hosting-site tests are its only
+    /// consumers (U9+ note: the composition seam owns this call).
     #[allow(dead_code)]
     pub(crate) fn with_effect_service_factory(
         mut self,
@@ -667,10 +667,8 @@ pub(crate) struct ProviderRuntime {
     trusted_context_publication: Option<TrustedContextPublication>,
     /// The zone's effect-service supervisor (U8, KTD5): one linked ractor
     /// actor per declared effect service, respawned from its durable row.
-    /// The U8b rendezvous binding resolves through this; until then the
-    /// hosting-site tests are its only consumers (same marker as
-    /// `effect_service_actors.rs`).
-    #[allow(dead_code)]
+    /// The rendezvous binding resolves live bindings through this
+    /// ([`Self::resolve_effect_service`]).
     effect_services: ActorRef<EffectServiceSupervisorMsg>,
 }
 
@@ -731,10 +729,13 @@ impl ProviderRuntime {
     /// Resolve the live binding of one declared effect service (U8, KTD5).
     ///
     /// The binding carries the service's generational revision and the live
-    /// actor; a respawn or provider-set republish bumps the revision, so a
-    /// caller that captured `revision()` can refuse stale traffic. The
-    /// rendezvous consumes this binding at U8b; until then the hosting-site
-    /// tests are its only consumers (same marker as `effect_service_actors.rs`).
+    /// actor; a respawn or republish bumps the revision, so a caller that
+    /// captured `revision()` can refuse stale traffic. The rendezvous
+    /// resolves every effect-service dispatch by operation
+    /// ([`Self::resolve_effect_service_for_operation`]); name-based
+    /// resolution stays the supervision-test harness surface. U9+ note: a
+    /// composition/operator dialogue re-drives rows by name and consumes
+    /// this.
     #[allow(dead_code)]
     pub(crate) async fn resolve_effect_service(
         &self,
@@ -756,12 +757,45 @@ impl ProviderRuntime {
             })?
     }
 
+    /// Resolve the live binding of the effect service that declares one
+    /// operation (KD6, U7).
+    ///
+    /// A forwarded call names the committed operation row; a service
+    /// declares that operation as the surface of one of its methods, and
+    /// the declaring service's current binding answers it. The rendezvous
+    /// uses this resolution for every effect-service dispatch; an
+    /// operation no hosted service declares answers
+    /// [`EffectServiceError::OperationUnserved`] and falls through to the
+    /// provider operation tables.
+    pub(crate) async fn resolve_effect_service_for_operation(
+        &self,
+        operation: &str,
+    ) -> Result<EffectServiceBinding, EffectServiceError> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.effect_services
+            .send_message(EffectServiceSupervisorMsg::ResolveOperation {
+                operation: operation.to_owned(),
+                reply: reply_tx,
+            })
+            .map_err(|_| EffectServiceError::ServiceUnavailable {
+                service: operation.to_owned(),
+            })?;
+        reply_rx
+            .await
+            .map_err(|_| EffectServiceError::ServiceUnavailable {
+                service: operation.to_owned(),
+            })?
+    }
+
     /// (Re)publish one effect service row on the zone's supervisor, taking
     /// effect at the composition point the plane publishes declared
     /// services. A republish of a live service bumps the generational
     /// binding revision and rebuilds the actor from the new row (KTD5).
-    /// The U8b republish flow drives this; until then the hosting-site
-    /// tests are its only consumers (same marker as `effect_service_actors.rs`).
+    ///
+    /// The republish seam is composition-side; the dialogue that re-drives
+    /// declared rows on a provider-set republish lands with the composition
+    /// work (U10 pilot and later). Until then the hosting-site tests are
+    /// its only consumers (U9+ note: the composition seam owns this call).
     #[allow(dead_code)]
     pub(crate) async fn publish_effect_service(
         &self,
@@ -983,12 +1017,12 @@ mod tests {
     use d2b_resource_runtime::context::SpecDecoder;
     use d2b_resource_runtime::driver::{DynResourceDriver, ResourceDriverFactory};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
-    use d2b_resource_types::{AllowedSources, WellKnownType};
+    use d2b_resource_types::{AllowedSources, ServiceMethod, WellKnownType};
 
     /// The declared service the hosting tests host.
     const ECHO_SERVICE: ServiceDecl = ServiceDecl {
         id: "fixture.echo",
-        methods: &["ping"],
+        methods: &[ServiceMethod::zone_plane("ping")],
         attach_kinds: &[],
         streams: &[],
         endpoint_policy: None,

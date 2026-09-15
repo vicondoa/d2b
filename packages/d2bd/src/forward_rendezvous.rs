@@ -43,6 +43,21 @@
 //! may run the handlers it declared, and the envelope refuses every caller
 //! it holds no grant for.
 //!
+//! Effect-service methods ride the same carrier (U8, KTD5). A forwarded
+//! operation is served by an effect service exactly when a declared
+//! method's `operation` facet names it (KD6: operations resolve to
+//! services); this endpoint resolves the operation to the declaring
+//! service's live generational binding through the hosting API
+//! (`ProviderRuntime::resolve_effect_service_for_operation`) and dispatches
+//! the canonical payload to the hosted actor. The binding's revision is
+//! captured when the call starts and checked again at dispatch: a respawn
+//! or republish that bumped the revision in between - or an actor that
+//! died under the in-flight call - is refused with the dedicated
+//! `stale-revision` code, never hung against a dead or superseded
+//! generation. An operation no hosted service declares falls through to
+//! the provider operation tables, and an operation nothing in this process
+//! declares is refused like any uncommitted operation.
+//!
 //! The endpoint serves on the daemon's runtime rather than on a thread per
 //! call: the listener and every accepted connection are registered with the
 //! reactor (`tokio::io::unix::AsyncFd`, the pattern the session crate drives
@@ -66,7 +81,7 @@ use d2b_contracts_broker::broker_wire::{
     ForwardOperationRequest, ForwardOperationResponse, MAX_CONTEXT_DEADLINE_MS, MAX_FRAME_FDS,
     STALE_CONTEXT,
 };
-use d2b_contracts_resource::v3::CanonicalJsonObject;
+use d2b_contracts_resource::v3::{CanonicalJsonObject, canonical_json_bytes};
 use d2b_provider_toolkit::operations::{UNCOMMITTED_OPERATION, UNGRANTED_CALLER};
 use d2bd_runtime::concurrency::DEFAULT_MAX_INFLIGHT_CONNECTIONS;
 use d2bd_runtime::runtime_process::{RuntimeIdentity, bind_public_socket};
@@ -79,6 +94,7 @@ use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::Semaphore;
 
+use crate::effect_service_actors::{EffectServiceBinding, EffectServiceError};
 use crate::provider_lifecycle::ProviderRuntime;
 
 /// The refusal code for a forwarded payload this endpoint cannot read as the
@@ -100,6 +116,25 @@ pub(crate) const FORWARD_TIMEOUT: &str = "forward-timeout";
 /// `handler-crashed` code, never a dropped socket the broker reads as a
 /// round-trip timeout.
 pub(crate) const HANDLER_CRASHED: &str = "handler-crashed";
+
+/// The refusal code for an effect-service call whose generation this
+/// process moved past (KTD5).
+///
+/// A respawn or provider-set republish bumps the service's generational
+/// binding revision; a call that resolved its binding under the older
+/// revision - or was still in flight when the actor died under it - is
+/// refused with this dedicated code, never hung against a dead or
+/// superseded generation. The spelling is this endpoint's own refusal
+/// entry for the KTD5 dedicated code, beside the `stale-context` code the
+/// attestation path uses for provider-set freshness.
+pub(crate) const STALE_REVISION: &str = "stale-revision";
+
+/// The refusal code for an effect service that declined a call.
+///
+/// The spelling is the taxonomy's handler-refused entry (KTD7): the
+/// service answered with its own refusal, and the call crosses back under
+/// the code the broker's envelope already admits.
+pub(crate) const HANDLER_REFUSED: &str = "handler-refused";
 
 /// The read deadline for one forwarded request frame: a connected peer that
 /// sends nothing is closed rather than holding an in-flight slot.
@@ -287,10 +322,13 @@ impl ForwardRendezvous {
 
     /// Answer one forwarded invocation.
     ///
-    /// A Zone with no started providers and an operation no started provider
-    /// declares are the same refusal: nothing in this process serves the
-    /// call, and the code the broker's own envelope uses for that state names
-    /// it.
+    /// An operation a declared effect-service method serves (the method's
+    /// `operation` facet names it, U8) resolves through the hosting binding
+    /// and is answered by the hosted actor; every other operation resolves
+    /// to the started provider that declared it. A Zone with no started
+    /// providers and an operation nothing in this process declares are the
+    /// same refusal: nothing serves the call, and the code the broker's own
+    /// envelope uses for that state names it.
     pub(crate) async fn invoke(
         &self,
         request: &ForwardOperationRequest,
@@ -305,6 +343,17 @@ impl ForwardRendezvous {
         let Some(providers) = providers else {
             return refused(UNCOMMITTED_OPERATION);
         };
+        // The effect-service leg (U8, KTD5): an operation the hosted
+        // services declare resolves through the live hosting binding, and a
+        // call against a generation this process moved past is refused with
+        // the dedicated stale-revision code instead of hanging. An
+        // operation no service declares falls through to the provider
+        // tables.
+        match providers.resolve_effect_service_for_operation(&request.operation).await {
+            Ok(binding) => return invoke_effect_service(&binding, request).await,
+            Err(EffectServiceError::OperationUnserved { .. }) => {}
+            Err(error) => return refused(effect_refusal_code(&error)),
+        }
         let Some(provider) = providers.declaring_provider(&request.operation) else {
             return refused(UNCOMMITTED_OPERATION);
         };
@@ -318,14 +367,7 @@ impl ForwardRendezvous {
             .invoke(&request.operation, &request.invocation_id, payload, fds)
             .await
         {
-            Ok(result) => ForwardOperationResponse {
-                outcome: ForwardOperationOutcome::Result {
-                    result: serde_json::to_value(result.object())
-                        .expect("canonical JSON objects always serialize"),
-                    fd_indexes: vec![],
-                    fd_kinds: vec![],
-                },
-            },
+            Ok(result) => result_response(result.object()),
             Err(failure) => refused(failure.code()),
         }
     }
@@ -455,6 +497,104 @@ impl ForwardRendezvous {
                 FORWARD_REPLY_DEADLINE,
             )
             .await
+    }
+}
+
+/// The wire code one effect-service failure surfaces under.
+///
+/// KTD5's dedicated refusal: the service's generational revision moved past
+/// the one the call started against, or the actor died under the in-flight
+/// call - the call rode a stale generation and is refused by name, never
+/// hung. An unbound service and an operation no hosted service declares are
+/// the same refusal as an operation this process does not serve, and a
+/// declined call crosses back under the taxonomy's handler-refused entry
+/// (KTD7).
+fn effect_refusal_code(error: &EffectServiceError) -> &'static str {
+    match error {
+        EffectServiceError::UnboundService { .. } => UNCOMMITTED_OPERATION,
+        EffectServiceError::OperationUnserved { .. } => UNCOMMITTED_OPERATION,
+        EffectServiceError::WrongZone { .. } => UNCOMMITTED_OPERATION,
+        EffectServiceError::StaleRevision { .. } => STALE_REVISION,
+        EffectServiceError::ServiceUnavailable { .. } => STALE_REVISION,
+        EffectServiceError::InFlightStale { .. } => STALE_REVISION,
+        EffectServiceError::Declined { .. } => HANDLER_REFUSED,
+    }
+}
+
+/// Invoke one effect-service operation through its live hosting binding.
+///
+/// The operation resolved to this binding through the declaring service's
+/// method facets, so the service is live and serves the call; the binding's
+/// revision is captured when the call starts and re-checked at dispatch, so
+/// a generation that moved past the call mid-flight is refused with the
+/// dedicated stale-revision code (KTD5). The payload rides the carrier as
+/// the canonical object the broker validated, and the actor's answer
+/// returns the same way - there is no second transport.
+async fn invoke_effect_service(
+    binding: &EffectServiceBinding,
+    request: &ForwardOperationRequest,
+) -> ForwardOperationResponse {
+    // The distinct name this operation resolves to, for the operator
+    // following the refusal records; the declaration it resolved through
+    // named it, and a binding carries the declaration.
+    let method = binding
+        .decl()
+        .methods
+        .iter()
+        .find(|declared| declared.operation == Some(request.operation.as_str()))
+        .map(|declared| declared.name);
+    let Ok(bytes) = serde_json::to_vec(&request.payload) else {
+        return refused(INVALID_PAYLOAD);
+    };
+    let Ok(payload) = CanonicalJsonObject::parse(&bytes) else {
+        return refused(INVALID_PAYLOAD);
+    };
+    let Ok(request_bytes) = canonical_json_bytes(&payload) else {
+        return refused(INVALID_PAYLOAD);
+    };
+    match binding
+        .call_expected(binding.revision(), request_bytes)
+        .await
+    {
+        Ok(response) => match CanonicalJsonObject::parse(&response) {
+            Ok(object) => result_response(&object),
+            Err(_) => {
+                // The actor answered outside the canonical object the
+                // carrier validates; the call is refused by name.
+                tracing::warn!(
+                    operation = %request.operation,
+                    zone = %request.zone,
+                    service = %binding.service(),
+                    method = ?method,
+                    "effect service answered a non-canonical payload; refusing"
+                );
+                refused(INVALID_PAYLOAD)
+            }
+        },
+        Err(error) => {
+            tracing::warn!(
+                operation = %request.operation,
+                zone = %request.zone,
+                service = %binding.service(),
+                method = ?method,
+                error = %error,
+                "effect-service call refused; its generation moved past the call"
+            );
+            refused(effect_refusal_code(&error))
+        }
+    }
+}
+
+/// The normal result reply: one canonical object rendered onto the forward
+/// carrier.
+fn result_response(object: &CanonicalJsonObject) -> ForwardOperationResponse {
+    ForwardOperationResponse {
+        outcome: ForwardOperationOutcome::Result {
+            result: serde_json::to_value(object)
+                .expect("canonical JSON objects always serialize"),
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        },
     }
 }
 
@@ -978,15 +1118,22 @@ mod tests {
         ProcessFamilySpec, ProcessResourceIdentity, ProviderAdoption, ProviderLiveness,
         process_family_descriptors,
     };
+    use d2b_resource_runtime::context::SpecDecoder;
+    use d2b_resource_runtime::driver::{DynResourceDriver, ResourceDriverFactory};
+    use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
     use d2b_resource_types::{
-        DriverDescriptor, OperationCtx, OperationDef, OperationFailure, OperationHandler,
-        OperationResult, ValidatedPayload,
+        AllowedSources, DriverDescriptor, OperationCtx, OperationDef, OperationFailure,
+        OperationHandler, OperationResult, ServiceDecl, ServiceMethod, ValidatedPayload,
+        WellKnownType,
     };
     use d2bd_runtime::target_runtime::DaemonMode;
     use d2bd_runtime::unix_transport::{connect_seqpacket, read_frame, write_frame};
-    use tokio::sync::Semaphore;
+    use tokio::sync::{Notify, Semaphore};
 
     use super::*;
+    use crate::effect_service_actors::{
+        EffectRequest, EffectResponse, EffectService, EffectServiceFactory, EffectServiceRow,
+    };
     use crate::provider_lifecycle::{ProviderSet, family_declaration};
 
     /// A port that refuses every effect: the pilot operation answers from the
@@ -1403,6 +1550,43 @@ mod tests {
             }
         }
 
+        /// The same rendezvous over a set that hosts a fixture effect
+        /// service (U8, KTD5): the composition point hosts the declared
+        /// service, and the forwarded calls below reach the actor through
+        /// the live hosting binding, served by the production entry point.
+        async fn start_with_effect_service() -> Self {
+            Self::effect_served_by(Arc::new(EchoFactory), |rendezvous, listener| {
+                spawn_server(rendezvous, listener, tokio::runtime::Handle::current())
+            })
+            .await
+        }
+
+        /// The same rendezvous over a set that hosts one pre-built fixture
+        /// service (gated/declining fixtures).
+        async fn start_with_effect_service_factory(
+            factory: Arc<dyn EffectServiceFactory>,
+        ) -> Self {
+            Self::effect_served_by(factory, |rendezvous, listener| {
+                spawn_server(rendezvous, listener, tokio::runtime::Handle::current())
+            })
+            .await
+        }
+
+        async fn effect_served_by<F>(factory: Arc<dyn EffectServiceFactory>, serve: F) -> Self
+        where
+            F: FnOnce(Arc<ForwardRendezvous>, Socket) -> Result<(), TypedError>,
+        {
+            let (rendezvous, socket_path, scratch, providers) =
+                effect_fixture_with(factory).await;
+            let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
+            serve(rendezvous, listener).expect("start the rendezvous server");
+            Self {
+                socket_path,
+                _scratch: scratch,
+                _providers: providers,
+            }
+        }
+
         async fn fixture() -> (
             Arc<ForwardRendezvous>,
             PathBuf,
@@ -1442,6 +1626,33 @@ mod tests {
             let socket_path = scratch.path().join("d2bd-forward.sock");
             (rendezvous, socket_path, scratch, providers)
         }
+    }
+
+    /// One started Zone whose fixture provider hosts a declared effect
+    /// service (U8, KTD5), served by a rendezvous on a real socket. The
+    /// fixture driver declares the service and nothing else, so the effect
+    /// tests cannot accidentally route to a provider operation handler.
+    async fn effect_fixture_with(
+        factory: Arc<dyn EffectServiceFactory>,
+    ) -> (
+        Arc<ForwardRendezvous>,
+        PathBuf,
+        tempfile::TempDir,
+        Arc<ProviderRuntime>,
+    ) {
+        let zone = ZoneId::parse("test").expect("the test zone label is canonical");
+        let scratch = tempfile::tempdir().expect("test scratch");
+        let providers = ProviderSet::new(zone.clone(), scratch.path().to_path_buf())
+            .with(family_declaration("fixture"), vec![effect_descriptor(&[ECHO_SERVICE])])
+            .with_effect_service_factory(ECHO_SERVICE.id, factory)
+            .start()
+            .await
+            .expect("the fixture provider starts through the base");
+        let providers = Arc::new(providers);
+        let rendezvous = Arc::new(ForwardRendezvous::new());
+        rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+        let socket_path = scratch.path().join("d2bd-forward.sock");
+        (rendezvous, socket_path, scratch, providers)
     }
 
     /// Forward one invocation the way the broker's forwarder does, driven on
@@ -1579,6 +1790,156 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         write_frame_with_fds(&socket, &encoded, fds).expect("write the request frame");
         let frame = read_frame(&socket).expect("read the reply frame");
         serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
+    }
+
+    // ---- U8 effect-service dispatch through the rendezvous (KTD5) ----
+    //
+    // The plan's unit tests drive the effect service "through the
+    // envelope": a forwarded call naming `service/method` crosses the
+    // carrier, the rendezvous resolves the service to its live hosting
+    // binding and the hosted actor answers - and a respawn or republish
+    // that bumps the generational revision, or an actor that dies under an
+    // in-flight call, surfaces as the dedicated stale-revision refusal,
+    // never a hang.
+
+    /// The declared effect service the effect tests host.
+    ///
+    /// The `ping` method serves the committed operation fixture-echo-ping:
+    /// the forwarded call names that operation, and the declaration's
+    /// operation facet resolves it to this service (KD6, U7). The zone-plane
+    /// `echo` method carries no operation facet: the session layer addresses
+    /// it, never the envelope.
+    const ECHO_SERVICE: ServiceDecl = ServiceDecl {
+        id: "fixture.echo",
+        methods: &[
+            ServiceMethod::serving("fixture-echo-ping", "ping"),
+            ServiceMethod::zone_plane("echo"),
+        ],
+        attach_kinds: &[],
+        streams: &[],
+        endpoint_policy: None,
+    };
+
+    /// Echo fixture: answers with the request payload (same shape as the
+    /// hosting site's harness).
+    struct EchoService;
+
+    #[async_trait::async_trait]
+    impl EffectService for EchoService {
+        async fn handle(
+            &self,
+            request: EffectRequest,
+        ) -> Result<EffectResponse, EffectServiceError> {
+            Ok(request)
+        }
+    }
+
+    /// Builds one echo service per respawn.
+    struct EchoFactory;
+
+    impl EffectServiceFactory for EchoFactory {
+        fn build(&self) -> Arc<dyn EffectService> {
+            Arc::new(EchoService)
+        }
+    }
+
+    /// Returns one pre-built service (gated/declining fixtures).
+    struct OnceFactory(Arc<dyn EffectService>);
+
+    impl EffectServiceFactory for OnceFactory {
+        fn build(&self) -> Arc<dyn EffectService> {
+            self.0.clone()
+        }
+    }
+
+    /// Gated fixture: parks inside `handle` until released, signalling that
+    /// the call is genuinely in flight.
+    struct GatedService {
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl EffectService for GatedService {
+        async fn handle(
+            &self,
+            request: EffectRequest,
+        ) -> Result<EffectResponse, EffectServiceError> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(request)
+        }
+    }
+
+    /// Declining fixture: answers with its own refusal.
+    struct DecliningService;
+
+    #[async_trait::async_trait]
+    impl EffectService for DecliningService {
+        async fn handle(
+            &self,
+            _request: EffectRequest,
+        ) -> Result<EffectResponse, EffectServiceError> {
+            Err(EffectServiceError::Declined {
+                service: ECHO_SERVICE.id.to_owned(),
+                reason: "fixture refuses".to_owned(),
+            })
+        }
+    }
+
+    /// A driver that registers cleanly beside its service declaration; its
+    /// spec/driver methods are unreachable at the rendezvous site.
+    fn effect_descriptor(services: &'static [ServiceDecl]) -> DriverDescriptor {
+        DriverDescriptor {
+            resource_type: WellKnownType::PROCESS,
+            allowed_sources: AllowedSources::STARTUP,
+            verbs: &[],
+            execution: &[],
+            exportable: false,
+            reads: &[],
+            operations: &[],
+            creations: &[],
+            startup: &[],
+            services,
+            decoder: Arc::new(NoSpecs),
+            factory: Arc::new(NoDrivers),
+        }
+    }
+
+    struct NoSpecs;
+
+    impl SpecDecoder for NoSpecs {
+        fn decode(
+            &self,
+            _envelope: &[u8],
+        ) -> Result<Box<dyn std::any::Any + Send>, Box<dyn std::error::Error + Send + Sync>> {
+            unreachable!("the rendezvous site decodes no specs")
+        }
+    }
+
+    struct NoDrivers;
+
+    #[async_trait::async_trait]
+    impl ResourceDriverFactory for NoDrivers {
+        fn resource_types(&self) -> &[ResourceTypeName] {
+            &[]
+        }
+
+        async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
+            unreachable!("the rendezvous site creates no resource drivers")
+        }
+    }
+
+    /// Wait until a condition holds (the supervisor respawns asynchronously
+    /// after a kill).
+    async fn until(condition: impl Fn() -> bool) {
+        for _ in 0..200 {
+            if condition() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("condition never became true within the deadline");
     }
 
     /// A forwarded call crosses a real socket and the declared handler
@@ -2743,6 +3104,263 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
                 code: STALE_CONTEXT.to_owned(),
             },
             "a broker that never answered acknowledges no epoch"
+        );
+    }
+
+    // ---- U8 effect-service dispatch tests (KTD5) ----
+
+    /// U8 happy path through the rendezvous: a driver's forwarded call
+    /// naming a declared effect-service method crosses the carrier, the
+    /// rendezvous resolves the service to its live hosting binding, and the
+    /// hosted actor answers with the canonical payload round-tripping
+    /// untouched - the effect service rides the normal forward carrier, no
+    /// second transport.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_forwarded_effect_service_call_is_answered_by_the_hosted_actor() {
+        let serving = ServingRendezvous::start_with_effect_service().await;
+        let response = forward(
+            &serving.socket_path,
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({ "echo": "ping" }),
+        );
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
+            panic!("the declared effect service must answer, got a refusal");
+        };
+        assert_eq!(result, serde_json::json!({ "echo": "ping" }));
+    }
+
+    /// An operation nothing in this process declares is refused like any
+    /// uncommitted operation: neither a hosted service's operation facet nor
+    /// a provider's handler table names it. A `service/method` spelling
+    /// works for no operation - the wire names the committed operation, and
+    /// the declaration's operation facet resolves it to the service (KD6).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_operation_no_effect_service_or_provider_declares_is_refused_by_name() {
+        let serving = ServingRendezvous::start_with_effect_service().await;
+        for (operation, what) in [
+            ("no-such-operation", "no declaration names it"),
+            ("fixture.echo/ping", "the service/method spelling is not a committed operation"),
+        ] {
+            let response = forward(&serving.socket_path, operation, "test", serde_json::json!({}));
+            assert_eq!(
+                response.outcome,
+                ForwardOperationOutcome::Refused {
+                    code: UNCOMMITTED_OPERATION.to_owned(),
+                },
+                "{operation}: {what}; it must refuse as uncommitted"
+            );
+        }
+    }
+
+    /// U8 error path through the rendezvous, `manager.rs:1190-1211`
+    /// semantics: killing the actor mid-supervision respawns the service
+    /// from its durable row and bumps the generational revision; the next
+    /// forwarded call succeeds against the fresh generation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn killing_a_hosted_effect_service_respawns_and_the_next_forwarded_call_succeeds() {
+        let serving = ServingRendezvous::start_with_effect_service().await;
+        let providers = Arc::clone(&serving._providers);
+        let binding = providers
+            .resolve_effect_service(ECHO_SERVICE.id)
+            .await
+            .expect("the declared service resolves");
+        let revision_before = binding.revision();
+
+        let response = forward(
+            &serving.socket_path,
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({ "one": true }),
+        );
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
+            panic!("the declared effect service must answer, got a refusal");
+        };
+        assert_eq!(result, serde_json::json!({ "one": true }));
+
+        // Kill the actor mid-supervision (aborts any in-flight work).
+        binding.kill();
+
+        // The zone supervisor respawns from the durable row and bumps the
+        // generational revision.
+        until(|| binding.revision() != revision_before).await;
+        let respawned = providers
+            .resolve_effect_service(ECHO_SERVICE.id)
+            .await
+            .expect("resolve after respawn");
+        assert_eq!(
+            respawned.revision(),
+            revision_before + 1,
+            "respawn bumped the revision"
+        );
+
+        // The next forwarded call succeeds against the respawned generation.
+        let response = forward(
+            &serving.socket_path,
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({ "two": true }),
+        );
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
+            panic!("the respawned service must answer, got a refusal");
+        };
+        assert_eq!(result, serde_json::json!({ "two": true }));
+    }
+
+    /// U8 edge through the rendezvous: an in-flight forwarded call whose
+    /// actor dies is refused with the dedicated stale-revision code, never
+    /// hung, and the service still respawns from its durable row.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_in_flight_effect_service_call_refuses_with_the_stale_revision_code_when_the_actor_dies()
+    {
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let gated: Arc<dyn EffectService> = Arc::new(GatedService {
+            entered: entered.clone(),
+            release: release.clone(),
+        });
+        let serving =
+            ServingRendezvous::start_with_effect_service_factory(Arc::new(OnceFactory(gated)))
+                .await;
+        let binding = serving
+            ._providers
+            .resolve_effect_service(ECHO_SERVICE.id)
+            .await
+            .expect("the declared service resolves");
+
+        let caller = tokio::spawn(forward_async(
+            serving.socket_path.clone(),
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({ "in-flight": true }),
+        ));
+        // Wait until the call is genuinely parked inside the service.
+        entered.notified().await;
+
+        binding.kill();
+
+        let outcome = tokio::time::timeout(Duration::from_secs(2), caller)
+            .await
+            .expect("in-flight call must refuse, not hang");
+        let response = outcome.expect("the call completed");
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_REVISION.to_owned(),
+            },
+            "the in-flight call rode a dead generation; the dedicated refusal must name it"
+        );
+
+        // The service still respawns from its durable row afterwards.
+        until(|| binding.revision() != 1).await;
+        let respawned = serving
+            ._providers
+            .resolve_effect_service(ECHO_SERVICE.id)
+            .await
+            .expect("resolve after respawn");
+        assert_eq!(respawned.revision(), 2);
+    }
+
+    /// U8 republish through the hosting seam keeps the rendezvous serving:
+    /// the republish bumps the generational revision and a fresh resolve
+    /// dispatches to the rebuilt actor (provider-set republish, KTD5).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_republished_effect_service_keeps_answering_through_the_rendezvous() {
+        let serving = ServingRendezvous::start_with_effect_service().await;
+        let rebound = serving
+            ._providers
+            .publish_effect_service(EffectServiceRow::declared(
+                "test",
+                &ECHO_SERVICE,
+                Arc::new(EchoFactory),
+            ))
+            .await
+            .expect("republish");
+        assert_eq!(rebound.revision(), 2, "republish bumped the revision");
+
+        let response = forward(
+            &serving.socket_path,
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({ "again": true }),
+        );
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
+            panic!("the republished service must answer, got a refusal");
+        };
+        assert_eq!(result, serde_json::json!({ "again": true }));
+    }
+
+    /// A declined effect-service call crosses back under the taxonomy's
+    /// handler-refused code (KTD7), not a carrier-level or uncommitted
+    /// refusal.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_declining_effect_service_refuses_under_the_handler_refused_code() {
+        let declining: Arc<dyn EffectService> = Arc::new(DecliningService);
+        let serving =
+            ServingRendezvous::start_with_effect_service_factory(Arc::new(OnceFactory(declining)))
+                .await;
+        let response = forward(
+            &serving.socket_path,
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({}),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: HANDLER_REFUSED.to_owned(),
+            }
+        );
+    }
+
+    /// The dedicated KTD5 refusal code covers every stale-generation failure
+    /// shape: a captured revision that a respawn or republish moved past, a
+    /// binding whose actor died, and a call still in flight when its actor
+    /// died. An unbound service flattens to the uncommitted refusal, and a
+    /// decline to the handler-refused entry.
+    #[test]
+    fn stale_generation_failures_map_to_the_dedicated_stale_revision_code() {
+        let stale = EffectServiceError::StaleRevision {
+            service: "s".to_owned(),
+            expected: 1,
+            current: 2,
+        };
+        let unavailable = EffectServiceError::ServiceUnavailable {
+            service: "s".to_owned(),
+        };
+        let in_flight = EffectServiceError::InFlightStale {
+            service: "s".to_owned(),
+        };
+        for error in [stale, unavailable, in_flight] {
+            assert_eq!(effect_refusal_code(&error), STALE_REVISION, "{error:?}");
+        }
+assert_eq!(
+            effect_refusal_code(&EffectServiceError::UnboundService {
+                zone: "z".to_owned(),
+                service: "s".to_owned(),
+            }),
+            UNCOMMITTED_OPERATION
+        );
+        assert_eq!(
+            effect_refusal_code(&EffectServiceError::OperationUnserved {
+                operation: "no-such-operation".to_owned(),
+            }),
+            UNCOMMITTED_OPERATION
+        );
+        assert_eq!(
+            effect_refusal_code(&EffectServiceError::Declined {
+                service: "s".to_owned(),
+                reason: "nope".to_owned(),
+            }),
+            HANDLER_REFUSED
+        );
+        assert_eq!(
+            effect_refusal_code(&EffectServiceError::WrongZone {
+                zone: "z".to_owned(),
+                service: "s".to_owned(),
+                row_zone: "other".to_owned(),
+            }),
+            UNCOMMITTED_OPERATION
         );
     }
     }

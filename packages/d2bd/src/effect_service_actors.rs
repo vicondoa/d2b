@@ -16,17 +16,20 @@
 //! [`EffectServiceRow`] on the zone's supervisor, rebuilt from that durable
 //! row on every respawn.
 //!
-//! The rendezvous binding consumes [`EffectServiceBinding`] at U8b: it
-//! captures [`EffectServiceBinding::revision`] when a call starts and
-//! dispatches through [`EffectServiceBinding::call_expected`], so an in-
-//! flight call against a revision that a respawn or republish moved past
-//! refuses with a dedicated code ([`EffectServiceError::StaleRevision`])
-//! instead of hanging or hitting the wrong generation. Until that wiring
-//! lands, the binding call surface (`call`, `kill`, `call_expected`) is
-//! exercised by the hosting-site tests only; those items carry the
-//! dead-code allowance as the tree's marker for exactly that state (same as
-//! `credential_backend_runtime.rs`).
-#![allow(dead_code)]
+//! The rendezvous binding consumes [`EffectServiceBinding`]: the forwarded
+//! operation resolves to its declaring service through the declared
+//! methods' `operation` facets (KD6, U7), the rendezvous captures
+//! [`EffectServiceBinding::revision`] when the call starts and dispatches
+//! through [`EffectServiceBinding::call_expected`], so an in-flight call
+//! against a revision that a respawn or republish moved past refuses with a
+//! dedicated code ([`EffectServiceError::StaleRevision`], surfaced on the
+//! forward carrier as the rendezvous's `stale-revision` refusal) instead of
+//! hanging or hitting the wrong generation. The hosting seam
+//! (`resolve_effect_service`/`publish_effect_service` and the
+//! operation-resolution query on `ProviderRuntime`) is the composition
+//! face. `kill` and `actor_id` stay test-only harness surface and carry the
+//! dead-code allowance as the tree's marker for exactly that state, with
+//! U9+ notes.
 
 
 use std::collections::HashMap;
@@ -56,6 +59,8 @@ pub type EffectResponse = Vec<u8>;
 pub enum EffectServiceError {
     #[error("no service `{service}` is published in zone `{zone}`")]
     UnboundService { zone: String, service: String },
+    #[error("no hosted effect service declares an operation `{operation}`")]
+    OperationUnserved { operation: String },
     #[error("row for `{service}` belongs to zone `{row_zone}`, not `{zone}`")]
     WrongZone { zone: String, service: String, row_zone: String },
     #[error("binding for `{service}` is stale: revision {current} != expected {expected} (KTD5)")]
@@ -143,16 +148,38 @@ pub struct EffectServiceBinding {
     service: String,
     actor: ActorRef<EffectServiceMsg>,
     revision: Arc<AtomicU64>,
+    /// The production declaration facets the binding serves. The rendezvous
+    /// validates the method an operation names against these before it
+    /// dispatches (U8b).
+    decl: ServiceDecl,
 }
 
 impl EffectServiceBinding {
-    fn new(service: String, actor: ActorRef<EffectServiceMsg>, revision: u64) -> Self {
-        Self { service, actor, revision: Arc::new(AtomicU64::new(revision)) }
+    fn new(
+        service: String,
+        actor: ActorRef<EffectServiceMsg>,
+        revision: u64,
+        decl: ServiceDecl,
+    ) -> Self {
+        Self {
+            service,
+            actor,
+            revision: Arc::new(AtomicU64::new(revision)),
+            decl,
+        }
     }
 
     /// The service this binding names.
     pub fn service(&self) -> &str {
         &self.service
+    }
+
+    /// The declared facets the service serves (request methods, attach
+    /// kinds, streams, endpoint policy). An operation resolved to this
+    /// binding through one of these methods; the rendezvous names the
+    /// resolving method in its records.
+    pub fn decl(&self) -> &ServiceDecl {
+        &self.decl
     }
 
     /// The current generational revision. A respawn or republish bumps it;
@@ -164,12 +191,22 @@ impl EffectServiceBinding {
     /// The actor generation this binding currently names. After a respawn
     /// the supervisor's live binding names a different actor — resolve again
     /// to re-bind.
+    ///
+    /// Test-only harness surface (the supervision tests observe the fresh
+    /// generation); no production path reads actor ids. U9+ note: a
+    /// telemetry surface may consume this.
+    #[allow(dead_code)]
     pub fn actor_id(&self) -> ractor::ActorId {
         self.actor.get_id()
     }
 
     /// Kill the bound actor (crash a service mid-supervision). The
     /// supervisor respawns it from the durable row and bumps the revision.
+    ///
+    /// Test-only harness surface (the supervision tests kill actors
+    /// mid-call); no production path kills a hosted service. U9+ note: the
+    /// operator control plane may consume this.
+    #[allow(dead_code)]
     pub fn kill(&self) {
         self.actor.get_cell().kill();
     }
@@ -197,7 +234,7 @@ impl EffectServiceBinding {
                 current,
             });
         }
-        self.send(request).await
+        self.call(request).await
     }
 
     async fn send(&self, request: EffectRequest) -> Result<EffectResponse, EffectServiceError> {
@@ -314,8 +351,24 @@ pub enum EffectServiceSupervisorMsg {
         reply: oneshot::Sender<Result<EffectServiceBinding, EffectServiceError>>,
     },
     /// Resolve the live binding for a service. Reply: the current binding.
+    ///
+    /// Test-only harness surface: the rendezvous resolves by operation
+    /// ([`Self::ResolveOperation`]), and the supervision tests resolve by
+    /// name after a kill. U9+ note: a composition/operator dialogue
+    /// re-drives rows by name and consumes this.
+    #[allow(dead_code)]
     Resolve {
         service: String,
+        reply: oneshot::Sender<Result<EffectServiceBinding, EffectServiceError>>,
+    },
+    /// Resolve the live binding of the service that declares one operation
+    /// (KD6, U7): the operation the forwarded call names is served exactly
+    /// when a declared method's `operation` facet names it, and the
+    /// declaring service answers it. Reply: the declaring service's current
+    /// binding, or [`EffectServiceError::OperationUnserved`] when no hosted
+    /// service declares the operation.
+    ResolveOperation {
+        operation: String,
         reply: oneshot::Sender<Result<EffectServiceBinding, EffectServiceError>>,
     },
 }
@@ -361,6 +414,38 @@ impl EffectServiceSupervisorState {
             zone: self.zone.clone(),
             service: service.to_string(),
         })
+    }
+
+    /// Resolve the live binding of the service that declares one operation
+    /// (KD6, U7).
+    ///
+    /// A declared method whose `operation` facet names the operation is the
+    /// declaration that the operation is the service's surface; the lowest
+    /// service identity among the declaring rows wins, so the resolution is
+    /// deterministic even when the row map iteration order is not. A row
+    /// whose actor never spawned (a refused build) resolves through the
+    /// bindings, which refuse it as unbound.
+    fn resolve_for_operation(
+        &self,
+        operation: &str,
+    ) -> Result<EffectServiceBinding, EffectServiceError> {
+        let mut serving: Vec<&EffectServiceRow> = self
+            .rows
+            .values()
+            .filter(|row| {
+                row.decl
+                    .methods
+                    .iter()
+                    .any(|method| method.operation == Some(operation))
+            })
+            .collect();
+        serving.sort_by(|left, right| left.service.cmp(&right.service));
+        match serving.first() {
+            Some(row) => self.resolve(&row.service),
+            None => Err(EffectServiceError::OperationUnserved {
+                operation: operation.to_owned(),
+            }),
+        }
     }
 
     async fn publish(
@@ -417,10 +502,12 @@ impl EffectServiceSupervisorState {
             Some(existing) => {
                 existing.revision.fetch_add(1, Ordering::SeqCst);
                 existing.actor = actor.clone();
+                existing.decl = row.decl;
                 existing.clone()
             }
             None => {
-                let binding = EffectServiceBinding::new(row.service.clone(), actor.clone(), 1);
+                let binding =
+                    EffectServiceBinding::new(row.service.clone(), actor.clone(), 1, row.decl);
                 self.bindings.insert(row.service.clone(), binding.clone());
                 binding
             }
@@ -473,6 +560,9 @@ impl Actor for EffectServiceSupervisor {
             EffectServiceSupervisorMsg::Resolve { service, reply } => {
                 reply.send(state.resolve(&service)).ok();
             }
+            EffectServiceSupervisorMsg::ResolveOperation { operation, reply } => {
+                reply.send(state.resolve_for_operation(&operation)).ok();
+            }
         }
         Ok(())
     }
@@ -519,6 +609,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicU64;
 
+    use d2b_resource_types::ServiceMethod;
     use tokio::sync::Notify;
 
     /// Echo fixture: answers with the request payload.
@@ -587,10 +678,13 @@ mod tests {
         }
     }
 
+    /// The zone-plane ping method of the fixture services.
+    const PING_METHOD: ServiceMethod = ServiceMethod::zone_plane("ping");
+
     fn service_decl(id: &'static str) -> ServiceDecl {
         ServiceDecl {
             id,
-            methods: &["ping"],
+            methods: &[PING_METHOD],
             attach_kinds: &[],
             streams: &[],
             endpoint_policy: None,
