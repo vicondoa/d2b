@@ -165,7 +165,15 @@ let
       cp -r --no-preserve=ownership,xattr,context "$path" root/
     done < ${guestClosure}/store-paths
     truncate -s 4096M "$out"
-    mkfs.ext4 -q -F -d root "$out"
+    # Reproducible ext4 image: SOURCE_DATE_EPOCH pins the superblock times and
+    # a fixed UUID seed pins the htree hash seed (e2fsprogs rejects all-zero
+    # seeds), so every build is byte-identical. With a random seed each build
+    # differed, and the nixos-install closure spec (recorded from an earlier
+    # build) could never match the freshly built image.
+    SOURCE_DATE_EPOCH=0 mkfs.ext4 -q -F \
+      -U 123e4567-e89b-12d3-a456-426614174000 \
+      -E hash_seed=123e4567-e89b-12d3-a456-426614174000 \
+      -d root "$out"
   '';
   artifacts = {
     runtime-cloud-hypervisor = {
