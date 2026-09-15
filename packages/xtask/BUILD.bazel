@@ -1,8 +1,8 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load(
-    "@rules_rust//rust:defs.bzl",
-    "rust_binary",
-    "rust_test",
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_test",
 )
 load(
     ":generated_artifact_check.bzl",
@@ -15,7 +15,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "manifest_v04_check",
     srcs = ["src/bin/manifest_v04_check.rs"],
     compile_data = ["Cargo.toml"],
@@ -26,7 +26,7 @@ rust_binary(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "xtask",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     crate_root = "src/main.rs",
@@ -221,7 +221,7 @@ test_suite(
     ],
 )
 
-rust_test(
+d2b_rust_test(
     name = "buildbuddy_config",
     srcs = ["tests/buildbuddy_config.rs"],
     compile_data = ["Cargo.toml"],
@@ -317,7 +317,7 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "bazel_evidence",
     srcs = ["tests/bazel_evidence.rs"],
     compile_data = ["Cargo.toml"],
@@ -337,7 +337,7 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "policy_changelog_gate",
     srcs = [
         "tests/common/mod.rs",
@@ -358,14 +358,14 @@ rust_test(
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "pr_workflow",
     srcs = ["tests/pr_workflow.rs"],
     data = ["//:.github/workflows/pr-l1-static-fast.yml"],
     visibility = ["//visibility:public"],
 )
 
-rust_test(
+d2b_rust_test(
     name = "repository_contract",
     srcs = ["tests/repository_contract.rs"],
     data = [
@@ -379,7 +379,7 @@ rust_test(
     visibility = ["//visibility:public"],
 )
 
-rust_test(
+d2b_rust_test(
     name = "policy_production_closure",
     srcs = [
         "tests/common/mod.rs",
@@ -400,7 +400,7 @@ rust_test(
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "xtask_test",
     compile_data = ["Cargo.toml", "//:clippy.toml"],
     crate = ":xtask",
@@ -425,7 +425,7 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "schema_reproducibility_test",
     args = ["schema_tests::"],
     compile_data = ["Cargo.toml", "//:clippy.toml"],

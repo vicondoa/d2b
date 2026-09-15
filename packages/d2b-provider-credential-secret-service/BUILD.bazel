@@ -1,11 +1,17 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_credential_secret_service",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -17,7 +23,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_credential_secret_service_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -30,7 +36,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "d2b-provider-credential-secret-service",
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
@@ -38,7 +44,7 @@ rust_binary(
     deps = [":d2b_provider_credential_secret_service"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "entrypoint",
     srcs = ["tests/entrypoint.rs"],
     compile_data = ["Cargo.toml"],
@@ -54,7 +60,7 @@ rust_test(
     deps = [":d2b_provider_credential_secret_service"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "canary",
     srcs = [
         "tests/canary.rs",
@@ -71,7 +77,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "conformance",
     srcs = [
         "tests/common/mod.rs",
@@ -89,7 +95,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "delivery",
     srcs = [
         "tests/common/mod.rs",
@@ -106,7 +112,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "faults",
     srcs = [
         "tests/common/mod.rs",
@@ -123,7 +129,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "lifecycle",
     srcs = [
         "tests/common/mod.rs",
@@ -140,7 +146,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "placement",
     srcs = ["tests/placement.rs"],
     compile_data = ["Cargo.toml"],
@@ -153,7 +159,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_credential_secret_service_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_credential_secret_service",
@@ -163,7 +169,7 @@ rust_test(
     ],
 )
 
-rust_test(
+d2b_rust_test(
     name = "session",
     srcs = [
         "tests/session.rs",
@@ -201,7 +207,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_credential_secret_service_doc_test",
     crate = "//packages/d2b-provider-credential-secret-service:d2b_provider_credential_secret_service",
 )

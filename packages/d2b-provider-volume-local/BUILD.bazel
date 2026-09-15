@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 
 exports_files(
@@ -18,7 +24,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_volume_local",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -31,7 +37,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_volume_local_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -45,7 +51,7 @@ rust_library(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "layout_conformance",
     srcs = ["tests/layout_conformance.rs"],
     compile_data = ["Cargo.toml"],
@@ -59,7 +65,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "lock_order",
     srcs = ["tests/lock_order.rs"],
     compile_data = ["Cargo.toml"],
@@ -72,7 +78,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "marker_fail_closed",
     srcs = ["tests/marker_fail_closed.rs"],
     compile_data = ["Cargo.toml"],
@@ -85,7 +91,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "state",
     srcs = ["tests/state.rs"],
     compile_data = ["Cargo.toml"],
@@ -98,7 +104,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "status_bounds",
     srcs = ["tests/status_bounds.rs"],
     compile_data = ["Cargo.toml"],
@@ -111,7 +117,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "store_view_and_swtpm",
     srcs = ["tests/store_view_and_swtpm.rs"],
     compile_data = ["Cargo.toml"],
@@ -124,7 +130,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "views_and_sharing",
     srcs = ["tests/views_and_sharing.rs"],
     compile_data = ["Cargo.toml"],
@@ -137,7 +143,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "volume_local",
     srcs = ["tests/volume_local.rs"],
     compile_data = ["Cargo.toml"],
@@ -150,7 +156,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_volume_local_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_volume_local_test_support",
@@ -183,7 +189,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_volume_local_doc_test",
     crate = "//packages/d2b-provider-volume-local:d2b_provider_volume_local",
 )
