@@ -29,6 +29,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, DEFAULT_CONTEXT_DEADLINE_MS, FdKind, ForwardContext, MAX_FRAME_FDS,
@@ -81,8 +82,52 @@ pub const FD_LEG: &str = d2b_contracts_broker::broker_wire::FD_LEG;
 
 pub const STALE_CONTEXT: &str = d2b_contracts_broker::broker_wire::STALE_CONTEXT;
 
+/// The refusal code for a handler that deliberately refused its invocation.
+///
+/// The peer codes are the closed dispatch-failure vocabulary (KTD7): a
+/// failure a handler chose, a failure a handler hit, a budget a handler
+/// overran, and a crash a handler died in each keep their own code when
+/// they surface from a dispatch, never flattened into the missing-handler
+/// refusal.
+pub const HANDLER_REFUSED: &str = "handler-refused";
+
+/// The refusal code for a handler that ran and failed.
+pub const HANDLER_ERRORED: &str = "handler-errored";
+
+/// The refusal code for a handler that did not finish within its effective
+/// budget.
+///
+/// The budget is the broker-attested context deadline when the call carries
+/// one, and the envelope or table default otherwise; the dispatch aborts the
+/// handler task at expiry, so a non-yielding handler is refused by name
+/// rather than served forever.
+pub const HANDLER_TIMED_OUT: &str = "handler-timed-out";
+
+/// The refusal code for a handler that panicked mid-dispatch.
+///
+/// The dispatch wraps the handler so the crash is a named refusal with the
+/// panic's message as detail, never a panic escaping into the caller's
+/// socket path.
+pub const HANDLER_CRASHED: &str = "handler-crashed";
+
+/// The refusal code for a wire variant a peer's Hello-negotiated wire
+/// version does not admit.
+///
+/// The code is this envelope's stable entry for the taxonomy's stale-wire
+/// half (KTD7): the gate that refuses a straggler peer's call with it before
+/// dispatch - rather than a pre-dispatch malformed-wire drop - lands with
+/// the wire-version gate (U4 item 4); this file carries the code and its
+/// closed-set entry alone.
+pub const STALE_WIRE_VERSION: &str = "stale-wire-version";
+
 /// The closed set of codes the envelope itself refuses with.
-pub const ENVELOPE_REFUSALS: [&str; 8] = [
+///
+/// The set is closed: the envelope codes above the dispatch failures that
+/// can name a refusal, the carrier's fd-leg and stale-context codes, the
+/// peer codes a dispatch failure can carry (KTD7), and the stale-wire-version
+/// code a retiring gate will refuse with. A code outside the set is never
+/// surfaced as the caller-visible code; it rides in the refusal's detail.
+pub const ENVELOPE_REFUSALS: [&str; 13] = [
     UNKNOWN_OPERATION,
     UNCOMMITTED_OPERATION,
     UNGRANTED_CALLER,
@@ -91,6 +136,11 @@ pub const ENVELOPE_REFUSALS: [&str; 8] = [
     UNREGISTERED_HANDLER,
     FD_LEG,
     STALE_CONTEXT,
+    HANDLER_REFUSED,
+    HANDLER_ERRORED,
+    HANDLER_TIMED_OUT,
+    HANDLER_CRASHED,
+    STALE_WIRE_VERSION,
 ];
 
 /// One refused invocation, named.
@@ -412,9 +462,8 @@ impl TrustedContextStore {
     /// A publication ack a daemon-side receiver hands back to its caller.
     ///
     /// The wire shape is the acknowledgement the daemon reads its epoch
-    /// from; production transports dispatch it on the origination leg
-    /// (later-unit wiring), and the store hands the same value directly so
-    /// the two never disagree.
+    /// from; production dispatch routes the publish variant through this
+    /// same method, so the wire and the store never disagree.
     pub fn publication_reply(&self, values: &PublishTrustedContextValues) -> Result<PublishTrustedContextResponse, TrustedContextStoreError> {
         let epoch = self.publish(values)?;
         Ok(PublishTrustedContextResponse {
@@ -466,6 +515,34 @@ impl TrustedContextStore {
     }
 }
 
+/// The broker process's trusted-context store.
+///
+/// The store is process-lifetime state opened once under the daemon state
+/// root before the accept loop starts, exactly like the state-cell store:
+/// dispatch routes the publish wire variant through it, and the envelope
+/// would mint from it. `run_server` is the only production writer; tests
+/// initialize it against a scratch root.
+static TRUSTED_CONTEXT_STORE: std::sync::OnceLock<TrustedContextStore> = std::sync::OnceLock::new();
+
+/// Open the process's trusted-context store under the daemon state root.
+///
+/// Called once in `run_server` before the broker serves; a store that fails
+/// to open fails the broker closed at startup rather than attesting or
+/// caching under a half-open state.
+pub(crate) fn init_trusted_context_store(
+    state_dir: &Path,
+) -> Result<(), TrustedContextStoreError> {
+    let store = TrustedContextStore::open(state_dir)?;
+    let _ = TRUSTED_CONTEXT_STORE.set(store);
+    Ok(())
+}
+
+/// The broker process's trusted-context store, absent until
+/// [`init_trusted_context_store`] runs.
+pub(crate) fn trusted_context_store() -> Option<&'static TrustedContextStore> {
+    TRUSTED_CONTEXT_STORE.get()
+}
+
 /// One dispatched invocation as the handler sees it.
 #[derive(Debug)]
 pub struct InvocationCtx<'a> {
@@ -496,10 +573,11 @@ pub struct DispatchOutcome {
 
 /// Why one dispatch produced no result.
 ///
-/// The two cases stay apart because the envelope reports them differently:
-/// an operation no handler serves is the fail-closed
-/// [`UNREGISTERED_HANDLER`] refusal, while a handler that ran and failed has
-/// its own code and must never be reported as a missing handler.
+/// The cases stay apart because the envelope reports them differently: an
+/// operation no handler serves is the fail-closed [`UNREGISTERED_HANDLER`]
+/// refusal, while a failure a handler or peer decided carries its own code
+/// from the closed peer set (KTD7) and must never be reported as a missing
+/// handler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchFailure {
     /// The closed refusal code.
@@ -750,27 +828,33 @@ impl BrokerEnvelope {
             })
             .await
             .map_err(|failure| {
-                // The envelope's refusals are a closed set of broker-side
-                // codes. The fd-leg refusal is one of them (and is exactly the
-                // carrier's own refusal name, so it surfaces as the closed code
-                // the caller sees); a failure a forwarder raised carries the
-                // peer's own code, which is otherwise not one of them. The
-                // closed code the caller sees stays the fail-closed
-                // missing-handler refusal, and the peer's code rides along as
-                // the detail the audit record keeps for an operator..
-                if failure.code == FD_LEG {
-                    return EnvelopeRefusal::new(
+                // Every dispatch failure keeps its own code: a refusal a
+                // handler chose, an error a handler hit, a budget a handler
+                // overran, and a crash a handler died in all name themselves
+                // (KTD7), so no dispatch failure is flattened into the
+                // missing-handler refusal. The peer codes are entries of the
+                // envelope's closed set; a failure that carries a code
+                // outside it (a non-conforming peer) is refused under the
+                // envelope's own errored code, and the peer's code rides in
+                // the record's detail so an operator still sees it.
+                match ENVELOPE_REFUSALS
+                    .iter()
+                    .find(|code| **code == failure.code)
+                    .copied()
+                {
+                    Some(code) => EnvelopeRefusal::with_detail(
                         invocation_id.clone(),
                         operation,
-                        FD_LEG,
-                    );
+                        code,
+                        failure.detail,
+                    ),
+                    None => EnvelopeRefusal::with_detail(
+                        invocation_id.clone(),
+                        operation,
+                        ERRORED,
+                        Some(failure.detail.unwrap_or(failure.code)),
+                    ),
                 }
-                EnvelopeRefusal::with_detail(
-                    invocation_id.clone(),
-                    operation,
-                    UNREGISTERED_HANDLER,
-                    failure.detail.or(Some(failure.code)),
-                )
             })?;
         Ok(Invocation {
             audit_join_identity: row.audit_join_identity(&payload),
@@ -970,13 +1054,80 @@ impl BrokerEnvelopeBuilder {
 pub type OperationHandler =
     Box<dyn Fn(&DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> + Send + Sync>;
 
+/// A registered operation handler, shared into the abortable task that runs
+/// it.
+type SharedOperationHandler =
+    Arc<dyn Fn(&DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> + Send + Sync>;
+
+/// The broker's handler worker set: the bounded pool in-broker handlers run
+/// on.
+///
+/// A local handler runs as an abortable task on this set rather than inline
+/// on the accept loop's executor: the call's effective budget (the
+/// broker-attested context deadline, or the handler table's own default) is
+/// enforced by task abort at expiry, so a non-yielding handler cannot starve
+/// the accept loop or a concurrent innocent operation. The set is one
+/// bounded multi-threaded runtime for the process, built the same way the
+/// broker's other runtimes are (`enable_all`, named workers); the existing
+/// blocking dispatch pool remains for non-async adapters.
+static HANDLER_WORKER_SET: std::sync::LazyLock<tokio::runtime::Runtime> =
+    std::sync::LazyLock::new(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("d2b-broker-handler")
+            .enable_all()
+            .build()
+            .expect("broker handler worker set")
+    });
+
+fn handler_worker_set() -> &'static tokio::runtime::Runtime {
+    &HANDLER_WORKER_SET
+}
+
+/// The message one handler panic carried, when it carried a message.
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> Option<String> {
+    if let Some(&message) = payload.downcast_ref::<&str>() {
+        Some(message.to_owned())
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        Some(message.clone())
+    } else {
+        None
+    }
+}
+
+/// The owned shape one local handler task runs on.
+///
+/// A handler is handed borrowed invocation data; an abortable task owns its
+/// inputs, so the borrowed invocation is materialized - payload, context,
+/// and descriptor dups - at the task boundary, exactly as a spawned forward
+/// leg owns its frame.
+struct OwnedInvocation {
+    operation: String,
+    zone: String,
+    invocation_id: String,
+    payload: CanonicalJsonObject,
+    context: Option<ForwardContext>,
+    fds: Vec<OwnedFd>,
+    fd_kind: Option<FdKind>,
+}
+
 /// A dispatcher that serves an explicit handler table.
 ///
 /// Used by the broker's own operations and by the tests; a family row is
 /// served by the declaring crate's process, not here.
-#[derive(Default)]
+///
+/// A local handler runs as an abortable task on the broker's handler worker
+/// set under the invocation's effective budget: the broker-attested context
+/// deadline when the call carries one, the table's own deadline (the carrier
+/// default) otherwise. The budget is enforced by task abort at expiry, so a
+/// non-yielding handler cannot starve the accept loop or a concurrent
+/// innocent operation, and a panicking handler is a named crash refusal
+/// rather than a panic escaping into the caller's socket path.
 pub struct HandlerTable {
-    handlers: Vec<(&'static str, OperationHandler)>,
+    handlers: Vec<(&'static str, SharedOperationHandler)>,
+    /// The budget one local handler may consume when the call carries no
+    /// context block; a context block's deadline supersedes it.
+    deadline: Duration,
 }
 
 impl std::fmt::Debug for HandlerTable {
@@ -984,7 +1135,19 @@ impl std::fmt::Debug for HandlerTable {
         formatter
             .debug_struct("HandlerTable")
             .field("handlers", &self.handlers.len())
+            .field("deadline_ms", &self.deadline.as_millis())
             .finish_non_exhaustive()
+    }
+}
+
+impl Default for HandlerTable {
+    /// An empty handler table whose local handlers run under the carrier
+    /// default budget.
+    fn default() -> Self {
+        Self {
+            handlers: Vec::new(),
+            deadline: Duration::from_millis(DEFAULT_CONTEXT_DEADLINE_MS),
+        }
     }
 }
 
@@ -1003,7 +1166,19 @@ impl HandlerTable {
         + Sync
         + 'static,
     ) -> Self {
-        self.handlers.push((operation, Box::new(handler)));
+        self.handlers.push((operation, Arc::new(handler)));
+        self
+    }
+
+    /// Bound every local handler to `deadline` when the call carries no
+    /// context block.
+    ///
+    /// The carrier's default is the table's own default; a broker-attested
+    /// context block's deadline supersedes the table's value whenever the
+    /// call mints one, which is how the row's declared budget will bind the
+    /// local leg once the row deadline tier lands (U4b).
+    pub fn with_deadline(mut self, deadline: Duration) -> Self {
+        self.deadline = deadline;
         self
     }
 }
@@ -1022,9 +1197,92 @@ impl OperationDispatcher for HandlerTable {
                 )))
             });
         };
-        // A local handler is already the whole answer: its future is ready
-        // the moment it is asked, and the envelope's await costs nothing.
-        Box::pin(async move { handler(&invocation) })
+        // A local handler runs as an abortable task on the handler worker
+        // set rather than inline on the caller's executor: the effective
+        // budget (the context block's deadline when the call carries one,
+        // the table's default otherwise) is enforced by task abort at
+        // expiry, and a panic inside the handler is caught at the task
+        // boundary and becomes a named crash refusal.
+        let handler = Arc::clone(handler);
+        let operation = invocation.ctx.operation.to_owned();
+        let panic_fallback = format!("handler panicked dispatching {operation}");
+        let zone = invocation.ctx.zone.to_owned();
+        let invocation_id = invocation.ctx.invocation_id.to_owned();
+        let payload = invocation.payload.clone();
+        let context = invocation.context.cloned();
+        let fd_kind = invocation.fd_kind;
+        let budget = invocation
+            .context
+            .map(|context| Duration::from_millis(context.deadline_ms))
+            .unwrap_or(self.deadline);
+        // The task owns its inputs, so the caller's descriptors are
+        // duplicated; a dup shares the open file description, which is
+        // exactly the visibility an inline dispatch would have had.
+        let fds = match invocation
+            .fds
+            .iter()
+            .map(|fd| fd.try_clone())
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(fds) => fds,
+            Err(error) => {
+                return Box::pin(async move {
+                    Err(DispatchFailure::with_detail(
+                        ERRORED,
+                        format!("duplicate invocation descriptors: {error}"),
+                    ))
+                })
+            }
+        };
+        Box::pin(async move {
+            let owned = OwnedInvocation {
+                operation,
+                zone,
+                invocation_id,
+                payload,
+                context,
+                fds,
+                fd_kind,
+            };
+            let joined = handler_worker_set().spawn(async move {
+                let invocation = DirectInvocation {
+                    ctx: InvocationCtx {
+                        operation: &owned.operation,
+                        zone: &owned.zone,
+                        invocation_id: &owned.invocation_id,
+                    },
+                    payload: &owned.payload,
+                    context: owned.context.as_ref(),
+                    fds: &owned.fds,
+                    fd_kind: owned.fd_kind,
+                };
+                handler(&invocation)
+            });
+            // The task is aborted the moment its budget expires and the call
+            // is refused by name; a handler that never yields keeps its own
+            // worker busy but cannot starve the accept loop or queue-block
+            // an innocent operation running on another worker.
+            let abort = joined.abort_handle();
+            match tokio::time::timeout(budget, joined).await {
+                Ok(Ok(Ok(outcome))) => Ok(outcome),
+                Ok(Ok(Err(failure))) => Err(failure),
+                Ok(Err(join)) if join.is_panic() => Err(DispatchFailure::with_detail(
+                    HANDLER_CRASHED,
+                    panic_message(join.into_panic()).unwrap_or(panic_fallback),
+                )),
+                Ok(Err(join)) => Err(DispatchFailure::with_detail(
+                    ERRORED,
+                    format!("handler task ended without a result: {join}"),
+                )),
+                Err(_elapsed) => {
+                    abort.abort();
+                    Err(DispatchFailure::with_detail(
+                        HANDLER_TIMED_OUT,
+                        format!("handler exceeded its {} ms budget", budget.as_millis()),
+                    ))
+                }
+            }
+        })
     }
 }
 
@@ -1411,6 +1669,238 @@ while let Ok(fd) = accept_peer(&listener) {
             ))
             .expect_err("a row with no handler is refused");
         assert_eq!(refusal.code, UNREGISTERED_HANDLER);
+    }
+
+    #[test]
+    fn the_closed_set_carries_the_peer_codes() {
+        // The taxonomy's peer codes and the stale-wire entry are closed-set
+        // members (KTD7): a dispatch failure carrying one surfaces under its
+        // own code, never flattened into the missing-handler refusal.
+        for code in [
+            HANDLER_REFUSED,
+            HANDLER_ERRORED,
+            HANDLER_TIMED_OUT,
+            HANDLER_CRASHED,
+            STALE_WIRE_VERSION,
+        ] {
+            assert!(
+                ENVELOPE_REFUSALS.contains(&code),
+                "{code} must be a closed-set entry"
+            );
+        }
+    }
+
+    #[test]
+    fn a_handler_refusal_and_a_handler_error_each_keep_their_own_codes() {
+        // A refusal a handler chose and a failure a handler hit are two
+        // cases with two codes: the caller can tell a deliberate refusal
+        // from a broken handler, and neither is a missing handler.
+        let refused = HandlerTable::new().with("ProbeOperation", |_invocation| {
+            Err(DispatchFailure::with_detail(HANDLER_REFUSED, "grant exhausted"))
+        });
+        let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(refused))
+            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .build();
+        let refusal = runtime().block_on(envelope.call(
+            CallerAuthority::Daemon,
+            "ProbeOperation",
+            "zone-a",
+            &serde_json::json!({ "label": "x" }),
+        ))
+        .expect_err("a handler that refuses keeps its own code");
+        assert_eq!(refusal.code, HANDLER_REFUSED);
+        assert_eq!(refusal.detail.as_deref(), Some("grant exhausted"));
+        assert_eq!(refusal.audit_fields()["reason"], HANDLER_REFUSED);
+
+        let errored = HandlerTable::new().with("ProbeOperation", |_invocation| {
+            Err(DispatchFailure::with_detail(HANDLER_ERRORED, "backend failed"))
+        });
+        let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(errored))
+            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .build();
+        let refusal = runtime().block_on(envelope.call(
+            CallerAuthority::Daemon,
+            "ProbeOperation",
+            "zone-a",
+            &serde_json::json!({ "label": "x" }),
+        ))
+        .expect_err("a handler that failed keeps its own code");
+        assert_eq!(refusal.code, HANDLER_ERRORED);
+        assert_eq!(refusal.detail.as_deref(), Some("backend failed"));
+    }
+
+    #[test]
+    fn a_forwarded_peer_failure_keeps_its_own_code() {
+        // The peer's dispatch failure crosses the socket and back under its
+        // own code: a handler refusal in the declaring process is reported
+        // as a refusal, not flattened into a missing handler here.
+        let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", |_invocation| {
+            Err(DispatchFailure::with_detail(
+                HANDLER_REFUSED,
+                "the declaring process refused",
+            ))
+        }));
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
+        )
+        .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+        .build();
+        let refusal = runtime().block_on(envelope.call(
+            CallerAuthority::Daemon,
+            "ProbeOperation",
+            "zone-a",
+            &serde_json::json!({ "label": "x" }),
+        ))
+        .expect_err("a peer refusal keeps its own code");
+        assert_eq!(refusal.code, HANDLER_REFUSED);
+        assert_eq!(peer.calls(), 1, "the call must have crossed the socket");
+    }
+
+    #[test]
+    fn a_failure_code_outside_the_closed_set_is_refused_as_errored_with_the_code_as_detail() {
+        // The caller's vocabulary is the envelope's closed set: a peer code
+        // the set does not carry is refused under the envelope's own errored
+        // code, and the peer's spelling rides in the record's detail so an
+        // operator still sees it.
+        let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", |_invocation| {
+            Err(DispatchFailure::new("family-own-code"))
+        }));
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
+        )
+        .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+        .build();
+        let refusal = runtime().block_on(envelope.call(
+            CallerAuthority::Daemon,
+            "ProbeOperation",
+            "zone-a",
+            &serde_json::json!({ "label": "x" }),
+        ))
+        .expect_err("a code outside the closed set is refused");
+        assert_eq!(refusal.code, ERRORED);
+        assert_eq!(refusal.detail.as_deref(), Some("family-own-code"));
+        assert_eq!(peer.calls(), 1);
+    }
+
+    #[test]
+    fn a_panicking_local_handler_writes_a_handler_crashed_refusal_and_the_envelope_keeps_serving() {
+        // A crash inside a local handler is caught at the task boundary: the
+        // caller sees a typed crash refusal carrying the panic's message,
+        // never a dropped caller, and the envelope keeps serving.
+        let table = HandlerTable::new().with("ProbeOperation", |_invocation| {
+            panic!("probe blew up");
+        });
+        let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(table))
+            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .build();
+        let refusal = runtime().block_on(envelope.call(
+            CallerAuthority::Daemon,
+            "ProbeOperation",
+            "zone-a",
+            &serde_json::json!({ "label": "x" }),
+        ))
+        .expect_err("a panicking handler is a typed refusal, never a dropped caller");
+        assert_eq!(refusal.code, HANDLER_CRASHED);
+        assert_eq!(refusal.detail.as_deref(), Some("probe blew up"));
+        assert!(refusal.invocation_id.starts_with("invocation-"));
+        let fields = refusal.audit_fields();
+        assert_eq!(fields["reason"], HANDLER_CRASHED);
+        assert_eq!(fields["invocation_id"], refusal.invocation_id);
+        assert_eq!(fields["operation"], "ProbeOperation");
+        // The panic never left the handler task: the same envelope turns the
+        // next crash into the same typed refusal instead of dropping the
+        // caller.
+        let again = runtime().block_on(envelope.call(
+            CallerAuthority::Daemon,
+            "ProbeOperation",
+            "zone-a",
+            &serde_json::json!({ "label": "x" }),
+        ))
+        .expect_err("a second crash is the same typed refusal");
+        assert_eq!(again.code, HANDLER_CRASHED);
+    }
+
+    #[test]
+    fn a_spinning_handler_is_aborted_to_timed_out_while_an_innocent_operation_answers() {
+        // A local handler that never awaits is aborted at its effective
+        // budget: the call is refused by name while the handler hogs its own
+        // worker, and an innocent operation on the same envelope answers
+        // from another worker.
+        const BUDGET: Duration = Duration::from_millis(400);
+        let mut spin_row = declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]);
+        spin_row.operation = "SpinningOperation";
+        let envelope = Arc::new(
+            BrokerEnvelope::over(
+                BrokerProfileId::Host,
+                Box::new(
+                    HandlerTable::new()
+                        .with_deadline(BUDGET)
+                        .with("SpinningOperation", |_invocation| {
+                            // A handler that never yields: it would starve an
+                            // inline executor, so the task must be aborted
+                            // for the call to end at its budget.
+                            let start = std::time::Instant::now();
+                            while start.elapsed() < Duration::from_secs(2) {
+                                std::hint::spin_loop();
+                            }
+                            Ok(DispatchOutcome {
+                                result: serde_json::from_value(serde_json::json!({
+                                    "done": true
+                                }))
+                                .expect("canonical"),
+                                fds: Vec::new(),
+                            })
+                        })
+                        .with("ProbeOperation", |_invocation| {
+                            Ok(DispatchOutcome {
+                                result: serde_json::from_value(
+                                    serde_json::json!({ "echo": "ok" }),
+                                )
+                                .expect("canonical"),
+                                fds: Vec::new(),
+                            })
+                        }),
+                ),
+            )
+            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .declare(spin_row)
+            .build(),
+        );
+        let spinner = Arc::clone(&envelope);
+        let started = std::time::Instant::now();
+        let spinning = runtime().spawn(async move {
+            spinner
+                .call(
+                    CallerAuthority::Daemon,
+                    "SpinningOperation",
+                    "zone-a",
+                    &serde_json::json!({ "label": "x" }),
+                )
+                .await
+        });
+        // The spinner is on its own worker by now; the innocent operation
+        // answers while it is still in flight.
+        std::thread::sleep(Duration::from_millis(60));
+        runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect("the innocent operation answers while the spinner is in flight");
+        let refusal = runtime()
+            .block_on(spinning)
+            .expect("the spinning call joined")
+            .expect_err("the spinning handler is aborted at its budget");
+        assert_eq!(refusal.code, HANDLER_TIMED_OUT);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= BUDGET && elapsed < Duration::from_secs(2),
+            "the refusal is the budget's, not the handler's: {elapsed:?}"
+        );
     }
 
     #[test]
