@@ -427,7 +427,7 @@ Sequencing: Phase A lands the three census-gated carrier capabilities - fd leg, 
 - **Test scenarios:**
   - Error: a fixture introducing a family literal into a shared crate fails the check with a named violation; a shared crate attempting a provider dependency fails the bazel visibility edge; a runtime-concatenated family name in a shared crate is caught by the extended probe.
   - Edge: a shrinking allowlist is accepted; a growing one fails.
-- **Verification:** `cargo xtask check-provider-layout` (extended) green on the final tree with an empty-or-shrinking allowlist.
+- **Verification:** `cargo xtask check-provider-crate-layout` (extended) green on the final tree with an empty-or-shrinking allowlist.
 
 ---
 
@@ -437,7 +437,7 @@ Sequencing: Phase A lands the three census-gated carrier capabilities - fd leg, 
 |---|---|---|
 | Workspace gates | `make check` + the full host-integration lane | no operator-visible regression, per #516's standing gate |
 | Generated-view drift | `//packages/xtask:generated_artifacts` (`gen_broker_operations_drift`) + the gen-layer-catalogs check | rows and views stay in sync across BOTH generators (U7) |
-| Policy check | `cargo xtask check-provider-layout` (extended, U14) | zero family-named code in shared crates (R14) |
+| Policy check | `cargo xtask check-provider-crate-layout` (extended, U14) | zero family-named code in shared crates (R14) |
 | Envelope suites | broker `envelope` tests + rendezvous cross-socket tests | carrier capabilities (U1-U6, U9) |
 | Conformance | `packages/d2b-process-conformance` suites per realizer | process family behavior preserved (U10) |
 | Cross-binary E2E | new pilot E2E (U10) | broker + daemon binaries end to end with fds and audit |

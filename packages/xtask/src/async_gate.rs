@@ -183,24 +183,24 @@ fn scan_line(
                     && token_start
                 {
                     for entry in entries {
-                            if flagged.contains(&entry.path.as_str()) {
-                                continue;
-                            }
-                            let first = entry.path.as_bytes()[0];
-                            if first != b && entry.tail.as_bytes()[0] != b {
-                                continue;
-                            }
-                            if matches_at(&code, i, entry) {
-                                flagged.push(&entry.path);
-                                out.push(Violation {
-                                    file: file.to_owned(),
-                                    line: line_no,
-                                    api: entry.path.clone(),
-                                    context,
-                                    code: raw.trim().to_owned(),
-                                });
-                            }
+                        if flagged.contains(&entry.path.as_str()) {
+                            continue;
                         }
+                        let first = entry.path.as_bytes()[0];
+                        if first != b && entry.tail.as_bytes()[0] != b {
+                            continue;
+                        }
+                        if matches_at(&code, i, entry) {
+                            flagged.push(&entry.path);
+                            out.push(Violation {
+                                file: file.to_owned(),
+                                line: line_no,
+                                api: entry.path.clone(),
+                                context,
+                                code: raw.trim().to_owned(),
+                            });
+                        }
+                    }
                 }
                 let ch = code[i..].chars().next().expect("i stays on a char boundary");
                 state.segment.push(ch);
