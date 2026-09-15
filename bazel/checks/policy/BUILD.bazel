@@ -13,6 +13,17 @@ sh_test(
     ],
 )
 
+sh_test(
+    name = "check-async-gate",
+    srcs = ["//:tests/tools/check-async-gate.sh"],
+    data = ["//packages/xtask:xtask"],
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
+
 test_suite(
     name = "source_hygiene",
     tests = [
@@ -77,6 +88,7 @@ test_suite(
     name = "policy_tooling",
     tests = [
         ":changelog",
+        ":check-async-gate",
         ":drift",
         ":policy",
         ":provider_crate_layout",
