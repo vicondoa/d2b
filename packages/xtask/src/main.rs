@@ -208,11 +208,10 @@ fn main() -> std::process::ExitCode {
         [command, rest @ ..] if command == "check-async-gate" => {
             run_async_gate(rest)
         }
-        [command] if command == "check-provider-layout" => run_provider_layout(),
         [command] if command == "deadcode-check" => deadcode::run(),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-layer-catalogs [--check|--write]|gen-error-codes|gen-provider-packaging|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout [--fix]|blocking-census|check-async-gate [<paths>...]|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-layer-catalogs [--check|--write]|gen-error-codes|gen-provider-packaging|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout [--fix]|blocking-census|check-async-gate [<paths>...]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -288,81 +287,6 @@ fn run_provider_crate_layout(args: &[String]) -> std::process::ExitCode {
     }
 }
 
-fn run_provider_layout() -> std::process::ExitCode {
-    let result = repo_root()
-        .map_err(|error| error.to_string())
-        .and_then(check_provider_layout);
-    match result {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("check-provider-layout failed: {error}");
-            std::process::ExitCode::FAILURE
-        }
-    }
-}
-
-/// Check the four required paths for every two-segment Provider workspace
-/// member. Generic helper crates such as `d2b-provider-toolkit` do not match
-/// the Provider crate naming shape and remain outside this check.
-fn check_provider_layout(repo_root: &Path) -> Result<(), String> {
-    let manifest = fs::read_to_string(repo_root.join("Cargo.toml"))
-        .map_err(|_| "provider-layout-input-unreadable".to_owned())?;
-    let members_start = manifest
-        .find("members = [")
-        .ok_or_else(|| "provider-layout-members-missing".to_owned())?;
-    let members = &manifest[members_start..];
-    let members_end = members
-        .find(']')
-        .ok_or_else(|| "provider-layout-members-malformed".to_owned())?;
-    let mut violations = Vec::new();
-
-    for line in members[..members_end].lines().skip(1) {
-        let member = line.trim().trim_end_matches(',');
-        let Some(relative) = member
-            .strip_prefix('"')
-            .and_then(|value| value.strip_suffix('"'))
-        else {
-            continue;
-        };
-        let member_path = Path::new(relative);
-        let Some(crate_name) = member_path.file_name().and_then(|value| value.to_str()) else {
-            return Err("provider-layout-member-invalid".to_owned());
-        };
-        let Some(provider_suffix) = crate_name.strip_prefix("d2b-provider-") else {
-            continue;
-        };
-        if !provider_suffix.contains('-') {
-            continue;
-        }
-        let crate_dir = if member_path.starts_with("packages") {
-            repo_root.join(member_path)
-        } else {
-            repo_root.join("packages").join(member_path)
-        };
-        let required = ["src", "tests", "integration", "README.md"];
-        let missing = required
-            .into_iter()
-            .filter(|path| !crate_dir.join(path).exists())
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            let missing = missing
-                .into_iter()
-                .map(|path| format!("\"{path}\""))
-                .collect::<Vec<_>>()
-                .join(",");
-            violations.push(format!(
-                "{{\"error\":\"missing-provider-layout\",\"crate\":\"{crate_name}\",\"missing\":[{missing}]}}"
-            ));
-        }
-    }
-
-    if violations.is_empty() {
-        Ok(())
-    } else {
-        violations.sort();
-        Err(violations.join("\n"))
-    }
-}
 
 fn run_inventory(output_path: Option<PathBuf>) -> std::process::ExitCode {
     match inventory::emit_adr0035_inventory(output_path.as_deref()) {
@@ -1581,55 +1505,6 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
-}
-
-#[cfg(test)]
-mod provider_layout_tests {
-    use super::check_provider_layout;
-    use std::{
-        fs,
-        sync::atomic::{AtomicUsize, Ordering},
-    };
-
-    static FIXTURE_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn fixture() -> std::path::PathBuf {
-        let serial = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "d2b-provider-layout-command-{}-{serial}",
-            std::process::id()
-        ));
-        let crate_dir = root.join("packages/d2b-provider-device-fixture");
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(crate_dir.join("src")).unwrap();
-        fs::create_dir_all(crate_dir.join("tests")).unwrap();
-        fs::create_dir_all(crate_dir.join("integration")).unwrap();
-        fs::write(
-            root.join("Cargo.toml"),
-            "[workspace]\nmembers = [\n    \"d2b-provider-device-fixture\",\n]\n",
-        )
-        .unwrap();
-        fs::write(crate_dir.join("README.md"), "# fixture\n").unwrap();
-        root
-    }
-
-    #[test]
-    fn accepts_all_four_required_paths() {
-        let root = fixture();
-        assert_eq!(check_provider_layout(&root), Ok(()));
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn names_each_missing_required_path() {
-        let root = fixture();
-        let missing = root.join("packages/d2b-provider-device-fixture/integration");
-        fs::remove_dir_all(missing).unwrap();
-        let error = check_provider_layout(&root).unwrap_err();
-        assert!(error.contains("\"crate\":\"d2b-provider-device-fixture\""));
-        assert!(error.contains("\"missing\":[\"integration\"]"));
-        fs::remove_dir_all(root).unwrap();
-    }
 }
 
 #[cfg(test)]
