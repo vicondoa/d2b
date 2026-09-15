@@ -3822,7 +3822,17 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             // Fail closed for doctor/status consumers if the replacement
             // report cannot be written below: stale clean evidence is worse
             // than an absent report.
-            match std::fs::remove_file(&report_path) {
+            // KTD9: the removal is a blocking fs call; never run it on a
+            // runtime worker.
+            let removed = tokio::task::spawn_blocking({
+                let report_path = report_path.clone();
+                move || std::fs::remove_file(&report_path)
+            })
+            .await
+            .unwrap_or_else(|join| {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, join.to_string()))
+            });
+            match removed {
                 Ok(()) => {}
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => {
@@ -4335,7 +4345,17 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     if options.validate_only {
         return Ok(());
     }
-    fs::create_dir_all(&options.state_dir).map_err(|_| TypedError::InternalConfig {
+    // KTD9: the mkdir is a blocking fs call; never run it on a runtime
+    // worker.
+    tokio::task::spawn_blocking({
+        let state_dir = options.state_dir.clone();
+        move || fs::create_dir_all(&state_dir)
+    })
+    .await
+    .map_err(|join| TypedError::InternalConfig {
+        detail: format!("guest state root unavailable: {join}"),
+    })?
+    .map_err(|_| TypedError::InternalConfig {
         detail: "guest state root unavailable".to_owned(),
     })?;
     let runtime = d2bd_runtime::guest_mode::GuestRuntime::new(
@@ -18419,40 +18439,83 @@ pub(crate) fn consume_lifecycle_lease(
     operation: provider_effects::GuestLifecycleOperation,
     caller_role: &BrokerCallerRole,
 ) -> Result<(), provider_effects::ProviderEffectError> {
-    let operation = match operation {
-        provider_effects::GuestLifecycleOperation::Start => {
-            d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Start
-        }
-        provider_effects::GuestLifecycleOperation::Stop => {
-            d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Stop
-        }
-        provider_effects::GuestLifecycleOperation::Restart => {
-            d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Restart
-        }
-    };
-    let response = dispatch_broker_request_as(
-        state,
-        BrokerRequest::ConsumeLifecycleLease(
-            d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest {
-                zone_uid: authorization.zone_uid().clone(),
-                guest_uid: authorization.guest_uid().clone(),
-                guest_generation: authorization.guest_generation().get(),
-                provider_assignment_generation: authorization
-                    .provider_assignment_generation()
-                    .get(),
-                policy_revision: authorization.policy_revision(),
-                operation_id: authorization.operation_id().to_owned(),
-                operation,
-                stop_only: authorization.is_stop_only(),
-            },
-        ),
-        caller_role.clone(),
-    )
-    .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
-    match response {
-        BrokerResponse::ConsumeLifecycleLease(response) if response.consumed => Ok(()),
-        _ => Err(provider_effects::ProviderEffectError::EffectRejected),
+    let zone_uid = authorization.zone_uid();
+    let guest_uid = authorization.guest_uid();
+    let guest_generation = authorization.guest_generation().get();
+    let provider_assignment_generation = authorization.provider_assignment_generation().get();
+    let policy_revision = authorization.policy_revision();
+    let operation_id = authorization.operation_id();
+    let stop_only = authorization.is_stop_only();
+    // The lease validation the retired broker arm ran moves caller-side
+    // (U11): the consume-cell/complete-cell kernels are generic cell
+    // machinery and never learn a lease shape, so the caller validates the
+    // identity fields and classifies itself before invoking.
+    if guest_generation == 0
+        || provider_assignment_generation == 0
+        || policy_revision == 0
+        || operation_id.is_empty()
+        || operation_id.len() > 128
+        || operation_id.chars().any(char::is_control)
+    {
+        return Err(provider_effects::ProviderEffectError::EffectRejected);
     }
+    // The stop_only/HostShutdownRestricted fence, moved side: the caller
+    // classifies itself — host-shutdown only when the envelope caller is
+    // HostShutdownUid — and keeps the retired arm's shape (stop-only
+    // shutdowns may only stop, never start or restart).
+    let is_shutdown = matches!(caller_role, BrokerCallerRole::HostShutdownUid { .. });
+    if stop_only != is_shutdown
+        || (is_shutdown && operation != provider_effects::GuestLifecycleOperation::Stop)
+        || matches!(caller_role, BrokerCallerRole::NotAuthorized)
+    {
+        return Err(provider_effects::ProviderEffectError::EffectRejected);
+    }
+    // The full lease identity is the one-time cell key (KTD3): the payload
+    // carries every field the retired arm keyed on, in the wire
+    // vocabulary's camelCase spelling, and the cell kernels derive the
+    // canonical identity from it.
+    let payload = serde_json::json!({
+        "zoneUid": zone_uid.as_str(),
+        "guestUid": guest_uid.as_str(),
+        "guestGeneration": guest_generation,
+        "providerAssignmentGeneration": provider_assignment_generation,
+        "policyRevision": policy_revision,
+        "operationId": operation_id,
+        "operation": operation.as_str(),
+        "stopOnly": stop_only,
+    });
+    let zone = zone_uid.as_str();
+    // The two-phase cell flow mirrors the retired arm exactly: the claim
+    // (consume-cell) is granted once, and the completion (complete-cell)
+    // records the durable marker before the effect runs, so a replayed
+    // invocation is refused (AE2).
+    for (kernel, result_field) in [("consume-cell", "consumed"), ("complete-cell", "completed")] {
+        let reply = envelope_invoke_kernel(
+            &broker_socket_path(state),
+            KERNEL_IO_TIMEOUT,
+            caller_role.clone(),
+            KernelInvocation {
+                operation: kernel,
+                zone,
+                payload: payload.clone(),
+                fds: &[],
+                chain_root_invocation_id: None,
+                chain_identities: None,
+            },
+        )
+        .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
+        let granted = reply
+            .response
+            .result
+            .as_ref()
+            .and_then(|result| result.get(result_field))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !granted {
+            return Err(provider_effects::ProviderEffectError::EffectRejected);
+        }
+    }
+    Ok(())
 }
 
 fn next_provider_lifecycle_operation_id(
@@ -26230,6 +26293,225 @@ mod broker_dispatch_tests {
                 VM_RUNNER_ROLE_ID
             ),
             "broker CgroupKill should clear the populated leaf before restart proceeds"
+        );
+        broker.join().expect("broker join");
+    }
+
+    /// The lease-shaped payload assertions one migrated lease-caller test
+    /// checks: the full lease identity in the wire vocabulary's camelCase
+    /// spelling, exactly as the retired typed request carried it (the
+    /// one-time cell key, KTD3).
+    fn assert_lease_cell_payload(payload: &Value, operation_id: &str) {
+        assert_eq!(
+            payload.get("zoneUid").and_then(Value::as_str),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
+        assert_eq!(
+            payload.get("guestUid").and_then(Value::as_str),
+            Some("22222222-2222-4222-8222-222222222222")
+        );
+        assert_eq!(payload.get("guestGeneration").and_then(Value::as_u64), Some(4));
+        assert_eq!(
+            payload.get("providerAssignmentGeneration").and_then(Value::as_u64),
+            Some(9)
+        );
+        assert_eq!(payload.get("policyRevision").and_then(Value::as_u64), Some(7));
+        assert_eq!(payload.get("operationId").and_then(Value::as_str), Some(operation_id));
+        assert_eq!(payload.get("operation").and_then(Value::as_str), Some("start"));
+        assert_eq!(payload.get("stopOnly").and_then(Value::as_bool), Some(false));
+    }
+
+    #[test]
+    fn the_lease_caller_consumes_and_completes_through_the_cell_kernels() {
+        // The migrated lease caller (U11): the daemon's convenience shim
+        // invokes the generic consume-cell and complete-cell kernels as two
+        // EnvelopeInvoke frames carrying the full lease identity, and only
+        // a consumed+completed pair admits the effect - the two-phase flow
+        // the retired broker arm ran in one typed request.
+        let (socket_path, broker) =
+            start_test_broker_server("lease-cell-caller", 2, move |index, env, fd| {
+                let BrokerRequest::EnvelopeInvoke(invoke) = env.request else {
+                    panic!("unexpected request: {env:?}");
+                };
+                match index {
+                    0 => {
+                        assert_eq!(invoke.operation, "consume-cell");
+                        assert_eq!(invoke.zone, "11111111-1111-4111-8111-111111111111");
+                        assert_lease_cell_payload(&invoke.payload, "lease-caller-test");
+                        assert_eq!(invoke.fd_indexes, Vec::<u32>::new());
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "consume-cell".to_owned(),
+                                invocation_id: "fake-consume-invocation".to_owned(),
+                                result: Some(json!({ "consumed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
+                            }),
+                        )
+                        .expect("write consume ack");
+                    }
+                    1 => {
+                        assert_eq!(invoke.operation, "complete-cell");
+                        assert_eq!(invoke.zone, "11111111-1111-4111-8111-111111111111");
+                        assert_lease_cell_payload(&invoke.payload, "lease-caller-test");
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "complete-cell".to_owned(),
+                                invocation_id: "fake-complete-invocation".to_owned(),
+                                result: Some(json!({ "completed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
+                            }),
+                        )
+                        .expect("write complete ack");
+                    }
+                    other => panic!("unexpected request index {other}"),
+                }
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let authorization = LifecycleAuthorization::for_test_with_guest(
+            "Guest/vm-a",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            4,
+            9,
+            7,
+            "lease-caller-test",
+        );
+        super::consume_lifecycle_lease(
+            &state,
+            &authorization,
+            super::provider_effects::GuestLifecycleOperation::Start,
+            &BrokerCallerRole::AdminUid { uid: 0 },
+        )
+        .expect("the lease caller consumes and completes");
+        broker.join().expect("broker join");
+    }
+
+    #[test]
+    fn the_lease_caller_refuses_when_a_cell_kernel_refuses() {
+        // The consumed+completed pair is the admission: a refused
+        // consume-cell (the lease is already granted - AE2 replay) fails
+        // the caller without a completion frame.
+        let (socket_path, broker) =
+            start_test_broker_server("lease-cell-refusal", 1, move |_, env, fd| {
+                let BrokerRequest::EnvelopeInvoke(invoke) = env.request else {
+                    panic!("unexpected request: {env:?}");
+                };
+                assert_eq!(invoke.operation, "consume-cell");
+                write_test_json_frame(
+                    fd,
+                    &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                        operation: "consume-cell".to_owned(),
+                        invocation_id: "fake-replay-invocation".to_owned(),
+                        result: None,
+                        refusal: Some("handler-refused".to_owned()),
+                        detail: Some("cell-replayed".to_owned()),
+                        fd_indexes: vec![],
+                        fd_kinds: vec![],
+                    }),
+                )
+                .expect("write replay refusal");
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let authorization = LifecycleAuthorization::for_test_with_guest(
+            "Guest/vm-a",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            4,
+            9,
+            7,
+            "lease-caller-refused",
+        );
+        assert_eq!(
+            super::consume_lifecycle_lease(
+                &state,
+                &authorization,
+                super::provider_effects::GuestLifecycleOperation::Start,
+                &BrokerCallerRole::AdminUid { uid: 0 },
+            ),
+            Err(super::provider_effects::ProviderEffectError::EffectRejected)
+        );
+        broker.join().expect("broker join");
+    }
+
+    #[test]
+    fn the_lease_caller_applies_the_fence_before_invoking() {
+        // The caller-side fence (U11): invalid identity fields and
+        // stop_only/host-shutdown mismatches are refused without any
+        // broker call - the broker's cell kernels are generic and never
+        // see a lease shape.
+        let (socket_path, broker) = start_test_broker_server("lease-cell-fence", 0, move |_, _, _| {
+            panic!("the fence must refuse before any broker call");
+        });
+        let state = test_state_with_broker_socket(socket_path);
+        let authorization = LifecycleAuthorization::for_test_with_guest(
+            "Guest/vm-a",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            4,
+            9,
+            7,
+            "lease-caller-fence",
+        );
+        let start = super::provider_effects::GuestLifecycleOperation::Start;
+        // stop_only (a host-shutdown lease) under a plain admin caller
+        // classifies wrong and refuses.
+        let shutdown_lease = LifecycleAuthorization::host_shutdown(
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("valid Zone UID"),
+            d2b_contracts_resource::v3::ResourceRef::parse("Guest/vm-a").expect("valid Guest ref"),
+            ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("valid Guest UID"),
+            ResourceGeneration::new(4).expect("valid generation"),
+            ResourceGeneration::new(9).expect("valid generation"),
+            7,
+            "lease-caller-fence-shutdown".to_owned(),
+        )
+        .expect("host-shutdown lease");
+        assert_eq!(
+            super::consume_lifecycle_lease(
+                &state,
+                &shutdown_lease,
+                start,
+                &BrokerCallerRole::AdminUid { uid: 0 },
+            ),
+            Err(super::provider_effects::ProviderEffectError::EffectRejected)
+        );
+        // A non-stop-only lease under the host-shutdown caller classifies
+        // wrong too.
+        assert_eq!(
+            super::consume_lifecycle_lease(
+                &state,
+                &authorization,
+                start,
+                &BrokerCallerRole::HostShutdownUid { uid: 0 },
+            ),
+            Err(super::provider_effects::ProviderEffectError::EffectRejected)
+        );
+        // Invalid identity fields (a zero policy revision) refuse before
+        // any broker call.
+        let invalid = LifecycleAuthorization::for_test_with_guest(
+            "Guest/vm-a",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            4,
+            9,
+            0,
+            "lease-caller-fence-invalid",
+        );
+        assert_eq!(
+            super::consume_lifecycle_lease(
+                &state,
+                &invalid,
+                start,
+                &BrokerCallerRole::AdminUid { uid: 0 },
+            ),
+            Err(super::provider_effects::ProviderEffectError::EffectRejected)
         );
         broker.join().expect("broker join");
     }

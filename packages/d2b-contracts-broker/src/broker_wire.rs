@@ -138,8 +138,6 @@ pub enum BrokerRequest {
     /// detach. The busid is a runtime selector only and is redacted from every
     /// success response/audit field.
     QemuMediaDetach(QemuMediaHotplugRequest),
-    /// Consume one sealed Guest lifecycle lease before any host effect.
-    ConsumeLifecycleLease(ConsumeLifecycleLeaseRequest),
     /// Apply one bounded host-side PipeWire effect for a trusted audio
     /// runner. The broker resolves all executable and runtime details from
     /// the signed runner intent; the daemon supplies only opaque identities
@@ -685,7 +683,6 @@ impl BrokerRequest {
             Self::QemuMediaQuit(_) => "QemuMediaQuit",
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
-            Self::ConsumeLifecycleLease(_) => "ConsumeLifecycleLease",
             Self::PipeWireAudio(_) => "PipeWireAudio",
             Self::StartSystemdUnit(_) => "StartSystemdUnit",
             Self::CheckSystemdUserManager(_) => "CheckSystemdUserManager",
@@ -735,7 +732,6 @@ impl BrokerRequest {
             Self::Hello(_) => "daemon-handshake",
             Self::PublishTrustedContext(_) => "trusted-context",
             Self::ExportBrokerAudit(_) => "audit-log",
-                                    Self::ConsumeLifecycleLease(_) => "guest-lifecycle",
             Self::EnvelopeInvoke(_) => "envelope",
             _ => "operation",
         }
@@ -1054,16 +1050,6 @@ impl BrokerRequest {
                 request.bundle_udev_intent_ref.clone(),
                 format!("{}:{}", self.op_name(), request.bundle_udev_intent_ref),
             ),
-            Self::ConsumeLifecycleLease(request) => (
-                request.zone_uid.as_str().to_owned(),
-                format!(
-                    "{}:{}:{}:{:?}",
-                    self.op_name(),
-                    request.guest_uid.as_str(),
-                    request.operation_id,
-                    request.operation
-                ),
-            ),
             Self::ExportBrokerAudit(_)
             | Self::Hello(_)
             | Self::PublishTrustedContext(_)
@@ -1147,7 +1133,6 @@ impl BrokerProfile {
         match self {
             Self::Host => !Self::request_targets_guest(request),
             Self::Guest => match request {
-                BrokerRequest::ConsumeLifecycleLease(_) => false,
                 BrokerRequest::StartSystemdUnit(request)
                 | BrokerRequest::ObserveSystemdUnit(request)
                 | BrokerRequest::CheckSystemdUserManager(request) => {
@@ -1275,8 +1260,6 @@ pub enum BrokerResponse {
     /// path) so the audit log and daemon can correlate the fd to the
     /// configured key.
     OpenHidrawSecurityKey(OpenHidrawSecurityKeyResponse),
-    /// Confirmation that one lifecycle lease was consumed.
-    ConsumeLifecycleLease(ConsumeLifecycleLeaseResponse),
     /// Result of one broker-owned PipeWire effect. Raw node identifiers and
     /// runtime paths never cross the wire.
     PipeWireAudio(PipeWireAudioResponse),
@@ -1874,40 +1857,6 @@ impl GuestExecutionBinding {
             && self.provider_generation > 0
             && self.controller_generation > 0
     }
-}
-
-/// Operation named by a sealed Guest lifecycle lease.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum LifecycleLeaseOperation {
-    Start,
-    Stop,
-    Restart,
-}
-
-/// Broker-side consumption of one daemon-issued Guest lifecycle lease.
-///
-/// The broker validates the complete immutable identity and records this
-/// unique lease identity as consumed before allowing the daemon to request
-/// effects. Replay retention is bounded by the broker's lease expiry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConsumeLifecycleLeaseRequest {
-    pub zone_uid: ResourceUid,
-    pub guest_uid: ResourceUid,
-    pub guest_generation: u64,
-    pub provider_assignment_generation: u64,
-    pub policy_revision: u64,
-    pub operation_id: String,
-    pub operation: LifecycleLeaseOperation,
-    #[serde(default)]
-    pub stop_only: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConsumeLifecycleLeaseResponse {
-    pub consumed: bool,
 }
 
 /// OpenPidfd daemon-side reconcile-and-adopt support. The daemon's

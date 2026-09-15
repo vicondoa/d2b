@@ -21,13 +21,15 @@ use serde::{Deserialize, Serialize};
 
 const PREVIOUS_PROTOCOL_VERSION: u32 = 3;
 
-/// The process-family wire variants U10 retired at wire v6 (KTD10). The
-/// matrix pins them exactly: each is still the *literal frame shape* an
-/// old binary at wire v<6 sent, none of them decodes as a current
-/// `RequestEnvelope`, and the retired-wire gate names every one of them
-/// with the v6 boundary, the typed stale-wire-version refusal, and an
-/// audit record.
-const RETIRED_PROCESS_VARIANTS: &[&str] = &[
+/// The wire variants U10/U11 retired at wire v6 (KTD10). The matrix pins
+/// them exactly: each is still the *literal frame shape* an old binary at
+/// wire v<6 sent, none of them decodes as a current `RequestEnvelope`,
+/// and the retired-wire gate names every one of them with the v6
+/// boundary, the typed stale-wire-version refusal, and an audit record.
+/// U10 retired the ten process-family variants; U11 retired
+/// `ConsumeLifecycleLease` with its row (the lease now rides the generic
+/// consume-cell/complete-cell kernels through the envelope).
+const RETIRED_WIRE_VARIANTS_MATRIX: &[&str] = &[
     "OpenPidfd",
     "OpenPeerPidfdFromAcceptedSocket",
     "ObserveRunner",
@@ -38,6 +40,7 @@ const RETIRED_PROCESS_VARIANTS: &[&str] = &[
     "SignalRunner",
     "DeregisterRunnerPidfd",
     "SpawnRunner",
+    "ConsumeLifecycleLease",
 ];
 
 // The production envelope carries no protocol version and has no negotiation
@@ -197,21 +200,22 @@ fn the_retired_wire_gate_machinery_names_a_retired_variant() {
 
 #[test]
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn the_retired_wire_gate_names_every_retired_process_variant_at_wire_v6() {
+fn the_retired_wire_gate_names_every_retired_variant_at_wire_v6() {
     use d2b_broker::catalog::WIRE_VARIANTS;
     use d2b_broker::runtime::{RETIRED_WIRE_VARIANTS, retired_wire_variant};
 
     assert_eq!(PROTOCOL_VERSION, 6);
-    // The production table names exactly the ten process-family variants
-    // the cut retired, all at the same wire boundary.
+    // The production table names exactly the eleven retired variants (the
+    // ten U10 process-family variants plus U11's ConsumeLifecycleLease),
+    // all at the same wire boundary.
     let mut names: Vec<&str> = RETIRED_WIRE_VARIANTS.iter().map(|entry| entry.variant).collect();
     names.sort_unstable();
-    let mut expected = RETIRED_PROCESS_VARIANTS.to_vec();
+    let mut expected = RETIRED_WIRE_VARIANTS_MATRIX.to_vec();
     expected.sort_unstable();
     assert_eq!(names, expected, "the retirement table and the matrix agree");
-    for variant in RETIRED_PROCESS_VARIANTS {
+    for variant in RETIRED_WIRE_VARIANTS_MATRIX {
         let retired = retired_wire_variant(variant, RETIRED_WIRE_VARIANTS)
-            .expect("the gate names every retired process variant");
+            .expect("the gate names every retired variant");
         assert_eq!(retired.retired_in_version, PROTOCOL_VERSION);
         assert!(
             PREVIOUS_PROTOCOL_VERSION < retired.retired_in_version,
@@ -221,7 +225,7 @@ fn the_retired_wire_gate_names_every_retired_process_variant_at_wire_v6() {
     // The wire enum no longer declares any retired variant: the current
     // decoder cannot spell a retired `kind`, and the gate alone still
     // recognizes the name as a straggler it must refuse.
-    for variant in RETIRED_PROCESS_VARIANTS {
+    for variant in RETIRED_WIRE_VARIANTS_MATRIX {
         assert!(
             WIRE_VARIANTS.iter().all(|declared| *declared != *variant),
             "{variant} is retired but the wire enum still declares it"
@@ -233,11 +237,11 @@ fn the_retired_wire_gate_names_every_retired_process_variant_at_wire_v6() {
 }
 
 #[test]
-fn a_retired_process_variant_old_frame_is_unknown_to_the_current_decoder() {
-    // A literal wire-v<6 frame for each retired process variant: the
-    // current decoder must refuse every one as an unknown variant (the arm
-    // is gone), never decode it into a neighboring request.
-    for variant in RETIRED_PROCESS_VARIANTS {
+fn a_retired_variant_old_frame_is_unknown_to_the_current_decoder() {
+    // A literal wire-v<6 frame for each retired variant: the current
+    // decoder must refuse every one as an unknown variant (the arm is
+    // gone), never decode it into a neighboring request.
+    for variant in RETIRED_WIRE_VARIANTS_MATRIX {
         let encoded = serde_json::to_vec(&serde_json::json!({
             "request": { "kind": variant, "payload": {} },
         }))
@@ -253,15 +257,15 @@ fn a_retired_process_variant_old_frame_is_unknown_to_the_current_decoder() {
 
 #[test]
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn an_old_binary_retired_process_variant_frame_is_refused_with_the_stale_wire_code_and_audited() {
+fn an_old_binary_retired_variant_frame_is_refused_with_the_stale_wire_code_and_audited() {
     // The full mixed-version matrix on the real broker binary (KTD10):
-    // each literal v<6 process-family frame is answered with the typed
+    // each literal v<6 retired frame is answered with the typed
     // stale-wire-version refusal that names the variant and the v6
     // boundary, and each refusal produces an audit record under the
     // variant's own operation name - the record vocabulary is the
     // pre-retirement op name, unchanged across the cut.
     let broker = TestBroker::spawn("retired-wire-gate-");
-    for variant in RETIRED_PROCESS_VARIANTS {
+    for variant in RETIRED_WIRE_VARIANTS_MATRIX {
         let client = connect_seqpacket(broker.socket_path()).expect("connect broker");
         send_json_frame(
             client.as_raw_fd(),
@@ -287,7 +291,7 @@ fn an_old_binary_retired_process_variant_frame_is_refused_with_the_stale_wire_co
     }
 
     let audit = broker.audit_contents();
-    for variant in RETIRED_PROCESS_VARIANTS {
+    for variant in RETIRED_WIRE_VARIANTS_MATRIX {
         assert!(
             audit.contains(&format!(r#""op":"{variant}""#)),
             "the audit record carries the committed op name {variant}: {audit}"
@@ -295,12 +299,12 @@ fn an_old_binary_retired_process_variant_frame_is_refused_with_the_stale_wire_co
     }
     assert_eq!(
         audit.matches(r#""disposition":"stale-wire-version""#).count(),
-        RETIRED_PROCESS_VARIANTS.len(),
+        RETIRED_WIRE_VARIANTS_MATRIX.len(),
         "every retired call is audited with the stale-wire-version disposition: {audit}"
     );
     assert_eq!(
         audit.matches(r#""outcome":"refused""#).count(),
-        RETIRED_PROCESS_VARIANTS.len(),
+        RETIRED_WIRE_VARIANTS_MATRIX.len(),
         "every retired call is audited as refused: {audit}"
     );
 }

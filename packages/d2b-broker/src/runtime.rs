@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap},
     sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -102,7 +102,6 @@ const DEFAULT_ACTIVATION_HELPER_PATH: &str = "/run/current-system/sw/bin/d2b-act
 const CAPABILITIES: &[&str] = &[
     "Hello",
     "ExportBrokerAudit",
-    "ConsumeLifecycleLease",
     "ApplyHostGenerationHandoff",
 ];
 const DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND: u32 = 512;
@@ -154,6 +153,11 @@ pub const RETIRED_WIRE_VARIANTS: &[RetiredWireVariant] = &[
     RetiredWireVariant { variant: "SignalRunner", retired_in_version: 6 },
     RetiredWireVariant { variant: "DeregisterRunnerPidfd", retired_in_version: 6 },
     RetiredWireVariant { variant: "SpawnRunner", retired_in_version: 6 },
+    // U11 retired the guest lifecycle lease arm with its row: the lease
+    // rides the generic consume-cell/complete-cell kernels through the
+    // EnvelopeInvoke surface, and a straggler's typed lease frame is
+    // refused by this gate.
+    RetiredWireVariant { variant: "ConsumeLifecycleLease", retired_in_version: 6 },
 ];
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -3127,7 +3131,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         && !matches!(
             request,
             RealBrokerRequest::Hello(_)
-                | RealBrokerRequest::ConsumeLifecycleLease(_)
+                | RealBrokerRequest::EnvelopeInvoke(_)
                 | RealBrokerRequest::StopSystemdUnit(_)
         )
     {
@@ -3752,39 +3756,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 response,
             )))
         }
-
-        RealBrokerRequest::ConsumeLifecycleLease(req) => {
-            consume_lifecycle_lease(&req, &caller_role)?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "ConsumeLifecycleLease",
-                "guest-lifecycle",
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                "guest-lifecycle",
-                "broker",
-                None,
-                OperationFields::ConsumeLifecycleLease {
-                    operation_id: req.operation_id.clone(),
-                    operation: format!("{:?}", req.operation),
-                    policy_revision: req.policy_revision,
-                    guest_generation: req.guest_generation,
-                    provider_assignment_generation: req.provider_assignment_generation,
-                    stop_only: req.stop_only,
-                },
-            )?;
-            complete_lifecycle_lease(&req, &caller_role)?;
-            Ok(DispatchResult::no_fds(
-                BrokerResponse::ConsumeLifecycleLease(
-                    d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseResponse {
-                        consumed: true,
-                    },
-                ),
-            ))
-        }
-
 
         RealBrokerRequest::PipeWireAudio(req) => {
             let resolver = require_resolver(resolver)?;
@@ -5927,159 +5898,11 @@ fn runner_signal_number(signal: d2b_contracts_broker::broker_wire::RunnerSignal)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-const LIFECYCLE_LEASES_CELL: &str = "lifecycle-leases";
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 const RUNNER_PIDFD_REGISTRY_CELL: &str = "runner-pidfd-registry";
-
-/// The committed state-cell declaration of the lifecycle lease.
-///
-/// The cell name and its durability facet flow from the committed operation
-/// row (U3/KTD3) — the row is the declaration surface, not the typed arm.
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn lifecycle_lease_cell() -> (&'static str, crate::catalog::CellDurability) {
-    let row = crate::catalog::BrokerOperationRow::find("ConsumeLifecycleLease")
-        .expect("ConsumeLifecycleLease is a committed row");
-    (
-        row.state_cell
-            .expect("ConsumeLifecycleLease declares its state cell"),
-        row.cell_durability
-            .expect("ConsumeLifecycleLease declares its cell durability"),
-    )
-}
-
-/// The initiating principal as attested at the envelope boundary, rendered
-/// for cell keys. Invocation ids appear in audit records and are not
-/// secrets, so the principal is the replay gate — never the id alone
-/// (KTD3).
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn caller_principal(caller_role: &CallerRole) -> String {
-    match caller_role {
-        CallerRole::AdminUid { uid } => format!("admin:{uid}"),
-        CallerRole::LauncherUid { uid } => format!("launcher:{uid}"),
-        CallerRole::RootUid { uid } => format!("root:{uid}"),
-        CallerRole::HostShutdownUid { uid } => format!("host-shutdown:{uid}"),
-        CallerRole::NotAuthorized => "unauthorized".to_owned(),
-    }
-}
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn cell_store_error(error: crate::state_cells::CellStoreError) -> BrokerError {
     BrokerError::Protocol(error.to_string())
-}
-
-/// The canonical invocation id of one lease request.
-///
-/// The full lease identity (zone, guest, generations, policy revision,
-/// operation id, operation, stop-only flag) is the per-invocation identity:
-/// two retries of one operation join under one invocation id, a genuinely
-/// new operation joins under a fresh one.
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn lifecycle_lease_identity(
-    request: &d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest,
-) -> String {
-    let mut fields = BTreeMap::new();
-    fields.insert(
-        "zone_uid",
-        serde_json::Value::String(request.zone_uid.as_str().to_owned()),
-    );
-    fields.insert(
-        "guest_uid",
-        serde_json::Value::String(request.guest_uid.as_str().to_owned()),
-    );
-    fields.insert("guest_generation", serde_json::Value::from(request.guest_generation));
-    fields.insert(
-        "provider_assignment_generation",
-        serde_json::Value::from(request.provider_assignment_generation),
-    );
-    fields.insert("policy_revision", serde_json::Value::from(request.policy_revision));
-    fields.insert("operation_id", serde_json::Value::String(request.operation_id.clone()));
-    fields.insert(
-        "operation",
-        serde_json::Value::String(format!("{:?}", request.operation)),
-    );
-    fields.insert("stop_only", serde_json::Value::Bool(request.stop_only));
-    serde_json::to_string(&fields).expect("canonical lease identity serializes")
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn consume_lifecycle_lease(
-    request: &d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest,
-    caller_role: &CallerRole,
-) -> Result<(), BrokerError> {
-    if request.guest_generation == 0
-        || request.provider_assignment_generation == 0
-        || request.policy_revision == 0
-        || request.operation_id.is_empty()
-        || request.operation_id.len() > 128
-        || request.operation_id.chars().any(char::is_control)
-    {
-        return Err(BrokerError::LiveHandler(
-            "lifecycle-lease-invalid".to_owned(),
-        ));
-    }
-    let is_shutdown = matches!(caller_role, CallerRole::HostShutdownUid { .. });
-    if request.stop_only != is_shutdown
-        || (is_shutdown
-            && !matches!(
-                request.operation,
-                d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Stop
-            ))
-    {
-        return Err(BrokerError::HostShutdownRestricted);
-    }
-    if matches!(caller_role, CallerRole::NotAuthorized) {
-        return Err(BrokerError::LiveHandler(
-            "lifecycle-lease-caller-denied".to_owned(),
-        ));
-    }
-    // The claim is a compare-and-consume on the declared one-time cell,
-    // keyed by the canonical invocation id and the initiating principal.
-    // The cell's durable pre-commit happens before this returns, so a
-    // broker crash between the commit and the completion leaves an
-    // `unknown` record the retried invocation reconciles under its id.
-    let (cell, durability) = lifecycle_lease_cell();
-    let identity = lifecycle_lease_identity(request);
-    let principal = caller_principal(caller_role);
-    let decision = crate::state_cells::broker_store()
-        .consume(cell, &identity, &principal, durability)
-        .map_err(cell_store_error)?;
-    match decision {
-        crate::state_cells::ConsumeDecision::Granted
-        | crate::state_cells::ConsumeDecision::Reconciled => Ok(()),
-        crate::state_cells::ConsumeDecision::InProgress => {
-            Err(BrokerError::LiveHandler("lifecycle-lease-in-progress".to_owned()))
-        }
-        crate::state_cells::ConsumeDecision::Replayed => {
-            Err(BrokerError::LiveHandler("lifecycle-lease-replayed".to_owned()))
-        }
-        // Replay under a different principal is refused: the invocation id
-        // alone never gates a one-time grant (KTD3).
-        crate::state_cells::ConsumeDecision::ForeignPrincipal => {
-            Err(BrokerError::LiveHandler("lifecycle-lease-caller-denied".to_owned()))
-        }
-    }
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn complete_lifecycle_lease(
-    request: &d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest,
-    caller_role: &CallerRole,
-) -> Result<(), BrokerError> {
-    let (cell, _) = lifecycle_lease_cell();
-    let identity = lifecycle_lease_identity(request);
-    let principal = caller_principal(caller_role);
-    crate::state_cells::broker_store()
-        .complete(cell, &identity, &principal)
-        .map_err(|error| match error {
-            crate::state_cells::CellStoreError::MissingRecord => BrokerError::Protocol(
-                "lifecycle lease completion record missing".to_owned(),
-            ),
-            crate::state_cells::CellStoreError::ForeignPrincipal => BrokerError::Protocol(
-                "lifecycle lease completion principal mismatch".to_owned(),
-            ),
-            other => cell_store_error(other),
-        })
 }
 
 /// The runner pidfd registry as one declared ephemeral state cell.
@@ -12836,58 +12659,6 @@ mod tests {
         assert!(request.is_err());
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn lifecycle_lease_cell_refuses_in_progress_replay_and_foreign_principal() {
-        use d2b_contracts_broker::broker_wire::{
-            ConsumeLifecycleLeaseRequest, LifecycleLeaseOperation,
-        };
-
-        let uid = |value: &str| {
-            d2b_contracts_resource::v3::ResourceUid::parse(value).expect("valid lifecycle UID")
-        };
-        let request = ConsumeLifecycleLeaseRequest {
-            zone_uid: uid("11111111-1111-4111-8111-111111111111"),
-            guest_uid: uid("22222222-2222-4222-8222-222222222222"),
-            guest_generation: 1,
-            provider_assignment_generation: 1,
-            policy_revision: 1,
-            operation_id: format!("runtime-lease-{}", std::process::id()),
-            operation: LifecycleLeaseOperation::Start,
-            stop_only: false,
-        };
-        let caller = CallerRole::AdminUid { uid: 1000 };
-        consume_lifecycle_lease(&request, &caller).expect("consume lifecycle lease");
-        // Same identity while the claim is live: in-progress refusal, exactly
-        // like the pre-cell arm.
-        assert!(matches!(
-            consume_lifecycle_lease(&request, &caller),
-            Err(BrokerError::LiveHandler(detail)) if detail == "lifecycle-lease-in-progress"
-        ));
-        complete_lifecycle_lease(&request, &caller).expect("complete lifecycle lease");
-        // Completed one-time cell: the same invocation id replays the
-        // recorded outcome — a refusal (AE2).
-        assert!(matches!(
-            consume_lifecycle_lease(&request, &caller),
-            Err(BrokerError::LiveHandler(detail)) if detail == "lifecycle-lease-replayed"
-        ));
-        // Replay under a different principal refuses: the invocation id
-        // alone never gates a one-time grant (KTD3).
-        let other = CallerRole::AdminUid { uid: 1001 };
-        assert!(matches!(
-            consume_lifecycle_lease(&request, &other),
-            Err(BrokerError::LiveHandler(detail)) if detail == "lifecycle-lease-caller-denied"
-        ));
-        // A genuinely new invocation (fresh operation id) is a fresh grant:
-        // the lease stays consumable per operation.
-        let next = ConsumeLifecycleLeaseRequest {
-            operation_id: format!("runtime-lease-next-{}", std::process::id()),
-            ..request
-        };
-        consume_lifecycle_lease(&next, &caller).expect("new operation consumes a new lease");
-        complete_lifecycle_lease(&next, &caller).expect("new lease completes");
-    }
-
     #[test]
     fn swtpm_hardening_failure_uses_the_typed_path_free_operation() {
         let error = BrokerError::SwtpmDirHardening {
@@ -13246,7 +13017,6 @@ mod tests {
             "ApplyRoute",
             "ApplySysctl",
             "CheckSystemdUserManager",
-            "ConsumeLifecycleLease",
             "CreateBridge",
             "CreatePersistentTap",
             "CreateTapFd",
@@ -15569,6 +15339,318 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // ------------------------------------------------------------------
+    // consume-cell / complete-cell kernel tests (U11): the retired
+    // ConsumeLifecycleLease arm's one-time cell semantics - AE2's
+    // consume-once/replay-refusal, the concurrent exactly-one-winner
+    // property, and the durable restart-replay resistance - restored on
+    // the generic cell kernels through the envelope.
+    // ------------------------------------------------------------------
+
+    /// The lease-shaped payload one cell-kernel test invokes with. The
+    /// full lease identity is the one-time key (KTD3): every field the
+    /// retired arm keyed on, in the wire vocabulary's camelCase spelling.
+    fn cell_kernel_payload(operation_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "zoneUid": "11111111-1111-4111-8111-111111111111",
+            "guestUid": "22222222-2222-4222-8222-222222222222",
+            "guestGeneration": 4,
+            "providerAssignmentGeneration": 9,
+            "policyRevision": 7,
+            "operationId": operation_id,
+            "operation": "start",
+            "stopOnly": false,
+        })
+    }
+
+    /// The envelope + dispatch harness one cell-kernel test drives: a real
+    /// kernel table over the broker's cell store, exactly as the retired
+    /// arm's helpers used it, with the invocation dispatched through the
+    /// EnvelopeInvoke arm.
+    struct CellKernelHarness {
+        config: ServerConfig,
+        log: AuditLog,
+        backend: FakeDispatchBackend,
+        caller_role: d2b_contracts_broker::broker_wire::BrokerCallerRole,
+        caller_gid: u32,
+    }
+
+    impl CellKernelHarness {
+        fn new(root: &Path, caller_role: d2b_contracts_broker::broker_wire::BrokerCallerRole) -> Self {
+            use crate::envelope::{BrokerEnvelope, ForwardingDispatcher, KernelDispatcher};
+            use crate::kernel_ops::{KernelConfig, kernel_table};
+
+            let config = test_server_config(root, &root.join("unused-bundle.json"));
+            let (log, _capture) = AuditLog::open_capturing(
+                &config.audit_dir,
+                Gid::current().as_raw(),
+                true,
+                config.audit_retention_days,
+            )
+            .expect("open capturing audit log");
+            let kernels = kernel_table(&KernelConfig {
+                state_dir: config.state_dir.clone(),
+                runtime_root: root.join("runtime"),
+                daemon_uid: config.d2bd_uid,
+                daemon_gid: config.d2bd_gid,
+                bundle_path: config.bundle_path.clone(),
+            });
+            let envelope = BrokerEnvelope::over(
+                crate::catalog::BrokerProfileId::Host,
+                Box::new(KernelDispatcher::new(
+                    kernels,
+                    ForwardingDispatcher::default(),
+                )),
+            )
+            .commit_forwarded()
+            .build();
+            let backend = FakeDispatchBackend {
+                envelope,
+                ..FakeDispatchBackend::default()
+            };
+            Self {
+                config,
+                log,
+                backend,
+                caller_role,
+                caller_gid: Gid::current().as_raw(),
+            }
+        }
+
+        fn invoke(
+            &self,
+            operation: &str,
+            payload: serde_json::Value,
+        ) -> Result<DispatchResult, BrokerError> {
+            use d2b_contracts_broker::broker_wire::{BrokerRequest, EnvelopeInvokeRequest};
+            let request = BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+                operation: operation.to_owned(),
+                zone: "work".to_owned(),
+                payload,
+                chain_root_invocation_id: None,
+                chain_identities: None,
+                fd_indexes: Vec::new(),
+                fd_kinds: Vec::new(),
+            });
+            let audit_context = DispatchAuditContext::from_request(&request, 4242, &self.caller_role)
+                .expect("audit context");
+            dispatch_request_with_backend_and_request_fds(
+                request,
+                1000,
+                self.caller_gid,
+                self.caller_role.clone(),
+                &audit_context,
+                &self.config,
+                &self.log,
+                None,
+                &self.backend,
+                Vec::new(),
+            )
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn consume_cell_and_complete_cell_dispatch_through_the_envelope() {
+        let root = test_audit_dir("cell-kernels-envelope");
+        fs::create_dir_all(&root).expect("create test root");
+        let harness = CellKernelHarness::new(
+            &root,
+            d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid { uid: 1000 },
+        );
+        let envelope_response =
+            |result: DispatchResult| match result.response {
+                BrokerResponse::EnvelopeInvoke(response) => response,
+                other => panic!("expected an EnvelopeInvoke response, got {other:?}"),
+            };
+        let operation_id = format!("cell-kernel-lease-{}", std::process::id());
+
+        // consume-cell: the one-time claim wins exactly once (AE2).
+        let response = envelope_response(
+            harness
+                .invoke("consume-cell", cell_kernel_payload(&operation_id))
+                .expect("consume-cell dispatches"),
+        );
+        assert_eq!(response.refusal, None);
+        assert_eq!(
+            response
+                .result
+                .as_ref()
+                .and_then(|result| result.get("consumed"))
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+
+        // The same identity while the claim is live: in-progress refusal.
+        let response = envelope_response(
+            harness
+                .invoke("consume-cell", cell_kernel_payload(&operation_id))
+                .expect("in-progress consume-cell dispatches"),
+        );
+        assert_eq!(response.refusal.as_deref(), Some(crate::envelope::HANDLER_REFUSED));
+        assert_eq!(
+            response.detail.as_deref(),
+            Some("cell-in-progress"),
+            "the documented cell code for a live claim"
+        );
+
+        // complete-cell: the completion phase records the durable marker.
+        let response = envelope_response(
+            harness
+                .invoke("complete-cell", cell_kernel_payload(&operation_id))
+                .expect("complete-cell dispatches"),
+        );
+        assert_eq!(response.refusal, None);
+        assert_eq!(
+            response
+                .result
+                .as_ref()
+                .and_then(|result| result.get("completed"))
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+
+        // Completed one-time cell: the same identity replays the recorded
+        // outcome — a refusal (AE2).
+        let response = envelope_response(
+            harness
+                .invoke("consume-cell", cell_kernel_payload(&operation_id))
+                .expect("replayed consume-cell dispatches"),
+        );
+        assert_eq!(response.refusal.as_deref(), Some(crate::envelope::HANDLER_REFUSED));
+        assert_eq!(
+            response.detail.as_deref(),
+            Some("cell-replayed"),
+            "the documented cell code for a completed replay"
+        );
+
+        // A genuinely new invocation (fresh operation id) is a fresh grant:
+        // the lease stays consumable per operation.
+        let next = format!("cell-kernel-lease-next-{}", std::process::id());
+        let response = envelope_response(
+            harness
+                .invoke("consume-cell", cell_kernel_payload(&next))
+                .expect("fresh consume-cell dispatches"),
+        );
+        assert_eq!(response.refusal, None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn consume_cell_concurrent_callers_have_exactly_one_winner() {
+        // AE2's concurrency property through the kernel: N callers race the
+        // same one-time identity; the cell store's single-process lock
+        // serializes the compare-and-consume, so exactly one caller wins
+        // and every other is refused with a documented cell code.
+        let root = test_audit_dir("cell-kernels-concurrent");
+        fs::create_dir_all(&root).expect("create test root");
+        let harness = Arc::new(CellKernelHarness::new(
+            &root,
+            d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid { uid: 1000 },
+        ));
+        let operation_id = format!("cell-kernel-race-{}", std::process::id());
+        let callers: Vec<_> = (0..8)
+            .map(|_| {
+                let harness = Arc::clone(&harness);
+                let operation_id = operation_id.clone();
+                std::thread::spawn(move || {
+                    harness
+                        .invoke("consume-cell", cell_kernel_payload(&operation_id))
+                        .expect("consume-cell dispatches")
+                })
+            })
+            .collect();
+        let mut winners = 0_usize;
+        let mut refusals = 0_usize;
+        for caller in callers {
+            let result = caller.join().expect("caller thread");
+            match result.response {
+                BrokerResponse::EnvelopeInvoke(response) => {
+                    if response.refusal.is_none() {
+                        assert_eq!(
+                            response
+                                .result
+                                .as_ref()
+                                .and_then(|result| result.get("consumed"))
+                                .and_then(serde_json::Value::as_bool),
+                            Some(true)
+                        );
+                        winners += 1;
+                    } else {
+                        assert_eq!(
+                            response.refusal.as_deref(),
+                            Some(crate::envelope::HANDLER_REFUSED)
+                        );
+                        assert!(
+                            matches!(
+                                response.detail.as_deref(),
+                                Some("cell-in-progress" | "cell-replayed")
+                            ),
+                            "a loser is refused with a documented cell code: {:?}",
+                            response.detail
+                        );
+                        refusals += 1;
+                    }
+                }
+                other => panic!("expected an EnvelopeInvoke response, got {other:?}"),
+            }
+        }
+        assert_eq!(
+            winners, 1,
+            "exactly one concurrent caller consumes the one-time cell"
+        );
+        assert_eq!(refusals, 7, "every other caller is refused");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn consume_cell_durable_records_refuse_replay_after_store_reopen() {
+        // Restart-replay resistance (AE2) over the kernel's durable leg:
+        // `init_broker_store` opens the store under the daemon state root,
+        // so a broker restart reopens that root. The completed one-time
+        // marker must survive the reopen and still refuse the replayed
+        // consume, and a different principal's replay must refuse too
+        // (KTD3).
+        let root = tempfile::tempdir().expect("cell store root");
+        let store = crate::state_cells::CellStore::open(root.path()).expect("open store");
+        let payload = cell_kernel_payload(&format!("cell-kernel-restart-{}", std::process::id()));
+        let canonical: d2b_contracts_resource::v3::CanonicalJsonObject =
+            serde_json::from_value(payload).expect("canonical payload");
+        let identity =
+            crate::kernel_ops::cell_identity(&canonical).expect("canonical cell identity");
+        let principal = "admin";
+        assert_eq!(
+            store
+                .consume("lifecycle-leases", &identity, principal, crate::catalog::CellDurability::OneTime)
+                .expect("consume"),
+            crate::state_cells::ConsumeDecision::Granted
+        );
+        store
+            .complete("lifecycle-leases", &identity, principal)
+            .expect("complete");
+        drop(store);
+
+        // The broker restarts: the store reopens the same root.
+        let reopened = crate::state_cells::CellStore::open(root.path()).expect("reopen store");
+        assert_eq!(
+            reopened
+                .consume("lifecycle-leases", &identity, principal, crate::catalog::CellDurability::OneTime)
+                .expect("replayed consume"),
+            crate::state_cells::ConsumeDecision::Replayed,
+            "the completed marker survives the restart and refuses the replay"
+        );
+        // A different principal's replay of the same identity refuses too
+        // (KTD3): invocation ids alone never gate a one-time grant.
+        assert_eq!(
+            reopened
+                .consume("lifecycle-leases", &identity, "daemon", crate::catalog::CellDurability::OneTime)
+                .expect("foreign replay"),
+            crate::state_cells::ConsumeDecision::ForeignPrincipal
+        );
     }
 
     // ------------------------------------------------------------------

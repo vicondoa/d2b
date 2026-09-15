@@ -96,7 +96,6 @@ pub const BROKER_OPERATION_VALUES: &[&str] = &[
     "QemuMediaQuit",
     "QemuMediaAttach",
     "QemuMediaDetach",
-    "ConsumeLifecycleLease",
     "PipeWireAudio",
     "OpenVhostNet",
     "ReconcileStorageScope",

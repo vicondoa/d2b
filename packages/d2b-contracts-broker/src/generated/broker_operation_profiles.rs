@@ -42,7 +42,6 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "QemuMediaQuit",
     "QemuMediaAttach",
     "QemuMediaDetach",
-    "ConsumeLifecycleLease",
     "PipeWireAudio",
     "OpenVhostNet",
     "ReconcileStorageScope",

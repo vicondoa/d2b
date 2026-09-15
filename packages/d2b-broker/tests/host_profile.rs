@@ -7,13 +7,14 @@ fn host_profile_keeps_the_complete_closed_operation_catalog() {
     // U10 retired the process-family wire variants (SpawnRunner among
     // them) at wire v6: the variants are gone from the enum, so the host
     // catalog no longer carries them; their privileged cores are the
-    // broker-generic kernels served through EnvelopeInvoke.
+    // broker-generic kernels served through EnvelopeInvoke. U11 retired
+    // ConsumeLifecycleLease the same way — the lease rides the generic
+    // consume-cell/complete-cell kernels.
     for operation in [
         "ApplyNftables",
         "EnvelopeInvoke",
         "ApplyHostGenerationHandoff",
         "ExportBrokerAudit",
-        "ConsumeLifecycleLease",
     ] {
         assert!(
             operations.contains(&operation),
@@ -24,7 +25,7 @@ fn host_profile_keeps_the_complete_closed_operation_catalog() {
             "host profile must admit {operation}"
         );
     }
-    for operation in ["SpawnRunner", "OpenPidfd", "PollChildReaped"] {
+    for operation in ["SpawnRunner", "OpenPidfd", "PollChildReaped", "ConsumeLifecycleLease"] {
         assert!(
             !operations.contains(&operation),
             "host profile must not re-admit the retired operation {operation}"

@@ -53,16 +53,16 @@ fn guest_profile_admits_only_local_process_effects() {
         "DeregisterRunnerPidfd",
         "OpenPeerPidfdFromAcceptedSocket",
         "PollChildReaped",
+        // U11 retired the typed lease arm with its row: the lease now
+        // rides the generic consume-cell/complete-cell kernels through
+        // the envelope, so the typed variant is gone from every catalog.
+        "ConsumeLifecycleLease",
     ] {
         assert!(
             !BrokerProfile::Guest.allows_operation(operation),
-            "guest profile must not admit retired process-family operation {operation}"
+            "guest profile must not admit retired operation {operation}"
         );
     }
-    assert!(
-        !BrokerProfile::Guest.allows_operation("ConsumeLifecycleLease"),
-        "guest profile must not consume host Guest lifecycle leases"
-    );
 }
 
 #[test]

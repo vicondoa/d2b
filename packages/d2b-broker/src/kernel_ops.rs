@@ -45,6 +45,8 @@ pub const SPAWN_PROCESS: &str = "spawn-process";
 pub const DELEGATE_CGROUP_V2: &str = "delegate-cgroup-v2";
 pub const OPEN_CGROUP_DIR: &str = "open-cgroup-dir";
 pub const OBSERVE_PROCESS: &str = "observe-process";
+pub const CONSUME_CELL: &str = "consume-cell";
+pub const COMPLETE_CELL: &str = "complete-cell";
 
 /// The fixed process values one kernel closure captures at serve time.
 #[derive(Debug, Clone)]
@@ -111,6 +113,12 @@ pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
         })
         .with(OBSERVE_PROCESS, {
             move |invocation| observe_process(invocation)
+        })
+        .with(CONSUME_CELL, {
+            move |invocation| consume_cell(invocation)
+        })
+        .with(COMPLETE_CELL, {
+            move |invocation| complete_cell(invocation)
         })
 }
 
@@ -390,6 +398,86 @@ fn observe_process(
         }))?,
         fds: Vec::new(),
     })
+}
+
+/// The cell-consume kernel: compare-and-consume one declared one-time
+/// state cell under the canonical identity the payload carries and the
+/// envelope-attested initiating principal. The committed row is the
+/// declaration surface: the cell name and its durability facet flow from
+/// the row's own `stateCell`/`cellDurability` facets (U3/KTD3), so the
+/// kernel is generic — it never learns a lease shape. The durable
+/// pre-commit happens before `Granted` returns, so a broker crash between
+/// the commit and the completion leaves an `unknown` record the retried
+/// invocation reconciles under its id; a completed record refuses
+/// re-consume across broker restarts (AE2).
+fn consume_cell(
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    let row = crate::catalog::BrokerOperationRow::find(CONSUME_CELL)
+        .expect("consume-cell is a committed row");
+    let cell = row.state_cell.expect("consume-cell declares its state cell");
+    let durability = row
+        .cell_durability
+        .expect("consume-cell declares its cell durability");
+    let identity = cell_identity(invocation.payload)?;
+    let principal = initiating_principal(invocation);
+    let decision = crate::state_cells::broker_store()
+        .consume(cell, &identity, &principal, durability)
+        .map_err(|error| errored(format!("consume-cell: {error}")))?;
+    match decision {
+        crate::state_cells::ConsumeDecision::Granted
+        | crate::state_cells::ConsumeDecision::Reconciled => Ok(DispatchOutcome {
+            result: canonical(serde_json::json!({ "consumed": true }))?,
+            fds: Vec::new(),
+        }),
+        crate::state_cells::ConsumeDecision::InProgress => Err(refused("cell-in-progress")),
+        crate::state_cells::ConsumeDecision::Replayed => Err(refused("cell-replayed")),
+        // Replay under a different principal refuses: the invocation id
+        // alone never gates a one-time grant (KTD3).
+        crate::state_cells::ConsumeDecision::ForeignPrincipal => {
+            Err(refused("cell-caller-denied"))
+        }
+    }
+}
+
+/// The cell-complete kernel: record completion for one claimed one-time
+/// state cell under the same canonical identity and initiating principal
+/// the consume leg used. The durable completed marker is what refuses a
+/// replayed consume across broker restarts (AE2).
+fn complete_cell(
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    let row = crate::catalog::BrokerOperationRow::find(COMPLETE_CELL)
+        .expect("complete-cell is a committed row");
+    let cell = row.state_cell.expect("complete-cell declares its state cell");
+    let identity = cell_identity(invocation.payload)?;
+    let principal = initiating_principal(invocation);
+    crate::state_cells::broker_store()
+        .complete(cell, &identity, &principal)
+        .map_err(|error| errored(format!("complete-cell: {error}")))?;
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({ "completed": true }))?,
+        fds: Vec::new(),
+    })
+}
+
+/// The canonical per-invocation identity of one cell call: the validated
+/// payload object itself, serialized canonically. The row's declared
+/// payload schema is the identity contract — the caller carries the full
+/// identity fields (the lease's zone/guest/generations/policy revision/
+/// operation id/operation/stop-only key, KTD3) and the envelope refuses
+/// any payload outside the declared shape, so consume and complete of one
+/// key always derive the same identity.
+pub(crate) fn cell_identity(payload: &CanonicalJsonObject) -> Result<String, DispatchFailure> {
+    serde_json::to_string(payload).map_err(|error| errored(format!("cell identity: {error}")))
+}
+
+/// The initiating principal as attested at the envelope boundary, rendered
+/// for cell keys. Invocation ids appear in audit records and are not
+/// secrets, so the principal is the replay gate — never the id alone
+/// (KTD3).
+fn initiating_principal(invocation: &DirectInvocation<'_>) -> String {
+    invocation.ctx.chain.initiating_identity().to_owned()
 }
 
 /// The spawn kernel: the privileged spawn of one fully-resolved runner

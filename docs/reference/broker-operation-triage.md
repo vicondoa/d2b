@@ -18,7 +18,7 @@ no resource family.
 - `transport-excluded` - the name is a transport-layer concern the
 operation envelope does not carry.
 
-Counts: 66 family-owned, 17 broker-generic, 0 transport-excluded (60 rows carry a wire discriminant, 23 rows do not).
+Counts: 65 family-owned, 19 broker-generic, 0 transport-excluded (59 rows carry a wire discriminant, 25 rows do not).
 
 | Operation | Owner | Family | Declaring provider | Service | Method | Profiles | Disposition | Target | Justification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -69,7 +69,6 @@ Counts: 66 family-owned, 17 broker-generic, 0 transport-excluded (60 rows carry 
 | QemuMediaQuit | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-quit | host | promoted-live | live in production broker | - |
 | QemuMediaAttach | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-attach | host | promoted-live | live in production broker | - |
 | QemuMediaDetach | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-detach | host | promoted-live | live in production broker | - |
-| ConsumeLifecycleLease | family | process | d2b-provider-process | d2b.process | consume-lifecycle-lease | host | untriaged | broker-generic row | - |
 | inspect-process-family | family | process | d2b-provider-process | d2b.process | inspect-process-family | host | callable-read-only | live read-only callable | - |
 | PipeWireAudio | family | audio | d2b-provider-audio-service | d2b.audio | pipe-wire-audio | host | promoted-live | live in production broker | - |
 | OpenVhostNet | family | device | d2b-provider-device | d2b.device | open-vhost-net | host | promoted-live | live in production broker | - |
@@ -105,3 +104,5 @@ Counts: 66 family-owned, 17 broker-generic, 0 transport-excluded (60 rows carry 
 | delegate-cgroup-v2 | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U10 sandwich kernel: the cgroup v2 delegation write, served in-broker as the nested core of the forwarded DelegateCgroupV2 family operation. |
 | open-cgroup-dir | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U10 sandwich kernel: the cgroup directory open, served in-broker as the nested core of the forwarded OpenCgroupDir family operation; returns a directory fd over the fd leg. |
 | observe-process | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the /proc observation probe (presence, executable, cgroup path, start time) served in-broker as the nested core of the forwarded ObserveRunner family operation; expectation comparison stays on the family side. |
+| consume-cell | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U11 cell kernel: compare-and-consume one declared one-time state cell under the canonical identity the payload carries and the envelope-attested initiating principal, served in-broker as the generic core of the retired ConsumeLifecycleLease arm (AE2: one-time consume wins exactly once, replay refuses). |
+| complete-cell | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U11 cell kernel: record completion for one claimed one-time state cell under the canonical identity the payload carries and the envelope-attested initiating principal, served in-broker as the generic completion phase of the retired ConsumeLifecycleLease arm; the durable completed marker is what refuses replay across broker restarts (AE2). |

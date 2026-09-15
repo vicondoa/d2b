@@ -2295,51 +2295,6 @@
    "method": "qemu-media-detach"
   },
   {
-   "operation": "ConsumeLifecycleLease",
-   "wireVariant": "ConsumeLifecycleLease",
-   "owner": "family",
-   "family": "process",
-   "declaringProvider": "d2b-provider-process",
-   "profiles": [
-    "host"
-   ],
-   "w3": false,
-   "capabilities": false,
-   "disposition": "untriaged",
-   "dispositionTarget": "broker-generic row",
-   "authz": {
-    "subject": "lifecycle",
-    "scope": "per-VM",
-    "allowedGroups": [
-     "d2bd"
-    ],
-    "destructive": true,
-    "secretAccess": "None",
-    "brokerRequired": "Yes",
-    "auditMode": "Yes"
-   },
-   "audit": {
-    "fields": [
-     "ConsumeLifecycleLease"
-    ],
-    "required": true,
-    "mode": "yes"
-   },
-   "payload": {
-    "provenance": "wire",
-    "schema": null
-   },
-   "stateCell": {
-    "cell": "lifecycle-leases",
-    "durability": "one-time"
-   },
-   "deadline": {
-    "tier": "standard"
-   },
-   "service": "d2b.process",
-   "method": "consume-lifecycle-lease"
-  },
-  {
    "operation": "inspect-process-family",
    "owner": "family",
    "family": "process",
@@ -4089,6 +4044,174 @@
      ],
      "additionalProperties": false
     }
+   },
+   "deadline": {
+    "tier": "standard"
+   }
+  },
+  {
+   "operation": "consume-cell",
+   "wireVariant": null,
+   "owner": "broker-generic",
+   "family": null,
+   "declaringProvider": null,
+   "justification": "U11 cell kernel: compare-and-consume one declared one-time state cell under the canonical identity the payload carries and the envelope-attested initiating principal, served in-broker as the generic core of the retired ConsumeLifecycleLease arm (AE2: one-time consume wins exactly once, replay refuses).",
+   "profiles": [
+    "host",
+    "guest"
+   ],
+   "w3": false,
+   "capabilities": false,
+   "disposition": "promoted-live",
+   "dispositionTarget": "live in production broker",
+   "authz": {
+    "subject": "cell",
+    "scope": "per-invocation",
+    "allowedGroups": [
+     "d2bd",
+     "d2b-admin",
+     "d2b-launcher"
+    ],
+    "destructive": true,
+    "secretAccess": "None",
+    "brokerRequired": "Yes",
+    "auditMode": "Yes"
+   },
+   "audit": {
+    "fields": [],
+    "required": true,
+    "mode": "yes"
+   },
+   "payload": {
+    "provenance": "request",
+    "schema": {
+     "type": "object",
+     "properties": {
+      "zoneUid": {
+       "type": "string"
+      },
+      "guestUid": {
+       "type": "string"
+      },
+      "guestGeneration": {
+       "type": "integer"
+      },
+      "providerAssignmentGeneration": {
+       "type": "integer"
+      },
+      "policyRevision": {
+       "type": "integer"
+      },
+      "operationId": {
+       "type": "string"
+      },
+      "operation": {
+       "type": "string"
+      },
+      "stopOnly": {
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "zoneUid",
+      "guestUid",
+      "guestGeneration",
+      "providerAssignmentGeneration",
+      "policyRevision",
+      "operationId",
+      "operation",
+      "stopOnly"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "stateCell": {
+    "cell": "lifecycle-leases",
+    "durability": "one-time"
+   },
+   "deadline": {
+    "tier": "standard"
+   }
+  },
+  {
+   "operation": "complete-cell",
+   "wireVariant": null,
+   "owner": "broker-generic",
+   "family": null,
+   "declaringProvider": null,
+   "justification": "U11 cell kernel: record completion for one claimed one-time state cell under the canonical identity the payload carries and the envelope-attested initiating principal, served in-broker as the generic completion phase of the retired ConsumeLifecycleLease arm; the durable completed marker is what refuses replay across broker restarts (AE2).",
+   "profiles": [
+    "host",
+    "guest"
+   ],
+   "w3": false,
+   "capabilities": false,
+   "disposition": "promoted-live",
+   "dispositionTarget": "live in production broker",
+   "authz": {
+    "subject": "cell",
+    "scope": "per-invocation",
+    "allowedGroups": [
+     "d2bd",
+     "d2b-admin",
+     "d2b-launcher"
+    ],
+    "destructive": false,
+    "secretAccess": "None",
+    "brokerRequired": "Yes",
+    "auditMode": "Yes"
+   },
+   "audit": {
+    "fields": [],
+    "required": true,
+    "mode": "yes"
+   },
+   "payload": {
+    "provenance": "request",
+    "schema": {
+     "type": "object",
+     "properties": {
+      "zoneUid": {
+       "type": "string"
+      },
+      "guestUid": {
+       "type": "string"
+      },
+      "guestGeneration": {
+       "type": "integer"
+      },
+      "providerAssignmentGeneration": {
+       "type": "integer"
+      },
+      "policyRevision": {
+       "type": "integer"
+      },
+      "operationId": {
+       "type": "string"
+      },
+      "operation": {
+       "type": "string"
+      },
+      "stopOnly": {
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "zoneUid",
+      "guestUid",
+      "guestGeneration",
+      "providerAssignmentGeneration",
+      "policyRevision",
+      "operationId",
+      "operation",
+      "stopOnly"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "stateCell": {
+    "cell": "lifecycle-leases",
+    "durability": "one-time"
    },
    "deadline": {
     "tier": "standard"
