@@ -54,6 +54,26 @@ pub const UNCOMMITTED_OPERATION: &str = "uncommitted-operation";
 /// The refusal code for a caller no committed grant covers.
 pub const UNGRANTED_CALLER: &str = "ungranted-caller";
 
+/// One wire/declared operation spelling. The committed rows name
+/// operations in PascalCase while family `ResourceRef` labels are
+/// lowercase and dash-separated; both spellings canonicalize to the same
+/// token (U10 seam).
+trait CanonicalOperationEq {
+    fn canonical_eq(&self, other: &str) -> bool;
+}
+
+impl CanonicalOperationEq for str {
+    fn canonical_eq(&self, other: &str) -> bool {
+        self.chars()
+            .filter(|c| *c != '-')
+            .flat_map(char::to_lowercase)
+            .eq(other
+                .chars()
+                .filter(|c| *c != '-')
+                .flat_map(char::to_lowercase))
+    }
+}
+
 /// The closed set of codes this envelope itself refuses with.
 pub const ENVELOPE_REFUSALS: [&str; 2] = [UNCOMMITTED_OPERATION, UNGRANTED_CALLER];
 
@@ -310,13 +330,15 @@ impl OperationEnvelope {
     /// Whether a declared handler serves this operation name.
     ///
     /// The committed rows spell the family operations in the catalog's
-    /// PascalCase wire names while a `ResourceRef` name is a lowercase
-    /// label, so the match is case-insensitive (U10): the forwarded wire
-    /// name `OpenPidfd` resolves the declared `Operation/open-pidfd` entry.
+    /// PascalCase wire names while a `ResourceRef` name is a lowercase,
+    /// dash-separated label (`Operation/open-pidfd`), so the match
+    /// canonicalizes both spellings - case AND dashes - before comparing
+    /// (U10): the forwarded wire name `OpenPidfd` resolves the declared
+    /// `Operation/open-pidfd` entry.
     pub fn declares(&self, operation: &str) -> bool {
         self.handlers
             .iter()
-            .any(|entry| entry.operation.name().as_str().eq_ignore_ascii_case(operation))
+            .any(|entry| entry.operation.name().as_str().canonical_eq(operation))
     }
 
     /// Run one operation a bare operation name selects, under an invocation
@@ -399,7 +421,7 @@ impl OperationEnvelope {
         let Some(entry) = self
             .handlers
             .iter()
-            .find(|entry| entry.operation.name().as_str().eq_ignore_ascii_case(operation))
+            .find(|entry| entry.operation.name().as_str().canonical_eq(operation))
         else {
             self.audit_named(operation, ProviderAgentAuditOutcome::Denied);
             return Err(OperationFailure::new(UNCOMMITTED_OPERATION));

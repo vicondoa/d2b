@@ -198,6 +198,9 @@ in
         KillMode = "process";
         User = "d2bd";
         Group = "d2bd";
+        # U10 seam: the broker's envelope forwarder dials the daemon's
+        # forward rendezvous; the daemon binds this path at startup.
+        Environment = "D2B_BROKER_FORWARD_SOCKET=/run/d2b/broker-forward.sock";
         ExecStart = "${d2bdPackage}/bin/d2bd host --config /etc/d2b/daemon-config.json";
         ExecStop = "+${hostShutdownHook}";
         TimeoutStopSec =
