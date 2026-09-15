@@ -5062,7 +5062,7 @@ fn cell_store_error(error: crate::state_cells::CellStoreError) -> BrokerError {
 /// The typed arm keeps serving registry reads from the cell backing until
 /// the Process family's arm retires (U10/U11): keys are `runner_id`,
 /// records hold the broker's dup of the spawn pidfd, and the cell is
-/// ephemeral — in-process with reset-on-restart semantics, per the
+/// ephemeral - in-process with reset-on-restart semantics, per the
 /// committed row's durability facet. Registered records are broker-internal
 /// spawn state, so the recorded principal is [`BROKER_PRINCIPAL`]; the
 /// reconciler reads (`contains`/`remove`/`keys`) are principal-agnostic,
@@ -15068,7 +15068,7 @@ mod tests {
         );
 
         // Completed one-time cell: the same identity replays the recorded
-        // outcome — a refusal (AE2).
+        // outcome - a refusal (AE2).
         let response = envelope_response(
             harness
                 .invoke("consume-cell", cell_kernel_payload(&operation_id))
@@ -15544,7 +15544,12 @@ mod tests {
     fn spawn_process_cloud_hypervisor_unlinks_stale_socket_before_spawn() {
         let root = test_audit_dir("spawn-kernel-stale-socket");
         fs::create_dir_all(&root).expect("create test root");
-        let stale = root.join("stale.sock");
+        // The sandbox execroot can push even a relative bind path past
+        // SUN_LEN (108 bytes); the stale socket lives on the short temp
+        // base so the bind itself succeeds before the unlink is proven.
+        let mut stale = std::env::temp_dir();
+        stale.push(format!("d2b-stale-{}.sock", std::process::id()));
+        let _ = fs::remove_file(&stale);
         let listener =
             std::os::unix::net::UnixListener::bind(&stale).expect("bind stale socket");
         drop(listener);

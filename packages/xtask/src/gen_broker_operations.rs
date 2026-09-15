@@ -1024,7 +1024,7 @@ mod tests {
 
     /// A row declaring an fd kind renders exactly one comma after the kind:
     /// the inner and outer format strings both used to append one, emitting
-    /// `Some(FdKind::Any),,` — invalid Rust that only a row with a declared
+    /// `Some(FdKind::Any),,` - invalid Rust that only a row with a declared
     /// kind could hit, so the all-None catalog never caught it (U10
     /// regression).
     #[test]

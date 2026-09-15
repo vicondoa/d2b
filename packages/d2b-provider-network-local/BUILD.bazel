@@ -45,7 +45,7 @@ rust_library(
     crate_features = ["test-support"],
     crate_name = "d2b_provider_network_local",
     deps = [
-        "//packages/d2b-core:d2b_core_test_support",
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail_test_support",
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor_test_support",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
@@ -129,7 +129,6 @@ rust_test(
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
-        "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts_test_support",

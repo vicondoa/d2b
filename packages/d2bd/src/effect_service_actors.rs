@@ -11,7 +11,7 @@
 //! This module ships the actor machinery around a small FIXTURE service trait
 //! ([`EffectService`]); no real provider integration lives here. Hosting is
 //! wired at the provider composition site: `ProviderSet::start`
-//! (`provider_lifecycle.rs`) hosts one actor per DECLARED effect service —
+//! (`provider_lifecycle.rs`) hosts one actor per DECLARED effect service -
 //! every `ServiceDecl` a started provider declares becomes an
 //! [`EffectServiceRow`] on the zone's supervisor, rebuilt from that durable
 //! row on every respawn.
@@ -83,7 +83,7 @@ pub trait EffectService: Send + Sync + 'static {
     async fn handle(&self, request: EffectRequest) -> Result<EffectResponse, EffectServiceError>;
 
     /// Timer-driven poll tick (default: nothing). The actor's requeue timer
-    /// drives this on the declared interval — never a thread.
+    /// drives this on the declared interval - never a thread.
     async fn poll(&self) {}
 }
 
@@ -189,7 +189,7 @@ impl EffectServiceBinding {
     }
 
     /// The actor generation this binding currently names. After a respawn
-    /// the supervisor's live binding names a different actor — resolve again
+    /// the supervisor's live binding names a different actor - resolve again
     /// to re-bind.
     ///
     /// Test-only harness surface (the supervision tests observe the fresh
@@ -212,7 +212,7 @@ impl EffectServiceBinding {
     }
 
     /// Call through the binding at its current revision; a mid-flight death
-    /// of the actor surfaces as [`EffectServiceError::InFlightStale`] — the
+    /// of the actor surfaces as [`EffectServiceError::InFlightStale`] - the
     /// caller sees a refusal, never a hang.
     pub async fn call(&self, request: EffectRequest) -> Result<EffectResponse, EffectServiceError> {
         self.send(request).await
@@ -255,7 +255,7 @@ pub(crate) enum EffectServiceMsg {
         reply: oneshot::Sender<Result<EffectResponse, EffectServiceError>>,
     },
     /// Requeue tick: the poll loop schedules the next one with
-    /// `ractor::time::send_after` — no threads (KTD9).
+    /// `ractor::time::send_after` - no threads (KTD9).
     Poll,
 }
 
@@ -270,7 +270,7 @@ pub(crate) struct EffectServiceActorState {
 }
 
 /// One hosted effect service. `handle` awaits the service's own future
-/// inline — the fixture shape; production services forward long effects onto
+/// inline - the fixture shape; production services forward long effects onto
 /// an unbounded channel pump like `ResourceActor` (KTD12) so the mailbox
 /// never blocks.
 pub(crate) struct EffectServiceActor;
@@ -326,7 +326,7 @@ impl Actor for EffectServiceActor {
             EffectServiceMsg::Call { request, reply } => {
                 let result = state.service.handle(request).await;
                 // If the actor dies before this sends, the caller's receiver
-                // closes and surfaces `InFlightStale` — never a hang.
+                // closes and surfaces `InFlightStale` - never a hang.
                 let _ = reply.send(result);
             }
             EffectServiceMsg::Poll => {
@@ -464,7 +464,7 @@ impl EffectServiceSupervisorState {
             // Republish (provider-set republish, KTD5): deregister the old
             // actor id before killing it. Supervision events race regular
             // mailbox traffic, so the old id must not be found when the
-            // event arrives — otherwise the exit would respawn the old
+            // event arrives - otherwise the exit would respawn the old
             // generation on top of the new one (same reasoning as
             // `ResourceManager::handle`'s `DeletionComplete`).
             let binding = self.bindings.get(&row.service).expect("checked above");
@@ -791,7 +791,7 @@ mod tests {
         binding.kill();
 
         // The supervisor respawns from the durable row and bumps the
-        // generational revision — observable through the shared counter.
+        // generational revision - observable through the shared counter.
         until(|| binding.revision() != revision_before).await;
         let respawned = resolve(&supervisor, "echo").await.expect("resolve after respawn");
         assert_eq!(respawned.revision(), revision_before + 1, "respawn bumped the revision");
@@ -861,7 +861,7 @@ mod tests {
         assert_eq!(respawned.revision(), 2);
     }
 
-    /// Edge: a requeue timer schedules the next poll after a timeout — no
+    /// Edge: a requeue timer schedules the next poll after a timeout - no
     /// poll before the delay, polls arrive afterwards, and the handler
     /// reschedules the next tick (ractor::time timers, never threads).
     #[tokio::test]

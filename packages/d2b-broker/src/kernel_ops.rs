@@ -470,7 +470,7 @@ fn observe_process(
 /// envelope-attested initiating principal. The committed row is the
 /// declaration surface: the cell name and its durability facet flow from
 /// the row's own `stateCell`/`cellDurability` facets (U3/KTD3), so the
-/// kernel is generic — it never learns a lease shape. The durable
+/// kernel is generic - it never learns a lease shape. The durable
 /// pre-commit happens before `Granted` returns, so a broker crash between
 /// the commit and the completion leaves an `unknown` record the retried
 /// invocation reconciles under its id; a completed record refuses
@@ -528,7 +528,7 @@ fn complete_cell(
 
 /// The canonical per-invocation identity of one cell call: the validated
 /// payload object itself, serialized canonically. The row's declared
-/// payload schema is the identity contract — the caller carries the full
+/// payload schema is the identity contract - the caller carries the full
 /// identity fields (the lease's zone/guest/generations/policy revision/
 /// operation id/operation/stop-only key, KTD3) and the envelope refuses
 /// any payload outside the declared shape, so consume and complete of one
@@ -539,7 +539,7 @@ pub(crate) fn cell_identity(payload: &CanonicalJsonObject) -> Result<String, Dis
 
 /// The initiating principal as attested at the envelope boundary, rendered
 /// for cell keys. Invocation ids appear in audit records and are not
-/// secrets, so the principal is the replay gate — never the id alone
+/// secrets, so the principal is the replay gate - never the id alone
 /// (KTD3).
 fn initiating_principal(invocation: &DirectInvocation<'_>) -> String {
     invocation.ctx.chain.initiating_identity().to_owned()

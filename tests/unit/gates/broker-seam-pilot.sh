@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# broker-seam-pilot.sh — U10 broker-seam cross-binary E2E gate.
+# broker-seam-pilot.sh - U10 broker-seam cross-binary E2E gate.
 #
 # Proves one migrated process-family operation answers END TO END across the
 # real broker + daemon binaries with fd carriage and audit continuity:

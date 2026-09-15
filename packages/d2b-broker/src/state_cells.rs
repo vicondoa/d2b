@@ -5,7 +5,7 @@
 //! `(cell, invocation_id, initiating_principal)`; compare-and-consume runs
 //! under the broker's single-process lock (the broker is the cell owner, so
 //! the lock is single-process by construction). A repeated invocation id
-//! replays the recorded outcome for the same initiating principal only —
+//! replays the recorded outcome for the same initiating principal only -
 //! invocation ids appear in audit records and are not secrets, so they never
 //! gate one-time grants alone.
 //!
@@ -18,7 +18,7 @@
 //!   it as `completed`. A crash between the durable commit and the effect
 //!   leaves `outcome = unknown`, and the retried invocation is reconciled
 //!   (re-granted under the same invocation id, which the effect pairs with
-//!   for idempotency — never a blind retry). A completed record refuses
+//!   for idempotency - never a blind retry). A completed record refuses
 //!   re-consume, across broker restarts (AE2's restart-replay resistance).
 //! - Ephemeral cells keep in-process reset-on-restart semantics; their
 //!   records replay in-process and never touch the durable file.
@@ -29,7 +29,7 @@
 //! never re-enable a double grant.
 //!
 //! Daemon-side effect actors reach cells only through carrier-mediated cell
-//! operations (the U10/U11 seam) — never direct file access; the file here
+//! operations (the U10/U11 seam) - never direct file access; the file here
 //! is broker-internal state under the daemon state root, written with the
 //! same discipline the broker's other durable rows use
 //! (`ops/network.rs::persist_persistent_tap_realization`).
@@ -198,7 +198,7 @@ struct CellRecord {
 
 /// The broker's single generic stateful mechanism.
 ///
-/// One owning process — the broker — serializes every compare-and-consume
+/// One owning process - the broker - serializes every compare-and-consume
 /// through [`Self::records`]; the durable file holds only one-time records.
 pub struct CellStore {
     /// The durable root directory, when the store is file-backed. `None`
@@ -345,7 +345,7 @@ impl CellStore {
     /// Follows the broker's durable-row discipline
     /// (`ops/network.rs::persist_persistent_tap_realization`): strict
     /// directory posture, temp file with `create_new`, `sync_data`, rename,
-    /// and a directory fsync — so a crash never leaves a half-written file.
+    /// and a directory fsync - so a crash never leaves a half-written file.
     fn persist_locked(&self, records: &BTreeMap<CellKey, CellRecord>) -> Result<(), CellStoreError> {
         let Some(root) = self.root.as_deref() else {
             return Ok(());
@@ -756,7 +756,7 @@ mod tests {
         // Alice claims the key.
         assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Granted);
         // Bob consumes the same cell + invocation id: the principal is part
-        // of the key, so this is a replay attempt, not a fresh grant — it
+        // of the key, so this is a replay attempt, not a fresh grant - it
         // must refuse whether or not Alice completed.
         assert_eq!(consume_ok(&store, "inv-1", "bob"), ConsumeDecision::ForeignPrincipal);
         store.complete(LEASES, "inv-1", "alice").expect("alice completes");
@@ -812,11 +812,11 @@ mod tests {
         // Owner B restarts with the durable file.
         let store = CellStore::open(&root_path).expect("owner B");
         // The retried invocation reconciles under the same invocation id: the
-        // idempotent effect re-runs — no silent leak.
+        // idempotent effect re-runs - no silent leak.
         assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Reconciled);
         store.complete(LEASES, "inv-1", "alice").expect("complete");
         // The grant is exercised exactly once: later consumes replay the
-        // refusal — no double grant.
+        // refusal - no double grant.
         assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Replayed);
         assert_eq!(consume_ok(&store, "inv-1", "bob"), ConsumeDecision::ForeignPrincipal);
     }
@@ -855,7 +855,7 @@ mod tests {
         // The durable file survived the interleaved claims.
         let reopened = CellStore::open(&root_path).expect("reopen");
         // The survivors' claims died with the process: the record is an
-        // unclaimed durable unknown, reconciled on retry — and the winner of
+        // unclaimed durable unknown, reconciled on retry - and the winner of
         // the whole population is still exactly one grant lineage.
         assert_eq!(consume_ok(&reopened, "inv-1", "alice"), ConsumeDecision::Reconciled);
         reopened.complete(LEASES, "inv-1", "alice").expect("complete");

@@ -3187,10 +3187,10 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         }
     }
 
-    // —————————————————————————————————————————————————————————————————
+    // -----------------------------------------------------------------
     // The origination leg: the daemon publishes its current values to the
     // broker, and the rendezvous advances exactly on the acknowledgement.
-    // —————————————————————————————————————————————————————————————————
+    // -----------------------------------------------------------------
 
     use d2b_contracts_broker::broker_wire::{
         BrokerCallerRole, BrokerErrorResponse, BrokerRequest, BrokerRequestEnvelope,

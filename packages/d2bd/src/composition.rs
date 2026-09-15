@@ -18580,8 +18580,8 @@ pub(crate) fn consume_lifecycle_lease(
         return Err(provider_effects::ProviderEffectError::EffectRejected);
     }
     // The stop_only/HostShutdownRestricted fence, moved side: the caller
-    // classifies itself — host-shutdown only when the envelope caller is
-    // HostShutdownUid — and keeps the retired arm's shape (stop-only
+    // classifies itself - host-shutdown only when the envelope caller is
+    // HostShutdownUid - and keeps the retired arm's shape (stop-only
     // shutdowns may only stop, never start or restart).
     let is_shutdown = matches!(caller_role, BrokerCallerRole::HostShutdownUid { .. });
     if stop_only != is_shutdown

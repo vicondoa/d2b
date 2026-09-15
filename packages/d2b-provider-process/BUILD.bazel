@@ -35,7 +35,9 @@ rust_library(
     crate_features = ["test-support"],
     crate_name = "d2b_provider_process",
     deps = [
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
         "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail_test_support",
         "//packages/d2b-provider-process-systemd:d2b_provider_process_systemd_test_support",

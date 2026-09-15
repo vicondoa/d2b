@@ -30,6 +30,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
+
 rust_library(
     name = "d2b_core_test_support",
     srcs = d2b_core_srcs,

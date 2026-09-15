@@ -4935,7 +4935,7 @@ fn string_literal_spans(line: &str) -> Vec<(usize, usize, String)> {
                 index = end.max(index + 1);
             }
             b'r' if bytes.get(index + 1) == Some(&b'"') => {
-                // r"..." — closes at the next unescaped quote (raw strings do
+                // r"..." - closes at the next unescaped quote (raw strings do
                 // not escape, but a `"` can still follow `#`-runs handled below).
                 let mut end = index + 2;
                 let mut closed = false;
@@ -4988,7 +4988,7 @@ fn string_literal_spans(line: &str) -> Vec<(usize, usize, String)> {
                 }
             }
             b'b' if bytes.get(index + 1) == Some(&b'"') => {
-                // b"..." — same shape as a plain string, one byte further in.
+                // b"..." - same shape as a plain string, one byte further in.
                 let mut end = index + 2;
                 let mut closed = false;
                 while end < bytes.len() {
@@ -5011,7 +5011,7 @@ fn string_literal_spans(line: &str) -> Vec<(usize, usize, String)> {
                 }
             }
             b'b' if bytes.get(index + 1) == Some(&b'r') => {
-                // br"..." / br#"..."# — hand off the scanner at the r.
+                // br"..." / br#"..."# - hand off the scanner at the r.
                 index += 1;
             }
             _ => index += 1,

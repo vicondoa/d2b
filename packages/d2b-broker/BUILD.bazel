@@ -168,7 +168,10 @@ rust_test(
 
 rust_test(
     name = "broker_protocol_compatibility",
-    srcs = ["tests/broker_protocol_compatibility.rs"],
+    srcs = [
+        "tests/broker_protocol_compatibility.rs",
+        "tests/common/mod.rs",
+    ],
     compile_data = ["Cargo.toml"],
     data = ["//packages/d2b-broker-composition:d2b-broker"],
     env = {"CARGO_BIN_EXE_d2b-broker": "$(rootpath //packages/d2b-broker-composition:d2b-broker)"},
@@ -176,6 +179,7 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-broker:d2b_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",

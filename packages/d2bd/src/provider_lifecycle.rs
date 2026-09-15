@@ -1189,7 +1189,7 @@ mod tests {
         binding.kill();
 
         // The zone supervisor respawns from the durable row and bumps the
-        // generational revision — observable through the shared counter.
+        // generational revision - observable through the shared counter.
         until(|| binding.revision() != revision_before).await;
         let respawned = runtime
             .resolve_effect_service(ECHO_SERVICE.id)

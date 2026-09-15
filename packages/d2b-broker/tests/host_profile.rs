@@ -8,9 +8,9 @@ fn host_profile_keeps_the_complete_closed_operation_catalog() {
     // them) at wire v6: the variants are gone from the enum, so the host
     // catalog no longer carries them; their privileged cores are the
     // broker-generic kernels served through EnvelopeInvoke. U11 retired
-    // ConsumeLifecycleLease the same way — the lease rides the generic
+    // ConsumeLifecycleLease the same way - the lease rides the generic
     // consume-cell/complete-cell kernels. U12 retired the thirteen
-    // network-fds family variants the same way — their cores are the
+    // network-fds family variants the same way - their cores are the
     // broker-generic network kernels served through EnvelopeInvoke.
     for operation in [
         "EnvelopeInvoke",
