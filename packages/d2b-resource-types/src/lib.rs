@@ -29,8 +29,8 @@ pub use child_creation::{ChildCreation, ChildCustody};
 pub use descriptor::{CONVERTED_TYPE_VERBS, DriverDescriptor};
 pub use metadata::{assert_metadata_registration, metadata_descriptor};
 pub use operation::{
-    OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult,
-    ValidatedPayload,
+    KernelCaller, OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult,
+    RunnerLookup, ValidatedPayload,
 };
 pub use provider::{
     Cardinality, IsolationPosture, PlaneAdapter, PrincipalName, ProviderDeclaration, SelfBinding,

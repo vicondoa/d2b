@@ -1,10 +1,14 @@
 //! Broker operation declarations and the handler contract they carry.
 
 use std::os::fd::RawFd;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
+use d2b_core::bundle_resolver::BundleResolver;
 
 /// One committed broker operation and the handler that serves it.
 ///
@@ -57,6 +61,68 @@ pub struct OperationCtx<'a> {
     /// They belong to the transport's frame,not to the handler;the handler
     /// borrows them for the duration of the invocation only.
     pub fds: &'a [RawFd],
+    /// The evidence chain this invocation runs under (U10, KTD6): the
+    /// ordered identities, root first, of the chain the broker minted for
+    /// the root call. A handler that invokes a broker-generic kernel as
+    /// the nested core of its family operation presents this chain with
+    /// its own identity appended, so the graft rule authorizes the kernel
+    /// call against the chain's initiating principal and the in-broker leg
+    /// records the correlation leg. Empty for a root call.
+    pub chain_identities: &'a [String],
+    /// The U10 family seam: the broker kernel socket, the caller role the
+    /// family handler presents, the Zone's trusted bundle, and the
+    /// daemon-side runner lookup the family handlers validate against.
+    /// Absent when the composition point wired no seam (direct and test
+    /// invocations).
+    pub kernel: Option<&'a KernelCaller>,
+}
+
+/// The U10 family seam a forwarded family handler invokes kernels through.
+///
+/// The sandwich serves each process-family operation's privileged,
+/// resource-agnostic kernel in-broker as a broker-generic committed row
+/// while the family operation itself stays forwarded to the declaring
+/// process. This caller carries everything the daemon-side family handler
+/// needs to invoke the kernel as a nested envelope call: the broker's
+/// origination socket, the caller role the daemon presents, the Zone's
+/// trusted bundle the family logic resolves intents from, and the
+/// daemon-side runner lookup the observation handlers validate against.
+#[derive(Clone)]
+pub struct KernelCaller {
+    /// The broker's origination socket the kernel calls dial.
+    pub socket_path: PathBuf,
+    /// The caller role the daemon presents to the broker.
+    pub caller_role: BrokerCallerRole,
+    /// The Zone's trusted bundle the family handlers resolve runner
+    /// intents and launch plans from.
+    pub bundle: Arc<BundleResolver>,
+    /// The daemon-side runner lookup: `(vm, role)` to the retained
+    /// `(pid, start_time_ticks)`, when the composition point wired one.
+    pub runner_lookup: Option<Arc<dyn RunnerLookup>>,
+}
+
+impl std::fmt::Debug for KernelCaller {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("KernelCaller")
+            .field("socket_path", &self.socket_path)
+            .field("caller_role", &self.caller_role)
+            .field("bundle", &"<redacted>")
+            .field("runner_lookup", &self.runner_lookup.is_some())
+            .finish()
+    }
+}
+
+/// The daemon-side runner lookup the family observation handlers validate
+/// against.
+///
+/// The daemon retains the authoritative `(pid, start_time_ticks)` for the
+/// runners it tracks (the pidfd table); the family handler reads it through
+/// this seam rather than reaching daemon internals.
+pub trait RunnerLookup: Send + Sync {
+    /// The retained `(pid, start_time_ticks)` for one `(vm, role)`, when
+    /// the daemon tracks it.
+    fn lookup(&self, vm: &str, role: &str) -> Option<(i32, u64)>;
 }
 
 /// The canonical payload of one invocation, already validated against the
@@ -86,23 +152,53 @@ impl ValidatedPayload {
 }
 
 /// The canonical result payload of one successful invocation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OperationResult(CanonicalJsonObject);
+#[derive(Debug)]
+pub struct OperationResult {
+    payload: CanonicalJsonObject,
+    /// The descriptors the handler minted for this invocation, when the
+    /// operation's result carries any (U10).
+    ///
+    /// The descriptors travel with the result over the forward carrier's
+    /// fd leg; the caller owns them once the reply frame has gone. A
+    /// handler that mints no descriptor leaves the vector empty.
+    fds: Vec<std::os::fd::OwnedFd>,
+}
 
 impl OperationResult {
     /// Wrap a canonical result payload object.
     pub fn new(payload: CanonicalJsonObject) -> Self {
-        Self(payload)
+        Self {
+            payload,
+            fds: Vec::new(),
+        }
+    }
+
+    /// Wrap a canonical result payload object plus the descriptors the
+    /// handler minted for this invocation.
+    pub fn with_fds(payload: CanonicalJsonObject, fds: Vec<std::os::fd::OwnedFd>) -> Self {
+        Self { payload, fds }
     }
 
     /// Borrow the canonical result payload object.
     pub fn object(&self) -> &CanonicalJsonObject {
-        &self.0
+        &self.payload
     }
 
-    /// Consume the wrapper, returning the canonical result payload object.
+    /// Consume the wrapper, returning the canonical payload object.
     pub fn into_object(self) -> CanonicalJsonObject {
-        self.0
+        self.payload
+    }
+
+    /// The descriptors the handler minted for this invocation, in frame
+    /// order.
+    pub fn fds(&self) -> &[std::os::fd::OwnedFd] {
+        &self.fds
+    }
+
+    /// Consume the wrapper, returning the canonical payload object and the
+    /// descriptors the handler minted.
+    pub fn into_parts(self) -> (CanonicalJsonObject, Vec<std::os::fd::OwnedFd>) {
+        (self.payload, self.fds)
     }
 }
 

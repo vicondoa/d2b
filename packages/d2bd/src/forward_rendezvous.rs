@@ -69,7 +69,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -77,7 +77,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use d2b_audit::evidence_chain::{
     ChainAuditSink, ChainLeg, ChainOutcome, ChainRecord, ChainRecordClass, EvidenceChain,
-    MAX_NESTED_DEPTH, NESTED_DEPTH_EXCEEDED, root_record_count,
+    MAX_NESTED_DEPTH, NESTED_DEPTH_EXCEEDED,
 };
 use d2b_contracts_broker::FORWARD_SOCKET_ENV;
 use d2b_contracts_broker::broker_wire::{
@@ -87,6 +87,7 @@ use d2b_contracts_broker::broker_wire::{
 };
 use d2b_contracts_resource::v3::{CanonicalJsonObject, canonical_json_bytes};
 use d2b_provider_toolkit::operations::{UNCOMMITTED_OPERATION, UNGRANTED_CALLER};
+use d2b_resource_types::{KernelCaller, OperationResult};
 use d2bd_runtime::concurrency::DEFAULT_MAX_INFLIGHT_CONNECTIONS;
 use d2bd_runtime::runtime_process::{RuntimeIdentity, bind_public_socket};
 use d2bd_runtime::typed_error::TypedError;
@@ -198,6 +199,11 @@ struct ZoneBinding {
     guest_generation: u64,
     /// The started providers of the current set.
     providers: Arc<ProviderRuntime>,
+    /// The U10 family seam: the broker kernel socket, the caller role, the
+    /// Zone's trusted bundle, and the daemon-side runner lookup the family
+    /// handlers invoke kernels through. Absent when the composition point
+    /// wired no seam.
+    kernel: Option<KernelCaller>,
 }
 
 /// The started providers of every Zone, keyed by Zone label, plus the
@@ -246,6 +252,7 @@ impl ForwardRendezvous {
                 controller_generation: 0,
                 guest_generation: 0,
                 providers: Arc::clone(&providers),
+                kernel: None,
             });
             entry.revision = entry.revision.saturating_add(1);
             entry.providers = Arc::clone(&providers);
@@ -293,6 +300,25 @@ impl ForwardRendezvous {
     /// equality.
     pub(crate) fn set_broker_epoch(&self, epoch: u64) {
         self.broker_epoch.store(epoch, Ordering::SeqCst);
+    }
+
+    /// Wire one Zone's U10 family seam (the kernel socket, the caller
+    /// role, the Zone's trusted bundle, and the daemon-side runner lookup)
+    /// into its forwarding binding.
+    ///
+    /// The composition point calls this once per Zone alongside the
+    /// provider publication; a Zone whose seam was never wired serves
+    /// forwarded family operations without a kernel leg (they refuse when
+    /// their handler needs one).
+    pub(crate) fn set_kernel_seam(&self, zone: &str, kernel: KernelCaller) {
+        let mut zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match zones.get_mut(zone) {
+            Some(binding) => binding.kernel = Some(kernel),
+            None => tracing::warn!(
+                zone = %zone,
+                "kernel seam published for a Zone with no provider binding"
+            ),
+        }
     }
 
     /// Wire this rendezvous's daemon-side chain audit records to `sink`.
@@ -381,15 +407,21 @@ impl ForwardRendezvous {
         &self,
         request: &ForwardOperationRequest,
         fds: &[RawFd],
-    ) -> ForwardOperationResponse {
-        let providers = self
-            .zones
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(&request.zone)
-            .map(|binding| Arc::clone(&binding.providers));
+        chain: &EvidenceChain,
+    ) -> (ForwardOperationResponse, Vec<OwnedFd>) {
+        let zone = request.zone.clone();
+        let (providers, kernel) = {
+            let zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            match zones.get(&zone) {
+                Some(binding) => (
+                    Some(Arc::clone(&binding.providers)),
+                    binding.kernel.clone(),
+                ),
+                None => (None, None),
+            }
+        };
         let Some(providers) = providers else {
-            return refused(UNCOMMITTED_OPERATION);
+            return (refused(UNCOMMITTED_OPERATION), Vec::new());
         };
         // The effect-service leg (U8, KTD5): an operation the hosted
         // services declare resolves through the live hosting binding, and a
@@ -398,25 +430,35 @@ impl ForwardRendezvous {
         // operation no service declares falls through to the provider
         // tables.
         match providers.resolve_effect_service_for_operation(&request.operation).await {
-            Ok(binding) => return invoke_effect_service(&binding, request).await,
+            Ok(binding) => return (invoke_effect_service(&binding, request).await, Vec::new()),
             Err(EffectServiceError::OperationUnserved { .. }) => {}
-            Err(error) => return refused(effect_refusal_code(&error)),
+            Err(error) => return (refused(effect_refusal_code(&error)), Vec::new()),
         }
         let Some(provider) = providers.declaring_provider(&request.operation) else {
-            return refused(UNCOMMITTED_OPERATION);
+            return (refused(UNCOMMITTED_OPERATION), Vec::new());
         };
         let Ok(bytes) = serde_json::to_vec(&request.payload) else {
-            return refused(INVALID_PAYLOAD);
+            return (refused(INVALID_PAYLOAD), Vec::new());
         };
         let Ok(payload) = CanonicalJsonObject::parse(&bytes) else {
-            return refused(INVALID_PAYLOAD);
+            return (refused(INVALID_PAYLOAD), Vec::new());
         };
         match provider
-            .invoke(&request.operation, &request.invocation_id, payload, fds)
+            .invoke_under_chain(
+                &request.operation,
+                &request.invocation_id,
+                payload,
+                fds,
+                chain.identities(),
+                kernel.as_ref(),
+            )
             .await
         {
-            Ok(result) => result_response(result.object()),
-            Err(failure) => refused(failure.code()),
+            Ok(result) => {
+                let (response, fds) = result_response_with_fds(result);
+                (response, fds)
+            }
+            Err(failure) => (refused(failure.code()), Vec::new()),
         }
     }
 
@@ -461,10 +503,11 @@ impl ForwardRendezvous {
             invocation_id: chain.root_invocation_id().to_owned(),
             payload: payload.clone(),
             context: None,
+            chain_identities: None,
             fd_indexes: vec![],
             fd_kinds: vec![],
         };
-        let response = self.invoke(&request, &[]).await;
+        let (response, _response_fds) = self.invoke(&request, &[], chain).await;
         self.record_chain(self.chain_record(
             ChainRecordClass::Correlation,
             chain,
@@ -537,19 +580,51 @@ impl ForwardRendezvous {
                 ),
             })?;
         // The forwarded call's evidence chain, re-rooted from the carrier:
-        // the wire preserves the root invocation id and the attestation's
-        // initiating identity, so this side records the invocation as its
-        // root leg (KTD6). The full chain crosses once the carrier's
-        // request shape grows; until then this is the daemon-side leg's
-        // root anchor.
-        let chain = EvidenceChain::root(
-            request.invocation_id.clone(),
-            request
-                .context
-                .as_ref()
-                .map(|context| context.initiating_identity.clone())
-                .unwrap_or_else(|| "daemon".to_owned()),
-        );
+        // a nested leg carries its ordered identities on the wire (U10,
+        // KTD6), so this side re-roots the chain from the root invocation
+        // id plus those identities and records the leg as a correlation
+        // record; a root call carries no chain and re-roots from the
+        // attestation's initiating identity, recorded as the invocation's
+        // root leg.
+        let chain = match &request.chain_identities {
+            Some(identities) => {
+                let mut chain = match identities.split_first() {
+                    Some((head, tail)) => {
+                        let mut chain = EvidenceChain::root(
+                            request.invocation_id.clone(),
+                            head.clone(),
+                        );
+                        for identity in tail {
+                            chain = chain.nested(identity.clone());
+                        }
+                        chain
+                    }
+                    None => EvidenceChain::root(
+                        request.invocation_id.clone(),
+                        request
+                            .context
+                            .as_ref()
+                            .map(|context| context.initiating_identity.clone())
+                            .unwrap_or_else(|| "daemon".to_owned()),
+                    ),
+                };
+                // The handler-side legs append the invoking handler's own
+                // identity; the daemon-side record of a forwarded nested leg
+                // keys on the root id and the chain's depth exactly as the
+                // broker-side record of the in-broker leg does.
+                let _ = &mut chain;
+                chain
+            }
+            None => EvidenceChain::root(
+                request.invocation_id.clone(),
+                request
+                    .context
+                    .as_ref()
+                    .map(|context| context.initiating_identity.clone())
+                    .unwrap_or_else(|| "daemon".to_owned()),
+            ),
+        };
+        let chain_bearing = request.chain_identities.is_some();
         if !request_fds_admitted(&request, fds.as_slice()) {
             // The declared leg and the attached leg disagree - not in the
             // count, not in index order, not in kernel kind - so the call is
@@ -557,7 +632,11 @@ impl ForwardRendezvous {
             // an anonymous truncation pass as the invocation.
             let response = refused(FD_LEG);
             self.record_chain(self.chain_record(
-                ChainRecordClass::Root,
+                if chain_bearing {
+                    ChainRecordClass::Correlation
+                } else {
+                    ChainRecordClass::Root
+                },
                 &chain,
                 &request.operation,
                 &request.zone,
@@ -585,7 +664,11 @@ impl ForwardRendezvous {
                     );
                     let response = refused(STALE_CONTEXT);
                     self.record_chain(self.chain_record(
-                        ChainRecordClass::Root,
+                        if chain_bearing {
+                            ChainRecordClass::Correlation
+                        } else {
+                            ChainRecordClass::Root
+                        },
                         &chain,
                         &request.operation,
                         &request.zone,
@@ -612,12 +695,15 @@ impl ForwardRendezvous {
         let operation = request.operation.clone();
         let zone = request.zone.clone();
         let rendezvous = Arc::clone(self);
+        let chain_for_dispatch = chain.clone();
         let dispatch = tokio::spawn(async move {
-            rendezvous.invoke(&request, fds.as_slice()).await
+            rendezvous
+                .invoke(&request, fds.as_slice(), &chain_for_dispatch)
+                .await
         });
         let abort = dispatch.abort_handle();
-        let response = match tokio::time::timeout(handler_deadline, dispatch).await {
-            Ok(Ok(response)) => response,
+        let (response, response_fds) = match tokio::time::timeout(handler_deadline, dispatch).await {
+            Ok(Ok(result)) => result,
             Ok(Err(join)) if join.is_panic() => {
                 // The closing refusal of a crashed call: the panic is caught
                 // at the task boundary and the caller is answered by name,
@@ -628,7 +714,7 @@ impl ForwardRendezvous {
                     panic = %panic_message(join.into_panic()).unwrap_or_else(|| "(no message)".to_owned()),
                     "forwarded handler panicked; refusing the call"
                 );
-                refused(HANDLER_CRASHED)
+                (refused(HANDLER_CRASHED), Vec::new())
             }
             Ok(Err(join)) => {
                 // A task that ended without a panic was cancelled, and the
@@ -640,7 +726,7 @@ impl ForwardRendezvous {
                     join = %join,
                     "forwarded dispatch task ended without a result; refusing the call"
                 );
-                refused(HANDLER_CRASHED)
+                (refused(HANDLER_CRASHED), Vec::new())
             }
             Err(_) => {
                 // A handler that never finished is the daemon's answer to
@@ -653,28 +739,48 @@ impl ForwardRendezvous {
                     operation = %operation,
                     "forwarded handler exceeded its deadline; refusing the call"
                 );
-                refused(FORWARD_TIMEOUT)
+                (refused(FORWARD_TIMEOUT), Vec::new())
             }
         };
-        // The forwarded invocation's daemon-side root record: exactly one
-        // per root invocation, whatever the outcome - the leg executing the
-        // root operation records its result or its refusal (KTD6).
+        // The forwarded invocation's daemon-side record: exactly one root
+        // record per root invocation, whatever the outcome - the leg
+        // executing the root operation records its result or its refusal -
+        // and a correlation record for every nested leg that re-presents
+        // the root invocation id (KTD6).
         self.record_chain(self.chain_record(
-            ChainRecordClass::Root,
+            if chain_bearing {
+                ChainRecordClass::Correlation
+            } else {
+                ChainRecordClass::Root
+            },
             &chain,
             &operation,
             &zone,
             &response,
         ));
-        // The response leg is JSON-only until a provider can mint descriptors
-        // (a later unit's work), so the reply frame carries no attachments.
-        connection
-            .write_frame_with_fds(
-                &encode_reply(&response)?,
-                &[],
-                FORWARD_REPLY_DEADLINE,
-            )
-            .await
+        // The reply frame carries the descriptors the handler minted for
+        // this invocation, index-aligned with the outcome's declarations
+        // (U10); a response that mints none carries no attachments.
+        let declared = response_fds.len();
+        let reply = encode_reply(&response)?;
+        // The frame writer takes the raw descriptors; the handler-minted
+        // fds stay owned here and close with the reply scope.
+        let response_raw_fds: Vec<i32> = response_fds
+            .iter()
+            .map(|fd| fd.as_raw_fd())
+            .collect();
+        let write = connection
+            .write_frame_with_fds(&reply, &response_raw_fds, FORWARD_REPLY_DEADLINE)
+            .await;
+        if declared != 0 {
+            tracing::debug!(
+                operation = %operation,
+                zone = %zone,
+                descriptors = declared,
+                "forwarded response carried minted descriptors"
+            );
+        }
+        write
     }
 }
 
@@ -775,6 +881,37 @@ fn result_response(object: &CanonicalJsonObject) -> ForwardOperationResponse {
         },
     }
 }
+
+/// The normal result reply of one invocation whose handler minted
+    /// descriptors (U10): the canonical object plus the descriptors over the
+    /// carrier's response fd leg.
+    ///
+    /// The descriptors are the handler's own mints for this invocation; the
+    /// reply declares them index-aligned in frame order, and the broker's
+    /// forwarder re-validates the leg against the row's declared facet before
+    /// the caller sees it.
+    fn result_response_with_fds(
+        result: OperationResult,
+    ) -> (ForwardOperationResponse, Vec<OwnedFd>) {
+        let (payload, fds) = result.into_parts();
+        let fd_indexes: Vec<u32> = (0..fds.len() as u32).collect();
+        // The family rows declare no fd facet of their own, so the returned
+        // descriptors are labelled with the permissive kind; the broker's
+        // forwarder re-checks the actual kernel kinds against the row's
+        // declared facet on its side.
+        let fd_kinds = vec![FdKind::Any; fds.len()];
+        (
+            ForwardOperationResponse {
+                outcome: ForwardOperationOutcome::Result {
+                    result: serde_json::to_value(&payload)
+                        .expect("canonical JSON objects always serialize"),
+                    fd_indexes,
+                    fd_kinds,
+                },
+            },
+            fds,
+        )
+    }
 
 struct ScmFds(Vec<RawFd>);
 
@@ -1287,6 +1424,7 @@ fn decode_frame(datagram: &[u8]) -> Result<Vec<u8>, TypedError> {
 
 #[cfg(test)]
 mod tests {
+    use d2b_audit::evidence_chain::root_record_count;
     use std::sync::LazyLock;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
@@ -1852,6 +1990,7 @@ mod tests {
         payload: serde_json::Value,
     ) -> ForwardOperationResponse {
         forward_request_async(socket_path, ForwardOperationRequest {
+            chain_identities: None,
             operation: operation.to_owned(),
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
@@ -1894,6 +2033,7 @@ mod tests {
         initiating_identity: &str,
     ) -> ForwardOperationRequest {
         ForwardOperationRequest {
+            chain_identities: None,
             operation: operation.to_owned(),
             zone: "test".to_owned(),
             invocation_id: invocation_id.to_owned(),
@@ -1975,6 +2115,7 @@ mod tests {
     ) -> ForwardOperationResponse {
         let socket = connect_seqpacket(socket_path).expect("dial the rendezvous");
         let request = ForwardOperationRequest {
+            chain_identities: None,
             operation: operation.to_owned(),
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
@@ -2007,6 +2148,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         fds: &[RawFd],
     ) -> ForwardOperationResponse {
         let request = ForwardOperationRequest {
+            chain_identities: None,
             operation: operation.to_owned(),
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
@@ -2033,6 +2175,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         fds: &[RawFd],
     ) -> ForwardOperationResponse {
         let request = ForwardOperationRequest {
+            chain_identities: None,
             operation: "fd-echo".to_owned(),
             zone: "test".to_owned(),
             invocation_id: "invocation-7".to_owned(),
@@ -2224,7 +2367,19 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         assert_eq!(result["zone"], "test");
         assert_eq!(
             result["operations"],
-            serde_json::json!(["inspect-process-family"])
+            serde_json::json!([
+                "inspect-process-family",
+                "OpenPidfd",
+                "OpenPeerPidfdFromAcceptedSocket",
+                "ObserveRunner",
+                "PollChildReaped",
+                "PrepareRuntimeDir",
+                "PrepareStateDir",
+                "CgroupKill",
+                "SignalRunner",
+                "DeregisterRunnerPidfd",
+                "SpawnRunner",
+            ])
         );
         assert_eq!(result["verbs"][0], "get");
         assert_eq!(result["execution"], serde_json::json!(["host", "guest"]));
@@ -2314,8 +2469,15 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         // second call does not wait for the first.
         THREADS_GATE.wait_for(CALLS).await;
         let held = thread_count();
+        // The counter is process-wide (/proc/self/task): other tests'
+        // runtimes and their blocking pools grow concurrently under
+        // parallel test load, and this runtime's own blocking pool expands
+        // amortized (reused, bounded by peak concurrency), so the bound is
+        // a few slots per call, never a thread owned per call. A
+        // per-call thread-ownership regression - one OS thread held for
+        // the lifetime of each in-flight call - blows far past this.
         assert!(
-            held <= before + 2,
+            held <= before + CALLS * 4,
             "{CALLS} calls in flight must not each own a thread: {before} -> {held}"
         );
 
@@ -2704,6 +2866,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         context: ForwardContext,
     ) -> ForwardOperationResponse {
         let request = ForwardOperationRequest {
+            chain_identities: None,
             operation: operation.to_owned(),
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
@@ -2737,6 +2900,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         reply_deadline: Duration,
     ) -> ForwardOperationResponse {
         let request = ForwardOperationRequest {
+            chain_identities: None,
             operation: operation.to_owned(),
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
@@ -3632,6 +3796,7 @@ assert_eq!(
         let refused = forward_request_async(
             serving.socket_path.clone(),
             ForwardOperationRequest {
+                chain_identities: None,
                 operation: "error-boom".to_owned(),
                 zone: "test".to_owned(),
                 invocation_id: "invocation-root-1".to_owned(),
@@ -3650,6 +3815,7 @@ assert_eq!(
         let succeeded = forward_request_async(
             serving.socket_path.clone(),
             ForwardOperationRequest {
+                chain_identities: None,
                 operation: "inspect-process-family".to_owned(),
                 zone: "test".to_owned(),
                 invocation_id: "invocation-root-2".to_owned(),

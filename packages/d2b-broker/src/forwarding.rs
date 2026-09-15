@@ -67,6 +67,14 @@ pub struct ForwardedOperation<'a> {
     /// travels with the forwarded invocation so the peer's leg records its
     /// correlation key the same way the broker's leg would.
     pub chain: &'a d2b_audit::evidence_chain::EvidenceChain,
+    /// Whether this leg is a nested call under an existing invocation
+    /// (U10, KTD6).
+    ///
+    /// The flag is the wire's chain-bearing signal: a nested call presents
+    /// a chain even when the chain carries a single identity, so the peer
+    /// records the leg as a correlation record rather than a second root
+    /// record for the invocation id.
+    pub nested: bool,
     /// The validated canonical payload.
     pub payload: &'a CanonicalJsonObject,
     /// The descriptors the caller attached to this invocation,when any.
@@ -232,6 +240,19 @@ impl SocketForwarder {
             // transports the block the envelope attested, never a copy it
             // re-derived from the request.
             context: invocation.context.cloned(),
+            // The evidence chain's identities cross with a nested leg
+            // (U10, KTD6): the peer re-roots the chain from the root
+            // invocation id plus these identities, records the leg as a
+            // correlation record rather than a second root record, and
+            // hands the chain to the declaring handler's context.
+            chain_identities: invocation.nested.then(|| {
+                invocation
+                    .chain
+                    .identities()
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<String>>()
+            }),
             fd_indexes,
             fd_kinds,
         };
@@ -508,6 +529,7 @@ mod tests {
             zone: "work",
             invocation_id,
             chain: &chain,
+            nested: false,
             payload,
             fds: &[],
             fd_kind: None,
@@ -610,6 +632,7 @@ mod tests {
                 zone: "work",
                 invocation_id: "invocation-10",
                 chain: &chain,
+                nested: false,
                 payload: &payload(),
                 fds: &[],
                 fd_kind: None,
@@ -764,6 +787,7 @@ mod tests {
             zone: "work",
             invocation_id: "invocation-16",
             chain: &chain,
+            nested: false,
             payload: &payload(),
             fds: &[],
             fd_kind: None,

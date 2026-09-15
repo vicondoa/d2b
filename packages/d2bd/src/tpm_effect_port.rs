@@ -28,8 +28,8 @@
 
 use std::sync::Mutex;
 
-use d2b_contracts::types::{BundleOpId, PathClass, VmId};
-use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest, BrokerResponse};
+use d2b_contracts::types::{BundleOpId, VmId};
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;
 use d2b_provider_device_tpm::{
@@ -352,25 +352,51 @@ impl LiveTpmResourceEffectPort<'_> {
 
     /// The broker-owned state-directory preparation (the trusted marker and
     /// hardening step the legacy TPM connector supplies). Not a spawn.
+    ///
+    /// The retired typed `PrepareStateDir` arm resolved the subject's trusted
+    /// state directory from the bundle; the U10 leg resolves the same intent
+    /// from the daemon's bundle copy and invokes the prepare-directory kernel
+    /// with the resolved parameters.
     fn prepare_state_dir(&self) -> Result<(), TpmResourceEffectError> {
-        let response = crate::dispatch_broker_request_as(
-            self.state,
-            BrokerRequest::PrepareStateDir(
-                d2b_contracts_broker::broker_wire::PrepareDirRequest {
-                    vm_id: self.vm_id.clone(),
-                    path_class: PathClass::Vm,
-                    tracing_span_id: None,
-                },
-            ),
-            self.caller_role.clone(),
+        let resolver = d2bd_runtime::runtime_util::block_on_future(
+            crate::load_bundle_resolver_on_worker(self.state),
         )
         .map_err(|_| TpmResourceEffectError::Transient)?;
-        match response {
-            BrokerResponse::Ack(_) => Ok(()),
-            other => {
+        let intent = resolver
+            .resolve_prepare_dir_intent(self.vm_id.as_str(), false)
+            .ok_or(TpmResourceEffectError::StateIntegrity)?;
+        let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+            &self.state.zone_coordinator,
+            self.vm_id.as_str(),
+        )
+        .map_err(|_| TpmResourceEffectError::Transient)?;
+        let invocation = d2b_contracts_broker::kernel_client::KernelInvocation {
+            operation: "prepare-directory",
+            zone: zone.as_str(),
+            payload: serde_json::json!({
+                "kind": "state",
+                "baseDir": intent.base_dir.display().to_string(),
+                "vmIdOrScope": intent.vm_name,
+                "mode": intent.mode,
+                "ownerUid": intent.owner_uid,
+                "ownerGid": intent.owner_gid,
+                "createdPaths": [],
+            }),
+            fds: &[],
+            chain_root_invocation_id: None,
+            chain_identities: None,
+        };
+        match d2b_contracts_broker::kernel_client::envelope_invoke_kernel(
+            &crate::broker_socket_path(self.state),
+            crate::KERNEL_IO_TIMEOUT,
+            self.caller_role.clone(),
+            invocation,
+        ) {
+            Ok(_) => Ok(()),
+            Err(error) => {
                 tracing::warn!(
                     device = %self.device_ref.to_canonical_string(),
-                    response = ?other,
+                    error = %error,
                     "broker state-directory preparation refused",
                 );
                 Err(TpmResourceEffectError::StateIntegrity)

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::fd::{OwnedFd, RawFd};
+use std::os::fd::OwnedFd;
 #[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -33,14 +33,15 @@ use d2b_contracts_broker::broker_wire::{
     ApplyNftablesRequest as BrokerApplyNftablesRequest,
     ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest, BrokerCallerRole,
     BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
-    DeregisterRunnerPidfdRequest, ExportBrokerAuditRequest,
-    OpenPidfdRequest as BrokerOpenPidfdRequest,
+    ChildExitKind, ChildExitStatus, ChildReapedNotification,
+    ExportBrokerAuditRequest,
     QemuMediaBootRequest as BrokerQemuMediaBootRequest,
     QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
     QemuMediaRefreshRegistryRequest as BrokerQemuMediaRefreshRegistryRequest,
     RunnerRole, RunnerSignal,
-    SignalRunnerRequest,
 };
+use d2b_contracts_broker::kernel_client::{KernelInvocation, envelope_invoke_kernel};
+use d2b_resource_types::{KernelCaller, RunnerLookup};
 use d2b_contracts_control::public_wire::{
     self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability,
 };
@@ -130,9 +131,8 @@ use d2bd_runtime::supervisor::pidfd_table::{
 #[cfg(test)]
 use d2bd_runtime::unix_transport::write_frame;
 pub(crate) use d2bd_runtime::unix_transport::{
-    close_received_fds, connect_seqpacket, connect_seqpacket_with_timeout,
-    drain_rejected_peer_input, read_frame, read_frame_with_fds, set_frame_read_deadline,
-    write_json_frame, write_json_frame_deadlined, write_json_frame_with_fds,
+    connect_seqpacket, connect_seqpacket_with_timeout, drain_rejected_peer_input, read_frame,
+    set_frame_read_deadline, write_json_frame, write_json_frame_deadlined,
 };
 #[cfg(test)]
 use d2bd_runtime::wire_response_helpers::response_remediation;
@@ -182,7 +182,7 @@ pub use d2bd_runtime::runtime_process::{
     write_daemon_version_file,
 };
 use d2bd_runtime::runtime_util::{
-    block_on_future, duplicate_received_fd, hex_bytes, projection_digest_bytes,
+    block_on_future, hex_bytes, projection_digest_bytes,
 };
 #[cfg(test)]
 use d2bd_runtime::shell_backend::shell_poll_timeout;
@@ -4750,63 +4750,52 @@ impl d2bd_runtime::supervisor::state::PidfdOpener for BrokerPidfdOpener<'_> {
     fn open_pidfd(
         &self,
         vm: &str,
-        role_id: &str,
+        _role_id: &str,
         pid: i32,
         expected_start_time_ticks: u64,
     ) -> Result<OwnedFd, String> {
-        match dispatch_broker_request_with_fds_timeout(
-            self.state,
-            BrokerRequest::OpenPidfd(BrokerOpenPidfdRequest {
-                vm_id: VmId::new(vm),
-                role_id: RoleId::new(role_id),
-                bundle_runner_intent_ref: None,
-                pid,
-                expected_start_time_ticks,
-                resource_ref: None,
-                resource_uid: None,
-                zone_uid: None,
-                owner_ref: None,
-                provider_ref: None,
-                provider_identity: None,
-                template_identity: None,
-                generation: None,
-                runtime_scope: None,
-                guest_execution: None,
-                tracing_span_id: None,
-            }),
-            Duration::from_secs(10),
+        // The U10 kernel leg: the open-pidfd kernel performs the same
+        // `pidfd_open` plus start-time verification the retired typed arm's
+        // live handler ran, and returns the pidfd over the fd leg.
+        let zone = match kernel_zone_for_vm(self.state, vm) {
+            Ok(zone) => zone,
+            Err(error) => return Err(format!("broker-dispatch:{error}")),
+        };
+        match envelope_invoke_kernel(
+            &broker_socket_path(self.state),
+            KERNEL_IO_TIMEOUT,
+            BrokerCallerRole::AdminUid {
+                uid: self.state.daemon_uid,
+            },
+            KernelInvocation {
+                operation: "open-pidfd",
+                zone: &zone,
+                payload: serde_json::json!({
+                    "pid": pid,
+                    "expectedStartTimeTicks": expected_start_time_ticks,
+                }),
+                fds: &[],
+                chain_root_invocation_id: None,
+                chain_identities: None,
+            },
         ) {
-            Ok((BrokerResponse::OpenPidfd(response), received_fds)) => {
-                let pidfd = duplicate_received_fd(
-                    &received_fds,
-                    response.pidfd_index,
-                    "duplicate OpenPidfd pidfd",
-                )
-                .map_err(|error| error.message());
-                close_received_fds(&received_fds);
-                match pidfd {
-                    Ok(pidfd) => {
-                        if response.vm_id.as_str() != vm
-                            || response.role_id.as_str() != role_id
-                            || response.verified_start_time_ticks != expected_start_time_ticks
-                        {
-                            Err("broker-response-mismatch".to_owned())
-                        } else {
-                            Ok(pidfd)
-                        }
-                    }
-                    Err(error) => Err(error),
+            Ok(reply) => {
+                let verified = reply
+                    .response
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.get("verifiedStartTimeTicks"))
+                    .and_then(serde_json::Value::as_i64)
+                    .map(|value| value as u64);
+                let mut fds = reply.fds;
+                let pidfd = fds.remove(0);
+                if verified != Some(expected_start_time_ticks) {
+                    Err("broker-response-mismatch".to_owned())
+                } else {
+                    Ok(pidfd)
                 }
             }
-            Ok((BrokerResponse::Error(error), received_fds)) => {
-                close_received_fds(&received_fds);
-                Err(format!("broker-error:{}", error.kind))
-            }
-            Ok((other, received_fds)) => {
-                close_received_fds(&received_fds);
-                Err(format!("broker-protocol:{}", broker_response_kind(&other)))
-            }
-            Err(error) => Err(format!("broker-dispatch:{}", error.message())),
+            Err(error) => Err(format!("broker-dispatch:{error}")),
         }
     }
 }
@@ -9993,12 +9982,48 @@ fn mutating_verb_preflight(
     None
 }
 
-fn broker_socket_path(state: &ServerState) -> PathBuf {
+pub(crate) fn broker_socket_path(state: &ServerState) -> PathBuf {
     if state.config.broker_socket_path.as_os_str().is_empty() {
         PathBuf::from(BROKER_SOCKET_PATH)
     } else {
         state.config.broker_socket_path.clone()
     }
+}
+
+/// The broker kernel IO budget one legacy kernel invocation may take.
+pub(crate) const KERNEL_IO_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The daemon-side runner lookup the U10 family seam wires: `(vm, role)` to
+/// the retained `(pid, start_time_ticks)` of the daemon's pidfd table.
+///
+/// The family observation/control handlers validate against this table, the
+/// daemon's authoritative runner source, instead of re-deriving presence
+/// from `/proc`.
+#[derive(Debug)]
+struct PidfdRunnerLookup {
+    table: Arc<PidfdTable>,
+}
+
+impl RunnerLookup for PidfdRunnerLookup {
+    fn lookup(&self, vm: &str, role: &str) -> Option<(i32, u64)> {
+        self.table
+            .list_for_vm(vm)
+            .into_iter()
+            .find(|entry| entry.role == role)
+            .map(|entry| (entry.pid, entry.start_time_ticks))
+    }
+}
+
+/// The Zone label one legacy daemon kernel call runs under: the zone the
+/// daemon's zone coordinator bound the VM to (the same plane zones the
+/// composition point published to the rendezvous).
+fn kernel_zone_for_vm(state: &ServerState, vm: &str) -> Result<String, String> {
+    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    )
+    .map_err(|error| format!("zone lookup for {vm} failed: {error}"))?;
+    Ok(zone.as_str().to_owned())
 }
 
 /// Canonical broker-owned group for per-Guest runtime state.
@@ -13603,19 +13628,6 @@ fn emit_detached_create_audit(state: &ServerState, peer_uid: u32, vm: &str, exec
     }
 }
 
-fn dispatch_broker_request(
-    state: &ServerState,
-    request: BrokerRequest,
-) -> Result<BrokerResponse, TypedError> {
-    dispatch_broker_request_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-    )
-}
-
 fn dispatch_broker_request_as(
     state: &ServerState,
     request: BrokerRequest,
@@ -13642,21 +13654,6 @@ fn dispatch_broker_request_as(
     Ok(decoded)
 }
 
-fn dispatch_broker_request_with_timeout(
-    state: &ServerState,
-    request: BrokerRequest,
-    timeout: Duration,
-) -> Result<BrokerResponse, TypedError> {
-    dispatch_broker_request_with_timeout_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-        timeout,
-    )
-}
-
 fn dispatch_broker_request_with_timeout_as(
     state: &ServerState,
     request: BrokerRequest,
@@ -13668,27 +13665,99 @@ fn dispatch_broker_request_with_timeout_as(
 }
 
 fn poll_broker_child_reaped(state: &ServerState) -> Result<usize, TypedError> {
-    let response = dispatch_broker_request(state, BrokerRequest::PollChildReaped)?;
-    match response {
-        BrokerResponse::PollChildReaped(response) => {
-            let count = response.notifications.len();
-            for notification in response.notifications {
-                state.broker_reap_log.insert(notification);
-            }
-            Ok(count)
+    // The U10 per-entry leg: the retired typed drain answered from the
+    // broker's reap buffer; the poll-child-reaped kernel probes one pidfd
+    // per call, so the daemon walks its own pidfd table and probes each
+    // tracked runner. A reaped entry is recorded into the daemon's reap log
+    // under the `vm:role` runner id, exactly as the broker's notifications
+    // were keyed.
+    let mut reaped = 0_usize;
+    let Some(providers) = state.provider_runtime.process_providers() else {
+        return Ok(0);
+    };
+    for vm in providers.vm_ids() {
+        let registrations = state.pidfd_table.list_for_vm(&vm);
+        if registrations.is_empty() {
+            continue;
         }
-        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
-            path: broker_socket_path(state),
-            detail: format!(
-                "PollChildReaped rejected by broker: {} ({})",
-                error.message, error.kind
-            ),
-        }),
-        other => Err(TypedError::InternalBrokerUnavailable {
-            path: broker_socket_path(state),
-            detail: format!("PollChildReaped returned unexpected response: {other:?}"),
-        }),
+        let zone = match kernel_zone_for_vm(state, &vm) {
+            Ok(zone) => zone,
+            Err(error) => {
+                tracing::warn!(vm = %vm, error = %error, "broker child reap probe skipped: no kernel zone");
+                continue;
+            }
+        };
+        for registration in registrations {
+            let Some((pidfd, _, _)) = state.pidfd_table.dup_pidfd_for(&vm, &registration.role)
+            else {
+                continue;
+            };
+            let outcome = envelope_invoke_kernel(
+                &broker_socket_path(state),
+                KERNEL_IO_TIMEOUT,
+                BrokerCallerRole::AdminUid {
+                    uid: state.daemon_uid,
+                },
+                KernelInvocation {
+                    operation: "poll-child-reaped",
+                    zone: &zone,
+                    payload: serde_json::json!({}),
+                    fds: std::slice::from_ref(&pidfd),
+                    chain_root_invocation_id: None,
+                    chain_identities: None,
+                },
+            );
+            match outcome {
+                Ok(reply) => {
+                    if let Some(result) = reply.response.result.as_ref()
+                        && result
+                            .get("reaped")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false)
+                    {
+                        let exit_kind = match result
+                            .get("exitKind")
+                            .and_then(serde_json::Value::as_str)
+                        {
+                            Some("exited") => ChildExitKind::Exited,
+                            Some("killed") => ChildExitKind::Killed,
+                            _ => ChildExitKind::Signaled,
+                        };
+                        let notification = ChildReapedNotification {
+                            runner_id: format!("{}:{}", vm, registration.role),
+                            pid: registration.pid,
+                            exit_status: ChildExitStatus {
+                                kind: exit_kind,
+                                code: result
+                                    .get("exitCode")
+                                    .and_then(serde_json::Value::as_i64)
+                                    .map(|code| code as i32),
+                                signal: result
+                                    .get("exitSignal")
+                                    .and_then(serde_json::Value::as_i64)
+                                    .map(|signal| signal as i32),
+                            },
+                            reaped_at_ms: result
+                                .get("reapedAtMs")
+                                .and_then(serde_json::Value::as_i64)
+                                .unwrap_or_default(),
+                        };
+                        state.broker_reap_log.insert(notification);
+                        reaped += 1;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        vm = %vm,
+                        role = %registration.role,
+                        error = %error,
+                        "broker child reap probe failed"
+                    );
+                }
+            }
+        }
     }
+    Ok(reaped)
 }
 
 fn refresh_broker_reap_log(state: &ServerState, context: &str) {
@@ -13697,73 +13766,6 @@ fn refresh_broker_reap_log(state: &ServerState, context: &str) {
         Ok(count) => tracing::debug!(count, context, "broker child reap log refreshed"),
         Err(err) => tracing::debug!(error = ?err, context, "broker child reap log refresh skipped"),
     }
-}
-
-fn dispatch_broker_request_with_fds_timeout(
-    state: &ServerState,
-    request: BrokerRequest,
-    timeout: Duration,
-) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
-    dispatch_broker_request_with_fds_timeout_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-        timeout,
-    )
-}
-
-fn dispatch_broker_request_with_fds_timeout_as(
-    state: &ServerState,
-    request: BrokerRequest,
-    caller_role: BrokerCallerRole,
-    timeout: Duration,
-) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
-    dispatch_broker_request_with_optional_request_fds(state, request, caller_role, &[], timeout)
-}
-
-fn dispatch_broker_request_with_optional_request_fds(
-    state: &ServerState,
-    request: BrokerRequest,
-    caller_role: BrokerCallerRole,
-    request_fds: &[RawFd],
-    timeout: Duration,
-) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
-    let socket_path = broker_socket_path(state);
-    let audit_join = default_audit_join_context(&request);
-    let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
-    socket
-        .set_read_timeout(Some(timeout))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker read timeout to {timeout:?}"),
-            detail: err.to_string(),
-        })?;
-    socket
-        .set_write_timeout(Some(timeout))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker write timeout to {timeout:?}"),
-            detail: err.to_string(),
-        })?;
-    write_json_frame_with_fds(
-        &socket,
-        &BrokerRequestEnvelope {
-            request,
-            caller_role,
-            test_peer_uid: None,
-            audit_join: audit_join.clone(),
-        },
-        request_fds,
-    )?;
-    let (response, received_fds) = read_frame_with_fds(&socket)?;
-    let decoded = serde_json::from_slice(&response).map_err(|err| {
-        close_received_fds(&received_fds);
-        TypedError::InternalBrokerUnavailable {
-            path: socket_path,
-            detail: err.to_string(),
-        }
-    })?;
-    Ok((decoded, received_fds))
 }
 
 fn dispatch_broker_ack_request_as(
@@ -13845,7 +13847,9 @@ fn load_bundle_resolver(state: &ServerState) -> Result<BundleResolver, TypedErro
 /// bounded loader worker; a saturated queue or a dead worker surfaces as the
 /// loader's named refusal through the same
 /// [`bundle_resolver_load_error`] mapping.
-async fn load_bundle_resolver_on_worker(state: &ServerState) -> Result<BundleResolver, TypedError> {
+pub(crate) async fn load_bundle_resolver_on_worker(
+    state: &ServerState,
+) -> Result<BundleResolver, TypedError> {
     #[cfg(test)]
     let loaded = BundleResolver::load_with_policy_on_loader_worker(
         &state.config.artifacts.bundle_path,
@@ -14357,6 +14361,25 @@ async fn open_resource_plane(
         };
         let plane_v3 = std::sync::Arc::new(plane_v3);
         rendezvous.publish(_zone.as_str(), plane_v3.provider_runtime());
+        // The U10 family seam: the broker kernel socket, the daemon's caller
+        // role, the Zone's trusted bundle, and the daemon-side runner lookup
+        // the family handlers invoke kernels through and validate against.
+        // Wired once per Zone alongside the provider publication; a Zone
+        // whose seam was never wired serves forwarded family operations
+        // without a kernel leg (they refuse when their handler needs one).
+        rendezvous.set_kernel_seam(
+            _zone.as_str(),
+            KernelCaller {
+                socket_path: broker_socket_path(state),
+                caller_role: BrokerCallerRole::AdminUid {
+                    uid: state.daemon_uid,
+                },
+                bundle: Arc::new(resolver.clone()),
+                runner_lookup: Some(Arc::new(PidfdRunnerLookup {
+                    table: Arc::clone(&state.pidfd_table),
+                })),
+            },
+        );
         v3_planes.insert(_zone.as_str().to_owned(), plane_v3);
     }
     // U14: publish the complete table before any Zone activates; the
@@ -16247,66 +16270,67 @@ fn signal_via_broker(
     role_id: &str,
     signal: RunnerSignal,
 ) -> Result<(), Value> {
-    let registration = state
-        .pidfd_table
-        .list_for_vm(vm)
-        .into_iter()
-        .find(|entry| entry.role == role_id);
-    let request = BrokerRequest::SignalRunner(SignalRunnerRequest {
-        vm_id: VmId::new(vm),
-        role_id: RoleId::new(role_id),
-        signal,
-        pid: registration.as_ref().map(|entry| entry.pid),
-        expected_start_time_ticks: registration.as_ref().map(|entry| entry.start_time_ticks),
-        resource_ref: None,
-        resource_uid: None,
-        zone_uid: None,
-        owner_ref: None,
-        provider_ref: None,
-        provider_identity: None,
-        template_identity: None,
-        generation: None,
-        runtime_scope: None,
-        guest_execution: None,
-        tracing_span_id: None,
-    });
-    match dispatch_broker_request_as(state, request, caller_role) {
-        Ok(BrokerResponse::SignalRunner(resp))
-            if resp.vm_id.as_str() == vm && resp.role_id.as_str() == role_id && resp.signaled =>
-        {
-            Ok(())
+    // The U10 kernel leg: the signal-pidfd kernel signals through the
+    // attached pidfd, so the daemon duplicates the tracked runner's pidfd
+    // from its own table and attaches it as the call's fd 0.
+    let Some((pidfd, _, _)) = state.pidfd_table.dup_pidfd_for(vm, role_id) else {
+        return Err(broker_fallback_failure(
+            vm,
+            role_id,
+            signal,
+            "no tracked pidfd to signal",
+        ));
+    };
+    let zone = match kernel_zone_for_vm(state, vm) {
+        Ok(zone) => zone,
+        Err(error) => {
+            return Err(broker_fallback_failure(vm, role_id, signal, error));
         }
-        Ok(BrokerResponse::SignalRunner(resp)) => Err(broker_fallback_failure(
+    };
+    // The POSIX signal numbers the kernel's `signal-pidfd` payload names
+    // (SIGTERM/SIGKILL/SIGQUIT, the same mapping the retired arm used).
+    let signal_number = match signal {
+        RunnerSignal::Term => 15,
+        RunnerSignal::Kill => 9,
+        RunnerSignal::Quit => 3,
+    };
+    match envelope_invoke_kernel(
+        &broker_socket_path(state),
+        KERNEL_IO_TIMEOUT,
+        caller_role,
+        KernelInvocation {
+            operation: "signal-pidfd",
+            zone: &zone,
+            payload: serde_json::json!({ "signal": signal_number }),
+            fds: std::slice::from_ref(&pidfd),
+            chain_root_invocation_id: None,
+            chain_identities: None,
+        },
+    ) {
+        Ok(reply) => {
+            let signaled = reply
+                .response
+                .result
+                .as_ref()
+                .and_then(|result| result.get("signaled"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if signaled {
+                Ok(())
+            } else {
+                Err(broker_fallback_failure(
+                    vm,
+                    role_id,
+                    signal,
+                    "signal-pidfd returned signaled=false",
+                ))
+            }
+        }
+        Err(error) => Err(broker_fallback_failure(
             vm,
             role_id,
             signal,
-            format!(
-                "SignalRunner returned vm={} role={} signaled={}",
-                resp.vm_id.as_str(),
-                resp.role_id.as_str(),
-                resp.signaled
-            ),
-        )),
-        Ok(BrokerResponse::Error(error)) => Err(broker_fallback_failure(
-            vm,
-            role_id,
-            signal,
-            format!(
-                "SignalRunner rejected by broker: {} ({})",
-                error.message, error.kind
-            ),
-        )),
-        Ok(other) => Err(broker_fallback_failure(
-            vm,
-            role_id,
-            signal,
-            format!("SignalRunner returned unexpected response: {other:?}"),
-        )),
-        Err(err) => Err(broker_fallback_failure(
-            vm,
-            role_id,
-            signal,
-            format!("{err:?}"),
+            format!("{error}"),
         )),
     }
 }
@@ -16317,57 +16341,63 @@ fn deregister_runner_pidfd_via_broker(
     vm: &str,
     role_id: &str,
 ) {
-    let request = BrokerRequest::DeregisterRunnerPidfd(DeregisterRunnerPidfdRequest {
-        vm_id: VmId::new(vm),
-        role_id: RoleId::new(role_id),
-        pid: state
-            .pidfd_table
-            .list_for_vm(vm)
-            .into_iter()
-            .find(|entry| entry.role == role_id)
-            .map(|entry| entry.pid),
-        expected_start_time_ticks: state
-            .pidfd_table
-            .list_for_vm(vm)
-            .into_iter()
-            .find(|entry| entry.role == role_id)
-            .map(|entry| entry.start_time_ticks),
-        resource_ref: None,
-        resource_uid: None,
-        zone_uid: None,
-        owner_ref: None,
-        provider_ref: None,
-        provider_identity: None,
-        template_identity: None,
-        generation: None,
-        runtime_scope: None,
-        guest_execution: None,
-        tracing_span_id: None,
-    });
-    match dispatch_broker_request_as(state, request, caller_role) {
-        Ok(BrokerResponse::DeregisterRunnerPidfd(resp))
-            if resp.vm_id.as_str() == vm && resp.role_id.as_str() == role_id =>
-        {
-            if !resp.removed {
-                tracing::warn!(
+    // The U10 kernel leg. The deregister-pidfd kernel removes the broker's
+    // runner-pidfd registry record keyed by the invocation id of the call
+    // it runs under. The daemon's legacy deregister carries no spawn id -
+    // these runners were adopted or spawned under broker-minted invocation
+    // ids the daemon never retained - so the root call mints a fresh
+    // invocation id and the kernel reports `removed: false`: the daemon's
+    // own pidfd table (deregistered by the caller) is the authoritative
+    // lifecycle record, and the broker-side registry entry for a
+    // legacy/adopted runner has no daemon-held key to remove. The call is
+    // kept so the kernel leg stays exercised and its refusal stays loud.
+    let zone = match kernel_zone_for_vm(state, vm) {
+        Ok(zone) => zone,
+        Err(error) => {
+            tracing::warn!(vm = %vm, role = %role_id, error = %error, "broker runner pidfd deregister skipped: no kernel zone");
+            return;
+        }
+    };
+    match envelope_invoke_kernel(
+        &broker_socket_path(state),
+        KERNEL_IO_TIMEOUT,
+        caller_role,
+        KernelInvocation {
+            operation: "deregister-pidfd",
+            zone: &zone,
+            payload: serde_json::json!({}),
+            fds: &[],
+            chain_root_invocation_id: None,
+            chain_identities: None,
+        },
+    ) {
+        Ok(reply) => {
+            let removed = reply
+                .response
+                .result
+                .as_ref()
+                .and_then(|result| result.get("removed"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if removed {
+                tracing::info!(
+                    vm = %vm,
+                    role = %role_id,
+                    "broker runner pidfd deregister removed a registry entry"
+                );
+            } else {
+                tracing::debug!(
                     vm = %vm,
                     role = %role_id,
                     removed = false,
-                    "broker runner pidfd deregister reported no entry"
+                    "broker runner pidfd deregister reported no entry (legacy no-op: the daemon holds no spawn invocation id)"
                 );
             }
         }
-
-        Ok(other) => tracing::warn!(
-            vm = %vm,
-            role = %role_id,
-            response = ?other,
-            "broker runner pidfd deregister returned unexpected response"
-        ),
         Err(error) => tracing::warn!(
             vm = %vm,
             role = %role_id,
-            error = ?error,
+            error = %error,
             "broker runner pidfd deregister failed"
         ),
     }
@@ -16481,25 +16511,45 @@ fn request_cgroup_kill_if_populated(
     vm: &str,
     role_id: &str,
 ) {
-    let request = json!({
-        "kind": "CgroupKill",
-        "payload": {
-            "vmId": vm,
-            "roleId": role_id,
-            "tracingSpanId": Value::Null,
+    // The U10 kernel leg: the daemon derives the runner's cgroup leaf from
+    // its own processes.json placement (the same derivation the old typed
+    // CgroupKill arm performed broker-side from the bundle) and the
+    // kill-cgroup kernel kills exactly that leaf, refusing any path outside
+    // the delegated d2b.slice subtree.
+    let Some(cgroup_path) = role_cgroup_path(state, vm, role_id) else {
+        tracing::warn!(vm = %vm, role = %role_id, "broker CgroupKill request skipped: no cgroup placement");
+        return;
+    };
+    let zone = match kernel_zone_for_vm(state, vm) {
+        Ok(zone) => zone,
+        Err(error) => {
+            tracing::warn!(vm = %vm, role = %role_id, error = %error, "broker CgroupKill request skipped: no kernel zone");
+            return;
         }
-    });
-    match dispatch_raw_broker_value_with_timeout(
-        state,
-        request,
+    };
+    match envelope_invoke_kernel(
+        &broker_socket_path(state),
+        KERNEL_IO_TIMEOUT,
         caller_role,
-        Duration::from_secs(5),
+        KernelInvocation {
+            operation: "kill-cgroup",
+            zone: &zone,
+            payload: serde_json::json!({ "cgroupPath": cgroup_path.display().to_string() }),
+            fds: &[],
+            chain_root_invocation_id: None,
+            chain_identities: None,
+        },
     ) {
-        Ok(response) => {
-            tracing::info!(vm = %vm, role = %role_id, response = ?response, "broker CgroupKill requested for populated runner leaf")
+        Ok(reply) => {
+            tracing::info!(
+                vm = %vm,
+                role = %role_id,
+                response = ?reply.response.result,
+                "broker CgroupKill requested for populated runner leaf"
+            )
         }
-        Err(err) => {
-            tracing::warn!(vm = %vm, role = %role_id, error = ?err, "broker CgroupKill request failed")
+        Err(error) => {
+            tracing::warn!(vm = %vm, role = %role_id, error = %error, "broker CgroupKill request failed")
         }
     }
 }
@@ -17242,18 +17292,12 @@ fn wait_terminated_with_broker_poll(
                     return Ok(WaitTermination::Terminated);
                 }
                 poll_count = poll_count.saturating_add(1);
-                let budget = remaining.min(Duration::from_millis(200));
-                if let Ok(BrokerResponse::PollChildReaped(resp)) =
-                    dispatch_broker_request_with_timeout(
-                        state,
-                        BrokerRequest::PollChildReaped,
-                        budget,
-                    )
+                // The U10 per-entry leg: the daemon probes its own pidfd
+                // table through the poll-child-reaped kernel and records
+                // any reaped child into the reap log.
+                if poll_broker_child_reaped(state).is_ok()
+                    && let Some(notification) = state.broker_reap_log.take_for(vm, role_id)
                 {
-                    for notification in resp.notifications {
-                        state.broker_reap_log.insert(notification);
-                    }
-                    if let Some(notification) = state.broker_reap_log.take_for(vm, role_id) {
                         let elapsed = started.elapsed();
                         tracing::info!(
                             outcome = "echild-broker-recovered",
@@ -17266,7 +17310,6 @@ fn wait_terminated_with_broker_poll(
                         return Ok(WaitTermination::TerminatedByBroker {
                             exit_status: notification.exit_status,
                         });
-                    }
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -23488,12 +23531,10 @@ mod broker_dispatch_tests {
     use std::time::{Duration, Instant};
     use std::{fs, thread};
 
-    use d2b_contracts::types::{RoleId, VmId};
+    use d2b_contracts::types::VmId;
     use d2b_contracts_broker::broker_wire::{
-        BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, ChildExitKind,
-        ChildExitStatus, ChildReapedNotification, DeregisterRunnerPidfdResponse,
-        PollChildReapedResponse, RunnerRole, RunnerSignal, SignalRunnerResponse,
-        SpawnRunnerResponse,
+        BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
+        EnvelopeInvokeResponse, FdKind, RunnerRole, SpawnRunnerRequest, SpawnRunnerResponse,
     };
     use d2b_contracts_control::public_wire;
     use d2b_contracts_control::public_wire::{
@@ -24859,7 +24900,6 @@ mod broker_dispatch_tests {
         ignore = "P2fu1 software-r2 (longstanding pre-existing): same root/owner requirement as vm_start_broker_unreachable_returns_broker_error."
     )]
     fn vm_start_registers_pidfd_table_entry_from_broker_fd() {
-        use d2b_contracts::types::{RoleId, VmId};
         use d2b_contracts_broker::broker_wire::{BrokerRequest, RunnerRole};
 
         let socket_path = unreachable_broker_socket_path("vm-start-registers");
@@ -24934,14 +24974,16 @@ mod broker_dispatch_tests {
             let frame = read_test_frame(accepted_fd).expect("read broker request frame");
             let envelope: BrokerRequestEnvelope =
                 serde_json::from_slice(&frame).expect("decode broker request frame");
-            match envelope.request {
-                BrokerRequest::SpawnRunner(request) => {
-                    assert_eq!(request.vm_id.as_str(), "vm-a");
-                    assert_eq!(request.role_id.as_str(), VM_RUNNER_ROLE_ID);
-                    assert_eq!(request.role, RunnerRole::CloudHypervisor);
-                }
+            let invoke = match envelope.request {
+                BrokerRequest::EnvelopeInvoke(invoke) => invoke,
                 other => panic!("unexpected broker request: {other:?}"),
-            }
+            };
+            assert_eq!(invoke.operation, "SpawnRunner");
+            let request: SpawnRunnerRequest = serde_json::from_value(invoke.payload)
+                .expect("spawn envelope payload is the typed spawn request");
+            assert_eq!(request.vm_id.as_str(), "vm-a");
+            assert_eq!(request.role_id.as_str(), VM_RUNNER_ROLE_ID);
+            assert_eq!(request.role, RunnerRole::CloudHypervisor);
 
             let child = ChildGuard::new(
                 Command::new("sleep")
@@ -24950,31 +24992,40 @@ mod broker_dispatch_tests {
                     .expect("spawn child for broker reply"),
             );
             let pidfd = open_child_pidfd(child.child());
+            let response = SpawnRunnerResponse {
+                vm_id: request.vm_id,
+                role_id: request.role_id,
+                role: request.role,
+                resource_ref: None,
+                resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                runtime_scope: None,
+                execution_ref: request.execution_ref,
+                execution_domain: request.execution_domain,
+                user_ref: request.user_ref,
+                guest_execution: request.guest_execution,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                bundle_content_identity: request.bundle_content_identity,
+                pid: child.child().id() as i32,
+                start_time_ticks: read_child_start_time(child.child()),
+                pidfd_index: 0,
+                controller_bootstrap_fd_index: None,
+                console_fd_index: None,
+            };
             write_test_json_frame_with_fds(
                 accepted_fd,
-                &BrokerResponse::SpawnRunner(Box::new(SpawnRunnerResponse {
-                    vm_id: VmId::new("vm-a"),
-                    role_id: RoleId::new(VM_RUNNER_ROLE_ID),
-                    role: RunnerRole::CloudHypervisor,
-                    resource_ref: None,
-                    resource_uid: None,
-                    zone_uid: None,
-                    owner_ref: None,
-                    runtime_scope: None,
-                    execution_ref: None,
-                    execution_domain: None,
-                    user_ref: None,
-                    guest_execution: None,
-                    provider_identity: None,
-                    template_identity: None,
-                    generation: None,
-                    bundle_content_identity: None,
-                    pid: child.child().id() as i32,
-                    start_time_ticks: read_child_start_time(child.child()),
-                    pidfd_index: 0,
-                    controller_bootstrap_fd_index: None,
-                    console_fd_index: None,
-                })),
+                &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                    operation: "SpawnRunner".to_owned(),
+                    invocation_id: "fake-spawn-invocation".to_owned(),
+                    result: Some(serde_json::to_value(response).expect("spawn response json")),
+                    refusal: None,
+                    detail: None,
+                    fd_indexes: vec![0],
+                    fd_kinds: vec![FdKind::Any],
+                }),
                 &[pidfd.as_raw_fd()],
             )
             .expect("write spawn response with pidfd");
@@ -25030,7 +25081,6 @@ mod broker_dispatch_tests {
     #[test]
     #[ignore = "flaky on shared hosts; Unix socket reuse races"]
     fn vm_start_drives_supervisor_dag_in_topo_order() {
-        use d2b_contracts::types::{RoleId, VmId};
         use d2b_contracts_broker::broker_wire::{BrokerRequest, RunnerRole};
 
         let daemon_state_dir = test_daemon_state_dir("vm-start-dag");
@@ -25210,10 +25260,13 @@ mod broker_dispatch_tests {
                 let frame = read_test_frame(accepted_fd).expect("read broker request frame");
                 let envelope: BrokerRequestEnvelope =
                     serde_json::from_slice(&frame).expect("decode broker request frame");
-                let request = match envelope.request {
-                    BrokerRequest::SpawnRunner(request) => request,
+                let invoke = match envelope.request {
+                    BrokerRequest::EnvelopeInvoke(invoke) => invoke,
                     other => panic!("unexpected broker request: {other:?}"),
                 };
+                assert_eq!(invoke.operation, "SpawnRunner");
+                let request: SpawnRunnerRequest = serde_json::from_value(invoke.payload)
+                    .expect("spawn envelope payload is the typed spawn request");
                 request_order_thread
                     .lock()
                     .expect("lock request order")
@@ -25252,33 +25305,44 @@ mod broker_dispatch_tests {
                         .expect("spawn child for broker reply"),
                 );
                 let pidfd = open_child_pidfd(child.child());
-                write_test_json_frame_with_fds(
-                    accepted_fd,
-                    &BrokerResponse::SpawnRunner(Box::new(SpawnRunnerResponse {
-                        vm_id: VmId::new("vm-a"),
-                        role_id: RoleId::new(request.role_id.as_str()),
+                let response = SpawnRunnerResponse {
+                        vm_id: request.vm_id.clone(),
+                        role_id: request.role_id.clone(),
                         role: expected_runner_role,
                         resource_ref: None,
                         resource_uid: None,
                         zone_uid: None,
                         owner_ref: None,
                         runtime_scope: None,
-                        execution_ref: None,
-                        execution_domain: None,
-                        user_ref: None,
-                        guest_execution: None,
+                        execution_ref: request.execution_ref.clone(),
+                        execution_domain: request.execution_domain,
+                        user_ref: request.user_ref.clone(),
+                        guest_execution: request.guest_execution.clone(),
                         provider_identity: None,
                         template_identity: None,
                         generation: None,
-                        bundle_content_identity: None,
+                        bundle_content_identity: request.bundle_content_identity.clone(),
                         pid: child.child().id() as i32,
                         start_time_ticks: read_child_start_time(child.child()),
                         pidfd_index: 0,
                         controller_bootstrap_fd_index: None,
                         console_fd_index: None,
-                    })),
-                    &[pidfd.as_raw_fd()],
-                )
+                    };
+                    write_test_json_frame_with_fds(
+                        accepted_fd,
+                        &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                            operation: "SpawnRunner".to_owned(),
+                            invocation_id: format!("fake-spawn-{}", request.role_id.as_str()),
+                            result: Some(
+                                serde_json::to_value(response).expect("spawn response json"),
+                            ),
+                            refusal: None,
+                            detail: None,
+                            fd_indexes: vec![0],
+                            fd_kinds: vec![FdKind::Any],
+                        }),
+                        &[pidfd.as_raw_fd()],
+                    )
                 .expect("write spawn response with pidfd");
                 close(accepted_fd).expect("close broker peer");
                 if request.role_id.as_str() == VM_RUNNER_ROLE_ID {
@@ -26101,24 +26165,36 @@ mod broker_dispatch_tests {
         fs::write(cgroup.join("cgroup.events"), "populated 1\n").expect("write cgroup.events");
         let cgroup_for_broker = cgroup.clone();
         let (socket_path, broker) =
-            start_raw_value_broker_server("cgroup-kill-escalation", 1, move |_, envelope, fd| {
-                let request = envelope.get("request").expect("request");
-                assert_eq!(
-                    request.get("kind").and_then(Value::as_str),
-                    Some("CgroupKill")
-                );
-                assert_eq!(
-                    request.pointer("/payload/vmId").and_then(Value::as_str),
-                    Some("vm-a")
-                );
-                assert_eq!(
-                    request.pointer("/payload/roleId").and_then(Value::as_str),
-                    Some(VM_RUNNER_ROLE_ID)
-                );
+            start_test_broker_server("cgroup-kill-escalation", 1, move |_, env, fd| {
+                let cgroup_path = cgroup_for_broker.display().to_string();
+                match env.request {
+                    BrokerRequest::EnvelopeInvoke(invoke) => {
+                        assert_eq!(invoke.operation, "kill-cgroup");
+                        assert_eq!(
+                            invoke
+                                .payload
+                                .get("cgroupPath")
+                                .and_then(serde_json::Value::as_str),
+                            Some(cgroup_path.as_str())
+                        );
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
                 fs::write(cgroup_for_broker.join("cgroup.events"), "populated 0\n")
                     .expect("clear populated state");
-                write_test_json_frame(fd, &json!({"kind": "Ack", "payload": {}}))
-                    .expect("write cgroup kill ack");
+                write_test_json_frame(
+                    fd,
+                    &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                        operation: "kill-cgroup".to_owned(),
+                        invocation_id: "fake-cgroup-kill-invocation".to_owned(),
+                        result: Some(serde_json::json!({ "killed": true })),
+                        refusal: None,
+                        detail: None,
+                        fd_indexes: vec![],
+                        fd_kinds: vec![],
+                    }),
+                )
+                .expect("write cgroup kill ack");
             });
         let mut state = test_state_with_broker_socket(socket_path);
         state.config.artifacts = write_custom_vm_start_bundle_artifacts(
@@ -26294,14 +26370,18 @@ mod broker_dispatch_tests {
         let child = ChildGuard::new(child);
         let pid = child.child().id() as i32;
         let (socket_path, broker) =
-            start_test_broker_server("eperm-term", 3, move |index, env, fd| {
+            start_test_broker_server("eperm-term", 2, move |index, env, fd| {
                 let caller_role_display = env.caller_role.for_display();
                 match (index, env.request) {
-                    (0, BrokerRequest::SignalRunner(req)) => {
+                    (0, BrokerRequest::EnvelopeInvoke(invoke)) => {
                         assert_broker_envelope_launcher_role(caller_role_display);
-                        assert_eq!(req.vm_id.as_str(), vm);
-                        assert_eq!(req.role_id.as_str(), role);
-                        assert_eq!(req.signal, RunnerSignal::Term);
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                        assert_eq!(
+                            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                            Some(15)
+                        );
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
                         nix::sys::signal::kill(
                             nix::unistd::Pid::from_raw(pid),
                             nix::sys::signal::Signal::SIGTERM,
@@ -26309,33 +26389,31 @@ mod broker_dispatch_tests {
                         .expect("broker kill child");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: VmId::new(vm),
-                                role_id: RoleId::new(role),
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "signal-pidfd".to_owned(),
+                                invocation_id: "fake-signal-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "signaled": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write signal response");
                     }
-                    (1, BrokerRequest::PollChildReaped) => {
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                                notifications: vec![],
-                            }),
-                        )
-                        .expect("write poll response");
-                    }
-                    (2, BrokerRequest::DeregisterRunnerPidfd(req)) => {
+                    (1, BrokerRequest::EnvelopeInvoke(invoke)) => {
                         assert_broker_envelope_launcher_role(caller_role_display);
-                        assert_eq!(req.vm_id.as_str(), vm);
-                        assert_eq!(req.role_id.as_str(), role);
+                        assert_eq!(invoke.operation, "deregister-pidfd");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: VmId::new(vm),
-                                role_id: RoleId::new(role),
-                                removed: true,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "deregister-pidfd".to_owned(),
+                                invocation_id: "fake-dereg-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "removed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write dereg response");
@@ -26404,34 +26482,41 @@ mod broker_dispatch_tests {
         );
         let pid = child.child().id() as i32;
         let (socket_path, broker) =
-            start_test_broker_server("eperm-kill", 5, move |index, env, fd| {
+            start_test_broker_server("eperm-kill", 3, move |index, env, fd| {
                 let caller_role_display = env.caller_role.for_display();
                 match (index, env.request) {
-                    (0, BrokerRequest::SignalRunner(req)) => {
+                    (0, BrokerRequest::EnvelopeInvoke(invoke)) => {
                         assert_broker_envelope_launcher_role(caller_role_display);
-                        assert_eq!(req.signal, RunnerSignal::Term);
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                        assert_eq!(
+                            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                            Some(15)
+                        );
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "signal-pidfd".to_owned(),
+                                invocation_id: "fake-term-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "signaled": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write term signal response");
                     }
-                    (1, BrokerRequest::PollChildReaped) | (3, BrokerRequest::PollChildReaped) => {
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                                notifications: vec![],
-                            }),
-                        )
-                        .expect("write poll response");
-                    }
-                    (2, BrokerRequest::SignalRunner(req)) => {
+                    (1, BrokerRequest::EnvelopeInvoke(invoke)) => {
                         assert_broker_envelope_launcher_role(caller_role_display);
-                        assert_eq!(req.signal, RunnerSignal::Kill);
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                        assert_eq!(
+                            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                            Some(9)
+                        );
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
                         nix::sys::signal::kill(
                             nix::unistd::Pid::from_raw(pid),
                             nix::sys::signal::Signal::SIGKILL,
@@ -26439,22 +26524,31 @@ mod broker_dispatch_tests {
                         .expect("broker sigkill child");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "signal-pidfd".to_owned(),
+                                invocation_id: "fake-kill-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "signaled": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write kill signal response");
                     }
-                    (4, BrokerRequest::DeregisterRunnerPidfd(req)) => {
+                    (2, BrokerRequest::EnvelopeInvoke(invoke)) => {
                         assert_broker_envelope_launcher_role(caller_role_display);
+                        assert_eq!(invoke.operation, "deregister-pidfd");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
-                                removed: true,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "deregister-pidfd".to_owned(),
+                                invocation_id: "fake-dereg-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "removed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write dereg response");
@@ -26531,31 +26625,32 @@ mod broker_dispatch_tests {
         );
         let pid = eperm_child.child().id() as i32;
         let (socket_path, broker) =
-            start_test_broker_server("eperm-multi", 5, move |index, env, fd| {
+            start_test_broker_server("eperm-multi", 3, move |index, env, fd| {
                 match (index, env.request) {
-                    (0, BrokerRequest::PollChildReaped) | (3, BrokerRequest::PollChildReaped) => {
+                    (0, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "deregister-pidfd");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                                notifications: vec![],
-                            }),
-                        )
-                        .expect("write poll response");
-                    }
-                    (1, BrokerRequest::DeregisterRunnerPidfd(req)) => {
-                        assert_eq!(req.role_id.as_str(), normal_role);
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
-                                removed: true,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "deregister-pidfd".to_owned(),
+                                invocation_id: "fake-normal-dereg-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "removed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write normal dereg response");
                     }
-                    (2, BrokerRequest::SignalRunner(req)) => {
-                        assert_eq!(req.role_id.as_str(), eperm_role);
+                    (1, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                        assert_eq!(
+                            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                            Some(15)
+                        );
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
                         nix::sys::signal::kill(
                             nix::unistd::Pid::from_raw(pid),
                             nix::sys::signal::Signal::SIGTERM,
@@ -26563,22 +26658,30 @@ mod broker_dispatch_tests {
                         .expect("broker signal eperm role");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "signal-pidfd".to_owned(),
+                                invocation_id: "fake-multi-signal-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "signaled": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write signal response");
                     }
-                    (4, BrokerRequest::DeregisterRunnerPidfd(req)) => {
-                        assert_eq!(req.role_id.as_str(), eperm_role);
+                    (2, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "deregister-pidfd");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
-                                removed: true,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "deregister-pidfd".to_owned(),
+                                invocation_id: "fake-ep-term-dereg-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "removed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write dereg response");
@@ -26651,9 +26754,16 @@ mod broker_dispatch_tests {
         );
         let pid = child.child().id() as i32;
         let (socket_path, broker) =
-            start_test_broker_server("eperm-idem", 3, move |index, env, fd| {
+            start_test_broker_server("eperm-idem", 2, move |index, env, fd| {
                 match (index, env.request) {
-                    (0, BrokerRequest::SignalRunner(req)) => {
+                    (0, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                        assert_eq!(
+                            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                            Some(15)
+                        );
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
                         nix::sys::signal::kill(
                             nix::unistd::Pid::from_raw(pid),
                             nix::sys::signal::Signal::SIGTERM,
@@ -26661,30 +26771,30 @@ mod broker_dispatch_tests {
                         .expect("kill child");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "signal-pidfd".to_owned(),
+                                invocation_id: "fake-signal-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "signaled": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write signal");
                     }
-                    (1, BrokerRequest::PollChildReaped) => {
+                    (1, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "deregister-pidfd");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                                notifications: vec![],
-                            }),
-                        )
-                        .expect("write poll");
-                    }
-                    (2, BrokerRequest::DeregisterRunnerPidfd(req)) => {
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
-                                removed: true,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "deregister-pidfd".to_owned(),
+                                invocation_id: "fake-dereg-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "removed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write dereg");
@@ -26793,15 +26903,28 @@ mod broker_dispatch_tests {
         let role = VM_RUNNER_ROLE_ID;
         let (socket_path, broker) =
             start_test_broker_server("eperm-false", 1, move |_, env, fd| match env.request {
-                BrokerRequest::SignalRunner(req) => write_test_json_frame(
-                    fd,
-                    &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                        signaled: false,
-                        vm_id: req.vm_id,
-                        role_id: req.role_id,
-                    }),
-                )
-                .expect("write false response"),
+                BrokerRequest::EnvelopeInvoke(invoke) => {
+                    assert_eq!(invoke.operation, "signal-pidfd");
+                    assert_eq!(
+                        invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                        Some(15)
+                    );
+                    assert_eq!(invoke.fd_indexes, vec![0]);
+                    assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
+                    write_test_json_frame(
+                        fd,
+                        &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                            operation: "signal-pidfd".to_owned(),
+                            invocation_id: "fake-signal-invocation".to_owned(),
+                            result: Some(serde_json::json!({ "signaled": false })),
+                            refusal: None,
+                            detail: None,
+                            fd_indexes: vec![],
+                            fd_kinds: vec![],
+                        }),
+                    )
+                    .expect("write false response")
+                }
                 other => panic!("unexpected request {other:?}"),
             });
         let state = test_state_with_broker_socket(socket_path);
@@ -26834,7 +26957,12 @@ mod broker_dispatch_tests {
         let vm = "vm-eperm-eof";
         let role = VM_RUNNER_ROLE_ID;
         let (socket_path, broker) = start_test_broker_server("eperm-eof", 1, move |_, env, _fd| {
-            assert!(matches!(env.request, BrokerRequest::SignalRunner(_)));
+            match env.request {
+                BrokerRequest::EnvelopeInvoke(invoke) => {
+                    assert_eq!(invoke.operation, "signal-pidfd");
+                }
+                other => panic!("unexpected request {other:?}"),
+            }
         });
         let state = test_state_with_broker_socket(socket_path);
         let child =
@@ -26866,7 +26994,12 @@ mod broker_dispatch_tests {
         let role = VM_RUNNER_ROLE_ID;
         let (socket_path, broker) =
             start_test_broker_server("eperm-short", 1, move |_, env, fd| {
-                assert!(matches!(env.request, BrokerRequest::SignalRunner(_)));
+                match env.request {
+                    BrokerRequest::EnvelopeInvoke(invoke) => {
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
                 nix::sys::socket::send(fd, &[1, 0], MsgFlags::empty()).expect("send short frame");
             });
         let state = test_state_with_broker_socket(socket_path);
@@ -26899,13 +27032,22 @@ mod broker_dispatch_tests {
         let role = VM_RUNNER_ROLE_ID;
         let (socket_path, broker) =
             start_test_broker_server("eperm-wrong", 1, move |_, env, fd| {
-                assert!(matches!(env.request, BrokerRequest::SignalRunner(_)));
+                match env.request {
+                    BrokerRequest::EnvelopeInvoke(invoke) => {
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
                 write_test_json_frame(
                     fd,
-                    &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                        vm_id: VmId::new(vm),
-                        role_id: RoleId::new(role),
-                        removed: true,
+                    &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                        operation: "deregister-pidfd".to_owned(),
+                        invocation_id: "fake-wrong-invocation".to_owned(),
+                        result: Some(serde_json::json!({ "removed": true })),
+                        refusal: None,
+                        detail: None,
+                        fd_indexes: vec![],
+                        fd_kinds: vec![],
                     }),
                 )
                 .expect("write wrong response");
@@ -26952,9 +27094,16 @@ mod broker_dispatch_tests {
         let child = ChildGuard::new(child);
         let pid = child.child().id() as i32;
         let (socket_path, broker) =
-            start_test_broker_server("eperm-dereg-false", 3, move |index, env, fd| {
+            start_test_broker_server("eperm-dereg-false", 2, move |index, env, fd| {
                 match (index, env.request) {
-                    (0, BrokerRequest::SignalRunner(req)) => {
+                    (0, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                        assert_eq!(
+                            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                            Some(15)
+                        );
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
                         nix::sys::signal::kill(
                             nix::unistd::Pid::from_raw(pid),
                             nix::sys::signal::Signal::SIGTERM,
@@ -26962,30 +27111,30 @@ mod broker_dispatch_tests {
                         .expect("kill child");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "signal-pidfd".to_owned(),
+                                invocation_id: "fake-signal-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "signaled": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write signal");
                     }
-                    (1, BrokerRequest::PollChildReaped) => {
+                    (1, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "deregister-pidfd");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                                notifications: vec![],
-                            }),
-                        )
-                        .expect("write poll");
-                    }
-                    (2, BrokerRequest::DeregisterRunnerPidfd(req)) => {
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
-                                removed: false,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "deregister-pidfd".to_owned(),
+                                invocation_id: "fake-dereg-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "removed": false })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write dereg false");
@@ -27071,29 +27220,99 @@ mod broker_dispatch_tests {
 
     #[test]
     fn wait_terminated_with_broker_poll_echild_polls_reap_log() {
-        let vm = "vm-echild-poll";
+        // The U10 per-entry reap probe walks the pidfd table of the VMs the
+        // process-Provider composition tracks, so this test attaches the
+        // bundle-backed providers; the minimal fixture bundle names its VM
+        // "vm-a".
+        let vm = "vm-a";
         let role = VM_RUNNER_ROLE_ID;
         let (socket_path, broker) =
             start_test_broker_server("echild-poll", 1, move |_, env, fd| {
-                assert!(matches!(env.request, BrokerRequest::PollChildReaped));
+                match env.request {
+                    BrokerRequest::EnvelopeInvoke(invoke) => {
+                        assert_eq!(invoke.operation, "poll-child-reaped");
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
                 write_test_json_frame(
                     fd,
-                    &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                        notifications: vec![ChildReapedNotification {
-                            pid: 424242,
-                            runner_id: format!("{vm}:{role}"),
-                            exit_status: ChildExitStatus {
-                                kind: ChildExitKind::Exited,
-                                code: Some(0),
-                                signal: None,
-                            },
-                            reaped_at_ms: 1,
-                        }],
+                    &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                        operation: "poll-child-reaped".to_owned(),
+                        invocation_id: "fake-poll-invocation".to_owned(),
+                        result: Some(serde_json::json!({
+                            "reaped": true,
+                            "exitKind": "exited",
+                            "exitCode": 0,
+                            "reapedAtMs": 1
+                        })),
+                        refusal: None,
+                        detail: None,
+                        fd_indexes: vec![],
+                        fd_kinds: vec![],
                     }),
                 )
                 .expect("write poll response");
             });
-        let state = test_state_with_broker_socket(socket_path);
+        let state = test_state_with_broker_socket(socket_path.clone());
+        // The U10 reap probe enumerates the VMs the process-Provider
+        // composition tracks, so this test composes the bundle-backed
+        // providers from the fixture artifacts (the v3 loader itself does
+        // not carry the process DAGs).
+        let host: d2b_core::host::HostJson = serde_json::from_str(
+            &fs::read_to_string(state.config.artifacts.host_path.clone())
+                .expect("read host fixture"),
+        )
+        .expect("parse host fixture");
+        let processes: d2b_core::processes::ProcessesJson = serde_json::from_str(
+            &fs::read_to_string(state.config.artifacts.processes_path.clone())
+                .expect("read processes fixture"),
+        )
+        .expect("parse processes fixture");
+        let resolver =
+            d2b_core::bundle_resolver::BundleResolver::from_artifacts_with_zone_resource_bundles(
+                d2b_core::bundle::Bundle {
+                    bundle_version: 1,
+                    schema_version: "v3".to_owned(),
+                    privileges_path: state
+                        .config
+                        .artifacts
+                        .bundle_path
+                        .with_file_name("privileges.json")
+                        .display()
+                        .to_string(),
+                    storage_path: None,
+                    realm_workloads_launcher_v2_path: None,
+                    generation: d2b_core::bundle::BundleGeneration {
+                        generator: "tests".to_owned(),
+                        source_revision: None,
+                        generated_at: None,
+                    },
+                    bundle_hash: None,
+                    artifact_hashes: None,
+                },
+                host,
+                processes,
+                d2b_core::manifest_v04::ManifestV04::from_slice(
+                    br#"{"_manifest":{"manifestVersion":7},"_observability":{"enabled":false,"obsVsockCid":0,"obsVsockHostSocket":"","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"signozUrl":"","vmName":""}}"#,
+                )
+                .expect("parse manifest fixture"),
+                std::collections::BTreeMap::new(),
+            );
+        let providers = Arc::new(
+            crate::process_provider_runtime::ProductionProcessProviders::new(
+                resolver,
+                socket_path,
+                BrokerCallerRole::AdminUid {
+                    uid: state.daemon_uid,
+                },
+            ),
+        );
+        state
+            .provider_runtime
+            .attach_process_providers(providers)
+            .expect("attach process providers");
         let child = register_echild_wait_entry(&state, vm, role);
         let result = super::wait_terminated_with_broker_poll(
             &state,

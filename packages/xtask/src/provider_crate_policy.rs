@@ -1006,6 +1006,28 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "activation-nixos",
         retires_with: "U12 activation/host-maintenance step",
     },
+    // U10 ported the retired process-family arm's privileged behaviors
+    // into the spawn-process kernel (kernel_ops.rs); the kernel keeps the
+    // family knowledge these tokens name until each family's own U12
+    // census step moves it into its provider crate.
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-broker/src/kernel_ops.rs",
+        token: "usbip",
+        family: "device-usbip",
+        retires_with: "U12 usbip census step (kernel usbip bind extension moves into d2b-provider-device-usbip)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-broker/src/kernel_ops.rs",
+        token: "otel",
+        family: "observability-otel",
+        retires_with: "U12 observability census step (kernel stale-socket cleanup moves into d2b-provider-observability-otel)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-broker/src/kernel_ops.rs",
+        token: "cloud_hypervisor",
+        family: "runtime-cloud-hypervisor",
+        retires_with: "U12 cloud-hypervisor census step (kernel stale-socket cleanup moves into d2b-provider-runtime-cloud-hypervisor)",
+    },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/audio.rs",
         token: "audio_pipewire",

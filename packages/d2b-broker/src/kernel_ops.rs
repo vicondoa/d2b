@@ -60,6 +60,12 @@ pub struct KernelConfig {
     pub daemon_uid: u32,
     /// The daemon's gid, as the broker resolved it from its configuration.
     pub daemon_gid: u32,
+    /// The configured trusted bundle path. The spawn kernel loads the
+    /// bundle resolver from it per invocation when a launch needs bundle
+    /// knowledge (the USBIP backend device-bind extension), mirroring the
+    /// broker's per-request bundle reload authority; every other kernel
+    /// stays bundle-free.
+    pub bundle_path: PathBuf,
 }
 
 /// The kernel handler table over one serve-time config.
@@ -398,7 +404,11 @@ fn spawn_process(
     config: &KernelConfig,
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
-    let plan_input = parse_plan(invocation.payload)?;
+    let mut plan_input = parse_plan(invocation.payload)?;
+    let role = parse_role(invocation.payload)?;
+    let serving_worker = optional_field_bool(invocation.payload, "servingWorker")?
+        .unwrap_or(false);
+    let identity = parse_runner_identity(invocation.payload)?;
     let activation_input: Option<d2b_contracts_resource::v3::ActivationRunnerInput> =
         optional_parse_field(invocation.payload, "activationInput")?;
     let swtpm_identity = optional_parse_swtpm_identity(invocation.payload)?;
@@ -411,6 +421,94 @@ fn spawn_process(
                 .map_err(|error| errored(format!("spawn-process request fd: {error}")))
         })
         .collect::<Result<Vec<OwnedFd>, DispatchFailure>>()?;
+    // The USBIP backend device binds (the retired arm's
+    // `extend_usbip_backend_device_binds`): the kernel loads the bundle
+    // resolver from the captured bundle path - the same per-request
+    // reload authority the broker's answer path uses - and extends the
+    // parsed plan's mount policy with the live locked busid device nodes
+    // before the sandbox plan builds, so the kernel produces the same
+    // mountPolicy the retired arm did.
+    if matches!(role, d2b_contracts_broker::broker_wire::RunnerRole::Usbip) {
+        let resolver = match crate::runtime::load_kernel_resolver(&config.bundle_path) {
+            crate::runtime::BundleSlot::Loaded(resolver) => resolver,
+            crate::runtime::BundleSlot::Unavailable => {
+                return Err(refused("spawn-process: usbip backend bundle resolver unavailable"));
+            }
+            crate::runtime::BundleSlot::Tampered { .. } => {
+                return Err(refused("spawn-process: usbip backend bundle tampered"));
+            }
+        };
+        crate::runtime::extend_usbip_backend_device_binds(
+            &resolver,
+            &identity.vm_id,
+            &identity.role_id,
+            &role,
+            &mut plan_input.mount_policy,
+        )
+        .map_err(|error| {
+            errored(format!(
+                "spawn-process: {}",
+                crate::runtime::broker_error_kernel_detail(error)
+            ))
+        })?;
+    }
+    // The stale-socket preflight cleanups (the retired arm's three
+    // `cleanup_*_stale_socket` calls), on the final argv the daemon-side
+    // handler composed.
+    crate::runtime::cleanup_cloud_hypervisor_stale_sockets(&role, &plan_input.argv).map_err(
+        |error| {
+            errored(format!(
+                "spawn-process: {}",
+                crate::runtime::broker_error_kernel_detail(error)
+            ))
+        },
+    )?;
+    crate::runtime::cleanup_video_stale_socket(&role, &plan_input.argv).map_err(|error| {
+        errored(format!(
+            "spawn-process: {}",
+            crate::runtime::broker_error_kernel_detail(error)
+        ))
+    })?;
+    crate::runtime::cleanup_otel_host_bridge_stale_socket(&role, &plan_input.argv).map_err(
+        |error| {
+            errored(format!(
+                "spawn-process: {}",
+                crate::runtime::broker_error_kernel_detail(error)
+            ))
+        },
+    )?;
+    // The serving-worker ACL grant (the retired arm's
+    // `prepare_runner_launch_identity` serving posture): before the
+    // spawn and before any descriptor is passed to the child, open the
+    // two ticket-named trees to the runner principal the plan
+    // establishes.
+    if serving_worker {
+        crate::live_handlers::grant_serving_worker_launch_acls(
+            &plan_input.argv,
+            plan_input.uid,
+            &config.runtime_root,
+        )
+        .map_err(|error| errored(format!("spawn-process: {error}")))?;
+    }
+    // The duplicate-runner guard (the retired arm's
+    // `reserve_runner_id_for_spawn`): refuse a second live spawn for the
+    // same runner BEFORE the child is spawned so a duplicate is never
+    // created - a rejected-after-spawn duplicate would leak an orphan
+    // child and pollute the existing registration.
+    let runner_id = crate::runtime::runner_registry_key(
+        &identity.vm_id,
+        &identity.role_id,
+        identity.resource_ref.as_ref(),
+        identity.resource_uid.as_ref(),
+        identity.zone_uid.as_ref(),
+        identity.runtime_scope,
+    );
+    if let Err(error) = crate::runtime::reserve_runner_id_for_spawn(&runner_id) {
+        return Err(match error {
+            crate::runtime::BrokerError::Protocol(message) => refused(message),
+            other => errored(format!("spawn-process reserve: {other:?}")),
+        });
+    }
     let outcome = crate::live_handlers::live_spawn_runner(
         &plan_input,
         Vec::new(),
@@ -433,6 +531,56 @@ fn spawn_process(
         crate::runtime::targeted_reap_runner(invocation_id, outcome.pidfd.as_fd());
         return Err(errored(format!("spawn-process registry: {error:?}")));
     }
+    // Register the runner-id-keyed pidfd and metadata the broker's
+    // existing removal paths (the SIGCHLD reaper, down/stop) key on -
+    // the retired arm's `register_runner_pidfd` plus
+    // `register_runner_metadata` - so those paths and the runner
+    // observation surface work for kernel-spawned runners. A failure
+    // rolls the spawn back exactly like the retired arm's
+    // `cleanup_spawned_runner_after_failure`.
+    if let Err(error) = crate::runtime::runner_pidfds().insert(
+        &runner_id,
+        duplicate(&outcome.pidfd).map_err(|error| errored(format!("spawn-process: {error}")))?,
+    ) {
+        crate::runtime::cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd());
+        let _ = crate::runtime::runner_pidfds().remove(invocation_id);
+        return Err(errored(format!("spawn-process registry: {error:?}")));
+    }
+    let registration = crate::runtime::RunnerRegistration {
+        vm_id: identity.vm_id.clone(),
+        role_id: identity.role_id.clone(),
+        resource_ref: identity.resource_ref.clone(),
+        resource_uid: identity.resource_uid.clone(),
+        zone_uid: identity.zone_uid.clone(),
+        generation: identity.generation,
+        runtime_scope: identity.runtime_scope,
+        owner_ref: identity.owner_ref.clone(),
+        provider_ref: identity.provider_ref.clone(),
+        provider_identity: identity.provider_identity,
+        template_identity: identity.template_identity,
+        role,
+        bundle_runner_intent_ref: identity.bundle_runner_intent_ref.clone(),
+        pid: outcome.pid,
+        start_time_ticks: outcome.start_time_ticks,
+        binary_path: plan_input.binary_path.clone(),
+        cgroup_subtree: plan_input.cgroup_placement.subtree.clone(),
+        guest_execution: identity.guest_execution.clone(),
+    };
+    let replaced = crate::runtime::runner_metadata_registry()
+        .lock()
+        .map_err(|_| errored("spawn-process: runner metadata registry mutex poisoned".to_owned()))?
+        .insert(runner_id.clone(), registration);
+    if replaced.is_some() {
+        // The reserve guard ran before the spawn, so a pre-existing
+        // registration is a concurrent duplicate that slipped in between
+        // the guard and the insert; roll the spawn back rather than
+        // overwrite the live registration.
+        crate::runtime::cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd());
+        let _ = crate::runtime::runner_pidfds().remove(invocation_id);
+        return Err(errored(format!(
+            "spawn-process metadata registry: runner {runner_id} already registered"
+        )));
+    }
     // Close the registration-window race: a child that exited between
     // clone3 and the registry insertion is reaped here and its
     // notification recorded under the invocation id for the reap probe.
@@ -445,6 +593,13 @@ fn spawn_process(
         "extraFdIndexes": (1..=outcome.extra_response_fds.len() as u32)
             .collect::<Vec<u32>>(),
     });
+    // The final plan's device binds (the USBIP backend extension the
+    // retired arm applied to the mount policy): observable so the
+    // sandbox plan the kernel built can be asserted.
+    if !plan_input.mount_policy.device_binds.is_empty() {
+        result["deviceBinds"] = serde_json::to_value(&plan_input.mount_policy.device_binds)
+            .map_err(|error| errored(format!("spawn-process device binds: {error}")))?;
+    }
     if let Some(audit) = &outcome.swtpm_dir_audit {
         result["swtpmDirAudit"] = serde_json::to_value(audit)
             .map_err(|error| errored(format!("spawn-process swtpm audit: {error}")))?;
@@ -749,6 +904,166 @@ fn parse_plan(payload: &CanonicalJsonObject) -> Result<SpawnRunnerPlanInput, Dis
     })
 }
 
+/// The runner role one spawn-process payload carries, in the wire
+/// vocabulary's kebab-case spelling.
+fn parse_role(payload: &CanonicalJsonObject) -> Result<d2b_contracts_broker::broker_wire::RunnerRole, DispatchFailure> {
+    parse_field(payload, "role")
+}
+
+/// The runner identity one spawn-process payload carries: the registry
+/// key fields plus the metadata the kernel registers under the runner id
+/// (the retired arm's `register_runner_metadata`), all derived
+/// daemon-side from the verified bundle and the typed request.
+#[derive(Debug, Clone)]
+struct RunnerIdentity {
+    vm_id: String,
+    role_id: String,
+    resource_ref: Option<d2b_contracts_resource::v3::ResourceRef>,
+    resource_uid: Option<d2b_contracts_resource::v3::ResourceUid>,
+    zone_uid: Option<d2b_contracts_resource::v3::ResourceUid>,
+    generation: Option<u64>,
+    runtime_scope: Option<[u8; 32]>,
+    owner_ref: Option<d2b_contracts_resource::v3::ResourceRef>,
+    provider_ref: Option<d2b_contracts_resource::v3::ResourceRef>,
+    provider_identity: Option<[u8; 32]>,
+    template_identity: Option<[u8; 32]>,
+    bundle_runner_intent_ref: String,
+    guest_execution: Option<d2b_contracts_broker::broker_wire::GuestExecutionBinding>,
+}
+
+fn string_field(
+    fields: &std::collections::BTreeMap<String, CanonicalJsonValue>,
+    key: &str,
+) -> Result<String, DispatchFailure> {
+    match fields.get(key) {
+        Some(CanonicalJsonValue::String(value)) => Ok(value.clone()),
+        _ => Err(refused(format!("{key}: expected a string"))),
+    }
+}
+
+fn optional_string_field(
+    fields: &std::collections::BTreeMap<String, CanonicalJsonValue>,
+    key: &str,
+) -> Result<Option<String>, DispatchFailure> {
+    let Some(value) = fields.get(key) else {
+        return Ok(None);
+    };
+    match value {
+        CanonicalJsonValue::String(value) => Ok(Some(value.clone())),
+        CanonicalJsonValue::Null => Ok(None),
+        _ => Err(refused(format!("{key}: expected a string or null"))),
+    }
+}
+
+fn optional_u64_field(
+    fields: &std::collections::BTreeMap<String, CanonicalJsonValue>,
+    key: &str,
+) -> Result<Option<u64>, DispatchFailure> {
+    let Some(value) = fields.get(key) else {
+        return Ok(None);
+    };
+    match value {
+        CanonicalJsonValue::Integer(value) if *value >= 0 => Ok(Some(*value as u64)),
+        CanonicalJsonValue::Null => Ok(None),
+        _ => Err(refused(format!("{key}: expected a non-negative integer or null"))),
+    }
+}
+
+/// An optional 32-byte identity digest, carried as an array of 32
+/// uint8 integers (the wire vocabulary's spelling of `[u8; 32]`).
+fn optional_byte_array(
+    fields: &std::collections::BTreeMap<String, CanonicalJsonValue>,
+    key: &str,
+) -> Result<Option<[u8; 32]>, DispatchFailure> {
+    let Some(value) = fields.get(key) else {
+        return Ok(None);
+    };
+    if matches!(value, CanonicalJsonValue::Null) {
+        return Ok(None);
+    }
+    let CanonicalJsonValue::Array(values) = value else {
+        return Err(refused(format!("{key}: expected an array of 32 integers or null")));
+    };
+    if values.len() != 32 {
+        return Err(refused(format!("{key}: expected 32 integers")));
+    }
+    let mut out = [0u8; 32];
+    for (index, value) in values.iter().enumerate() {
+        match value {
+            CanonicalJsonValue::Integer(value) if (0..=255).contains(value) => {
+                out[index] = *value as u8;
+            }
+            _ => return Err(refused(format!("{key}: expected uint8 integers"))),
+        }
+    }
+    Ok(Some(out))
+}
+
+fn optional_resource_ref(
+    fields: &std::collections::BTreeMap<String, CanonicalJsonValue>,
+    key: &str,
+) -> Result<Option<d2b_contracts_resource::v3::ResourceRef>, DispatchFailure> {
+    optional_string_field(fields, key)?
+        .map(|value| {
+            d2b_contracts::identity::ResourceRef::parse(value.as_str()).map_err(|error| {
+                refused(format!("{key}: {error}"))
+            })
+        })
+        .transpose()
+}
+
+fn optional_resource_uid(
+    fields: &std::collections::BTreeMap<String, CanonicalJsonValue>,
+    key: &str,
+) -> Result<Option<d2b_contracts_resource::v3::ResourceUid>, DispatchFailure> {
+    optional_string_field(fields, key)?
+        .map(|value| {
+            d2b_contracts::identity::ResourceUid::parse(value).map_err(|error| {
+                refused(format!("{key}: {error}"))
+            })
+        })
+        .transpose()
+}
+
+/// The optional Guest execution binding, carried as the wire vocabulary's
+/// camelCase object (or null).
+fn optional_guest_execution(
+    fields: &std::collections::BTreeMap<String, CanonicalJsonValue>,
+) -> Result<Option<d2b_contracts_broker::broker_wire::GuestExecutionBinding>, DispatchFailure> {
+    let Some(value) = fields.get("guestExecution") else {
+        return Ok(None);
+    };
+    if matches!(value, CanonicalJsonValue::Null) {
+        return Ok(None);
+    }
+    let json = value_to_serde(value)?;
+    serde_json::from_value(json)
+        .map(Some)
+        .map_err(|error| refused(format!("guestExecution: {error}")))
+}
+
+/// The runner identity object one spawn-process payload carries.
+fn parse_runner_identity(payload: &CanonicalJsonObject) -> Result<RunnerIdentity, DispatchFailure> {
+    let CanonicalJsonValue::Object(fields) = field(payload, "runnerIdentity")? else {
+        return Err(refused("runnerIdentity: expected an object"));
+    };
+    Ok(RunnerIdentity {
+        vm_id: string_field(fields, "vmId")?,
+        role_id: string_field(fields, "roleId")?,
+        resource_ref: optional_resource_ref(fields, "resourceRef")?,
+        resource_uid: optional_resource_uid(fields, "resourceUid")?,
+        zone_uid: optional_resource_uid(fields, "zoneUid")?,
+        generation: optional_u64_field(fields, "generation")?,
+        runtime_scope: optional_byte_array(fields, "runtimeScope")?,
+        owner_ref: optional_resource_ref(fields, "ownerRef")?,
+        provider_ref: optional_resource_ref(fields, "providerRef")?,
+        provider_identity: optional_byte_array(fields, "providerIdentity")?,
+        template_identity: optional_byte_array(fields, "templateIdentity")?,
+        bundle_runner_intent_ref: string_field(fields, "bundleRunnerIntentRef")?,
+        guest_execution: optional_guest_execution(fields)?,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Result helpers
 // ---------------------------------------------------------------------------
@@ -1050,6 +1365,199 @@ mod tests {
         assert!(!plan.root_carve_out);
         assert_eq!(plan.user_namespace, None);
         assert_eq!(plan.umask, None);
+    }
+
+    #[test]
+    fn parse_role_and_runner_identity_read_every_committed_field() {
+        use d2b_contracts_broker::broker_wire::{GuestExecutionBinding, RunnerRole};
+
+        let payload = object(&[
+            ("role", string("cloud-hypervisor")),
+            ("servingWorker", CanonicalJsonValue::Bool(false)),
+            (
+                "runnerIdentity",
+                CanonicalJsonValue::Object(
+                    [
+                        ("vmId", string("vm-a")),
+                        ("roleId", string("ch-runner")),
+                        ("resourceRef", string("Process/vol-abcd")),
+                        ("resourceUid", string("00000000-0000-4000-8000-000000000001")),
+                        ("zoneUid", string("00000000-0000-4000-8000-000000000002")),
+                        ("generation", integer(7)),
+                        (
+                            "runtimeScope",
+                            CanonicalJsonValue::Array(
+                                (0..32).map(|index| integer(index as i64)).collect(),
+                            ),
+                        ),
+                        ("ownerRef", string("Volume/vol-abcd")),
+                        ("providerRef", string("Provider/volume-virtiofs")),
+                        (
+                            "providerIdentity",
+                            CanonicalJsonValue::Array(
+                                (0..32).map(|index| integer(index as i64)).collect(),
+                            ),
+                        ),
+                        (
+                            "templateIdentity",
+                            CanonicalJsonValue::Array(
+                                (0..32).map(|index| integer(255 - index as i64)).collect(),
+                            ),
+                        ),
+                        ("bundleRunnerIntentRef", string("runner:vm-a:ch-runner")),
+                        (
+                            "guestExecution",
+                            CanonicalJsonValue::Object(
+                                [
+                                    ("targetUid", string("00000000-0000-4000-8000-000000000003")),
+                                    (
+                                        "bootIdentityDigest",
+                                        CanonicalJsonValue::Array(
+                                            (0..32).map(|index| integer(index as i64)).collect(),
+                                        ),
+                                    ),
+                                    ("sessionGeneration", integer(1)),
+                                    ("assignmentEpoch", integer(2)),
+                                    ("providerGeneration", integer(3)),
+                                    ("controllerGeneration", integer(4)),
+                                ]
+                                .into_iter()
+                                .map(|(key, value)| (key.to_owned(), value))
+                                .collect(),
+                            ),
+                        ),
+                    ]
+                    .into_iter()
+                    .map(|(key, value)| (key.to_owned(), value))
+                    .collect(),
+                ),
+            ),
+        ]);
+        assert_eq!(
+            parse_role(&payload).expect("role parses"),
+            RunnerRole::CloudHypervisor
+        );
+        let identity = parse_runner_identity(&payload).expect("runner identity parses");
+        assert_eq!(identity.vm_id, "vm-a");
+        assert_eq!(identity.role_id, "ch-runner");
+        assert_eq!(
+            identity.resource_ref.as_ref().map(|reference| reference.to_canonical_string()),
+            Some("Process/vol-abcd".to_owned())
+        );
+        assert_eq!(
+            identity.resource_uid.as_ref().map(|uid| uid.as_str()),
+            Some("00000000-0000-4000-8000-000000000001")
+        );
+        assert_eq!(
+            identity.zone_uid.as_ref().map(|uid| uid.as_str()),
+            Some("00000000-0000-4000-8000-000000000002")
+        );
+        assert_eq!(identity.generation, Some(7));
+        assert_eq!(
+            identity.runtime_scope,
+            Some(std::array::from_fn(|index| index as u8))
+        );
+        assert_eq!(
+            identity.owner_ref.as_ref().map(|reference| reference.to_canonical_string()),
+            Some("Volume/vol-abcd".to_owned())
+        );
+        assert_eq!(
+            identity.provider_ref.as_ref().map(|reference| reference.to_canonical_string()),
+            Some("Provider/volume-virtiofs".to_owned())
+        );
+        assert_eq!(
+            identity.provider_identity,
+            Some(std::array::from_fn(|index| index as u8))
+        );
+        assert_eq!(
+            identity.template_identity,
+            Some(std::array::from_fn(|index| 255 - index as u8))
+        );
+        assert_eq!(identity.bundle_runner_intent_ref, "runner:vm-a:ch-runner");
+        assert_eq!(
+            identity.guest_execution,
+            Some(GuestExecutionBinding {
+                target_uid: d2b_contracts::identity::ResourceUid::parse(
+                    "00000000-0000-4000-8000-000000000003",
+                )
+                .expect("target uid parses"),
+                boot_identity_digest: std::array::from_fn(|index| index as u8),
+                session_generation: 1,
+                assignment_epoch: 2,
+                provider_generation: 3,
+                controller_generation: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_runner_identity_tolerates_absent_optionals() {
+        let payload = object(&[
+            ("role", string("usbip")),
+            ("servingWorker", CanonicalJsonValue::Bool(true)),
+            (
+                "runnerIdentity",
+                CanonicalJsonValue::Object(
+                    [
+                        ("vmId", string("sys-work-usbipd")),
+                        ("roleId", string("backend")),
+                        ("resourceRef", CanonicalJsonValue::Null),
+                        ("resourceUid", CanonicalJsonValue::Null),
+                        ("zoneUid", CanonicalJsonValue::Null),
+                        ("generation", CanonicalJsonValue::Null),
+                        ("runtimeScope", CanonicalJsonValue::Null),
+                        ("ownerRef", CanonicalJsonValue::Null),
+                        ("providerRef", CanonicalJsonValue::Null),
+                        ("providerIdentity", CanonicalJsonValue::Null),
+                        ("templateIdentity", CanonicalJsonValue::Null),
+                        ("bundleRunnerIntentRef", string("runner:sys-work-usbipd:backend")),
+                        ("guestExecution", CanonicalJsonValue::Null),
+                    ]
+                    .into_iter()
+                    .map(|(key, value)| (key.to_owned(), value))
+                    .collect(),
+                ),
+            ),
+        ]);
+        let identity = parse_runner_identity(&payload).expect("minimal identity parses");
+        assert_eq!(identity.vm_id, "sys-work-usbipd");
+        assert_eq!(identity.role_id, "backend");
+        assert_eq!(identity.resource_ref, None);
+        assert_eq!(identity.resource_uid, None);
+        assert_eq!(identity.zone_uid, None);
+        assert_eq!(identity.generation, None);
+        assert_eq!(identity.runtime_scope, None);
+        assert_eq!(identity.owner_ref, None);
+        assert_eq!(identity.provider_ref, None);
+        assert_eq!(identity.provider_identity, None);
+        assert_eq!(identity.template_identity, None);
+        assert_eq!(identity.guest_execution, None);
+        // A malformed byte array is refused, not truncated.
+        let bad = object(&[
+            ("role", string("usbip")),
+            ("servingWorker", CanonicalJsonValue::Bool(false)),
+            (
+                "runnerIdentity",
+                CanonicalJsonValue::Object(
+                    [
+                        ("vmId", string("sys-work-usbipd")),
+                        ("roleId", string("backend")),
+                        (
+                            "runtimeScope",
+                            CanonicalJsonValue::Array(vec![integer(1), integer(2)]),
+                        ),
+                        ("bundleRunnerIntentRef", string("runner:x")),
+                    ]
+                    .into_iter()
+                    .map(|(key, value)| (key.to_owned(), value))
+                    .collect(),
+                ),
+            ),
+        ]);
+        assert!(
+            parse_runner_identity(&bad).is_err(),
+            "a short runtimeScope must be refused"
+        );
     }
 
     #[test]

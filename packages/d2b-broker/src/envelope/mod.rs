@@ -601,6 +601,16 @@ pub struct InvocationCtx<'a> {
     /// with its own invoking identity appended ([`EvidenceChain::nested`]),
     /// never re-presenting as the daemon class (KTD6).
     pub chain: &'a EvidenceChain,
+    /// Whether this leg is a nested call under an existing invocation
+    /// (U10, KTD6).
+    ///
+    /// A nested call presents a chain even when the chain carries a single
+    /// identity (the initiating principal alone), so the record class is
+    /// decided by this flag rather than by the chain's depth: the leg
+    /// executing the root operation writes exactly one root record per
+    /// root invocation, and every nested leg writes a correlation record
+    /// keyed by the root invocation id and its depth.
+    pub nested: bool,
 }
 
 /// The result of one dispatched invocation.
@@ -854,6 +864,7 @@ impl BrokerEnvelope {
             zone,
             payload,
             fds,
+            false,
         )
         .await
     }
@@ -927,6 +938,7 @@ impl BrokerEnvelope {
             zone,
             payload,
             fds,
+            true,
         )
         .await
     }
@@ -948,6 +960,7 @@ impl BrokerEnvelope {
         zone: &str,
         payload: &Value,
         fds: &[OwnedFd],
+        nested: bool,
     ) -> Result<Invocation, EnvelopeRefusal> {
         // The audit rule needs the executing leg: the envelope writes
         // broker-side records only for in-broker executions, and nothing
@@ -1035,6 +1048,7 @@ impl BrokerEnvelope {
                 zone,
                 invocation_id: chain.root_invocation_id(),
                 chain,
+                nested,
             };
             let outcome = self
                 .dispatcher
@@ -1094,7 +1108,7 @@ impl BrokerEnvelope {
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64,
-                record_class: if chain.is_nested() {
+                record_class: if nested {
                     ChainRecordClass::Correlation
                 } else {
                     ChainRecordClass::Root
@@ -1418,6 +1432,7 @@ struct OwnedInvocation {
     zone: String,
     invocation_id: String,
     chain: EvidenceChain,
+    nested: bool,
     payload: CanonicalJsonObject,
     context: Option<ForwardContext>,
     fds: Vec<OwnedFd>,
@@ -1550,6 +1565,7 @@ impl OperationDispatcher for HandlerTable {
         let zone = invocation.ctx.zone.to_owned();
         let invocation_id = invocation.ctx.invocation_id.to_owned();
         let chain = invocation.ctx.chain.clone();
+        let nested = invocation.ctx.nested;
         let payload = invocation.payload.clone();
         let context = invocation.context.cloned();
         let fd_kind = invocation.fd_kind;
@@ -1582,6 +1598,7 @@ impl OperationDispatcher for HandlerTable {
                 zone,
                 invocation_id,
                 chain,
+                nested,
                 payload,
                 context,
                 fds,
@@ -1594,6 +1611,7 @@ impl OperationDispatcher for HandlerTable {
                         zone: &owned.zone,
                         invocation_id: &owned.invocation_id,
                         chain: &owned.chain,
+                        nested: owned.nested,
                     },
                     payload: &owned.payload,
                     context: owned.context.as_ref(),
@@ -1689,6 +1707,7 @@ impl OperationDispatcher for ForwardingDispatcher {
                 zone: invocation.ctx.zone,
                 invocation_id: invocation.ctx.invocation_id,
                 chain: invocation.ctx.chain,
+                nested: invocation.ctx.nested,
                 payload: invocation.payload,
                 context: invocation.context,
                 fds: invocation.fds,
@@ -1864,6 +1883,9 @@ while let Ok(fd) = accept_peer(&listener) {
                 zone,
                 invocation_id,
                 chain: &chain,
+                // The loopback peer re-roots the chain, so this leg is the
+                // root leg of its own invocation.
+                nested: false,
             },
             payload: &payload,
             context,

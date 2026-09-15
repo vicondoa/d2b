@@ -2,6 +2,7 @@
 
 pub mod broker_wire;
 pub mod host_generation;
+pub mod kernel_client;
 
 pub use broker_wire::BrokerRequest;
 pub use broker_wire::{

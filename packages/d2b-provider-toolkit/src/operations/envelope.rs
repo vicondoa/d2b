@@ -303,14 +303,20 @@ impl OperationEnvelope {
             return Err(OperationFailure::new(UNCOMMITTED_OPERATION));
         };
         let invocation_id = self.next_invocation_id();
-        self.run(&invocation_id, caller, entry, payload, &[]).await
+        self.run(&invocation_id, caller, entry, payload, &[], &[], None)
+            .await
     }
 
     /// Whether a declared handler serves this operation name.
+    ///
+    /// The committed rows spell the family operations in the catalog's
+    /// PascalCase wire names while a `ResourceRef` name is a lowercase
+    /// label, so the match is case-insensitive (U10): the forwarded wire
+    /// name `OpenPidfd` resolves the declared `Operation/open-pidfd` entry.
     pub fn declares(&self, operation: &str) -> bool {
         self.handlers
             .iter()
-            .any(|entry| entry.operation.name().as_str() == operation)
+            .any(|entry| entry.operation.name().as_str().eq_ignore_ascii_case(operation))
     }
 
     /// Run one operation a bare operation name selects, under an invocation
@@ -348,15 +354,63 @@ impl OperationEnvelope {
         payload: CanonicalJsonObject,
         fds: &[RawFd],
     ) -> Result<OperationResult, OperationFailure> {
+        self.invoke_named_with_fds_under_chain(
+            operation,
+            invocation_id,
+            caller,
+            payload,
+            fds,
+            &[],
+            None,
+        )
+        .await
+    }
+
+    /// Invoke as [`Self::invoke_named_with_fds`], under the evidence chain
+    /// the forwarded invocation runs on and the U10 family seam.
+    ///
+    /// The chain identities (root first) are the ones the broker minted
+    /// for the root call; the handler presents them - with its own identity
+    /// appended - when it invokes a broker-generic kernel as the nested
+    /// core of its family operation, so the graft rule authorizes the
+    /// kernel call against the chain's initiating principal and the
+    /// in-broker leg records the correlation leg (KTD6). The kernel caller
+    /// carries the broker socket, the caller role, the Zone's trusted
+    /// bundle, and the daemon-side runner lookup; absent for direct and
+    /// test invocations.
+    pub async fn invoke_named_with_fds_under_chain(
+        &self,
+        operation: &str,
+        invocation_id: &str,
+        caller: &ResourceRef,
+        payload: CanonicalJsonObject,
+        fds: &[RawFd],
+        chain_identities: &[String],
+        kernel: Option<&d2b_resource_types::KernelCaller>,
+    ) -> Result<OperationResult, OperationFailure> {
+        // The committed rows spell the family operations in the catalog's
+        // PascalCase wire names while a `ResourceRef` name is a lowercase
+        // label, so the match is case-insensitive (U10): the forwarded wire
+        // name `OpenPidfd` resolves the declared `Operation/open-pidfd`
+        // entry.
         let Some(entry) = self
             .handlers
             .iter()
-            .find(|entry| entry.operation.name().as_str() == operation)
+            .find(|entry| entry.operation.name().as_str().eq_ignore_ascii_case(operation))
         else {
             self.audit_named(operation, ProviderAgentAuditOutcome::Denied);
             return Err(OperationFailure::new(UNCOMMITTED_OPERATION));
         };
-        self.run(invocation_id, caller, entry, payload, fds).await
+        self.run(
+            invocation_id,
+            caller,
+            entry,
+            payload,
+            fds,
+            chain_identities,
+            kernel,
+        )
+        .await
     }
 
     async fn run(
@@ -366,6 +420,8 @@ impl OperationEnvelope {
         entry: &HandlerEntry,
         payload: CanonicalJsonObject,
         fds: &[RawFd],
+        chain_identities: &[String],
+        kernel: Option<&d2b_resource_types::KernelCaller>,
     ) -> Result<OperationResult, OperationFailure> {
         let operation = &entry.operation;
         if !self.is_granted(caller, operation) {
@@ -378,6 +434,8 @@ impl OperationEnvelope {
             operation,
             invocation_id,
             fds,
+            chain_identities,
+            kernel,
         };
         let result = entry
             .handler

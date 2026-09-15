@@ -4,9 +4,13 @@ use d2b_contracts_broker::broker_wire::BrokerProfile;
 fn host_profile_keeps_the_complete_closed_operation_catalog() {
     let operations = BrokerProfile::Host.operations();
 
+    // U10 retired the process-family wire variants (SpawnRunner among
+    // them) at wire v6: the variants are gone from the enum, so the host
+    // catalog no longer carries them; their privileged cores are the
+    // broker-generic kernels served through EnvelopeInvoke.
     for operation in [
         "ApplyNftables",
-        "SpawnRunner",
+        "EnvelopeInvoke",
         "ApplyHostGenerationHandoff",
         "ExportBrokerAudit",
         "ConsumeLifecycleLease",
@@ -18,6 +22,12 @@ fn host_profile_keeps_the_complete_closed_operation_catalog() {
         assert!(
             BrokerProfile::Host.allows_operation(operation),
             "host profile must admit {operation}"
+        );
+    }
+    for operation in ["SpawnRunner", "OpenPidfd", "PollChildReaped"] {
+        assert!(
+            !operations.contains(&operation),
+            "host profile must not re-admit the retired operation {operation}"
         );
     }
 }

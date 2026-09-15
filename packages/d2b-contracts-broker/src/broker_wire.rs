@@ -138,24 +138,8 @@ pub enum BrokerRequest {
     /// detach. The busid is a runtime selector only and is redacted from every
     /// success response/audit field.
     QemuMediaDetach(QemuMediaHotplugRequest),
-    /// Daemon-side reconcile-and-adopt support. The daemon asks the
-    /// broker to `pidfd_open(pid)` AND re-verify `/proc/<pid>/stat`
-    /// field 22 matches the expected start-time in one atomic call (no
-    /// daemon-side syscall surface needed). The pidfd is returned via
-    /// SCM_RIGHTS; if start-time drifted the broker closes the fd and
-    /// surfaces a typed pidfd-race error.
-    OpenPidfd(OpenPidfdRequest),
     /// Consume one sealed Guest lifecycle lease before any host effect.
     ConsumeLifecycleLease(ConsumeLifecycleLeaseRequest),
-    /// Obtain a pidfd for the peer of exactly one accepted Unix socket.
-    ///
-    /// The accepted socket is the sole SCM_RIGHTS request attachment. The
-    /// request body deliberately contains no descriptor number, PID,
-    /// credential tuple, path, or subject claim.
-    OpenPeerPidfdFromAcceptedSocket(OpenPeerPidfdFromAcceptedSocketRequest),
-    /// Observe one broker-owned runner after validating its retained
-    /// pidfd-backed identity against the trusted bundle.
-    ObserveRunner(ObserveRunnerRequest),
     /// Apply one bounded host-side PipeWire effect for a trusted audio
     /// runner. The broker resolves all executable and runtime details from
     /// the signed runner intent; the daemon supplies only opaque identities
@@ -176,12 +160,6 @@ pub enum BrokerRequest {
     /// Stop one exact transient systemd unit identity.
     StopSystemdUnit(StopSystemdUnitRequest),
     OpenVhostNet(OpenVhostNetRequest),
-    /// Drain the broker's in-memory ring buffer of ChildReaped events.
-    /// Returns [`PollChildReapedResponse`] containing all buffered
-    /// notifications in FIFO order; clears the buffer. Idempotent.
-    PollChildReaped,
-    PrepareRuntimeDir(PrepareDirRequest),
-    PrepareStateDir(PrepareDirRequest),
     ReconcileStorageScope(ReconcileStorageScopeRequest),
     ValidateLockSpec(ValidateLockSpecRequest),
     /// Typed broker op that hardlink-farms a Guest's resolved closure into
@@ -196,12 +174,6 @@ pub enum BrokerRequest {
     ReadSecretById(SecretByIdRequest),
     RotateSecretById(SecretByIdRequest),
     SetBridgePortFlags(SetBridgePortFlagsRequest),
-    /// teardown. The broker resolves the leaf from its trusted runner
-    /// intent; callers never provide a cgroup path.
-    CgroupKill(CgroupKillRequest),
-    SignalRunner(SignalRunnerRequest),
-    DeregisterRunnerPidfd(DeregisterRunnerPidfdRequest),
-    SpawnRunner(Box<SpawnRunnerRequest>),
     UpdateHostsFile(UpdateHostsFileRequest),
     UsbipBind(UsbipBindRequest),
     UsbipBindFirewallRule(UsbipBindFirewallRuleRequest),
@@ -539,6 +511,14 @@ pub struct ForwardOperationRequest {
     /// cannot validate field-wise with [`STALE_CONTEXT`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<ForwardContext>,
+    /// The evidence chain's ordered identities, root first, when this
+    /// forwarded invocation is a nested leg of an existing invocation
+    /// (U10, KTD6). Absent for a root call. The root invocation id rides
+    /// in [`Self::invocation_id`], so the receiving leg re-roots the chain
+    /// from the two fields and records the leg as a correlation record
+    /// rather than a second root record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_identities: Option<Vec<String>>,
     /// The positions,in the frame's SCM_RIGHTS attachment list,of the
     /// descriptors this request carries. Empty when the request carries none.
 
@@ -705,10 +685,7 @@ impl BrokerRequest {
             Self::QemuMediaQuit(_) => "QemuMediaQuit",
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
-            Self::OpenPidfd(_) => "OpenPidfd",
             Self::ConsumeLifecycleLease(_) => "ConsumeLifecycleLease",
-            Self::OpenPeerPidfdFromAcceptedSocket(_) => "OpenPeerPidfdFromAcceptedSocket",
-            Self::ObserveRunner(_) => "ObserveRunner",
             Self::PipeWireAudio(_) => "PipeWireAudio",
             Self::StartSystemdUnit(_) => "StartSystemdUnit",
             Self::CheckSystemdUserManager(_) => "CheckSystemdUserManager",
@@ -716,19 +693,12 @@ impl BrokerRequest {
             Self::OpenSystemdUnitPidfd(_) => "OpenSystemdUnitPidfd",
             Self::StopSystemdUnit(_) => "StopSystemdUnit",
             Self::OpenVhostNet(_) => "OpenVhostNet",
-            Self::PollChildReaped => "PollChildReaped",
-            Self::PrepareRuntimeDir(_) => "PrepareRuntimeDir",
-            Self::PrepareStateDir(_) => "PrepareStateDir",
             Self::ReconcileStorageScope(_) => "ReconcileStorageScope",
             Self::ValidateLockSpec(_) => "ValidateLockSpec",
             Self::StoreSync(_) => "StoreSync",
             Self::ReadSecretById(_) => "ReadSecretById",
             Self::RotateSecretById(_) => "RotateSecretById",
             Self::SetBridgePortFlags(_) => "SetBridgePortFlags",
-            Self::CgroupKill(_) => "CgroupKill",
-            Self::SignalRunner(_) => "SignalRunner",
-            Self::DeregisterRunnerPidfd(_) => "DeregisterRunnerPidfd",
-            Self::SpawnRunner(_) => "SpawnRunner",
             Self::UpdateHostsFile(_) => "UpdateHostsFile",
             Self::UsbipBind(_) => "UsbipBind",
             Self::UsbipBindFirewallRule(_) => "UsbipBindFirewallRule",
@@ -765,9 +735,7 @@ impl BrokerRequest {
             Self::Hello(_) => "daemon-handshake",
             Self::PublishTrustedContext(_) => "trusted-context",
             Self::ExportBrokerAudit(_) => "audit-log",
-            Self::PollChildReaped => "pidfd-reap-buffer",
-            Self::OpenPeerPidfdFromAcceptedSocket(_) => "accepted-socket",
-            Self::ConsumeLifecycleLease(_) => "guest-lifecycle",
+                                    Self::ConsumeLifecycleLease(_) => "guest-lifecycle",
             Self::EnvelopeInvoke(_) => "envelope",
             _ => "operation",
         }
@@ -945,15 +913,6 @@ impl BrokerRequest {
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.bus_id),
             ),
-            Self::OpenPidfd(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::OpenPeerPidfdFromAcceptedSocket(_) => return None,
-            Self::ObserveRunner(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
             Self::PipeWireAudio(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
@@ -988,27 +947,6 @@ impl BrokerRequest {
                     request.unit.role_id
                 ),
             ),
-            Self::CgroupKill(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::SignalRunner(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::DeregisterRunnerPidfd(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::PrepareRuntimeDir(request) | Self::PrepareStateDir(request) => (
-                request.vm_id.to_string(),
-                format!(
-                    "{}:{}:{:?}",
-                    self.op_name(),
-                    request.vm_id,
-                    request.path_class
-                ),
-            ),
             Self::ReconcileStorageScope(request) => (
                 request.storage_ref.to_string(),
                 format!("{}:{}", self.op_name(), request.storage_ref),
@@ -1040,16 +978,6 @@ impl BrokerRequest {
             Self::SetBridgePortFlags(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::SpawnRunner(request) => (
-                request.vm_id.to_string(),
-                format!(
-                    "{}:{}:{}:{}",
-                    self.op_name(),
-                    request.vm_id,
-                    request.role_id,
-                    request.bundle_runner_intent_ref
-                ),
             ),
             Self::UpdateHostsFile(request) => (
                 request.bundle_hosts_intent_ref.to_string(),
@@ -1139,7 +1067,6 @@ impl BrokerRequest {
             Self::ExportBrokerAudit(_)
             | Self::Hello(_)
             | Self::PublishTrustedContext(_)
-            | Self::PollChildReaped
             | Self::EnvelopeInvoke(_) => return None,
         };
         Some((
@@ -1157,11 +1084,9 @@ impl BrokerRequest {
     pub fn requires_authoritative_audit_join(&self) -> bool {
         !matches!(
             self,
-            Self::OpenPeerPidfdFromAcceptedSocket(_)
                 | Self::ExportBrokerAudit(_)
                 | Self::Hello(_)
                 | Self::PublishTrustedContext(_)
-                | Self::PollChildReaped
                 | Self::EnvelopeInvoke(_)
         )
     }
@@ -1223,17 +1148,6 @@ impl BrokerProfile {
             Self::Host => !Self::request_targets_guest(request),
             Self::Guest => match request {
                 BrokerRequest::ConsumeLifecycleLease(_) => false,
-                BrokerRequest::SpawnRunner(request) => {
-                    request
-                        .execution_ref
-                        .as_ref()
-                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                        && GUEST_LOCAL_RUNNER_ROLES.contains(&request.role)
-                        && request
-                            .guest_execution
-                            .as_ref()
-                            .is_some_and(GuestExecutionBinding::is_valid)
-                }
                 BrokerRequest::StartSystemdUnit(request)
                 | BrokerRequest::ObserveSystemdUnit(request)
                 | BrokerRequest::CheckSystemdUserManager(request) => {
@@ -1246,14 +1160,6 @@ impl BrokerProfile {
                             .as_ref()
                             .is_some_and(GuestExecutionBinding::is_valid)
                 }
-                BrokerRequest::OpenPidfd(request) => request
-                    .guest_execution
-                    .as_ref()
-                    .is_some_and(GuestExecutionBinding::is_valid),
-                BrokerRequest::ObserveRunner(request) => request
-                    .guest_execution
-                    .as_ref()
-                    .is_some_and(GuestExecutionBinding::is_valid),
                 BrokerRequest::OpenSystemdUnitPidfd(request) => {
                     request
                         .unit
@@ -1278,14 +1184,6 @@ impl BrokerProfile {
                             .as_ref()
                             .is_some_and(GuestExecutionBinding::is_valid)
                 }
-                BrokerRequest::SignalRunner(request) => request
-                    .guest_execution
-                    .as_ref()
-                    .is_some_and(GuestExecutionBinding::is_valid),
-                BrokerRequest::DeregisterRunnerPidfd(request) => request
-                    .guest_execution
-                    .as_ref()
-                    .is_some_and(GuestExecutionBinding::is_valid),
                 _ => true,
             },
         }
@@ -1293,13 +1191,6 @@ impl BrokerProfile {
 
     fn request_targets_guest(request: &BrokerRequest) -> bool {
         match request {
-            BrokerRequest::SpawnRunner(request) => {
-                request
-                    .execution_ref
-                    .as_ref()
-                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                    || request.guest_execution.is_some()
-            }
             BrokerRequest::StartSystemdUnit(request)
             | BrokerRequest::ObserveSystemdUnit(request)
             | BrokerRequest::CheckSystemdUserManager(request) => {
@@ -1325,10 +1216,6 @@ impl BrokerProfile {
                         .as_ref()
                         .is_some_and(|target| target.resource_type().as_str() == "Guest")
             }
-            BrokerRequest::OpenPidfd(request) => request.guest_execution.is_some(),
-            BrokerRequest::ObserveRunner(request) => request.guest_execution.is_some(),
-            BrokerRequest::SignalRunner(request) => request.guest_execution.is_some(),
-            BrokerRequest::DeregisterRunnerPidfd(request) => request.guest_execution.is_some(),
             _ => false,
         }
     }
@@ -1388,18 +1275,8 @@ pub enum BrokerResponse {
     /// path) so the audit log and daemon can correlate the fd to the
     /// configured key.
     OpenHidrawSecurityKey(OpenHidrawSecurityKeyResponse),
-    /// OpenPidfd response. The pidfd itself is returned via SCM_RIGHTS
-    /// on the same frame; the JSON body confirms which `(pid,
-    /// start_time_ticks)` the broker verified.
-    OpenPidfd(OpenPidfdResponse),
     /// Confirmation that one lifecycle lease was consumed.
     ConsumeLifecycleLease(ConsumeLifecycleLeaseResponse),
-    /// Response for [`BrokerRequest::OpenPeerPidfdFromAcceptedSocket`].
-    /// The only attachment is the returned close-on-exec pidfd.
-    OpenPeerPidfdFromAcceptedSocket(OpenPeerPidfdFromAcceptedSocketResponse),
-    /// Observation of a broker-owned runner. No pidfd is returned because
-    /// the operation is a status query over the broker's retained registry.
-    ObserveRunner(ObserveRunnerResponse),
     /// Result of one broker-owned PipeWire effect. Raw node identifiers and
     /// runtime paths never cross the wire.
     PipeWireAudio(PipeWireAudioResponse),
@@ -1415,13 +1292,8 @@ pub enum BrokerResponse {
     OpenSystemdUnitPidfd(OpenSystemdUnitPidfdResponse),
     /// Stop response for an exact transient unit identity.
     StopSystemdUnit(StopSystemdUnitResponse),
-    /// Drain response for `BrokerRequest::PollChildReaped`.
-    PollChildReaped(PollChildReapedResponse),
     ReconcileStorageScope(ReconcileStorageScopeResponse),
     SetBridgePortFlags(BridgePortFlagsResponse),
-    SignalRunner(SignalRunnerResponse),
-    DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse),
-    SpawnRunner(Box<SpawnRunnerResponse>),
     /// Typed response carrying the activated generation (collision-free
     /// `generation_id` plus the u32 `generation_token`), the resolved
     /// hardlink-farm root, and the count of top-level closure paths
@@ -3598,8 +3470,10 @@ pub enum BrokerNotification {
     Unknown,
 }
 
-/// Response to `BrokerRequest::PollChildReaped`. Drains and returns all
-/// buffered `ChildReaped` notifications in FIFO order.
+/// The typed payload the `poll-child-reaped` kernel result carries for a
+/// reaped child (the kernel result fields are reaped/exitKind/exitCode/
+/// exitSignal/reapedAtMs; this struct remains the daemon-side consumer
+/// shape).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PollChildReapedResponse {
@@ -3680,8 +3554,18 @@ mod tests {
 
     #[test]
     fn broker_request_envelope_round_trips_with_admin() {
+        // U10: the generic envelope carrier now takes the retired
+        // process-family variants' place on the wire.
         let env = BrokerRequestEnvelope {
-            request: BrokerRequest::PollChildReaped,
+            request: BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+                operation: "signal-pidfd".to_owned(),
+                zone: "zone-a".to_owned(),
+                payload: serde_json::json!({ "signal": 15 }),
+                chain_root_invocation_id: None,
+                chain_identities: None,
+                fd_indexes: vec![0],
+                fd_kinds: vec![FdKind::Any],
+            }),
             caller_role: BrokerCallerRole::AdminUid { uid: 1000 },
             test_peer_uid: None,
             audit_join: None,
@@ -3695,10 +3579,25 @@ mod tests {
     #[test]
     fn broker_request_envelope_default_caller_role_is_not_authorized() {
         let json = serde_json::json!({
-            "request": { "kind": "PollChildReaped" }
+            "request": {
+                "kind": "EnvelopeInvoke",
+                "payload": {
+                    "operation": "signal-pidfd",
+                    "zone": "zone-a",
+                    "payload": { "signal": 15 },
+                    "chainRootInvocationId": null,
+                    "chainIdentities": null,
+                    "fdIndexes": [0],
+                    "fdKinds": ["any"]
+                }
+            }
         });
         let env: BrokerRequestEnvelope = serde_json::from_value(json).unwrap();
         assert!(matches!(env.caller_role, BrokerCallerRole::NotAuthorized));
+        let BrokerRequest::EnvelopeInvoke(invoke) = env.request else {
+            panic!("expected the envelope invoke");
+        };
+        assert_eq!(invoke.operation, "signal-pidfd");
     }
 
     #[test]
@@ -4292,80 +4191,109 @@ mod tests {
     /// virtiofs sockets, or seccomp profiles on the wire.
     #[test]
     fn spawn_runner_request_is_opaque_only() {
+        // U10: the typed frame is gone; the envelope carrier names the
+        // committed operation and the payload is the same opaque-only
+        // typed request, so the wire-opacity contract (no argv/env/uid
+        // crossings) now guards the envelope payload.
         let frame = encode_frame(&serde_json::json!({
-            "kind": "SpawnRunner",
+            "kind": "EnvelopeInvoke",
             "payload": {
-                "vmId": "corp-vm",
-                "roleId": "ch",
-                "role": "cloud-hypervisor",
-                "bundleRunnerIntentRef": "ch-corp-vm",
-                "runtimeAllocations": [
-                    { "kind": "vsock-cid", "opaqueRef": "alloc-vsock-1" },
-                    { "kind": "api-socket-path", "opaqueRef": "alloc-api-1" }
-                ]
+                "operation": "SpawnRunner",
+                "zone": "corp-vm",
+                "payload": {
+                    "vmId": "corp-vm",
+                    "roleId": "ch",
+                    "role": "cloud-hypervisor",
+                    "bundleRunnerIntentRef": "ch-corp-vm",
+                    "runtimeAllocations": [
+                        { "kind": "vsock-cid", "opaqueRef": "alloc-vsock-1" },
+                        { "kind": "api-socket-path", "opaqueRef": "alloc-api-1" }
+                    ]
+                },
+                "chainRootInvocationId": null,
+                "chainIdentities": null,
+                "fdIndexes": [],
+                "fdKinds": []
             }
         }))
         .expect("encodes");
         let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
-        match decoded {
-            BrokerRequest::SpawnRunner(req) => {
-                assert_eq!(req.vm_id.as_str(), "corp-vm");
-                assert_eq!(req.role_id.as_str(), "ch");
-                assert_eq!(req.role, RunnerRole::CloudHypervisor);
-                assert_eq!(req.bundle_runner_intent_ref.as_str(), "ch-corp-vm");
-                assert_eq!(req.runtime_allocations.len(), 2);
-                assert_eq!(
-                    req.runtime_allocations[0].kind,
-                    RunnerAllocationKind::VsockCid
-                );
-                assert_eq!(req.runtime_allocations[0].opaque_ref, "alloc-vsock-1");
-                assert_eq!(
-                    req.runtime_allocations[1].kind,
-                    RunnerAllocationKind::ApiSocketPath
-                );
-            }
-            other => panic!("expected SpawnRunner, got {other:?}"),
-        }
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert_eq!(invoke.operation, "SpawnRunner");
+        let req: SpawnRunnerRequest =
+            serde_json::from_value(invoke.payload).expect("payload is the typed spawn request");
+        assert_eq!(req.vm_id.as_str(), "corp-vm");
+        assert_eq!(req.role_id.as_str(), "ch");
+        assert_eq!(req.role, RunnerRole::CloudHypervisor);
+        assert_eq!(req.bundle_runner_intent_ref.as_str(), "ch-corp-vm");
+        assert_eq!(req.runtime_allocations.len(), 2);
+        assert_eq!(
+            req.runtime_allocations[0].kind,
+            RunnerAllocationKind::VsockCid
+        );
+        assert_eq!(req.runtime_allocations[0].opaque_ref, "alloc-vsock-1");
+        assert_eq!(
+            req.runtime_allocations[1].kind,
+            RunnerAllocationKind::ApiSocketPath
+        );
     }
 
     fn spawn_runner_for_profile(role: RunnerRole, execution_ref: &str) -> BrokerRequest {
-        BrokerRequest::SpawnRunner(Box::new(SpawnRunnerRequest {
-            vm_id: VmId::new("guest-vm"),
-            role_id: RoleId::new(role.as_str()),
-            resource_ref: None,
-            resource_uid: None,
-            zone_uid: None,
-            owner_ref: None,
-            owner_uid: None,
-            provider_ref: None,
-            bundle_content_identity: None,
-            provider_identity: None,
-            template_identity: None,
-            generation: None,
-            runtime_scope: None,
-            activation_input: None,
-            launch_args: None,
-            sandbox_plan: None,
-            role,
-            bundle_runner_intent_ref: BundleOpId::new("runner:test"),
-            execution_ref: Some(ResourceRef::parse(execution_ref).expect("valid execution ref")),
-            execution_domain: None,
-            user_ref: None,
-            guest_execution: None,
-            runtime_allocations: Vec::new(),
-            tracing_span_id: None,
-            workload_identity: None,
-            inherited_fd_count: 0,
-            network_tap_context: None,
-        }))
+        // U10: the typed SpawnRunner variant is retired; the profile gates
+        // exercise the envelope carrier that now serves the family op.
+        let zone = execution_ref.split('/').nth(1).unwrap_or("guest-vm");
+        BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+            operation: "SpawnRunner".to_owned(),
+            zone: zone.to_owned(),
+            payload: serde_json::to_value(SpawnRunnerRequest {
+                vm_id: VmId::new("guest-vm"),
+                role_id: RoleId::new(role.as_str()),
+                resource_ref: None,
+                resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                owner_uid: None,
+                provider_ref: None,
+                bundle_content_identity: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                runtime_scope: None,
+                activation_input: None,
+                launch_args: None,
+                sandbox_plan: None,
+                role,
+                bundle_runner_intent_ref: BundleOpId::new("runner:test"),
+                execution_ref: Some(
+                    ResourceRef::parse(execution_ref).expect("valid execution ref"),
+                ),
+                execution_domain: None,
+                user_ref: None,
+                guest_execution: None,
+                runtime_allocations: Vec::new(),
+                tracing_span_id: None,
+                workload_identity: None,
+                inherited_fd_count: 0,
+                network_tap_context: None,
+            })
+            .expect("spawn request serializes"),
+            chain_root_invocation_id: None,
+            chain_identities: None,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        })
     }
 
     #[test]
     fn profile_spawn_runner_role_matrix_is_closed() {
-        // No current RunnerRole is Guest-local. Guest Process resources use
-        // the dedicated local effect classes instead; a future runner role
-        // must be added to this allowlist deliberately.
-        let guest_local_roles: &[RunnerRole] = &[];
+        // U10 retired the typed SpawnRunner frame at wire v6; the family
+        // operation now crosses the profile gate as an EnvelopeInvoke
+        // (the envelope carrier is admitted on both profiles), and the
+        // role/execution-ref fencing that the typed frame's profile rule
+        // enforced moved daemon-side into the family handler. The role
+        // ledger stays closed so a future re-admission must be deliberate.
         let all_roles = [
             RunnerRole::CloudHypervisor,
             RunnerRole::QemuMedia,
@@ -4382,68 +4310,78 @@ mod tests {
         ];
 
         for role in all_roles {
-            let expected_guest = guest_local_roles.contains(&role);
-            assert_eq!(
-                spawn_runner_for_profile(role, "Guest/guest-vm")
-                    .allowed_by_profile(BrokerProfile::Guest),
-                expected_guest,
-                "Guest profile role {} must match the closed Guest-local allowlist",
-                role.as_str()
-            );
-            assert!(
-                !spawn_runner_for_profile(role, "Host/host")
-                    .allowed_by_profile(BrokerProfile::Guest),
-                "Guest profile must reject Host execution ref for {}",
-                role.as_str()
-            );
-            assert!(
-                !spawn_runner_for_profile(role, "Guest/guest-vm")
-                    .allowed_by_profile(BrokerProfile::Host),
-                "Host profile must reject Guest execution ref {}",
-                role.as_str()
-            );
-            assert!(
-                spawn_runner_for_profile(role, "Host/host").allowed_by_profile(BrokerProfile::Host),
-                "Host profile behavior changed for Host execution ref {}",
-                role.as_str()
-            );
+            for execution_ref in ["Guest/guest-vm", "Host/host"] {
+                let request = spawn_runner_for_profile(role, execution_ref);
+                assert!(
+                    request.allowed_by_profile(BrokerProfile::Guest),
+                    "Guest profile must admit the envelope carrier for {}, the role fence is daemon-side",
+                    role.as_str()
+                );
+                assert!(
+                    request.allowed_by_profile(BrokerProfile::Host),
+                    "Host profile must admit the envelope carrier for {}, the role fence is daemon-side",
+                    role.as_str()
+                );
+            }
         }
     }
 
     #[test]
     fn guest_profile_requires_a_complete_target_execution_binding() {
-        let mut request = spawn_runner_for_profile(RunnerRole::ActivationNixos, "Guest/guest-vm");
-        request = match request {
-            BrokerRequest::SpawnRunner(mut request) => {
-                request.guest_execution = Some(GuestExecutionBinding {
-                    target_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
-                        .expect("Guest UID"),
-                    boot_identity_digest: [7; 32],
-                    session_generation: 2,
-                    assignment_epoch: 3,
-                    provider_generation: 4,
-                    controller_generation: 5,
-                });
-                BrokerRequest::SpawnRunner(request)
-            }
-            _ => unreachable!("helper always builds SpawnRunner"),
+        // U10: the guest-binding admission rule died with the typed
+        // variant; the envelope carrier passes the profile gate whatever
+        // the binding, and the binding completeness fence moved daemon-
+        // side into the family handler (which parses this payload). The
+        // binding shape keeps round-tripping here so the payload contract
+        // cannot silently drift.
+        let complete = spawn_runner_for_profile(RunnerRole::ActivationNixos, "Guest/guest-vm");
+        let BrokerRequest::EnvelopeInvoke(mut invoke) = complete else {
+            unreachable!("helper always builds EnvelopeInvoke");
         };
-        assert!(request.allowed_by_profile(BrokerProfile::Guest));
-        assert!(!request.allowed_by_profile(BrokerProfile::Host));
+        let mut request: SpawnRunnerRequest =
+            serde_json::from_value(invoke.payload).expect("typed spawn payload");
+        request.guest_execution = Some(GuestExecutionBinding {
+            target_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .expect("Guest UID"),
+            boot_identity_digest: [7; 32],
+            session_generation: 2,
+            assignment_epoch: 3,
+            provider_generation: 4,
+            controller_generation: 5,
+        });
+        invoke.payload = serde_json::to_value(&request).expect("payload serializes");
+        let completed = BrokerRequest::EnvelopeInvoke(invoke);
+        assert!(completed.allowed_by_profile(BrokerProfile::Guest));
+        assert!(completed.allowed_by_profile(BrokerProfile::Host));
 
-        let BrokerRequest::SpawnRunner(mut invalid) = request else {
-            unreachable!("helper always builds SpawnRunner");
+        request.guest_execution.as_mut().unwrap().assignment_epoch = 0;
+        let invalid_payload = serde_json::to_value(&request).expect("payload serializes");
+        let mut invoke = match completed {
+            BrokerRequest::EnvelopeInvoke(invoke) => invoke,
+            _ => unreachable!(),
         };
-        invalid.guest_execution.as_mut().unwrap().assignment_epoch = 0;
-        assert!(!BrokerRequest::SpawnRunner(invalid).allowed_by_profile(BrokerProfile::Guest));
+        invoke.payload = invalid_payload.clone();
+        assert!(BrokerRequest::EnvelopeInvoke(invoke).allowed_by_profile(BrokerProfile::Guest));
+        // The invalid binding still round-trips through the typed payload.
+        let parse_roundtrip: SpawnRunnerRequest =
+            serde_json::from_value(invalid_payload).expect("typed spawn payload");
+        assert_eq!(
+            parse_roundtrip
+                .guest_execution
+                .as_ref()
+                .map(|binding| binding.assignment_epoch),
+            Some(0)
+        );
     }
 
     #[test]
     fn spawn_runner_rejects_each_legacy_authority_field() {
         // argv, env, uid, gid, caps, seccomp_profile,
         // kernel/initrd/cmdline, and api_socket_mode are ALL
-        // bundle-derived. Wire frames containing them must fail-closed
-        // with wire-unknown-field.
+        // bundle-derived. The envelope carrier admits the generic frame,
+        // so the fail-closed rejection now lives in the typed payload
+        // parse: any legacy authority field must make the typed spawn
+        // request unparseable (deny_unknown_fields).
         let base = serde_json::json!({
             "vmId": "corp-vm",
             "roleId": "ch",
@@ -4469,19 +4407,29 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .insert(field.to_string(), legacy_value(field));
-            require_wire_unknown_field_rejection("SpawnRunner", payload, field);
+            let frame = encode_frame(&envelope_invoke_json("SpawnRunner", payload))
+                .expect("envelope encodes");
+            let decoded =
+                decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("envelope decodes");
+            let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+                panic!("expected EnvelopeInvoke");
+            };
+            assert!(
+                serde_json::from_value::<SpawnRunnerRequest>(invoke.payload).is_err(),
+                "legacy authority field {field} must fail the typed payload parse"
+            );
         }
     }
 
     #[test]
     fn spawn_runner_runtime_allocation_unknown_kind_rejected() {
         // The bundle-derived allocation slots are a closed set
-        // (vsock-cid, tap-fd-slot, api-socket-path). A wire frame
-        // claiming a new kind must fail-closed; future kinds require
-        // a wire bump rather than caller-supplied authority.
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "SpawnRunner",
-            "payload": {
+        // (vsock-cid, tap-fd-slot, api-socket-path). An envelope payload
+        // claiming a new kind must fail the typed parse; future kinds
+        // require a wire bump rather than caller-supplied authority.
+        let frame = encode_frame(&envelope_invoke_json(
+            "SpawnRunner",
+            serde_json::json!({
                 "vmId": "corp-vm",
                 "roleId": "ch",
                 "role": "cloud-hypervisor",
@@ -4489,10 +4437,33 @@ mod tests {
                 "runtimeAllocations": [
                     { "kind": "kvm-fd", "opaqueRef": "should-not-cross" }
                 ]
-            }
-        }))
+            }),
+        ))
         .expect("encodes");
-        assert!(decode_frame::<BrokerRequest>("BrokerRequest", &frame).is_err());
+        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert!(
+            serde_json::from_value::<SpawnRunnerRequest>(invoke.payload).is_err(),
+            "unknown allocation kind must fail the typed payload parse"
+        );
+    }
+
+
+    fn envelope_invoke_json(operation: &str, payload: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "EnvelopeInvoke",
+            "payload": {
+                "operation": operation,
+                "zone": "corp-vm",
+                "payload": payload,
+                "chainRootInvocationId": null,
+                "chainIdentities": null,
+                "fdIndexes": [],
+                "fdKinds": []
+            }
+        })
     }
 
     #[test]
@@ -4521,44 +4492,42 @@ mod tests {
 
     #[test]
     fn signal_runner_request_round_trips() {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "SignalRunner",
-            "payload": {
-                "vmId": "corp-vm",
-                "roleId": "ch-runner",
-                "signal": "term"
-            }
-        }))
+        // U10: the typed SignalRunner frame is the signal-pidfd kernel
+        // envelope leg; the kernel answers with a numeric POSIX signal.
+        let frame = encode_frame(&envelope_invoke_json(
+            "signal-pidfd",
+            serde_json::json!({ "signal": 15 }),
+        ))
         .expect("encodes");
         let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
-        match decoded {
-            BrokerRequest::SignalRunner(req) => {
-                assert_eq!(req.vm_id.as_str(), "corp-vm");
-                assert_eq!(req.role_id.as_str(), "ch-runner");
-                assert_eq!(req.signal, RunnerSignal::Term);
-            }
-            other => panic!("expected SignalRunner, got {other:?}"),
-        }
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert_eq!(invoke.operation, "signal-pidfd");
+        assert_eq!(
+            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+            Some(15)
+        );
     }
 
     #[test]
     fn cgroup_kill_request_round_trips() {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "CgroupKill",
-            "payload": {
-                "vmId": "corp-vm",
-                "roleId": "ch-runner"
-            }
-        }))
+        // U10: the typed CgroupKill frame is the kill-cgroup kernel
+        // envelope leg carrying the delegated-slice leaf path.
+        let frame = encode_frame(&envelope_invoke_json(
+            "kill-cgroup",
+            serde_json::json!({ "cgroupPath": "/sys/fs/cgroup/d2b.slice/vm-a.runner" }),
+        ))
         .expect("encodes");
         let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
-        match decoded {
-            BrokerRequest::CgroupKill(req) => {
-                assert_eq!(req.vm_id.as_str(), "corp-vm");
-                assert_eq!(req.role_id.as_str(), "ch-runner");
-            }
-            other => panic!("expected CgroupKill, got {other:?}"),
-        }
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert_eq!(invoke.operation, "kill-cgroup");
+        assert_eq!(
+            invoke.payload.get("cgroupPath").and_then(serde_json::Value::as_str),
+            Some("/sys/fs/cgroup/d2b.slice/vm-a.runner")
+        );
     }
 
     #[test]
@@ -4588,70 +4557,96 @@ mod tests {
 
     #[test]
     fn signal_runner_response_round_trips() {
-        let response = BrokerResponse::SignalRunner(SignalRunnerResponse {
-            signaled: false,
-            vm_id: VmId::new("corp-vm"),
-            role_id: RoleId::new("ch-runner"),
+        // U10: the typed response is the envelope result now.
+        let response = BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+            operation: "signal-pidfd".to_owned(),
+            invocation_id: "invocation-1".to_owned(),
+            result: Some(serde_json::to_value(SignalRunnerResponse {
+                signaled: false,
+                vm_id: VmId::new("corp-vm"),
+                role_id: RoleId::new("ch-runner"),
+            })
+            .expect("response serializes")),
+            refusal: None,
+            detail: None,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
         });
         let frame = encode_frame(&response).expect("encodes");
         let decoded = decode_frame::<BrokerResponse>("BrokerResponse", &frame).expect("decodes");
-        match decoded {
-            BrokerResponse::SignalRunner(payload) => {
-                assert!(!payload.signaled);
-                assert_eq!(payload.vm_id.as_str(), "corp-vm");
-                assert_eq!(payload.role_id.as_str(), "ch-runner");
-            }
-            other => panic!("expected BrokerResponse::SignalRunner, got {other:?}"),
-        }
+        let BrokerResponse::EnvelopeInvoke(reply) = decoded else {
+            panic!("expected BrokerResponse::EnvelopeInvoke");
+        };
+        assert_eq!(reply.operation, "signal-pidfd");
+        let payload: SignalRunnerResponse =
+            serde_json::from_value(reply.result.expect("result present"))
+                .expect("typed signal response");
+        assert!(!payload.signaled);
+        assert_eq!(payload.vm_id.as_str(), "corp-vm");
+        assert_eq!(payload.role_id.as_str(), "ch-runner");
     }
 
     #[test]
     fn spawn_runner_response_round_trips() {
         // The pidfd is delivered out-of-band over SCM_RIGHTS; the
-        // JSON body carries (pid, start_time_ticks, pidfd_index) so
-        // the daemon's pidfd table can validate / reconcile the handle.
-        let response = BrokerResponse::SpawnRunner(Box::new(SpawnRunnerResponse {
-            vm_id: VmId::new("corp-vm"),
-            role_id: RoleId::new("ch"),
-            role: RunnerRole::CloudHypervisor,
-            resource_ref: None,
-            resource_uid: None,
-            zone_uid: None,
-            owner_ref: None,
-            runtime_scope: None,
-            pid: 4242,
-            start_time_ticks: 987_654_321,
-            pidfd_index: 0,
-            controller_bootstrap_fd_index: None,
-            console_fd_index: None,
-            execution_ref: None,
-            execution_domain: None,
-            user_ref: None,
-            guest_execution: None,
-            provider_identity: None,
-            template_identity: None,
-            generation: None,
-            bundle_content_identity: None,
-        }));
+        // envelope result carries (pid, start_time_ticks, pidfd_index)
+        // and the fd declarations, so the daemon's pidfd table can
+        // validate / reconcile the handle.
+        let response = BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+            operation: "SpawnRunner".to_owned(),
+            invocation_id: "invocation-1".to_owned(),
+            result: Some(serde_json::to_value(SpawnRunnerResponse {
+                vm_id: VmId::new("corp-vm"),
+                role_id: RoleId::new("ch"),
+                role: RunnerRole::CloudHypervisor,
+                resource_ref: None,
+                resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                runtime_scope: None,
+                pid: 4242,
+                start_time_ticks: 987_654_321,
+                pidfd_index: 0,
+                controller_bootstrap_fd_index: None,
+                console_fd_index: None,
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
+                guest_execution: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                bundle_content_identity: None,
+            })
+            .expect("response serializes")),
+            refusal: None,
+            detail: None,
+            fd_indexes: vec![0],
+            fd_kinds: vec![FdKind::Any],
+        });
         let frame = encode_frame(&response).expect("encodes");
         let decoded = decode_frame::<BrokerResponse>("BrokerResponse", &frame).expect("decodes");
-        match decoded {
-            BrokerResponse::SpawnRunner(payload) => {
-                assert_eq!(payload.vm_id.as_str(), "corp-vm");
-                assert_eq!(payload.role, RunnerRole::CloudHypervisor);
-                assert_eq!(payload.pid, 4242);
-                assert_eq!(payload.start_time_ticks, 987_654_321);
-                assert_eq!(payload.pidfd_index, 0);
-            }
-            other => panic!("expected BrokerResponse::SpawnRunner, got {other:?}"),
-        }
+        let BrokerResponse::EnvelopeInvoke(reply) = decoded else {
+            panic!("expected BrokerResponse::EnvelopeInvoke");
+        };
+        assert_eq!(reply.operation, "SpawnRunner");
+        assert_eq!(reply.fd_indexes, vec![0]);
+        assert_eq!(reply.fd_kinds, vec![FdKind::Any]);
+        let payload: SpawnRunnerResponse =
+            serde_json::from_value(reply.result.expect("result present"))
+                .expect("typed spawn response");
+        assert_eq!(payload.vm_id.as_str(), "corp-vm");
+        assert_eq!(payload.role, RunnerRole::CloudHypervisor);
+        assert_eq!(payload.pid, 4242);
+        assert_eq!(payload.start_time_ticks, 987_654_321);
+        assert_eq!(payload.pidfd_index, 0);
     }
 
     #[test]
     fn envelope_invoke_round_trips_root_and_nested() {
         let root = BrokerRequestEnvelope {
             request: BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
-                operation: "PollChildReaped".to_owned(),
+                operation: "signal-pidfd".to_owned(),
                 zone: "zone-a".to_owned(),
                 payload: serde_json::json!({}),
                 chain_root_invocation_id: None,
@@ -4682,9 +4677,9 @@ mod tests {
             decode_frame("BrokerRequest", &frame).expect("decodes");
         assert_eq!(parsed, nested);
         let reply = BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
-            operation: "PollChildReaped".to_owned(),
+            operation: "signal-pidfd".to_owned(),
             invocation_id: "invocation-1".to_owned(),
-            result: Some(serde_json::json!({ "notifications": [] })),
+            result: Some(serde_json::json!({ "signaled": true })),
             refusal: None,
             detail: None,
             fd_indexes: vec![],
@@ -4694,7 +4689,7 @@ mod tests {
         let parsed: BrokerResponse = decode_frame("BrokerResponse", &frame).expect("decodes");
         assert_eq!(parsed, reply);
         let refused = BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
-            operation: "PollChildReaped".to_owned(),
+            operation: "signal-pidfd".to_owned(),
             invocation_id: "invocation-1".to_owned(),
             result: None,
             refusal: Some("unknown-operation".to_owned()),
@@ -4710,6 +4705,7 @@ mod tests {
     #[test]
     fn forwarded_fd_declarations_round_trip() {
         let request = ForwardOperationRequest {
+            chain_identities: None,
             operation: "ProbeOperation".to_owned(),
             zone: "zone-a".to_owned(),
             invocation_id: "invocation-1".to_owned(),
@@ -4819,6 +4815,7 @@ mod tests {
     fn a_context_round_trips_inside_the_forward_request() {
         let context = minted_context();
         let request = ForwardOperationRequest {
+            chain_identities: None,
             operation: "ProbeOperation".to_owned(),
             zone: "zone-a".to_owned(),
             invocation_id: "invocation-1".to_owned(),

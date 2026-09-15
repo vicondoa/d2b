@@ -18,7 +18,7 @@ no resource family.
 - `transport-excluded` - the name is a transport-layer concern the
 operation envelope does not carry.
 
-Counts: 66 family-owned, 17 broker-generic, 0 transport-excluded (70 rows carry a wire discriminant, 13 rows do not).
+Counts: 66 family-owned, 17 broker-generic, 0 transport-excluded (60 rows carry a wire discriminant, 23 rows do not).
 
 | Operation | Owner | Family | Declaring provider | Service | Method | Profiles | Disposition | Target | Justification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |

@@ -226,6 +226,11 @@ fn parse_text(text: &str) -> Result<Catalog, Box<dyn std::error::Error>> {
     }
     let mut operations = BTreeSet::new();
     let mut wire_variants = BTreeSet::new();
+    // The toolkit envelope resolves operation names case-insensitively
+    // (provider-side ResourceRef names are lowercase-only while committed
+    // row names are PascalCase), so two committed rows differing only in
+    // case would silently alias; reject them alongside exact duplicates.
+    let mut casefolded_operations = BTreeSet::new();
     // One row per declared service method: two rows resolving to the same
     // service+method could not be told apart by the declaring driver.
     let mut service_methods = BTreeSet::new();
@@ -233,6 +238,12 @@ fn parse_text(text: &str) -> Result<Catalog, Box<dyn std::error::Error>> {
         if !operations.insert(row.operation.as_str()) {
             return Err(render_error(format!(
                 "{POLICY_PATH}: duplicate operation {}",
+                row.operation
+            )));
+        }
+        if !casefolded_operations.insert(row.operation.to_ascii_lowercase()) {
+            return Err(render_error(format!(
+                "{POLICY_PATH}: operation {} collides case-insensitively with a committed row",
                 row.operation
             )));
         }

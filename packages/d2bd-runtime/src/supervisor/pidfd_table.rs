@@ -65,8 +65,8 @@ pub enum WaitTermination {
 
 /// Shared log of broker-reaped child events.
 ///
-/// Populated by d2bd's broker-interaction layer when it calls
-/// `BrokerRequest::PollChildReaped`. Consulted by
+/// Populated by d2bd's broker-interaction layer when it probes the
+/// envelope `poll-child-reaped` kernel per tracked runner. Consulted by
 /// [`PidfdTable::wait_terminated`] on `ECHILD` so it can return
 /// [`WaitTermination::TerminatedByBroker`] immediately instead of
 /// spinning on `/proc` polling.

@@ -344,10 +344,7 @@ wire_variants! {
         BrokerRequest::QemuMediaQuit(..) => "QemuMediaQuit",
         BrokerRequest::QemuMediaAttach(..) => "QemuMediaAttach",
         BrokerRequest::QemuMediaDetach(..) => "QemuMediaDetach",
-        BrokerRequest::OpenPidfd(..) => "OpenPidfd",
         BrokerRequest::ConsumeLifecycleLease(..) => "ConsumeLifecycleLease",
-        BrokerRequest::OpenPeerPidfdFromAcceptedSocket(..) => "OpenPeerPidfdFromAcceptedSocket",
-        BrokerRequest::ObserveRunner(..) => "ObserveRunner",
         BrokerRequest::PipeWireAudio(..) => "PipeWireAudio",
         BrokerRequest::StartSystemdUnit(..) => "StartSystemdUnit",
         BrokerRequest::CheckSystemdUserManager(..) => "CheckSystemdUserManager",
@@ -355,19 +352,12 @@ wire_variants! {
         BrokerRequest::OpenSystemdUnitPidfd(..) => "OpenSystemdUnitPidfd",
         BrokerRequest::StopSystemdUnit(..) => "StopSystemdUnit",
         BrokerRequest::OpenVhostNet(..) => "OpenVhostNet",
-        BrokerRequest::PollChildReaped => "PollChildReaped",
-        BrokerRequest::PrepareRuntimeDir(..) => "PrepareRuntimeDir",
-        BrokerRequest::PrepareStateDir(..) => "PrepareStateDir",
         BrokerRequest::ReconcileStorageScope(..) => "ReconcileStorageScope",
         BrokerRequest::ValidateLockSpec(..) => "ValidateLockSpec",
         BrokerRequest::StoreSync(..) => "StoreSync",
         BrokerRequest::ReadSecretById(..) => "ReadSecretById",
         BrokerRequest::RotateSecretById(..) => "RotateSecretById",
         BrokerRequest::SetBridgePortFlags(..) => "SetBridgePortFlags",
-        BrokerRequest::CgroupKill(..) => "CgroupKill",
-        BrokerRequest::SignalRunner(..) => "SignalRunner",
-        BrokerRequest::DeregisterRunnerPidfd(..) => "DeregisterRunnerPidfd",
-        BrokerRequest::SpawnRunner(..) => "SpawnRunner",
         BrokerRequest::UpdateHostsFile(..) => "UpdateHostsFile",
         BrokerRequest::UsbipBind(..) => "UsbipBind",
         BrokerRequest::UsbipBindFirewallRule(..) => "UsbipBindFirewallRule",
@@ -902,9 +892,17 @@ mod tests {
 
     #[test]
     fn wire_row_resolves_every_variant_it_names() {
+        // U10 retired the process-family wire variants (their rows keep the
+        // names as envelope-request operations without a wire variant), so
+        // the resolver pair is pinned on a current wire operation.
         let (request, name) = (
-            d2b_contracts_broker::broker_wire::BrokerRequest::PollChildReaped,
-            "PollChildReaped",
+            d2b_contracts_broker::broker_wire::BrokerRequest::Hello(
+                d2b_contracts_broker::broker_wire::HelloRequest {
+                    client_version: "0.0.0-test".to_owned(),
+                    supported_features: Vec::new(),
+                },
+            ),
+            "Hello",
         );
         assert_eq!(wire_variant_name(&request), name);
         assert_eq!(wire_row(&request).map(|row| row.operation), Some(name));

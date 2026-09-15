@@ -382,16 +382,36 @@ impl ProviderOperations {
         self.envelope.declares(operation)
     }
 
-    /// Run one forwarded invocation under the identifier the broker minted.
-    pub(crate) async fn invoke(
+    /// Run one forwarded invocation under the evidence chain it was
+    /// dispatched on and the U10 family seam (the sanctioned seam, U10).
+    ///
+    /// The chain identities (root first) are the ones the broker minted
+    /// for the root call; the family handler presents them - with its own
+    /// identity appended - when it invokes a broker-generic kernel as the
+    /// nested core of its operation, so the kernel call is authorized
+    /// against the chain's initiating principal and the in-broker leg
+    /// records the correlation leg (KTD6). The kernel caller carries the
+    /// broker socket, the caller role, the Zone's trusted bundle, and the
+    /// daemon-side runner lookup.
+    pub(crate) async fn invoke_under_chain(
         &self,
         operation: &str,
         invocation_id: &str,
         payload: CanonicalJsonObject,
         fds: &[RawFd],
+        chain_identities: &[String],
+        kernel: Option<&d2b_resource_types::KernelCaller>,
     ) -> Result<OperationResult, OperationFailure> {
         self.envelope
-            .invoke_named_with_fds(operation, invocation_id, &self.caller, payload, fds)
+            .invoke_named_with_fds_under_chain(
+                operation,
+                invocation_id,
+                &self.caller,
+                payload,
+                fds,
+                chain_identities,
+                kernel,
+            )
             .await
     }
 }

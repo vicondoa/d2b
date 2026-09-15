@@ -139,7 +139,18 @@ fn host_and_guest_instances_keep_separate_runtime_bindings() {
         panic!("guest should return Hello");
     };
     assert!(host_hello.capabilities.contains(&"Hello".to_owned()));
-    assert!(guest_hello.capabilities.contains(&"SpawnRunner".to_owned()));
+    // U10 retired the process-family wire variants: the guest advertises
+    // the remaining local-process effects (e.g. StartSystemdUnit) and never
+    // a retired runner op.
+    assert!(guest_hello
+        .capabilities
+        .contains(&"StartSystemdUnit".to_owned()));
+    for retired in ["SpawnRunner", "OpenPidfd", "SignalRunner"] {
+        assert!(
+            !guest_hello.capabilities.contains(&retired.to_owned()),
+            "guest must not advertise the retired process-family operation {retired}"
+        );
+    }
     assert!(
         !guest_hello
             .capabilities
