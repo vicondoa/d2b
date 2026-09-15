@@ -176,17 +176,32 @@ impl ForwardRendezvous {
     ///
     /// A Zone whose plane re-opens republishes its new provider set; the last
     /// published set is the one that answers, and the republish bumps the
-    /// provider-set revision a minted context must match.
-    pub(crate) fn publish(&self, zone: &str, providers: Arc<ProviderRuntime>) {
-        let mut zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let entry = zones.entry(zone.to_owned()).or_insert(ZoneBinding {
-            revision: 0,
-            controller_generation: 0,
-            guest_generation: 0,
-            providers: Arc::clone(&providers),
-        });
-        entry.revision = entry.revision.saturating_add(1);
-        entry.providers = providers;
+    /// provider-set revision a minted context must match. Returns the new
+    /// revision, so the daemon publishes the SAME revision to the broker over
+    /// the origination leg: a context the broker mints against it then
+    /// matches, and a republish that outran the broker's cache refuses the
+    /// pre-republish contexts by the same comparison.
+    pub(crate) fn publish(&self, zone: &str, providers: Arc<ProviderRuntime>) -> u64 {
+        let revision = {
+            let mut zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let entry = zones.entry(zone.to_owned()).or_insert(ZoneBinding {
+                revision: 0,
+                controller_generation: 0,
+                guest_generation: 0,
+                providers: Arc::clone(&providers),
+            });
+            entry.revision = entry.revision.saturating_add(1);
+            entry.providers = Arc::clone(&providers);
+            entry.revision
+        };
+        // Outside the binding lock: the daemon publishes the SAME revision
+        // to the broker over the origination leg, and the acknowledgement
+        // path re-enters these bindings through the generation/epoch
+        // setters. A set that carries no publication binding (tests,
+        // context-free deployments) publishes nothing, and the rendezvous
+        // stays fail-closed on its zero epoch.
+        providers.publish_trusted_context(self, revision);
+        revision
     }
 
     /// Publish the daemon-owned controller and guest generations one Zone
@@ -913,7 +928,8 @@ mod tests {
         DriverDescriptor, OperationCtx, OperationDef, OperationFailure, OperationHandler,
         OperationResult, ValidatedPayload,
     };
-    use d2bd_runtime::unix_transport::{connect_seqpacket, read_frame};
+    use d2bd_runtime::target_runtime::DaemonMode;
+    use d2bd_runtime::unix_transport::{connect_seqpacket, read_frame, write_frame};
     use tokio::sync::Semaphore;
 
     use super::*;
@@ -1448,7 +1464,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// answers it:the result carries the family's own declaration, the Zone,
     /// and the invocation identifier the caller forwarded. A carrier that
     /// never reached the handler could not produce these values.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_forwarded_call_crosses_the_socket_and_the_declared_handler_answers() {
         let serving = ServingRendezvous::start().await;
         let response = forward(
@@ -1480,7 +1496,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
     /// An operation no started provider declares is refused by name, and so is
     /// a call naming a Zone this process has no providers for.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_undeclared_operation_is_refused_by_name() {
         let serving = ServingRendezvous::start().await;
         for (operation, zone) in [
@@ -1506,7 +1522,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// A refusal the handler itself decided crosses the socket under its own
     /// code, so the peer's record and the passed-through detail keep the
     /// family's vocabulary rather than a carrier-level one.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_handler_refusal_crosses_back_under_its_own_code() {
         let serving = ServingRendezvous::start().await;
         let response = forward(
@@ -1527,7 +1543,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// they do not queue behind one another, and calls in flight do not add a
     /// thread each - before this the serving path owned one thread per call,
     /// so four stalled calls added four.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_calls_are_held_on_the_runtime_without_a_thread_each() {
         const CALLS: usize = 4;
         let serving = ServingRendezvous::start().await;
@@ -1578,7 +1594,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// deadline - by name, while the caller is still listening - and the slot
     /// it held is free again, so the call that follows is served rather than
     /// refused at the cap.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_stalled_handler_is_refused_by_name_and_frees_its_slot() {
         const HANDLER_DEADLINE: Duration = Duration::from_millis(200);
         let serving = ServingRendezvous::start_with(posture(1, HANDLER_DEADLINE)).await;
@@ -1630,7 +1646,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// A call the rendezvous is at its cap for is answered with the daemon's
     /// own capacity code - a named refusal, not a silent close - and the
     /// calls already in flight are undisturbed.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_call_over_the_in_flight_cap_is_refused_by_name() {
         let serving = ServingRendezvous::start_with(posture(1, Duration::from_secs(10))).await;
         let held = tokio::spawn(forward_async(
@@ -1672,7 +1688,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// only way to exercise the refusal from inside one process. The root arm
     /// cannot be moved - root is the privileged broker and is always
     /// accepted - so a run as root has nothing to refuse here.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_peer_that_is_not_the_broker_is_refused_by_name() {
         if nix::unistd::geteuid().is_root() {
             return;
@@ -1698,7 +1714,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_fd_carrying_request_crosses_the_socket_and_the_declared_handler_reads_it_back() {
         use nix::unistd::{pipe, write};
         let serving = ServingRendezvous::start().await;
@@ -1722,7 +1738,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_request_whose_fd_count_mismatches_is_refused_with_the_fd_leg_code() {
         use nix::unistd::{pipe, write};
         let serving = ServingRendezvous::start().await;
@@ -1743,7 +1759,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_request_whose_fd_kind_mismatches_is_refused_with_the_fd_leg_code() {
         use nix::unistd::pipe;
         let serving = ServingRendezvous::start().await;
@@ -1763,7 +1779,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_request_whose_fd_declarations_exceed_the_frame_ceiling_is_refused_with_the_fd_leg_code() {
         let serving = ServingRendezvous::start().await;
         let response = forward_raw_declared(
@@ -1869,7 +1885,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// A freshly minted context passes the field-wise freshness check: the
     /// epoch is the daemon's observed one, the Zone binds to the call, and
     /// the revision and generations match the daemon's current values.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_fresh_context_passes_the_rendezvous() {
         let serving = ServingRendezvous::start_attesting().await;
         let response = forward_with_context(
@@ -1889,7 +1905,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// verified: the attestation's epoch half is uncheckable, so every
     /// attested call refuses fail-closed - the receiving side of the rule
     /// that the broker refuses to mint until it holds a value.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn contexts_refuse_until_the_daemon_observes_a_broker_epoch() {
         let serving = ServingRendezvous::start().await;
         let response = forward_with_context(
@@ -1910,7 +1926,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
     /// A context minted against an older provider-set revision refuses: the
     /// daemon republished its provider set since the broker minted.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_context_minted_against_an_older_provider_set_revision_is_refused() {
         let serving = ServingRendezvous::start_attesting().await;
         let response = forward_with_context(
@@ -1931,7 +1947,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
     /// A context minted against a lower guest generation refuses: the
     /// daemon's current guest generation moved past the minted one.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_context_minted_against_a_lower_guest_generation_is_refused() {
         let serving = ServingRendezvous::start_attesting().await;
         let response = forward_with_context(
@@ -1952,7 +1968,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
     /// A context whose Zone is not the call's Zone is not bound to the
     /// connection: the attestation names another Zone, so the call refuses.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_context_minted_against_another_zone_is_refused() {
         let serving = ServingRendezvous::start_attesting().await;
         let response = forward_with_context(
@@ -1974,7 +1990,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// A mutated context refuses even when every field it touched moved the
     /// "right" way: the broker is the sole minter, so any difference from
     /// the daemon's current values is tampering, never a fresher truth.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_mutated_context_is_refused() {
         let serving = ServingRendezvous::start_attesting().await;
         let mut mutated = fresh_context();
@@ -2125,5 +2141,341 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
                 "a budget of {budget} ms is not one the broker mints"
             );
         }
+    }
+
+    // —————————————————————————————————————————————————————————————————
+    // The origination leg: the daemon publishes its current values to the
+    // broker, and the rendezvous advances exactly on the acknowledgement.
+    // —————————————————————————————————————————————————————————————————
+
+    use d2b_contracts_broker::broker_wire::{
+        BrokerCallerRole, BrokerErrorResponse, BrokerRequest, BrokerRequestEnvelope,
+        BrokerResponse, PublishTrustedContextResponse, PublishTrustedContextValues,
+    };
+    use crate::provider_lifecycle::TrustedContextPublication;
+
+    /// The broker's half of one origination-leg publication: bind the broker
+    /// socket, read the daemon's request envelope, assert the published
+    /// values, and reply with `reply`. The envelope the daemon actually sent
+    /// is delivered on `seen`.
+    fn serve_one_publication(
+        socket_path: PathBuf,
+        expected: PublishTrustedContextValues,
+        reply: BrokerResponse,
+        seen: std::sync::mpsc::Sender<BrokerRequestEnvelope>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let listener = bind_public_socket(&socket_path, &test_identity())
+                .expect("bind the test broker socket");
+            listener
+                .set_nonblocking(false)
+                .expect("the test broker accepts blockingly");
+            let (peer, _) = listener.accept().expect("the daemon dials the broker");
+            let frame = read_frame(&peer).expect("read the publication frame");
+            let envelope: BrokerRequestEnvelope =
+                serde_json::from_slice(&frame).expect("the publication is a broker envelope");
+            match &envelope.request {
+                BrokerRequest::PublishTrustedContext(values) => {
+                    assert_eq!(
+                        &expected, values,
+                        "the daemon publishes its current provider-set values"
+                    );
+                }
+                other => {
+                    panic!(
+                        "expected a PublishTrustedContext request, got {}",
+                        other.op_name()
+                    )
+                }
+            }
+            let acknowledged = canonical_json_bytes(&reply)
+                .expect("the acknowledgement encodes as canonical JSON");
+            write_frame(&peer, &acknowledged).expect("write the acknowledgement frame");
+            let _ = seen.send(envelope);
+        })
+    }
+
+    /// The daemon publishes the Zone's current values over the origination
+    /// leg when its started set carries a publication binding, and the
+    /// rendezvous advances exactly on the acknowledged broker epoch: a
+    /// context minted against the acked epoch, revision, and generations is
+    /// admitted, and any pre-ack state is stale.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_daemon_publishes_over_the_origination_leg_and_advances_on_the_ack() {
+        let zone = ZoneId::parse("test").expect("the test zone label is canonical");
+        let scratch = tempfile::tempdir().expect("test scratch");
+        let broker_socket = scratch.path().join("broker.sock");
+        let rendezvous_socket = scratch.path().join("d2bd-forward.sock");
+        let expected = PublishTrustedContextValues {
+            zone: zone.as_str().to_owned(),
+            provider_set_revision: 1,
+            controller_generation: 4,
+            guest_generation: 1,
+        };
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+        let broker = serve_one_publication(
+            broker_socket.clone(),
+            expected.clone(),
+            BrokerResponse::PublishTrustedContext(PublishTrustedContextResponse {
+                broker_epoch: 7,
+            }),
+            seen_tx,
+        );
+
+        let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
+            zone: zone.clone(),
+            effects: Arc::new(RefusingEffects),
+            zone_uid: None,
+            policy_revision: None,
+            provider_assignment_generation: None,
+            controller_generation: ControllerGeneration::new(1)
+                .expect("the test generation is canonical"),
+            guest_execution: None,
+            mode: ExecutionMode::Host,
+        });
+        let providers = Arc::new(
+            ProviderSet::new(zone.clone(), scratch.path().join("state"))
+                .with_trusted_context_publication(Some(
+                    TrustedContextPublication::production(
+                        DaemonMode::Host,
+                        broker_socket,
+                        nix::unistd::getuid().as_raw(),
+                        4,
+                    ),
+                ))
+                .with(
+                    family_declaration("process"),
+                    vec![
+                        process,
+                        DriverDescriptor {
+                            operations: &STALL_OPERATIONS[..],
+                            ..ephemeral
+                        },
+                    ],
+                )
+                .start()
+                .await
+                .expect("the process family starts through the base"),
+        );
+        let rendezvous = Arc::new(ForwardRendezvous::new());
+        let revision = rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+        assert_eq!(revision, 1, "the first publication is revision 1");
+        let envelope =
+            seen_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("one publication reaches the broker");
+        assert_eq!(
+            envelope.caller_role,
+            BrokerCallerRole::AdminUid {
+                uid: nix::unistd::getuid().as_raw(),
+            },
+            "the publication presents the daemon's caller role"
+        );
+        broker.join().expect("the test broker completes");
+
+        let listener = bind(&rendezvous_socket, &test_identity()).expect("bind the rendezvous");
+        spawn_server(rendezvous.clone(), listener, tokio::runtime::Handle::current())
+            .expect("start the rendezvous server");
+
+        // The acked epoch, revision, and generations pass field-wise.
+        let acknowledged = forward_with_context(
+            &rendezvous_socket,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            ForwardContext {
+                broker_epoch: 7,
+                zone: "test".to_owned(),
+                provider_set_revision: 1,
+                controller_generation: 4,
+                guest_generation: 1,
+                initiating_identity: "daemon".to_owned(),
+                deadline_ms: DEFAULT_CONTEXT_DEADLINE_MS,
+            },
+        );
+        assert!(
+            matches!(acknowledged.outcome, ForwardOperationOutcome::Result { .. }),
+            "a context minted against the acknowledged state is admitted, got {acknowledged:?}"
+        );
+
+        // Pre-ack epochs, older revisions, and older generations refuse.
+        for stale in [
+            context_for(5, "test", 1, 1),
+            context_for(7, "test", 2, 1),
+            context_for(7, "other", 1, 1),
+        ] {
+            let response = forward_with_context(
+                &rendezvous_socket,
+                "inspect-process-family",
+                "test",
+                serde_json::json!({ "resourceType": "Process" }),
+                stale,
+            );
+            assert_eq!(
+                response.outcome,
+                ForwardOperationOutcome::Refused {
+                    code: STALE_CONTEXT.to_owned(),
+                },
+                "a context outside the acknowledged state is stale"
+            );
+        }
+    }
+
+    /// A refused publication advances nothing: a broker that refuses the
+    /// publication leaves the rendezvous fail-closed on its zero epoch, so
+    /// no context validates - the daemon never trusts an epoch it was not
+    /// acknowledged.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refused_publication_leaves_the_rendezvous_fail_closed() {
+        let zone = ZoneId::parse("test").expect("the test zone label is canonical");
+        let scratch = tempfile::tempdir().expect("test scratch");
+        let broker_socket = scratch.path().join("broker.sock");
+        let rendezvous_socket = scratch.path().join("d2bd-forward.sock");
+        let expected = PublishTrustedContextValues {
+            zone: zone.as_str().to_owned(),
+            provider_set_revision: 1,
+            controller_generation: 1,
+            guest_generation: 1,
+        };
+        let (seen_tx, _) = std::sync::mpsc::channel();
+        let broker = serve_one_publication(
+            broker_socket.clone(),
+            expected.clone(),
+            BrokerResponse::Error(BrokerErrorResponse {
+                kind: "refused".to_owned(),
+                operation: "PublishTrustedContext".to_owned(),
+                target_wave: None,
+                message: "stale publication".to_owned(),
+                action: "republish".to_owned(),
+            }),
+            seen_tx,
+        );
+
+        let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
+            zone: zone.clone(),
+            effects: Arc::new(RefusingEffects),
+            zone_uid: None,
+            policy_revision: None,
+            provider_assignment_generation: None,
+            controller_generation: ControllerGeneration::new(1)
+                .expect("the test generation is canonical"),
+            guest_execution: None,
+            mode: ExecutionMode::Host,
+        });
+        let providers = Arc::new(
+            ProviderSet::new(zone.clone(), scratch.path().join("state"))
+                .with_trusted_context_publication(Some(
+                    TrustedContextPublication::production(
+                        DaemonMode::Host,
+                        broker_socket,
+                        nix::unistd::getuid().as_raw(),
+                        1,
+                    ),
+                ))
+                .with(
+                    family_declaration("process"),
+                    vec![
+                        process,
+                        DriverDescriptor {
+                            operations: &STALL_OPERATIONS[..],
+                            ..ephemeral
+                        },
+                    ],
+                )
+                .start()
+                .await
+                .expect("the process family starts through the base"),
+        );
+        let rendezvous = Arc::new(ForwardRendezvous::new());
+        rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+        broker.join().expect("the test broker completes");
+
+        let listener = bind(&rendezvous_socket, &test_identity()).expect("bind the rendezvous");
+        spawn_server(rendezvous.clone(), listener, tokio::runtime::Handle::current())
+            .expect("start the rendezvous server");
+
+        for context in [context_for(7, "test", 1, 1), context_for(1, "test", 1, 1)] {
+            let response = forward_with_context(
+                &rendezvous_socket,
+                "inspect-process-family",
+                "test",
+                serde_json::json!({ "resourceType": "Process" }),
+                context,
+            );
+            assert_eq!(
+                response.outcome,
+                ForwardOperationOutcome::Refused {
+                    code: STALE_CONTEXT.to_owned(),
+                },
+                "a refused publication acknowledges no epoch, so every context is stale"
+            );
+        }
+    }
+
+    /// A broker that never answers the publication leaves the rendezvous
+    /// fail-closed too: the transport failure is the same refusal boundary,
+    /// observed before any epoch could be acknowledged.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unreachable_broker_leaves_the_rendezvous_fail_closed() {
+        let zone = ZoneId::parse("test").expect("the test zone label is canonical");
+        let scratch = tempfile::tempdir().expect("test scratch");
+        let missing_broker = scratch.path().join("broker.sock");
+        let rendezvous_socket = scratch.path().join("d2bd-forward.sock");
+        let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
+            zone: zone.clone(),
+            effects: Arc::new(RefusingEffects),
+            zone_uid: None,
+            policy_revision: None,
+            provider_assignment_generation: None,
+            controller_generation: ControllerGeneration::new(1)
+                .expect("the test generation is canonical"),
+            guest_execution: None,
+            mode: ExecutionMode::Host,
+        });
+        let providers = Arc::new(
+            ProviderSet::new(zone.clone(), scratch.path().join("state"))
+                .with_trusted_context_publication(Some(
+                    TrustedContextPublication::production(
+                        DaemonMode::Host,
+                        missing_broker,
+                        nix::unistd::getuid().as_raw(),
+                        1,
+                    ),
+                ))
+                .with(
+                    family_declaration("process"),
+                    vec![
+                        process,
+                        DriverDescriptor {
+                            operations: &STALL_OPERATIONS[..],
+                            ..ephemeral
+                        },
+                    ],
+                )
+                .start()
+                .await
+                .expect("the process family starts through the base"),
+        );
+        let rendezvous = Arc::new(ForwardRendezvous::new());
+        rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+
+        let listener = bind(&rendezvous_socket, &test_identity()).expect("bind the rendezvous");
+        spawn_server(rendezvous.clone(), listener, tokio::runtime::Handle::current())
+            .expect("start the rendezvous server");
+
+        let response = forward_with_context(
+            &rendezvous_socket,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            context_for(7, "test", 1, 1),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "a broker that never answered acknowledges no epoch"
+        );
     }
     }

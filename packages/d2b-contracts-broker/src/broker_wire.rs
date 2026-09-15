@@ -79,6 +79,17 @@ pub enum BrokerRequest {
     /// the bootstrap `Hello` shape so the connection layer doesn't need
     /// a side-channel.
     Hello(HelloRequest),
+    /// One daemon publication of the trusted-context values it currently
+    /// holds for one Zone.
+    ///
+    /// The daemon owns the provider-set revision and the controller/guest
+    /// generations, so it publishes them over the same origination leg its
+    /// other broker operations use; the broker caches them as durable,
+    /// monotonically increasing state and refuses to mint a context block
+    /// until it holds a value for the Zone a call names. The reply carries
+    /// the broker-epoch nonce every context minted from that point on
+    /// carries.
+    PublishTrustedContext(PublishTrustedContextValues),
     InjectSecretById(SecretByIdRequest),
     LaunchMinijailChild(LaunchMinijailChildRequest),
     ModprobeIfAllowed(ModprobeIfAllowedRequest),
@@ -575,6 +586,7 @@ impl BrokerRequest {
             Self::DelegateCgroupV2(_) => "DelegateCgroupV2",
             Self::ExportBrokerAudit(_) => "ExportBrokerAudit",
             Self::Hello(_) => "Hello",
+            Self::PublishTrustedContext(_) => "PublishTrustedContext",
             Self::InjectSecretById(_) => "InjectSecretById",
             Self::LaunchMinijailChild(_) => "LaunchMinijailChild",
             Self::ModprobeIfAllowed(_) => "ModprobeIfAllowed",
@@ -648,6 +660,7 @@ impl BrokerRequest {
     pub fn opaque_target_id(&self) -> &'static str {
         match self {
             Self::Hello(_) => "daemon-handshake",
+            Self::PublishTrustedContext(_) => "trusted-context",
             Self::ExportBrokerAudit(_) => "audit-log",
             Self::PollChildReaped => "pidfd-reap-buffer",
             Self::OpenPeerPidfdFromAcceptedSocket(_) => "accepted-socket",
@@ -1019,7 +1032,10 @@ impl BrokerRequest {
                     request.operation
                 ),
             ),
-            Self::ExportBrokerAudit(_) | Self::Hello(_) | Self::PollChildReaped => return None,
+            Self::ExportBrokerAudit(_)
+            | Self::Hello(_)
+            | Self::PublishTrustedContext(_)
+            | Self::PollChildReaped => return None,
         };
         Some((
             d2b_contracts_resource::v3::canonical_digest("d2b:broker-zone:v2", scope.as_bytes()),
@@ -1039,6 +1055,7 @@ impl BrokerRequest {
             Self::OpenPeerPidfdFromAcceptedSocket(_)
                 | Self::ExportBrokerAudit(_)
                 | Self::Hello(_)
+                | Self::PublishTrustedContext(_)
                 | Self::PollChildReaped
         )
     }
@@ -1246,6 +1263,11 @@ pub enum BrokerResponse {
     /// capability-negotiate and the broker can audit the connection
     /// without a separate side-channel.
     Hello(HelloResponse),
+    /// Acknowledgement of one [`BrokerRequest::PublishTrustedContext`].
+    /// Carries the broker-epoch nonce the broker is currently minting
+    /// with, so the daemon's receiving leg can refuse every context
+    /// minted before a broker restart.
+    PublishTrustedContext(PublishTrustedContextResponse),
     QemuMediaEnroll(QemuMediaEnrollResponse),
     QemuMediaRefreshRegistry(QemuMediaRefreshRegistryResponse),
     QemuMediaBoot(QemuMediaHotplugResponse),

@@ -903,6 +903,14 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     #[cfg(not(feature = "layer1-bootstrap"))]
     crate::state_cells::init_broker_store(&config.state_dir)
         .map_err(|error| RunError::Protocol(format!("state cell store: {error}")))?;
+    // Open the broker's trusted-context store under the same daemon state
+    // root: the daemon's publications land here durably and the envelope
+    // would mint broker-attested contexts from it. Opening claims a fresh
+    // broker epoch, so a store that fails to open fails the broker closed
+    // rather than attesting or caching under a half-open state.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    crate::envelope::init_trusted_context_store(&config.state_dir)
+        .map_err(|error| RunError::Protocol(format!("trusted context store: {error}")))?;
 
     let audit_log = Arc::new(AuditLog::open(
         &config.audit_dir,
@@ -2962,6 +2970,48 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(hello_ok_response(config.profile)))
+        }
+        RealBrokerRequest::PublishTrustedContext(req) => {
+            // The daemon publishes its current provider-set revision and
+            // controller/guest generations over the origination leg; the
+            // store caches them durably and monotonically, and the reply
+            // carries the broker epoch every context minted from this point
+            // on must carry. A publication that would move the cached values
+            // backwards - or a store I/O failure - is refused with the
+            // shared stale-context code so the daemon's receiving leg never
+            // trusts an epoch that was not acknowledged.
+            let reply = crate::envelope::trusted_context_store()
+                .ok_or_else(|| {
+                    BrokerError::Protocol("trusted-context store unavailable".to_owned())
+                })?
+                .publication_reply(&req)
+                .map_err(|error| {
+                    BrokerError::LiveHandler(format!(
+                        "trusted-context publication refused: {}",
+                        error.code()
+                    ))
+                })?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "PublishTrustedContext",
+                "daemon-handshake",
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.zone.as_str(),
+                "broker",
+                None,
+                OperationFields::PublishTrustedContext {
+                    zone: req.zone.clone(),
+                    provider_set_revision: req.provider_set_revision,
+                    controller_generation: req.controller_generation,
+                    guest_generation: req.guest_generation,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::PublishTrustedContext(
+                reply,
+            )))
         }
         RealBrokerRequest::ExportBrokerAudit(req) => {
             // Real wire filter is a typed BrokerAuditFilter struct;
@@ -13720,6 +13770,7 @@ mod tests {
             "PollChildReaped",
             "PrepareRuntimeDir",
             "PrepareStateDir",
+            "PublishTrustedContext",
             "QemuMediaAttach",
             "QemuMediaBoot",
             "QemuMediaDetach",
@@ -15899,6 +15950,122 @@ mod tests {
         assert!(
             matches!(error, BrokerError::Protocol(message) if message == "audit-join-not-permitted")
         );
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn publish_trusted_context_updates_the_store_and_acks_the_epoch() {
+        use d2b_contracts_broker::broker_wire::{
+            BrokerCallerRole, BrokerRequest, PublishTrustedContextResponse,
+            PublishTrustedContextValues,
+        };
+
+        let root = test_audit_dir("publish-trusted-context");
+        crate::envelope::init_trusted_context_store(&root)
+            .expect("init the trusted context store");
+        let bundle = build_test_bundle(&root);
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let (log, capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let values = PublishTrustedContextValues {
+            zone: "test".to_owned(),
+            provider_set_revision: 3,
+            controller_generation: 4,
+            guest_generation: 2,
+        };
+        let audit_context = DispatchAuditContext::from_request(
+            &BrokerRequest::PublishTrustedContext(values.clone()),
+            4242,
+            &caller_role,
+        )
+        .expect("audit context");
+
+        let result = dispatch_request_with_backend(
+            BrokerRequest::PublishTrustedContext(values.clone()),
+            1000,
+            Gid::current().as_raw(),
+            caller_role.clone(),
+            &audit_context,
+            &config,
+            &log,
+            Some(&bundle.resolver),
+            &backend,
+        )
+        .expect("the publication dispatches");
+        assert!(result.fds.is_empty(), "the publication carries no descriptors");
+        match result.response {
+            BrokerResponse::PublishTrustedContext(PublishTrustedContextResponse {
+                broker_epoch,
+            }) => {
+                assert_eq!(
+                    broker_epoch, 1,
+                    "a fresh store acknowledges its first epoch nonce"
+                );
+            }
+            other => panic!("expected a PublishTrustedContext acknowledgement, got {other:?}"),
+        }
+
+        // The cache is durable and monotonic: a publication that would move a
+        // cached value backwards is refused with the stale-context code, and
+        // the acknowledgement the daemon advances on only ever carries an
+        // epoch that store state accepted.
+        let mut backward = values.clone();
+        backward.provider_set_revision = 1;
+        let audit_context = DispatchAuditContext::from_request(
+            &BrokerRequest::PublishTrustedContext(backward.clone()),
+            4242,
+            &caller_role,
+        )
+        .expect("audit context");
+        let error = dispatch_request_with_backend(
+            BrokerRequest::PublishTrustedContext(backward),
+            1000,
+            Gid::current().as_raw(),
+            caller_role.clone(),
+            &audit_context,
+            &config,
+            &log,
+            Some(&bundle.resolver),
+            &backend,
+        )
+        .expect_err("a backwards publication is refused");
+        assert!(
+            matches!(error, BrokerError::LiveHandler(ref detail) if detail.contains("stale-context")),
+            "the refusal names the stale-context code, got {error:?}"
+        );
+
+        // The acknowledged publication is audited with the published values.
+        let records = capture.lock().expect("capture lock after dispatch");
+        let record = records.last().expect("one publication audit record");
+        assert_eq!(record.operation, "PublishTrustedContext");
+        let fields = OperationFields::from_operation_value(
+            "PublishTrustedContext",
+            record
+                .operation_fields
+                .clone()
+                .expect("operation fields present"),
+        )
+        .expect("deserialize operation fields");
+        assert_eq!(
+            fields,
+            OperationFields::PublishTrustedContext {
+                zone: "test".to_owned(),
+                provider_set_revision: 3,
+                controller_generation: 4,
+                guest_generation: 2,
+            },
+            "the audit record carries the published zone and values"
+        );
+        drop(records);
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]

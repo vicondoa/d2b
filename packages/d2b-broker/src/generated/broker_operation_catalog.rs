@@ -36,6 +36,37 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         cell_durability: None,
     },
     BrokerOperationRow {
+        operation: "PublishTrustedContext",
+        wire_variant: Some("PublishTrustedContext"),
+        owner: OperationOwner::BrokerGeneric,
+        family: None,
+        declaring_provider: None,
+        justification: Some("broker-held attestation cache: the daemon publishes the Zone's daemon-owned provider-set revision and controller/guest generations over the origination leg, and the broker caches them as durable, monotonically increasing state from which it mints; no resource family holds the store"),
+        profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
+        w3: false,
+        capabilities: false,
+        disposition: "promoted-live",
+        stub_target: None,
+        audit_fields: &["PublishTrustedContext"],
+        authz: BrokerAuthzFacets {
+            subject: "handshake",
+            scope: "global",
+            allowed_groups: &["d2bd"],
+            destructive: false,
+            secret_access: "None",
+            broker_required: "Yes",
+            audit_mode: "Yes",
+        },
+        payload_provenance: PayloadProvenance::Wire,
+        payload_fields: &[],
+        payload_required: &[],
+        audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
+        state_cell: None,
+        cell_durability: None,
+    },
+    BrokerOperationRow {
         operation: "ExportBrokerAudit",
         wire_variant: Some("ExportBrokerAudit"),
         owner: OperationOwner::BrokerGeneric,
@@ -2177,4 +2208,4 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
 ];
 
 /// The number of committed operation rows.
-pub const BROKER_OPERATION_COUNT: usize = 70;
+pub const BROKER_OPERATION_COUNT: usize = 71;

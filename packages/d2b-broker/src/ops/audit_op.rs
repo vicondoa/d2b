@@ -433,6 +433,15 @@ pub enum OperationFields {
     Hello {
         client_version: String,
     },
+    /// Trusted-context publication audit fields. Records the Zone and the
+    /// published generational values; the broker-epoch ack is the response,
+    /// never a caller-supplied field.
+    PublishTrustedContext {
+        zone: String,
+        provider_set_revision: u64,
+        controller_generation: u64,
+        guest_generation: u64,
+    },
     ExportBrokerAudit {
         since: Option<String>,
         filter: Option<String>,
@@ -737,6 +746,12 @@ impl OperationFields {
             }),
             "Hello" => parse_fields!(value => Hello {
                 client_version: String,
+            }),
+            "PublishTrustedContext" => parse_fields!(value => PublishTrustedContext {
+                zone: String,
+                provider_set_revision: u64,
+                controller_generation: u64,
+                guest_generation: u64,
             }),
             "ExportBrokerAudit" => parse_fields!(value => ExportBrokerAudit {
                 since: Option<String>,

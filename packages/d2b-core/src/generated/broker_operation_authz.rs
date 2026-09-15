@@ -16,6 +16,16 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "PublishTrustedContext",
+        "handshake",
+        "global",
+        &["d2bd"],
+        false,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
         "ExportBrokerAudit",
         "broker-admin",
         "global",

@@ -18,11 +18,12 @@ no resource family.
 - `transport-excluded` - the name is a transport-layer concern the
 operation envelope does not carry.
 
-Counts: 66 family-owned, 4 broker-generic, 0 transport-excluded (68 rows carry a wire discriminant, 2 rows do not).
+Counts: 66 family-owned, 5 broker-generic, 0 transport-excluded (69 rows carry a wire discriminant, 2 rows do not).
 
 | Operation | Owner | Family | Declaring provider | Profiles | Disposition | Target | Justification |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Hello | broker-generic | - | - | host, guest | callable-read-only | live read-only callable | transport handshake: the first frame on the private socket, answered from the broker's own capability table, with no host effect and no resource family behind it |
+| PublishTrustedContext | broker-generic | - | - | host, guest | promoted-live | live in production broker | broker-held attestation cache: the daemon publishes the Zone's daemon-owned provider-set revision and controller/guest generations over the origination leg, and the broker caches them as durable, monotonically increasing state from which it mints; no resource family holds the store |
 | ExportBrokerAudit | broker-generic | - | - | host, guest | callable-read-only | live read-only callable | broker self-audit: the broker reads its own append-only audit log, so the effect is the broker's record keeping rather than a family effect |
 | OpenPidfd | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
 | OpenPeerPidfdFromAcceptedSocket | family | process | d2b-provider-process | host, guest | callable-read-only | live read-only callable | - |

@@ -24,9 +24,15 @@ use std::collections::BTreeMap;
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
+use d2b_contracts_broker::broker_wire::{
+    BrokerRequest, BrokerResponse, PublishTrustedContextValues,
+};
 use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
+use d2bd_runtime::broker_transport::ModeBoundBrokerAdapter;
+use d2bd_runtime::target_runtime::DaemonMode;
 use d2b_provider_toolkit::{
     AttachError, Cardinality, DEFAULT_DRAIN_BUDGET_MS, DrainDeadline, DrainError,
     DriverDescriptor, IsolationPosture, Lifecycle, OperationEnvelope, OperationFailure,
@@ -34,6 +40,7 @@ use d2b_provider_toolkit::{
 };
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 
+use crate::forward_rendezvous::ForwardRendezvous;
 use crate::plane_port::{PlaneRefusal, ProductionPlanePort};
 
 /// The declaration one driver family makes about its zone plane.
@@ -342,11 +349,59 @@ impl ProviderOperations {
     }
 }
 
+/// The round trip budget for one trusted-context publication over the
+/// origination leg: the same order as the daemon's other broker clients.
+const TRUSTED_CONTEXT_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The base guest generation every Zone's fleet is created from.
+///
+/// The daemon does not yet track zone-level guest generation movement; the
+/// publication carries the served fleet base, and zone freshness between
+/// planes is enforced by the provider-set revision, not by this base. When
+/// generation movement is tracked, the moving value is published here.
+const GUEST_FLEET_BASE_GENERATION: u64 = 1;
+
+/// The daemon's publication binding for one Zone's trusted-context values.
+///
+/// Carries everything the origination leg needs to publish the Zone's
+/// attestation values to the broker: the mode-bound broker adapter (the
+/// broker socket and the caller role the daemon presents), and the
+/// controller and guest generations the Zone currently serves. The Zone and
+/// the provider-set revision are supplied at publication time - the
+/// revision must be the rendezvous binding's current revision, which only
+/// the rendezvous assigns.
+#[derive(Clone)]
+pub(crate) struct TrustedContextPublication {
+    adapter: ModeBoundBrokerAdapter,
+    controller_generation: u64,
+    guest_generation: u64,
+}
+
+impl TrustedContextPublication {
+    /// The production binding for one Zone's plane.
+    ///
+    /// The controller generation is the Zone authority's; the guest
+    /// generation is the Zone's served fleet base ([`GUEST_FLEET_BASE_GENERATION`]).
+    pub(crate) fn production(
+        mode: DaemonMode,
+        broker_socket: impl Into<PathBuf>,
+        daemon_uid: u32,
+        controller_generation: u64,
+    ) -> Self {
+        Self {
+            adapter: ModeBoundBrokerAdapter::for_mode(mode, broker_socket, daemon_uid),
+            controller_generation,
+            guest_generation: GUEST_FLEET_BASE_GENERATION,
+        }
+    }
+}
+
 /// The providers one plane starts, in the order they start.
 pub(crate) struct ProviderSet {
     zone: ZoneId,
     state_root: PathBuf,
     providers: Vec<(ProviderDeclaration, Vec<DriverDescriptor>)>,
+    trusted_context_publication: Option<TrustedContextPublication>,
 }
 
 impl ProviderSet {
@@ -357,7 +412,21 @@ impl ProviderSet {
             zone,
             state_root,
             providers: Vec::new(),
+            trusted_context_publication: None,
         }
+    }
+
+    /// Bind this set's publication over the origination leg.
+    ///
+    /// A set started without a publication binding (tests, context-free
+    /// deployments) publishes nothing: the rendezvous stays fail-closed
+    /// until a broker acknowledgement lands.
+    pub(crate) fn with_trusted_context_publication(
+        mut self,
+        publication: Option<TrustedContextPublication>,
+    ) -> Self {
+        self.trusted_context_publication = publication;
+        self
     }
 
     /// Add the next provider: its declaration and the drivers it serves.
@@ -378,6 +447,7 @@ impl ProviderSet {
             zone,
             state_root,
             providers,
+            trusted_context_publication,
         } = self;
         let mut seen: BTreeMap<&'static str, ()> = BTreeMap::new();
         for (declaration, _) in &providers {
@@ -437,18 +507,21 @@ impl ProviderSet {
             providers.push(provider);
         }
         Ok(ProviderRuntime {
+            zone,
             port,
             providers,
             startup_order,
             drain_order: Mutex::new(Vec::new()),
             directory: registrations.take_directory(),
             operations,
+            trusted_context_publication,
         })
     }
 }
 
 /// The providers one zone is running.
 pub(crate) struct ProviderRuntime {
+    zone: ZoneId,
     port: Arc<ProductionPlanePort>,
     providers: Vec<ZoneProvider>,
     startup_order: Vec<&'static str>,
@@ -456,6 +529,8 @@ pub(crate) struct ProviderRuntime {
     directory: ProviderDirectory,
     /// The operation surfaces of the providers that declared operations.
     operations: Vec<ProviderOperations>,
+    /// The origination-leg binding this set carries, when one is bound.
+    trusted_context_publication: Option<TrustedContextPublication>,
 }
 
 impl core::fmt::Debug for ProviderRuntime {
@@ -510,6 +585,63 @@ impl ProviderRuntime {
         self.operations
             .iter()
             .find(|provider| provider.declares(operation))
+    }
+
+    /// Publish this Zone's trusted-context values to the broker over the
+    /// origination leg, and advance the rendezvous exactly on the
+    /// acknowledged epoch.
+    ///
+    /// Called once per provider-set publication, after the rendezvous
+    /// assigned the revision, so the broker caches the SAME revision the
+    /// rendezvous validates against. Fail-closed: a transport error, a
+    /// broker refusal, or an unexpected reply shape leaves the
+    /// rendezvous's epoch and generations untouched - no acknowledgement,
+    /// no trust.
+    pub(crate) fn publish_trusted_context(
+        &self,
+        rendezvous: &ForwardRendezvous,
+        provider_set_revision: u64,
+    ) {
+        let Some(publication) = &self.trusted_context_publication else {
+            // No binding: nothing is published, and the rendezvous keeps
+            // its fail-closed zero epoch.
+            return;
+        };
+        let request = BrokerRequest::PublishTrustedContext(PublishTrustedContextValues {
+            zone: self.zone.as_str().to_owned(),
+            provider_set_revision,
+            controller_generation: publication.controller_generation,
+            guest_generation: publication.guest_generation,
+        });
+        match publication
+            .adapter
+            .dispatch(request, Some(TRUSTED_CONTEXT_PUBLICATION_TIMEOUT))
+        {
+            Ok(BrokerResponse::PublishTrustedContext(reply)) => {
+                rendezvous.publish_generations(
+                    self.zone.as_str(),
+                    publication.controller_generation,
+                    publication.guest_generation,
+                );
+                rendezvous.set_broker_epoch(reply.broker_epoch);
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    zone = %self.zone.as_str(),
+                    revision = provider_set_revision,
+                    operation = "PublishTrustedContext",
+                    "trusted-context publication answered with an unexpected response"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    zone = %self.zone.as_str(),
+                    revision = provider_set_revision,
+                    operation = "PublishTrustedContext",
+                    "trusted-context publication refused: {error}"
+                );
+            }
+        }
     }
 
     /// Drain every provider, in the reverse of the order they started.

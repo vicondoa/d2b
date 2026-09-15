@@ -6,6 +6,7 @@
 /// over this list rather than using an open-ended default.
 pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "Hello",
+    "PublishTrustedContext",
     "ExportBrokerAudit",
     "OpenPidfd",
     "OpenPeerPidfdFromAcceptedSocket",
@@ -80,6 +81,7 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
 /// absent from this catalog.
 pub const GUEST_OPERATION_CATALOG: &[&str] = &[
     "Hello",
+    "PublishTrustedContext",
     "ExportBrokerAudit",
     "OpenPidfd",
     "OpenPeerPidfdFromAcceptedSocket",
