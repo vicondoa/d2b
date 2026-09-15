@@ -87,7 +87,7 @@ Counts: 66 family-owned, 5 broker-generic, 0 transport-excluded (69 rows carry a
 | UsbipExplicitBind | family | device-usbip | d2b-provider-device-usbip | host | promoted-live | live in production broker | - |
 | UsbipExplicitFirewallRule | family | device-usbip | d2b-provider-device-usbip | host | promoted-live | live in production broker | - |
 | SeedDnsmasqLease | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| OwnershipMatrixCheck | family | volume | d2b-provider-volume-local | host | stubbed-unimplemented | future work | - |
+| OwnershipMatrixCheck | family | volume | d2b-provider-volume-local | host | promoted-live | live in production broker | - |
 | SshHostKeyPreflight | family | device-security-key | d2b-provider-device-security-key | host | stubbed-unimplemented | future work | - |
 | DiskInit | family | volume | d2b-provider-volume-local | host | promoted-live | live in production broker | - |
 | SecurityKeyOpenDevice | family | device-security-key | d2b-provider-device-security-key | host | stubbed-unimplemented | future work | - |

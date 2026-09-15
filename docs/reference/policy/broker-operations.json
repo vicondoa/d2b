@@ -2584,8 +2584,8 @@
    ],
    "w3": false,
    "capabilities": false,
-   "disposition": "stubbed-unimplemented",
-   "dispositionTarget": "future work",
+   "disposition": "promoted-live",
+   "dispositionTarget": "live in production broker",
    "authz": {
     "subject": "host",
     "scope": "per-VM",
@@ -2603,8 +2603,18 @@
     "mode": "yes"
    },
    "payload": {
-    "provenance": "wire",
-    "schema": null
+    "provenance": "request",
+    "schema": {
+     "type": "object",
+     "properties": {
+      "vm": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "vm"
+     ]
+    }
    },
    "deadline": {
     "tier": "standard"

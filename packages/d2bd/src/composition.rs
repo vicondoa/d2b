@@ -17645,6 +17645,115 @@ fn dispatch_broker_host_prep_step(
     }
 }
 
+/// The caller budget for one ownership-matrix preflight round trip over the
+/// broker socket.
+///
+/// The budget is mapped to the envelope's forward budget for the operation:
+/// the row's standard deadline tier (the shared context-deadline constant
+/// every committed row's tier resolves under, U4b). The broker's own
+/// envelope dispatch and its forwarding leg serve the same order of budget,
+/// so the caller's expiry and the serving side's deadline do not disagree by
+/// an order of magnitude.
+const OWNERSHIP_PREFLIGHT_ROUND_TRIP_BUDGET: Duration =
+    Duration::from_millis(d2b_contracts_broker::broker_wire::DEFAULT_CONTEXT_DEADLINE_MS);
+
+/// Dispatch one ownership-matrix preflight through the broker envelope and
+/// map the reply into the host-prep DAG failure vocabulary.
+///
+/// The wire request crosses over the established origination-leg carrier
+/// (`dispatch_broker_request_to_socket`, the same bounded round trip the
+/// trusted-context publication uses) and is served broker-side through the
+/// committed-operation envelope under `CallerAuthority::Daemon`.
+///
+/// `round_trip_budget` bounds the caller's whole connect/write/read round
+/// trip; production passes [`OWNERSHIP_PREFLIGHT_ROUND_TRIP_BUDGET`] (the
+/// envelope row's forward budget), tests may pass a shorter budget.
+/// Timeouts are reported as the unknown-outcome case: when the broker does
+/// not answer within the budget, the daemon cannot know whether the
+/// preflight ran, so the failure carries the `internal-broker-timeout` code
+/// - never a definitive refusal such as `unregistered-handler`, which the
+/// broker itself reports when the envelope holds no serving handler (the
+/// documented prebind gap: calls before the daemon binds its forwarding leg
+/// refuse fail-closed with `unregistered-handler`, no transparent queue).
+fn dispatch_ownership_matrix_preflight(
+    state: &ServerState,
+    verb: &str,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+    round_trip_budget: Duration,
+) -> Result<(), Value> {
+    const OP_NAME: &str = "OwnershipMatrixCheck";
+    match dispatch_broker_request_with_timeout_as(
+        state,
+        request,
+        caller_role,
+        round_trip_budget,
+    ) {
+        Ok(BrokerResponse::Ack(ack)) if ack.accepted && ack.operation == OP_NAME => Ok(()),
+        Ok(BrokerResponse::Ack(ack)) => {
+            tracing::warn!(
+                op_name = OP_NAME,
+                broker_ack_operation = %ack.operation,
+                broker_ack_accepted = ack.accepted,
+                "broker returned unexpected ack payload"
+            );
+            let (summary, remediation) =
+                redact_broker_error_for_launcher(OP_NAME, None, "Broker.Protocol");
+            Err(broker_failure_response(verb, summary, remediation, None))
+        }
+        Ok(BrokerResponse::Error(error)) => {
+            tracing::warn!(
+                broker_kind = %error.kind,
+                broker_operation = %error.operation,
+                broker_target_wave = error.target_wave.as_deref().unwrap_or("none"),
+                broker_message = %error.message,
+                broker_action = %error.action,
+                "broker live op failed"
+            );
+            let (summary, remediation) = redact_broker_error_for_launcher(
+                OP_NAME,
+                error.target_wave.as_deref(),
+                &error.kind,
+            );
+            Err(broker_failure_response(
+                verb,
+                summary,
+                remediation,
+                error.target_wave,
+            ))
+        }
+        Ok(other) => {
+            tracing::warn!(
+                op_name = OP_NAME,
+                broker_response_kind = broker_response_kind(&other),
+                "broker returned an unexpected response shape"
+            );
+            let (summary, remediation) =
+                redact_broker_error_for_launcher(OP_NAME, None, "Broker.Protocol");
+            Err(broker_failure_response(verb, summary, remediation, None))
+        }
+        Err(TypedError::InternalBrokerTimeout { .. }) => {
+            // Unknown-outcome semantics on expiry: the round trip exceeded
+            // the caller's forward budget, so the preflight MAY have run.
+            // The failure names the timeout code, never a synthesized
+            // handler verdict.
+            Err(broker_failure_response(
+                verb,
+                format!(
+                    "{OP_NAME} round trip exceeded its forward budget; outcome unknown"
+                ),
+                "Check that d2b-broker is responsive (not backlogged or half-open) and retry VM start; the preflight may have run.".to_owned(),
+                Some("internal-broker-timeout".to_owned()),
+            ))
+        }
+        Err(error) => {
+            tracing::warn!(op_name = OP_NAME, error = ?error, "broker dispatch failed");
+            let (summary, remediation) = redact_broker_dispatch_failure_for_launcher(OP_NAME);
+            Err(broker_failure_response(verb, summary, remediation, None))
+        }
+    }
+}
+
 /// Execute the host-prep DAG by dispatching the corresponding broker op
 /// for each step in topo order. On step failure surfaces the broker
 /// envelope; the operator sees the step id, the broker op kind, and the
@@ -17709,45 +17818,51 @@ fn execute_host_prep_dag(
                 continue;
             }
             HostPrepStepKind::OwnershipMatrixCheck => {
-                // Run the daemon-native ownership preflight instead of
-                // dispatching the broker stub. The check is a pure stat walk
-                // over the per-VM state subtree the daemon already has
-                // `CAP_DAC_READ_SEARCH` for, and the real implementation
-                // lives in `d2bd-runtime` (`ownership_preflight`); the typed
-                // variant therefore has no production caller and retires with
-                // the typed arms.
-                let Some(state_dir) = per_vm_state_dir.as_ref() else {
+                // U5: the first production envelope caller. The
+                // ownership-matrix preflight used to run daemon-side from a
+                // typed placeholder arm (d9d41b4ec) that had no state ledger
+                // and silently skipped; that placeholder path is RETIRED.
+                // The DAG step now dispatches the typed wire request over
+                // the established origination-leg carrier (the same broker
+                // socket the trusted-context publication uses), and the
+                // broker serves it through the operation envelope as
+                // `CallerAuthority::Daemon` (committed `OwnershipMatrixCheck`
+                // row, see `docs/reference/policy/broker-operations.json`).
+                //
+                // The caller's round trip is bounded by the row's forward
+                // budget, so a broker that does not answer within it is
+                // reported as the unknown-outcome case
+                // (`internal-broker-timeout`) - never synthesized into a
+                // definitive refusal such as `unregistered-handler`.
+                //
+                // Prebind gap: before the daemon's forwarding leg is bound
+                // (and until the declaring process registers a handler), the
+                // envelope refuses the call with `unregistered-handler`.
+                // There is NO transparent queue: the DAG step fails closed
+                // on that refusal rather than letting the preflight pass
+                // unserved.
+                let request = BrokerRequest::OwnershipMatrixCheck(
+                    d2b_contracts_broker::broker_wire::OwnershipMatrixCheckRequest {
+                        vm_id: step.bundle_ref.vm_id.clone(),
+                        tracing_span_id: None,
+                    },
+                );
+                if let Err(response) = dispatch_ownership_matrix_preflight(
+                    state,
+                    VERB,
+                    request,
+                    caller_role.clone(),
+                    OWNERSHIP_PREFLIGHT_ROUND_TRIP_BUDGET,
+                ) {
                     tracing::warn!(
                         vm = %vm,
                         step_id = %step.id,
                         op_kind = op_name,
-                        "ownership-matrix preflight skipped: no per-VM state ledger",
+                        "host-prep DAG step failed"
                     );
-                    continue;
-                };
-                match d2bd_runtime::ownership_preflight::preflight(vm, state_dir) {
-                    d2bd_runtime::ownership_preflight::OwnershipPreflightOutcome::Clean => {
-                        continue;
-                    }
-                    d2bd_runtime::ownership_preflight::OwnershipPreflightOutcome::Drift(drift) => {
-                        let message = d2bd_runtime::ownership_preflight::render_drift_message(
-                            vm, &drift,
-                        );
-                        tracing::warn!(
-                            vm = %vm,
-                            step_id = %step.id,
-                            outcome = "ownership-matrix-drift",
-                            "host-prep DAG step failed: ownership drift (path in typed envelope + audit log)",
-                        );
-                        return Err(broker_failure_response(
-                            VERB,
-                            message,
-                            "Restore the ownership matrix the preflight names and retry VM start."
-                                .to_owned(),
-                            None,
-                        ));
-                    }
+                    return Err(response);
                 }
+                continue;
             }
             HostPrepStepKind::SshHostKeyPreflight => {
                 // Run the daemon-native posture check instead of dispatching
@@ -24039,6 +24154,95 @@ mod broker_dispatch_tests {
             err,
             d2bd_runtime::typed_error::TypedError::InternalBrokerTimeout { .. }
         ));
+    }
+
+    /// The wire request the migrated host-prep caller dispatches.
+    ///
+    /// Mirrors the exact shape the production DAG arm composes for
+    /// [`HostPrepStepKind::OwnershipMatrixCheck`].
+    fn ownership_matrix_check_request() -> BrokerRequest {
+        BrokerRequest::OwnershipMatrixCheck(
+            d2b_contracts_broker::broker_wire::OwnershipMatrixCheckRequest {
+                vm_id: VmId::new("vm-1"),
+                tracing_span_id: None,
+            },
+        )
+    }
+
+    /// The daemon-side caller (U5): a broker that answers the envelope
+    /// serving of the ownership-matrix preflight with an Ack drives the DAG
+    /// step to success over the established origination-leg carrier.
+    #[test]
+    fn the_preflight_caller_answers_through_the_broker_so_the_dag_step_passes() {
+        use d2b_contracts_broker::broker_wire::{AckResponse, BrokerResponse};
+
+        let (socket_path, broker) =
+            start_test_broker_server("preflight-envelope-happy", 1, |_index, envelope, fd| {
+                assert_eq!(envelope.request.op_name(), "OwnershipMatrixCheck");
+                let BrokerRequest::OwnershipMatrixCheck(request) = envelope.request else {
+                    panic!("expected the typed ownership-matrix request");
+                };
+                assert_eq!(request.vm_id.as_str(), "vm-1");
+                write_test_json_frame(
+                    fd,
+                    &BrokerResponse::Ack(AckResponse {
+                        accepted: true,
+                        operation: "OwnershipMatrixCheck".to_owned(),
+                    }),
+                )
+                .expect("write broker ack");
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let result = super::dispatch_ownership_matrix_preflight(
+            &state,
+            "vm start",
+            ownership_matrix_check_request(),
+            BrokerCallerRole::AdminUid {
+                uid: state.daemon_uid,
+            },
+            super::OWNERSHIP_PREFLIGHT_ROUND_TRIP_BUDGET,
+        );
+        assert!(result.is_ok(), "the DAG step passes on the broker ack");
+        broker.join().expect("the test broker completes");
+    }
+
+    /// The caller's own budget expiry maps to the unknown-outcome code
+    /// (`internal-broker-timeout`), never to `unregistered-handler`: a
+    /// broker that accepted the frame and then stalls leaves the DAG step
+    /// with the documented unknown outcome, not a synthesized handler
+    /// verdict.
+    #[test]
+    fn a_stalled_broker_maps_the_caller_timeout_to_the_unknown_outcome_code() {
+        let (socket_path, broker) =
+            start_test_broker_server("preflight-envelope-timeout", 1, |_index, envelope, _fd| {
+                assert_eq!(envelope.request.op_name(), "OwnershipMatrixCheck");
+                // Hold the accepted connection open past the caller's
+                // budget without answering: a closed peer would surface as a
+                // transport EOF, but the expiry under test is the caller's
+                // own read deadline.
+                std::thread::sleep(Duration::from_secs(2));
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let result = super::dispatch_ownership_matrix_preflight(
+            &state,
+            "vm start",
+            ownership_matrix_check_request(),
+            BrokerCallerRole::AdminUid {
+                uid: state.daemon_uid,
+            },
+            Duration::from_millis(250),
+        );
+        let response = result.expect_err("a stalled round trip fails the DAG step");
+        let rendered = response.to_string();
+        assert!(
+            rendered.contains("internal-broker-timeout"),
+            "the expiry surfaces the unknown-outcome code: {rendered}"
+        );
+        assert!(
+            !rendered.contains("unregistered-handler"),
+            "an expiry is never synthesized into a handler verdict: {rendered}"
+        );
+        broker.join().expect("the test broker completes");
     }
 
     fn read_child_start_time(child: &Child) -> u64 {

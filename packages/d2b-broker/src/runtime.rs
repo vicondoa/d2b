@@ -1009,14 +1009,14 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     #[cfg(not(feature = "layer1-bootstrap"))]
     crate::state_cells::init_broker_store(&config.state_dir)
         .map_err(|error| RunError::Protocol(format!("state cell store: {error}")))?;
-    // Open the broker's trusted-context store under the same daemon state
-    // root: the daemon's publications land here durably and the envelope
-    // would mint broker-attested contexts from it. Opening claims a fresh
-    // broker epoch, so a store that fails to open fails the broker closed
-    // rather than attesting or caching under a half-open state.
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    crate::envelope::init_trusted_context_store(&config.state_dir)
-        .map_err(|error| RunError::Protocol(format!("trusted context store: {error}")))?;
+    // The trusted-context store is deliberately NOT opened at startup: a
+    // state root that cannot host `trusted-context/` (a read-only or absent
+    // daemon state dir in a constrained sandbox) must not take the whole
+    // broker down. The store opens lazily on the FIRST PublishTrustedContext
+    // arrival (see that dispatch arm): an open failure there refuses that
+    // publication fail-closed while the broker keeps serving everything
+    // else, and the rendezvous stays fail-closed on its zero epoch because
+    // it only ever advances on an acknowledged epoch.
 
     let audit_log = Arc::new(AuditLog::open(
         &config.audit_dir,
@@ -3129,10 +3129,28 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             // backwards - or a store I/O failure - is refused with the
             // shared stale-context code so the daemon's receiving leg never
             // trusts an epoch that was not acknowledged.
+            //
+            // The store opens lazily on this first arrival rather than at
+            // broker startup: a state root that cannot host the store (a
+            // constrained sandbox whose daemon state dir is absent or
+            // read-only) must refuse publications fail-closed, not take the
+            // whole broker down. The process store is a OnceLock with the
+            // epoch already claimed by whoever opened it, so only the first
+            // arrival opens; an open failure here means the broker has NO
+            // usable store, and the publication is refused by name while
+            // the broker keeps serving everything else. Restart
+            // invalidation still holds: a fresh broker process bumps the
+            // persisted epoch before it can serve a publication.
+            if crate::envelope::trusted_context_store().is_none() {
+                crate::envelope::init_trusted_context_store(&config.state_dir)
+                    .map_err(|error| {
+                        BrokerError::LiveHandler(format!(
+                            "trusted-context store unavailable: {error}"
+                        ))
+                    })?;
+            }
             let reply = crate::envelope::trusted_context_store()
-                .ok_or_else(|| {
-                    BrokerError::Protocol("trusted-context store unavailable".to_owned())
-                })?
+                .expect("the lazy init above just opened the store")
                 .publication_reply(&req)
                 .map_err(|error| {
                     BrokerError::LiveHandler(format!(
@@ -3161,6 +3179,64 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             Ok(DispatchResult::no_fds(BrokerResponse::PublishTrustedContext(
                 reply,
             )))
+        }
+        RealBrokerRequest::OwnershipMatrixCheck(req) => {
+            // U5: the first production envelope caller. The daemon's
+            // host-prep DAG dispatches the ownership-matrix preflight as the
+            // typed wire request (the established origination-leg carrier);
+            // this arm is the envelope's production call site. The check
+            // runs as the daemon's own authority - `CallerAuthority::Daemon`
+            // - under the operation's committed row (see
+            // `docs/reference/policy/broker-operations.json`), and the
+            // dispatch step answers through the envelope: before the daemon
+            // binds its forwarding socket the envelope refuses with
+            // `unregistered-handler` (the documented prebind gap, no
+            // transparent queue); after the daemon binds, the declaring
+            // process's handler answers. The wire request carries no Zone -
+            // the preflight is host-scope and the vm_id is the wire's own
+            // authoritative audit-join axis - so the call's Zone field
+            // carries the same identity the audit join derives.
+            let zone = req.vm_id.as_str();
+            let payload = serde_json::json!({ "vm": req.vm_id.as_str() });
+            let invocation = envelope_call_runtime().block_on(
+                backend.operation_envelope().call(
+                    crate::envelope::CallerAuthority::Daemon,
+                    "OwnershipMatrixCheck",
+                    zone,
+                    &payload,
+                ),
+            );
+            if let Err(refusal) = invocation {
+                tracing::warn!(
+                    broker_operation = "OwnershipMatrixCheck",
+                    invocation_id = %refusal.invocation_id,
+                    refusal = %refusal.code,
+                    "ownership-matrix preflight refused through the envelope"
+                );
+                return Err(BrokerError::LiveHandler(format!(
+                    "OwnershipMatrixCheck refused: {} (invocation {})",
+                    refusal.code, refusal.invocation_id
+                )));
+            }
+            // The success path records the preflight as an allowed entry
+            // with the VM target. The record carries no typed `OperationFields`
+            // shape yet: the row's audit field set stays empty and the
+            // operation is pinned in the served-but-unaudited-shape set
+            // (same marker as `PollChildReaped`, see
+            // `a_served_operation_names_the_audit_shape_its_records_use`),
+            // so the closed audit vocabulary in `catalog.rs` does not widen
+            // for one caller.
+            audit_log
+                .write_entry_with_caller_ids(
+                    "OwnershipMatrixCheck",
+                    caller_uid,
+                    caller_gid,
+                    "allowed",
+                    req.vm_id.as_str(),
+                    "success",
+                )
+                .map_err(|err| BrokerError::Protocol(err.to_string()))?;
+            Ok(DispatchResult::no_fds(ack_response("OwnershipMatrixCheck")))
         }
         RealBrokerRequest::ExportBrokerAudit(req) => {
             // Real wire filter is a typed BrokerAuditFilter struct;
@@ -8613,6 +8689,32 @@ impl DispatchBackend for LiveDispatchBackend {
     }
 }
 
+/// The runtime one envelope call from the synchronous dispatch pool runs on.
+///
+/// The wire arms are synchronous (they run on the broker's dispatch pool),
+/// while the envelope's dispatch step is async: the forward leg dials and
+/// exchanges frames in async time under the forwarder's round-trip budget.
+/// A sync arm that invokes the envelope blocks on this dedicated runtime
+/// instead of stalling a dispatch worker's executor, which has no reactor by
+/// construction. The set is built the way the broker's other runtimes are
+/// (`enable_all`, capped workers), and exists only when a committed
+/// operation's arm actually calls the envelope.
+#[cfg(not(feature = "layer1-bootstrap"))]
+static ENVELOPE_CALL_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
+    std::sync::LazyLock::new(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("d2b-broker-envelope-call")
+            .enable_all()
+            .build()
+            .expect("broker envelope-call runtime")
+    });
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn envelope_call_runtime() -> &'static tokio::runtime::Runtime {
+    &ENVELOPE_CALL_RUNTIME
+}
+
 /// The committed-operation envelope of this broker instance.
 ///
 /// The rows are the committed catalog; the handlers live in the declaring
@@ -13915,6 +14017,7 @@ mod tests {
             "OpenPidfd",
             "OpenSystemdUnitPidfd",
             "OpenVhostNet",
+            "OwnershipMatrixCheck",
             "PipeWireAudio",
             "PollChildReaped",
             "PrepareRuntimeDir",
@@ -13994,8 +14097,15 @@ mod tests {
         {
             // Served, but their records carry no typed field shape yet. Pinned
             // so the gap cannot grow while the audit shapes are brought up to
-            // the served set.
-            const UNAUDITED: &[&str] = &["PollChildReaped", "QemuMediaQueryStatus"];
+            // the served set. `OwnershipMatrixCheck` is the first envelope
+            // caller (U5): its wire arm records an allowed entry and the
+            // envelope's own invocation is audited by the declaring peer;
+            // its row therefore declares no typed audit shape yet.
+            const UNAUDITED: &[&str] = &[
+                "PollChildReaped",
+                "QemuMediaQueryStatus",
+                "OwnershipMatrixCheck",
+            ];
             for name in crate::catalog::WIRE_VARIANTS {
                 if crate::catalog::stub_target(name).is_some() || UNAUDITED.contains(name)
                 {
@@ -16216,6 +16326,279 @@ mod tests {
         );
         drop(records);
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn the_ownership_matrix_preflight_caller_answers_through_the_envelope_end_to_end() {
+        use d2b_contracts::types::VmId;
+        use d2b_contracts_broker::broker_wire::{
+            BrokerCallerRole, BrokerRequest, ForwardOperationOutcome,
+            ForwardOperationRequest, ForwardOperationResponse,
+            OwnershipMatrixCheckRequest,
+        };
+        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
+        use crate::forwarding::SocketForwarder;
+        use crate::protocol::{bind_seqpacket, recv_json_frame, send_json_frame};
+        use nix::sys::socket::{SockFlag, accept4};
+        use std::os::fd::AsRawFd;
+
+        // U5 happy path: the migrated caller dispatches the typed wire
+        // request and the serving arm routes it through the envelope under
+        // `CallerAuthority::Daemon`; the dispatch step crosses the forward
+        // carrier to the declaring process's leg, whose answer travels back
+        // as the wire Ack. The peer is the daemon's rendezvous-shaped half
+        // (a bound forward socket accepted before the dispatch starts) and
+        // answers only from bytes it read off the accepted connection, so
+        // the operations/zone/payload assertions are grounded in what
+        // actually crossed the socket.
+        let root = test_audit_dir("ownership-prep-envelope");
+        fs::create_dir_all(&root).expect("create audit test dir");
+        let config = test_server_config(&root, &root.join("unused-bundle.json"));
+        let (log, _capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+
+        let socket_root = tempfile::tempdir().expect("forward socket dir");
+        let forward_path = socket_root.path().join("d2bd-forward.sock");
+        let listener = bind_seqpacket(&forward_path).expect("bind the test forwarding peer");
+        let peer = std::thread::spawn(move || {
+            let fd = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
+                .expect("the broker's forwarder dials the peer");
+            let request = recv_json_frame::<ForwardOperationRequest>(fd.as_raw_fd())
+                .expect("read the forwarded invocation")
+                .expect("the broker's forwarder sent a frame");
+            assert_eq!(request.operation, "OwnershipMatrixCheck");
+            assert_eq!(
+                request.zone, "vm-1",
+                "the wire carries no zone; the call's zone is the vm id (the wire's audit-join axis)"
+            );
+            assert_eq!(
+                request.payload,
+                serde_json::json!({ "vm": "vm-1" }),
+                "the forwarded payload is the canonical preflight payload"
+            );
+            send_json_frame(
+                fd.as_raw_fd(),
+                &ForwardOperationResponse {
+                    outcome: ForwardOperationOutcome::Result {
+                        result: serde_json::json!({ "clean": true }),
+                        fd_indexes: vec![],
+                        fd_kinds: vec![],
+                    },
+                },
+            )
+            .expect("write the forwarded reply");
+        });
+
+        // The same envelope shape the production broker builds
+        // (`live_operation_envelope`): every committed forwarded row served
+        // through the carrier, with the row's committed grants deciding the
+        // caller. Built in the test rather than through the process static
+        // so the two scenarios below stay deterministic regardless of test
+        // order.
+        let envelope = BrokerEnvelope::over(
+            crate::catalog::BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(SocketForwarder::new(forward_path))),
+        )
+        .commit_forwarded()
+        .build();
+        let backend = FakeDispatchBackend {
+            envelope,
+            ..FakeDispatchBackend::default()
+        };
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let request = BrokerRequest::OwnershipMatrixCheck(OwnershipMatrixCheckRequest {
+            vm_id: VmId::new("vm-1"),
+            tracing_span_id: None,
+        });
+        let audit_context =
+            DispatchAuditContext::from_request(&request, 4242, &caller_role).expect("audit context");
+        let result = dispatch_request_with_backend(
+            request,
+            1000,
+            Gid::current().as_raw(),
+            caller_role,
+            &audit_context,
+            &config,
+            &log,
+            None,
+            &backend,
+        )
+        .expect("the preflight dispatches through the envelope");
+        match result.response {
+            BrokerResponse::Ack(ack) => {
+                assert!(ack.accepted);
+                assert_eq!(ack.operation, "OwnershipMatrixCheck");
+            }
+            other => panic!("expected an OwnershipMatrixCheck ack, got {other:?}"),
+        }
+        peer.join().expect("the forwarding peer completes");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn an_absent_forwarding_peer_refuses_the_preflight_with_the_unregistered_handler_code() {
+        use d2b_contracts::types::VmId;
+        use d2b_contracts_broker::broker_wire::{
+            BrokerCallerRole, BrokerRequest, OwnershipMatrixCheckRequest,
+        };
+        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
+
+        // U5 error path (the prebind gap): before the daemon binds its
+        // forwarding leg, the envelope holds no serving peer and refuses the
+        // forwarded operation with `unregistered-handler` - the documented
+        // fail-closed code, never a silent queue or a synthesized success.
+        let root = test_audit_dir("ownership-prep-prebind");
+        fs::create_dir_all(&root).expect("create audit test dir");
+        let config = test_server_config(&root, &root.join("unused-bundle.json"));
+        let (log, _capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let envelope = BrokerEnvelope::over(
+            crate::catalog::BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::default()),
+        )
+        .commit_forwarded()
+        .build();
+        let backend = FakeDispatchBackend {
+            envelope,
+            ..FakeDispatchBackend::default()
+        };
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let request = BrokerRequest::OwnershipMatrixCheck(OwnershipMatrixCheckRequest {
+            vm_id: VmId::new("vm-1"),
+            tracing_span_id: None,
+        });
+        let audit_context =
+            DispatchAuditContext::from_request(&request, 4242, &caller_role).expect("audit context");
+        let error = dispatch_request_with_backend(
+            request,
+            1000,
+            Gid::current().as_raw(),
+            caller_role,
+            &audit_context,
+            &config,
+            &log,
+            None,
+            &backend,
+        )
+        .expect_err("a call before the daemon binds must refuse");
+        match &error {
+            BrokerError::LiveHandler(detail) => assert!(
+                detail.contains("unregistered-handler"),
+                "the refusal names the documented prebind code, got {error:?}"
+            ),
+            other => panic!("expected the prebind refusal, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn an_unwritable_state_dir_refuses_publications_fail_closed_without_taking_the_broker_down()
+    {
+        use d2b_contracts_broker::broker_wire::{
+            BrokerCallerRole, BrokerRequest, PublishTrustedContextValues,
+        };
+
+        // Lazy-store regression (U2 startup fix): opening the
+        // trusted-context store must not happen at broker startup - a state
+        // root that cannot host `trusted-context/` refuses publications
+        // fail-closed while the broker keeps serving everything else.
+        // `state_dir` is a regular file, so `state_dir/trusted-context` can
+        // never be created on any host under any uid (a chmod-based
+        // read-only dir would not bite a root test runner).
+        let root = test_audit_dir("trusted-store-unwritable");
+        fs::create_dir_all(&root).expect("create test root");
+        let blocker = root.join("state");
+        fs::write(&blocker, b"a file blocks the trusted-context store")
+            .expect("write the blocking file");
+        let config = test_server_config(&root, &root.join("unused-bundle.json"));
+        let config = ServerConfig {
+            state_dir: blocker.clone(),
+            ..config
+        };
+
+        // The open itself fails closed with the documented store-unavailable
+        // failure, deterministically, regardless of whether an earlier test
+        // already opened the process store.
+        let open_error = crate::envelope::init_trusted_context_store(&blocker)
+            .expect_err("a state dir that cannot host the store must fail its open");
+        assert!(
+            format!("{open_error}").contains("trusted-context"),
+            "the open failure names the store: {open_error}"
+        );
+
+        let (log, _capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let values = PublishTrustedContextValues {
+            zone: "test".to_owned(),
+            provider_set_revision: 1,
+            controller_generation: 1,
+            guest_generation: 1,
+        };
+        let audit_context = DispatchAuditContext::from_request(
+            &BrokerRequest::PublishTrustedContext(values.clone()),
+            4242,
+            &caller_role,
+        )
+        .expect("audit context");
+        let outcome = dispatch_request_with_backend(
+            BrokerRequest::PublishTrustedContext(values),
+            1000,
+            Gid::current().as_raw(),
+            caller_role,
+            &audit_context,
+            &config,
+            &log,
+            None,
+            &backend,
+        );
+        match outcome {
+            // No store exists yet (this process never published before):
+            // the arm's lazy open refuses the publication by name, and the
+            // refusal is a dispatch error - the broker process itself keeps
+            // serving.
+            Err(BrokerError::LiveHandler(detail)) => {
+                assert!(
+                    detail.contains("trusted-context store unavailable"),
+                    "the refusal names the documented store failure: {detail}"
+                );
+            }
+            // An earlier test already opened the process store at its own
+            // scratch root: the broker serves publications from the
+            // already-open store (the documented reuse path) - equally not
+            // a startup failure.
+            Ok(result) => {
+                assert!(
+                    matches!(
+                        result.response,
+                        BrokerResponse::PublishTrustedContext(_)
+                    ),
+                    "an already-open process store keeps serving publications, got {:?}",
+                    result.response
+                );
+            }
+            Err(other) => panic!("unexpected publication failure: {other:?}"),
+        }
         let _ = fs::remove_dir_all(&root);
     }
 
