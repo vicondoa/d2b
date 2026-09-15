@@ -5145,7 +5145,7 @@ pub(crate) fn runner_pidfds() -> RunnerPidfdCell {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn controller_bootstrap_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
+pub(crate) fn controller_bootstrap_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
     static REGISTRY: OnceLock<Mutex<HashMap<String, OwnedFd>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }

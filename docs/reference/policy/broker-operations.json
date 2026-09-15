@@ -1112,7 +1112,11 @@
         "tier": "standard"
       },
       "service": "d2b.process",
-      "method": "spawn-runner"
+      "method": "spawn-runner",
+      "fds": {
+        "maxFds": 3,
+        "fdKind": "Any"
+      }
     },
     {
       "operation": "ApplyHostGenerationHandoff",

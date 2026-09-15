@@ -1028,6 +1028,28 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
         chain_root_invocation_id: Option<&str>,
         chain_identities: Option<&[String]>,
     ) -> Result<KernelReply, KernelInvokeError> {
+        self.envelope_call_with_fds(
+            operation,
+            zone,
+            payload,
+            chain_root_invocation_id,
+            chain_identities,
+            &[],
+        )
+    }
+
+    /// The envelope carrier with request descriptors (the family rows now
+    /// declare the fd facet for the ProviderController escrow leg; every
+    /// other call attaches none).
+    fn envelope_call_with_fds(
+        &self,
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+        chain_root_invocation_id: Option<&str>,
+        chain_identities: Option<&[String]>,
+        fds: &[OwnedFd],
+    ) -> Result<KernelReply, KernelInvokeError> {
         if matches!(self.caller_role, BrokerCallerRole::NotAuthorized) {
             warn!(
                 provider = "supervisor",
@@ -1046,7 +1068,7 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
                 operation,
                 zone,
                 payload,
-                fds: &[],
+                fds,
                 chain_root_invocation_id,
                 chain_identities,
             },
@@ -1230,17 +1252,10 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
     ) -> Result<BackendLaunch<Self::Handle>, ProcessEffectError> {
         let (request, inherited_fds) = request.into_parts();
         let intent = self.resolver.resolve(&request)?;
-        // The envelope family row admits no request descriptors; the
-        // resolver already refused a ticket whose posture carries any, so
-        // a launch that still arrives with descriptors is refused rather
-        // than dropped at the wire.
-        if !inherited_fds.is_empty() {
-            warn!(
-                provider = "supervisor",
-                "launch rejected: the envelope family row admits no inherited descriptors"
-            );
-            return Err(ProcessEffectError::LaunchFailed);
-        }
+        // The ProviderController escrow rides the envelope's request-fd
+        // leg (the SpawnRunner row declares the fd facet); every other
+        // posture launches with no descriptors and the broker's fence
+        // re-checks the same shape.
         // Controller-supplied arguments are admitted only by the resolved
         // template's own declaration; every other template refuses them here
         // (and the broker re-checks the same fence).
@@ -1276,14 +1291,21 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                 runtime_allocations: Vec::new(),
                 tracing_span_id: None,
                 workload_identity: None,
-                inherited_fd_count: 0,
+                inherited_fd_count: inherited_fds.len() as u16,
                 network_tap_context: None,
             },
             intent,
         ))
         .map_err(|_| ProcessEffectError::LaunchFailed)?;
         let mut reply = self
-            .envelope_call("SpawnRunner", &intent.zone, payload, None, None)
+            .envelope_call_with_fds(
+                "SpawnRunner",
+                &intent.zone,
+                payload,
+                None,
+                None,
+                &inherited_fds,
+            )
             .map_err(|error| response_error(&error, BrokerOperation::Other))?;
         let response: SpawnRunnerResponse =
             serde_json::from_value(reply.response.result.clone().ok_or_else(|| {

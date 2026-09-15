@@ -18,7 +18,7 @@
 //! serves the handlers from there. There is no second registration step.
 
 use std::collections::BTreeSet;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -576,21 +576,6 @@ impl LaunchPosture {
         attached_fd_count: usize,
     ) -> Result<(), OperationFailure> {
         const MAX_REQUEST_INHERITED_FDS: u16 = 256;
-        // The retired arm required a ProviderController spawn to carry its
-        // bootstrap escrow descriptor (1..=2 inherited + 1 attached) and
-        // refused the (0, 0) shape fail-closed. The family rows declare no
-        // fd facet (U10), so the escrow can never cross the forward carrier
-        // today: the posture is unservable outright, and admitting a
-        // (0, 0) controller launch would spawn a controller without its
-        // bootstrap fd - the exact state the retired arm refused.
-        if self == Self::ControllerEscrow {
-            return Err(OperationFailure::with_detail(
-                INHERITED_FDS_UNSUPPORTED,
-                "SpawnRunner: the ControllerEscrow posture needs its bootstrap \
-                 escrow descriptor, which the family row's fd-less contract \
-                 cannot transport",
-            ));
-        }
         if inherited_fd_count > MAX_REQUEST_INHERITED_FDS {
             return Err(OperationFailure::with_detail(
                 KERNEL_REFUSED,
@@ -599,21 +584,28 @@ impl LaunchPosture {
                 ),
             ));
         }
-        if inherited_fd_count != 0 {
+        if self == Self::ControllerEscrow {
+            // The retired arm required a ProviderController spawn to carry
+            // its bootstrap escrow descriptor (1..=2 inherited fds) and
+            // refused the (0, 0) shape fail-closed. The escrow now rides the
+            // envelope's request-fd leg (the SpawnRunner row declares the fd
+            // facet) and the spawn-process kernel retains it for the
+            // controller-bootstrap registry.
+            if attached_fd_count == 0 {
+                return Err(OperationFailure::with_detail(
+                    INHERITED_FDS_UNSUPPORTED,
+                    "SpawnRunner: the ControllerEscrow posture must carry its \
+                     bootstrap escrow descriptor",
+                ));
+            }
+            return Ok(());
+        }
+        if inherited_fd_count != 0 || attached_fd_count != 0 {
             return Err(OperationFailure::with_detail(
                 INHERITED_FDS_UNSUPPORTED,
                 format!(
-                    "SpawnRunner: the family row's fd-less contract cannot transport \
-                     {inherited_fd_count} inherited descriptors (posture {self:?})"
-                ),
-            ));
-        }
-        if attached_fd_count != 0 {
-            return Err(OperationFailure::with_detail(
-                KERNEL_REFUSED,
-                format!(
-                    "SpawnRunner: the family row's fd-less contract cannot transport \
-                     {attached_fd_count} attached descriptors"
+                    "SpawnRunner: the family posture {self:?} carries no \
+                     inherited or attached descriptors"
                 ),
             ));
         }
@@ -2632,7 +2624,16 @@ impl OperationHandler for SpawnRunnerHandler {
                     "guestExecution": request.guest_execution,
                 },
             }),
-            Vec::new(),
+            ctx.fds
+                .iter()
+                .map(|&fd| duplicate_fd(fd, "spawn-process request fd"))
+                .collect::<Result<Vec<OwnedFd>, _>>()
+                .map_err(|_error| {
+                    OperationFailure::with_detail(
+                        KERNEL_REFUSED,
+                        "spawn-process: request fd duplicate failed".to_owned(),
+                    )
+                })?,
         )
         .await?;
         let result = kernel_result(&reply)?;
@@ -2648,11 +2649,44 @@ impl OperationHandler for SpawnRunnerHandler {
                     "spawn-process: result startTimeTicks missing".to_owned(),
                 )
             })? as u64;
-        let pidfd = take_reply_fd(reply, 0)?;
-        // The kernel returns the pidfd alone today: the retired arm's
-        // controller-bootstrap duplicate and console descriptor were
-        // broker-side response enrichments the kernel path does not mint, so
-        // the response advertises no extra indices.
+        // The kernel mints the controller-bootstrap duplicate for
+        // ProviderController spawns and returns it as the extra fd the
+        // result's controllerBootstrapFdIndex names; the typed response
+        // hands the index back so the supervisor's handle re-arms the
+        // daemon-side marker.
+        let reply_fds = reply
+            .fds
+            .iter()
+            .map(|fd| duplicate_fd(fd.as_raw_fd(), "spawn-process reply fd"))
+            .collect::<Result<Vec<OwnedFd>, OperationFailure>>()?;
+        let pidfd = reply_fds
+            .first()
+            .map(|fd| duplicate_fd(fd.as_raw_fd(), "spawn-process reply pidfd"))
+            .transpose()?
+            .ok_or_else(|| {
+                OperationFailure::with_detail(
+                    KERNEL_REFUSED,
+                    "spawn-process: reply pidfd missing".to_owned(),
+                )
+            })?;
+        let controller_bootstrap_fd_index = result
+            .get("controllerBootstrapFdIndex")
+            .and_then(serde_json::Value::as_u64)
+            .map(|index| index as usize)
+            .map(|index| {
+                reply_fds
+                    .get(index)
+                    .map(|fd| duplicate_fd(fd.as_raw_fd(), "spawn-process reply bootstrap"))
+                    .transpose()?
+                    .map(|_fd| index as u32)
+                    .ok_or_else(|| {
+                        OperationFailure::with_detail(
+                            KERNEL_REFUSED,
+                            "spawn-process: controller bootstrap fd missing".to_owned(),
+                        )
+                    })
+            })
+            .transpose()?;
         let response = SpawnRunnerResponse {
             vm_id: request.vm_id.clone(),
             role_id: request.role_id.clone(),
@@ -2673,12 +2707,27 @@ impl OperationHandler for SpawnRunnerHandler {
             pid,
             start_time_ticks,
             pidfd_index: 0,
-            controller_bootstrap_fd_index: None,
+            controller_bootstrap_fd_index,
             console_fd_index: None,
         };
+        let mut fds = vec![pidfd];
+        if let Some(index) = controller_bootstrap_fd_index {
+            fds.push(
+                reply_fds
+                    .get(index as usize)
+                    .map(|fd| duplicate_fd(fd.as_raw_fd(), "spawn-process reply bootstrap"))
+                    .transpose()?
+                    .ok_or_else(|| {
+                        OperationFailure::with_detail(
+                            KERNEL_REFUSED,
+                            "spawn-process: controller bootstrap fd missing".to_owned(),
+                        )
+                    })?,
+            );
+        }
         Ok(OperationResult::with_fds(
             typed_result(SPAWN_RUNNER, &response)?,
-            vec![pidfd],
+            fds,
         ))
     }
 }

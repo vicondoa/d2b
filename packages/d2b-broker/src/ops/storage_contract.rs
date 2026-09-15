@@ -465,11 +465,7 @@ mod tests {
                 .keys()
                 .cloned()
                 .collect::<Vec<_>>(),
-            vec![
-                "apply".to_owned(),
-                "storageRef".to_owned(),
-                "tracingSpanId".to_owned(),
-            ]
+            vec!["apply".to_owned(), "storageRef".to_owned()]
         );
 
         let lock =
@@ -484,7 +480,7 @@ mod tests {
                 .keys()
                 .cloned()
                 .collect::<Vec<_>>(),
-            vec!["lockRef".to_owned(), "tracingSpanId".to_owned()]
+            vec!["lockRef".to_owned()]
         );
         for value in [&storage, &lock] {
             for forbidden in [
