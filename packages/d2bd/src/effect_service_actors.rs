@@ -9,19 +9,25 @@
 //! against a dead or superseded actor.
 //!
 //! This module ships the actor machinery around a small FIXTURE service trait
-//! ([`EffectService`]); no real provider integration lives here. The
-//! rendezvous binding consumes [`EffectServiceBinding`] at U8 integration:
-//! it captures [`EffectServiceBinding::revision`] when a call starts and
+//! ([`EffectService`]); no real provider integration lives here. Hosting is
+//! wired at the provider composition site: `ProviderSet::start`
+//! (`provider_lifecycle.rs`) hosts one actor per DECLARED effect service —
+//! every `ServiceDecl` a started provider declares becomes an
+//! [`EffectServiceRow`] on the zone's supervisor, rebuilt from that durable
+//! row on every respawn.
+//!
+//! The rendezvous binding consumes [`EffectServiceBinding`] at U8b: it
+//! captures [`EffectServiceBinding::revision`] when a call starts and
 //! dispatches through [`EffectServiceBinding::call_expected`], so an in-
 //! flight call against a revision that a respawn or republish moved past
 //! refuses with a dedicated code ([`EffectServiceError::StaleRevision`])
-//! instead of hanging or hitting the wrong generation.
-//!
-//! The module ships ahead of its composition site: nothing constructs it
-//! until U8 integration wires the rendezvous binding to
-//! [`EffectServiceBinding`]. The dead-code allowance is the tree's marker
-//! for exactly that state (same as `credential_backend_runtime.rs`).
+//! instead of hanging or hitting the wrong generation. Until that wiring
+//! lands, the binding call surface (`call`, `kill`, `call_expected`) is
+//! exercised by the hosting-site tests only; those items carry the
+//! dead-code allowance as the tree's marker for exactly that state (same as
+//! `credential_backend_runtime.rs`).
 #![allow(dead_code)]
+
 
 use std::collections::HashMap;
 use std::fmt;
@@ -30,6 +36,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use d2b_provider_toolkit::ServiceDecl;
 use ractor::{Actor, ActorCell, ActorProcessingErr, ActorRef, SupervisionEvent};
 use thiserror::Error;
 use tokio::sync::oneshot;
@@ -82,15 +89,40 @@ pub trait EffectServiceFactory: Send + Sync + 'static {
     fn build(&self) -> Arc<dyn EffectService>;
 }
 
-/// The durable declaration row for one effect service (U8). Production
-/// integration persists these under the zone state root (KTD3); until then
-/// the supervisor treats this struct as its durable source and respawns a
-/// service exclusively from it.
+/// The durable declaration row for one effect service (U8): the production
+/// declaration the declaring provider made about the service, plus the
+/// factory that rebuilds the service instance from this row. The supervisor
+/// treats this struct as its durable source and respawns a service
+/// exclusively from it (mirroring `ResourceManager` re-creating its drivers
+/// from the committed spec row).
 #[derive(Clone)]
 pub struct EffectServiceRow {
+    /// The zone that hosts this service.
     pub zone: String,
+    /// The service identity the session layer addresses.
     pub service: String,
+    /// The production declaration facets (methods, attach kinds, streams,
+    /// endpoint policy). The rendezvous validates method calls against
+    /// these at U8b.
+    pub decl: ServiceDecl,
+    /// Rebuilds the service on respawn.
     pub factory: Arc<dyn EffectServiceFactory>,
+}
+
+impl EffectServiceRow {
+    /// One declared service of a started provider, hosted in `zone`.
+    pub fn declared(
+        zone: &str,
+        service: &ServiceDecl,
+        factory: Arc<dyn EffectServiceFactory>,
+    ) -> Self {
+        Self {
+            zone: zone.to_owned(),
+            service: service.id.to_owned(),
+            decl: *service,
+            factory,
+        }
+    }
 }
 
 impl fmt::Debug for EffectServiceRow {
@@ -305,7 +337,6 @@ pub(crate) struct EffectServiceSupervisorState {
     rows: HashMap<String, EffectServiceRow>,
     bindings: HashMap<String, EffectServiceBinding>,
     actors_by_id: HashMap<ractor::ActorId, String>,
-    my_cell: ActorCell,
 }
 
 /// Per-zone supervisor for effect services (U8, KTD5): service actors are
@@ -415,13 +446,15 @@ impl Actor for EffectServiceSupervisor {
             rows: HashMap::new(),
             bindings: HashMap::new(),
             actors_by_id: HashMap::new(),
-            my_cell: myself.get_cell(),
         };
         // Restart recovery: spawn one actor per durable row, mirroring
-        // `ResourceManager::pre_start`. Rows are per-zone records; a foreign
-        // row has no business in this supervisor.
+        // `ResourceManager::pre_start`. The row is recorded before the
+        // actor exists (F1-shaped boundary, same as `publish`): a respawn
+        // after a later kill must find the durable row in `rows` even when
+        // the supervisor started from that row.
         let zone = state.zone.clone();
         for row in args.rows.into_iter().filter(|row| row.zone == zone) {
+            state.rows.insert(row.service.clone(), row.clone());
             let _ = state.spawn_service_actor(&myself, &row).await;
         }
         Ok(state)
@@ -554,20 +587,22 @@ mod tests {
         }
     }
 
-    fn echo_row(zone: &str, service: &str, builds: Arc<AtomicU64>) -> EffectServiceRow {
-        EffectServiceRow {
-            zone: zone.to_string(),
-            service: service.to_string(),
-            factory: Arc::new(EchoFactory { builds }),
+    fn service_decl(id: &'static str) -> ServiceDecl {
+        ServiceDecl {
+            id,
+            methods: &["ping"],
+            attach_kinds: &[],
+            streams: &[],
+            endpoint_policy: None,
         }
     }
 
-    fn once_row(zone: &str, service: &str, svc: Arc<dyn EffectService>) -> EffectServiceRow {
-        EffectServiceRow {
-            zone: zone.to_string(),
-            service: service.to_string(),
-            factory: Arc::new(OnceFactory(svc)),
-        }
+    fn echo_row(zone: &str, service: &'static str, builds: Arc<AtomicU64>) -> EffectServiceRow {
+        EffectServiceRow::declared(zone, &service_decl(service), Arc::new(EchoFactory { builds }))
+    }
+
+    fn once_row(zone: &str, service: &'static str, svc: Arc<dyn EffectService>) -> EffectServiceRow {
+        EffectServiceRow::declared(zone, &service_decl(service), Arc::new(OnceFactory(svc)))
     }
 
     async fn spawn_supervisor(
