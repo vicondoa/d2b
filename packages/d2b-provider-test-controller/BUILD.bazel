@@ -1,6 +1,10 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = [])
+
 exports_files(
     [
         "BUILD.bazel",
@@ -13,7 +17,6 @@ rust_binary(
     name = "d2b-provider-test-controller",
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",

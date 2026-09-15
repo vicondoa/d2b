@@ -1,6 +1,10 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__"])
+
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
@@ -23,7 +27,6 @@ rust_library(
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
-    visibility = ["//visibility:public"],
 )
 
 rust_test(
@@ -39,7 +42,6 @@ rust_test(
         "//packages/d2b-provider:d2b_provider",
         "//packages/d2b-session:d2b_session",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-    visibility = ["//visibility:public"],
 )
 
 rust_test(
@@ -48,7 +50,6 @@ rust_test(
         "tests/authentication.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -62,7 +63,6 @@ rust_test(
         "tests/effect_port_mock.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -76,7 +76,6 @@ rust_test(
         "tests/framing.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -91,7 +90,6 @@ rust_test(
         "integration/host_guest.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -105,7 +103,6 @@ rust_test(
         "integration/no_fd_transfer.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -119,7 +116,6 @@ rust_test(
         "tests/observe.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -133,7 +129,6 @@ rust_test(
         "tests/open_close.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -147,7 +142,6 @@ rust_test(
         "tests/redaction.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -161,7 +155,6 @@ rust_test(
         "tests/relay_lifecycle.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -175,7 +168,6 @@ rust_test(
         "tests/schema.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -189,7 +181,6 @@ rust_test(
         "tests/service.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -203,7 +194,6 @@ rust_test(
         "tests/state_volume.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -217,7 +207,6 @@ rust_test(
         "tests/topology.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",

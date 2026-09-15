@@ -1,6 +1,10 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-audio-binding:__pkg__", "//packages/d2b-provider-audio-service:__pkg__", "//packages/d2bd:__pkg__"])
+
 exports_files(
     [
         "BUILD.bazel",
@@ -21,7 +25,6 @@ rust_library(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
-    visibility = ["//visibility:public"],
 )
 
 rust_library(
@@ -35,7 +38,6 @@ rust_library(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
-    visibility = ["//visibility:public"],
 )
 
 rust_test(
@@ -46,7 +48,6 @@ rust_test(
     compile_data = [
         "Cargo.toml",
     ],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -61,7 +62,6 @@ rust_test(
         "tests/audio_policy.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -76,7 +76,6 @@ rust_test(
         "tests/audio_telemetry.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -88,7 +87,6 @@ rust_test(
     name = "state",
     srcs = ["tests/state.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -103,7 +101,6 @@ rust_test(
         "tests/authority.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -117,7 +114,6 @@ rust_test(
         "tests/controller.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -132,7 +128,6 @@ rust_test(
         "tests/mediator.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -146,7 +141,6 @@ rust_test(
         "tests/resource_type.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",

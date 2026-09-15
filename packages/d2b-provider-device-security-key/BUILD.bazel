@@ -1,6 +1,10 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-device:__pkg__", "//packages/d2bd:__pkg__"])
+
 
 exports_files(
     ["BUILD.bazel", "nix/default.nix", "nix/guest.nix", "nix/tests/default.nix"],
@@ -11,7 +15,6 @@ rust_library(
     name = "d2b_provider_device_security_key",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -32,7 +35,6 @@ rust_library(
     compile_data = ["Cargo.toml"],
     crate_name = "d2b_provider_device_security_key",
     crate_features = ["test-support"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -51,7 +53,6 @@ rust_test(
     name = "d2b_provider_device_security_key_test",
     crate = ":d2b_provider_device_security_key",
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -69,7 +70,6 @@ rust_test(
     name = "guest_frontend_process",
     srcs = ["tests/guest_frontend_process.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -82,7 +82,6 @@ rust_test(
     name = "lease_state_machine",
     srcs = ["tests/lease_state_machine.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -95,7 +94,6 @@ rust_test(
     name = "mutual_exclusion",
     srcs = ["tests/mutual_exclusion.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -108,7 +106,6 @@ rust_test(
     name = "provider_lifecycle",
     srcs = ["integration/provider_lifecycle.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -121,7 +118,6 @@ rust_test(
     name = "redaction",
     srcs = ["tests/redaction.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_device_security_key",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -133,7 +129,6 @@ rust_test(
         "tests/exact_authority.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
