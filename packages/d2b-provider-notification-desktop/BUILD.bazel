@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 exports_files(
     [
@@ -11,7 +17,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_notification_desktop",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -24,7 +30,7 @@ rust_library(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_notification_desktop_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -38,7 +44,7 @@ rust_library(
     visibility = ["//visibility:public"],
 )
 
-rust_test(
+d2b_rust_test(
     name = "action_nonce",
     srcs = [
         "tests/action_nonce.rs",
@@ -52,7 +58,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "notification_lifecycle",
     srcs = [
         "tests/notification_lifecycle.rs",
@@ -67,7 +73,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "provider_behavior",
     srcs = [
         "tests/provider_behavior.rs",
@@ -82,7 +88,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "redaction",
     srcs = [
         "tests/redaction.rs",
@@ -94,7 +100,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "stream_record",
     srcs = [
         "tests/stream_record.rs",
@@ -108,7 +114,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "lib_units",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_notification_desktop",
@@ -135,7 +141,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_notification_desktop_doc_test",
     crate = "//packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop",
 )

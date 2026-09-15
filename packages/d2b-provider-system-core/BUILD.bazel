@@ -1,11 +1,17 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_system_core",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -15,7 +21,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_system_core_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -26,7 +32,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "host_reconciliation",
     srcs = ["tests/host_reconciliation.rs"],
     compile_data = ["Cargo.toml"],
@@ -37,7 +43,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "ownership",
     srcs = ["tests/ownership.rs"],
     compile_data = ["Cargo.toml"],
@@ -48,7 +54,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "user_discovery",
     srcs = ["tests/user_discovery.rs"],
     compile_data = ["Cargo.toml"],
@@ -59,7 +65,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_system_core_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_system_core",
@@ -88,7 +94,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_system_core_doc_test",
     crate = "//packages/d2b-provider-system-core:d2b_provider_system_core",
 )

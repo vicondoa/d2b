@@ -1,12 +1,19 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
+
 
 exports_files(
     ["BUILD.bazel", "nix/default.nix", "nix/tests/default.nix"],
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_shell_terminal",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -17,7 +24,7 @@ rust_library(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_shell_terminal_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -30,7 +37,7 @@ rust_library(
 )
 
 
-rust_test(
+d2b_rust_test(
     name = "adoption",
     srcs = [
         "tests/adoption.rs",
@@ -44,7 +51,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "authz",
     srcs = [
         "tests/authz.rs",
@@ -58,7 +65,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "controller_reconcile",
     srcs = [
         "tests/controller_reconcile.rs",
@@ -72,7 +79,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "migration",
     srcs = [
         "tests/migration.rs",
@@ -86,7 +93,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "observability",
     srcs = [
         "tests/observability.rs",
@@ -100,7 +107,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "placement",
     srcs = [
         "tests/placement.rs",
@@ -114,7 +121,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "resource_schema",
     srcs = [
         "tests/resource_schema.rs",
@@ -128,7 +135,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "ring_buffer",
     srcs = [
         "tests/ring_buffer.rs",
@@ -142,7 +149,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "service_contract",
     srcs = [
         "tests/service_contract.rs",
@@ -156,7 +163,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "supervisor_runtime",
     srcs = [
         "tests/supervisor_runtime.rs",
@@ -191,7 +198,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_shell_terminal_doc_test",
     crate = "//packages/d2b-provider-shell-terminal:d2b_provider_shell_terminal",
 )

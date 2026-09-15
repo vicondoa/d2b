@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
 exports_files(["proto/d2b-resource-v3.proto"], visibility = ["//visibility:public"])
@@ -18,7 +24,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_contracts_resource",
     srcs = resource_srcs,
     compile_data = ["Cargo.toml"],
@@ -26,7 +32,7 @@ rust_library(
     deps = ["//packages/d2b-contracts:d2b_contracts"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "schema",
     srcs = ["tests/schema.rs"],
     compile_data = ["Cargo.toml"],
@@ -34,7 +40,7 @@ rust_test(
     visibility = ["//visibility:public"],
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_contracts_resource_test",
     crate = ":d2b_contracts_resource",
     compile_data = ["Cargo.toml"],
@@ -62,7 +68,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(name = "d2b_contracts_resource_doc_test", crate = ":d2b_contracts_resource")
+d2b_rust_doc_test(name = "d2b_contracts_resource_doc_test", crate = ":d2b_contracts_resource")
 
 test_suite(
     name = "all-tests",

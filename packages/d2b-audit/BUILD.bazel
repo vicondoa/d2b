@@ -1,5 +1,10 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 
 exports_files(
@@ -18,7 +23,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_audit",
     srcs = d2b_audit_srcs,
     compile_data = ["Cargo.toml"],
@@ -28,7 +33,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_audit_test_support",
     srcs = d2b_audit_srcs,
     compile_data = ["Cargo.toml"],
@@ -39,7 +44,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_audit_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_audit",
@@ -63,7 +68,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_audit_doc_test",
     crate = "//packages/d2b-audit:d2b_audit",
 )

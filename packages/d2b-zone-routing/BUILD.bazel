@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 
 exports_files(
@@ -9,7 +15,7 @@ exports_files(
 
 d2b_zone_routing_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
-rust_library(
+d2b_rust_library(
     name = "d2b_zone_routing",
     srcs = d2b_zone_routing_srcs,
     compile_data = ["Cargo.toml"],
@@ -23,7 +29,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_zone_routing_test_support",
     srcs = d2b_zone_routing_srcs,
     compile_data = ["Cargo.toml"],
@@ -39,7 +45,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "route_engine_vectors",
     srcs = ["tests/route_engine_vectors.rs"],
     compile_data = ["Cargo.toml"],
@@ -52,7 +58,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "guest_enrollment",
     srcs = ["tests/guest_enrollment.rs"],
     compile_data = ["Cargo.toml"],
@@ -69,7 +75,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "route_decision",
     srcs = ["benches/route_decision.rs"],
     compile_data = ["Cargo.toml"],
@@ -84,7 +90,7 @@ rust_test(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_zone_routing_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_zone_routing",
@@ -108,7 +114,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_zone_routing_doc_test",
     crate = "//packages/d2b-zone-routing:d2b_zone_routing",
 )
