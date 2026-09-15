@@ -23,10 +23,17 @@
 //! is the shape that crosses to the declaring process, and
 //! [`DirectInvocation`] is the shape a local handler is handed.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use d2b_contracts_broker::broker_wire::{BrokerCallerRole, FdKind, MAX_FRAME_FDS};
+use d2b_contracts_broker::broker_wire::{
+    BrokerCallerRole, DEFAULT_CONTEXT_DEADLINE_MS, FdKind, ForwardContext, MAX_FRAME_FDS,
+    PublishTrustedContextValues, PublishTrustedContextResponse,
+};
 use d2b_contracts_resource::v3::CanonicalJsonObject;
 use serde_json::Value;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -63,8 +70,19 @@ pub const ERRORED: &str = "errored";
 
 pub const FD_LEG: &str = d2b_contracts_broker::broker_wire::FD_LEG;
 
+/// The refusal code for a broker-attested context the envelope cannot mint
+/// or the peer cannot validate.
+///
+/// The code is the shared carrier code (`d2b_contracts_broker::broker_wire::
+/// STALE_CONTEXT`): the broker refuses with it when it holds no published
+/// values for the Zone a call names (minting is impossible until the daemon
+/// publishes), and the rendezvous refuses with it when a context's epoch,
+/// Zone, revision, or generations do not match its own current values.
+
+pub const STALE_CONTEXT: &str = d2b_contracts_broker::broker_wire::STALE_CONTEXT;
+
 /// The closed set of codes the envelope itself refuses with.
-pub const ENVELOPE_REFUSALS: [&str; 7] = [
+pub const ENVELOPE_REFUSALS: [&str; 8] = [
     UNKNOWN_OPERATION,
     UNCOMMITTED_OPERATION,
     UNGRANTED_CALLER,
@@ -72,6 +90,7 @@ pub const ENVELOPE_REFUSALS: [&str; 7] = [
     INVALID_PAYLOAD,
     UNREGISTERED_HANDLER,
     FD_LEG,
+    STALE_CONTEXT,
 ];
 
 /// One refused invocation, named.
@@ -160,6 +179,290 @@ impl CallerAuthority {
             BrokerCallerRole::HostShutdownUid { .. } => Self::Daemon,
             BrokerCallerRole::NotAuthorized => Self::Unauthorized,
         }
+    }
+
+    /// The initiating identity a broker-minted context carries for this
+    /// caller: the stable class name the attestation records.
+    ///
+    /// The identity is the broker's own classification, never a caller-
+    /// supplied spelling, so a context cannot re-present a caller as a
+    /// class it was not authenticated under.
+    pub fn identity(self) -> &'static str {
+        match self {
+            Self::Daemon => "daemon",
+            Self::Admin => "admin",
+            Self::Launcher => "launcher",
+            Self::Unauthorized => "unauthorized",
+        }
+    }
+}
+
+/// One Zone's daemon-published attestation values, as the broker cached
+/// them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ZoneAttestation {
+    provider_set_revision: u64,
+    controller_generation: u64,
+    guest_generation: u64,
+}
+
+/// The durable shape of the broker's trusted-context state.
+///
+/// One file under the broker state root, persisted atomically (temp file +
+/// rename + fsync) exactly like the broker's other durable records, so a
+/// crash never leaves a half-written epoch or a half-applied publication.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct PersistedTrustedContext {
+    /// The broker-epoch nonce this store currently mints with.
+    epoch: u64,
+    /// The daemon-published values the broker holds, per Zone.
+    zones: BTreeMap<String, ZoneAttestation>,
+}
+
+/// The failure of one trusted-context store operation.
+#[derive(Debug)]
+pub enum TrustedContextStoreError {
+    /// A publication that would move the cached values backwards.
+    StaleFreshness(&'static str),
+    /// The store could not open, persist, or read its durable state.
+    Io { detail: String },
+    /// The durable state file is not the store's own shape.
+    Corrupt { detail: String },
+}
+
+impl std::fmt::Display for TrustedContextStoreError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StaleFreshness(code) => write!(formatter, "stale freshness: {code}"),
+            Self::Io { detail } => write!(formatter, "trusted-context store I/O: {detail}"),
+            Self::Corrupt { detail } => {
+                write!(formatter, "trusted-context store corrupt: {detail}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TrustedContextStoreError {}
+
+impl TrustedContextStoreError {
+    /// The closed stale-context code a freshness refusal surfaces under.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::StaleFreshness(code) => code,
+            Self::Io { .. } | Self::Corrupt { .. } => STALE_CONTEXT,
+        }
+    }
+}
+
+/// The broker-held cache the daemon's publications fill and the envelope
+/// mints contexts from.
+///
+/// The broker is the sole minter of the carrier's context block, and it
+/// mints from values the daemon owns: the daemon publishes its current
+/// provider-set revision and controller/guest generations over the
+/// established origination leg, and this store caches them as durable,
+/// monotonically increasing broker state.
+///
+/// Two properties are structural. The store refuses to mint until the
+/// daemon has published the Zone a call names - a call into a Zone the
+/// broker holds no values for is refused with the stale-context code rather
+/// than attested blind. And the broker-epoch nonce is a durable counter a
+/// fresh store instance strictly increments on open, so a broker restart is
+/// a fresh nonce: every context minted before the restart fails the
+/// rendezvous's epoch check regardless of generation equality, and no
+/// previously minted context can be re-minted into validity, because the
+/// old context still carries the old epoch.
+pub struct TrustedContextStore {
+    root: PathBuf,
+    state: Mutex<PersistedTrustedContext>,
+}
+
+impl TrustedContextStore {
+    /// The directory name under the store root the durable state lives in.
+    const STATE_DIR: &'static str = "trusted-context";
+
+    /// Open the store under `root`, claiming a fresh broker epoch.
+    ///
+    /// The epoch is loaded from the durable state when one exists and
+    /// strictly incremented before anything mints, so no two broker
+    /// instances ever mint under one epoch; the fresh epoch is persisted
+    /// before the store is usable. The daemon's last-published values are
+    /// loaded with it, so a restarting broker still holds the values it
+    /// published for while minting under a nonce no prior context carries.
+    pub fn open(root: impl Into<PathBuf>) -> Result<Self, TrustedContextStoreError> {
+        let root = root.into();
+        let directory = root.join(Self::STATE_DIR);
+        fs::create_dir_all(&directory).map_err(|error| TrustedContextStoreError::Io {
+            detail: format!("create {}: {error}", directory.display()),
+        })?;
+        let path = directory.join("state.json");
+        let mut state = if path.exists() {
+            let bytes = fs::read(&path).map_err(|error| TrustedContextStoreError::Io {
+                detail: format!("read {}: {error}", path.display()),
+            })?;
+            serde_json::from_slice(&bytes).map_err(|error| TrustedContextStoreError::Corrupt {
+                detail: format!("{}: {error}", path.display()),
+            })?
+        } else {
+            PersistedTrustedContext {
+                epoch: 0,
+                zones: BTreeMap::new(),
+            }
+        };
+        // A fresh instance is a fresh attestation lineage: strictly bump the
+        // durable counter before the store can mint, and persist the bump so
+        // even a crash before the first mint cannot make the next instance
+        // reuse this epoch.
+        state.epoch = state.epoch.saturating_add(1);
+        Self::persist(&path, &state)?;
+        Ok(Self {
+            root,
+            state: Mutex::new(state),
+        })
+    }
+
+    /// The epoch this store is currently minting with.
+    pub fn epoch(&self) -> u64 {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .epoch
+    }
+
+    /// Whether the broker holds published values for one Zone.
+    ///
+    /// The fail-closed side of the attestation: a Zone the daemon has not
+    /// published is a Zone the broker cannot attest, so the envelope refuses
+    /// to mint for it rather than attest blind.
+    pub fn holds_zone(&self, zone: &str) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .zones
+            .contains_key(zone)
+    }
+
+    /// Cache one daemon publication, monotonically.
+    ///
+    /// The cache is monotonically increasing: a publication for a Zone the
+    /// broker already holds values for must not move any of the three values
+    /// backwards - a rollback means the daemon is re-publishing older state
+    /// over newer, and the publication is refused with the stale-context
+    /// code rather than attested. Returns the epoch the broker is currently
+    /// minting with, so the daemon's receiving leg learns the nonce every
+    /// context it validates must carry.
+    pub fn publish(
+        &self,
+        values: &PublishTrustedContextValues,
+    ) -> Result<u64, TrustedContextStoreError> {
+        let mut state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = state.zones.get(&values.zone) {
+            if existing.provider_set_revision > values.provider_set_revision
+                || existing.controller_generation > values.controller_generation
+                || existing.guest_generation > values.guest_generation
+            {
+                return Err(TrustedContextStoreError::StaleFreshness(STALE_CONTEXT));
+            }
+        }
+        let inserted = ZoneAttestation {
+            provider_set_revision: values.provider_set_revision,
+            controller_generation: values.controller_generation,
+            guest_generation: values.guest_generation,
+        };
+        let changed = state.zones.get(&values.zone) != Some(&inserted);
+        if changed {
+            state.zones.insert(values.zone.clone(), inserted);
+            self.persist_locked(&state)?;
+        }
+        Ok(state.epoch)
+    }
+
+    /// Mint one context block for a Zone the broker holds values for.
+    ///
+    /// The envelope's mint call: refuses with the stale-context code until
+    /// the daemon has published the Zone, then attests the Zone's cached
+    /// revision and generations under the store's current epoch with the
+    /// broker's own classification of the caller and the operation's
+    /// deadline budget.
+    pub fn mint(
+        &self,
+        zone: &str,
+        initiating_identity: &str,
+        deadline_ms: u64,
+    ) -> Result<ForwardContext, &'static str> {
+        let state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(attestation) = state.zones.get(zone) else {
+            // Nothing published for this Zone: the broker cannot attest a
+            // call it holds no values for, so the call is refused with the
+            // dedicated code - the same code the receiving leg refuses a
+            // stale or mismatched context with.
+            return Err(STALE_CONTEXT);
+        };
+        Ok(ForwardContext {
+            broker_epoch: state.epoch,
+            zone: zone.to_owned(),
+            provider_set_revision: attestation.provider_set_revision,
+            controller_generation: attestation.controller_generation,
+            guest_generation: attestation.guest_generation,
+            initiating_identity: initiating_identity.to_owned(),
+            deadline_ms,
+        })
+    }
+
+    /// A publication ack a daemon-side receiver hands back to its caller.
+    ///
+    /// The wire shape is the acknowledgement the daemon reads its epoch
+    /// from; production transports dispatch it on the origination leg
+    /// (later-unit wiring), and the store hands the same value directly so
+    /// the two never disagree.
+    pub fn publication_reply(&self, values: &PublishTrustedContextValues) -> Result<PublishTrustedContextResponse, TrustedContextStoreError> {
+        let epoch = self.publish(values)?;
+        Ok(PublishTrustedContextResponse {
+            broker_epoch: epoch,
+        })
+    }
+
+    fn persist_locked(&self, state: &PersistedTrustedContext) -> Result<(), TrustedContextStoreError> {
+        Self::persist(&self.root.join(Self::STATE_DIR).join("state.json"), state)
+    }
+
+    fn persist(
+        path: &Path,
+        state: &PersistedTrustedContext,
+    ) -> Result<(), TrustedContextStoreError> {
+        let bytes = serde_json::to_vec(state).map_err(|error| TrustedContextStoreError::Io {
+            detail: format!("serialize {}: {error}", path.display()),
+        })?;
+        let tmp = path.with_extension("json.tmp");
+        {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&tmp)
+                .map_err(|error| TrustedContextStoreError::Io {
+                    detail: format!("open {}: {error}", tmp.display()),
+                })?;
+            file.write_all(&bytes)
+                .map_err(|error| TrustedContextStoreError::Io {
+                    detail: format!("write {}: {error}", tmp.display()),
+                })?;
+            file.sync_all()
+                .map_err(|error| TrustedContextStoreError::Io {
+                    detail: format!("sync {}: {error}", tmp.display()),
+                })?;
+        }
+        fs::rename(&tmp, path).map_err(|error| TrustedContextStoreError::Io {
+            detail: format!("rename {} -> {}: {error}", tmp.display(), path.display()),
+        })?;
+        if let Some(parent) = path.parent() {
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| TrustedContextStoreError::Io {
+                    detail: format!("sync {}: {error}", parent.display()),
+                })?;
+        }
+        Ok(())
     }
 }
 
@@ -250,6 +553,10 @@ pub struct DirectInvocation<'a> {
     pub ctx: InvocationCtx<'a>,
     /// The canonical payload the envelope validated against the row.
     pub payload: &'a CanonicalJsonObject,
+    /// The broker-attested context block the envelope minted for this
+    /// invocation, when the broker holds a context store. A local handler
+    /// sees the same block the forward carrier would carry.
+    pub context: Option<&'a ForwardContext>,
     /// The descriptors the caller attached to this invocation,when any.
     /// The caller owns them;the invocation borrows them for its duration.
     pub fds: &'a [OwnedFd],
@@ -289,6 +596,14 @@ pub struct BrokerEnvelope {
     profile: BrokerProfileId,
     dispatcher: Box<dyn OperationDispatcher>,
     invocations: AtomicU64,
+    /// The broker-held attestation cache, when the broker attests calls.
+    ///
+    /// Absent, the envelope runs the context-free carrier: no context block
+    /// is minted and the forwarded request crosses as the pre-attestation
+    /// shape. Present, every call is minted a broker-attested context block
+    /// before dispatch, and a call the store cannot attest is refused with
+    /// the stale-context code.
+    context_store: Option<Arc<TrustedContextStore>>,
 }
 
 impl std::fmt::Debug for BrokerEnvelope {
@@ -312,6 +627,7 @@ impl BrokerEnvelope {
             dispatcher,
             committed: Vec::new(),
             extras: Vec::new(),
+            context_store: None,
         }
     }
 
@@ -400,6 +716,24 @@ impl BrokerEnvelope {
         }
         let payload = Self::validate(row, payload)
             .map_err(|_| EnvelopeRefusal::new(invocation_id.clone(), operation, INVALID_PAYLOAD))?;
+        // The broker attests the call before dispatch when it holds a
+        // context store: the mint names the Zone's published revision and
+        // generations under the current broker epoch, the caller's identity
+        // as the broker classified it, and the operation's deadline budget.
+        // A store that holds no values for the Zone refuses to mint, and the
+        // call is refused with the stale-context code rather than attested
+        // blind. (The budget is the carrier default until the committed
+        // row's deadline tier arrives; U4 wires the row budget here.)
+        let context = match &self.context_store {
+            Some(store) => Some(
+                store
+                    .mint(zone, caller.identity(), DEFAULT_CONTEXT_DEADLINE_MS)
+                    .map_err(|_| {
+                        EnvelopeRefusal::new(invocation_id.clone(), operation, STALE_CONTEXT)
+                    })?,
+            ),
+            None => None,
+        };
         let ctx = InvocationCtx {
             operation: row.operation,
             zone,
@@ -410,6 +744,7 @@ impl BrokerEnvelope {
             .dispatch(DirectInvocation {
                 ctx,
                 payload: &payload,
+                context: context.as_ref(),
                 fds,
                 fd_kind: row.fd_kind,
             })
@@ -531,9 +866,21 @@ pub struct BrokerEnvelopeBuilder {
     dispatcher: Box<dyn OperationDispatcher>,
     committed: Vec<&'static str>,
     extras: Vec<BrokerOperationRow>,
+    context_store: Option<Arc<TrustedContextStore>>,
 }
 
 impl BrokerEnvelopeBuilder {
+    /// Attest every call through a trusted-context store.
+    ///
+    /// The envelope mints a broker-attested context block for each call
+    /// before dispatch and refuses with the stale-context code any call the
+    /// store cannot attest - a Zone the daemon has not published is refused
+    /// rather than attested blind.
+    pub fn with_trusted_context(mut self, store: Arc<TrustedContextStore>) -> Self {
+        self.context_store = Some(store);
+        self
+    }
+
     /// Commit the rows the broker serves for this profile.
     ///
     /// A row absent from the committed set is refused as uncommitted even
@@ -614,6 +961,7 @@ impl BrokerEnvelopeBuilder {
             profile: self.profile,
             dispatcher: self.dispatcher,
             invocations: AtomicU64::new(1),
+            context_store: self.context_store,
         }
     }
 }
@@ -689,6 +1037,7 @@ impl Default for BrokerEnvelope {
             profile: BrokerProfileId::Host,
             dispatcher: Box::new(HandlerTable::new()),
             invocations: AtomicU64::new(1),
+            context_store: None,
         }
     }
 }
@@ -737,6 +1086,7 @@ impl OperationDispatcher for ForwardingDispatcher {
                 zone: invocation.ctx.zone,
                 invocation_id: invocation.ctx.invocation_id,
                 payload: invocation.payload,
+                context: invocation.context,
                 fds: invocation.fds,
                 fd_kind: invocation.fd_kind,
             })
@@ -814,6 +1164,7 @@ while let Ok(fd) = accept_peer(&listener) {
                 request.payload,
                 &request_fds,
                 request.fd_kinds.first().copied(),
+                request.context.as_ref(),
             );
             let raw: Vec<std::os::fd::RawFd> =
                 response_fds.iter().map(|fd| fd.as_raw_fd()).collect();
@@ -836,6 +1187,7 @@ while let Ok(fd) = accept_peer(&listener) {
         payload: Value,
         fds: &[OwnedFd],
         fd_kind: Option<FdKind>,
+        context: Option<&d2b_contracts_broker::broker_wire::ForwardContext>,
     ) -> (d2b_contracts_broker::broker_wire::ForwardOperationResponse, Vec<OwnedFd>) {
         use d2b_contracts_broker::broker_wire::{
             ForwardOperationOutcome, ForwardOperationResponse,
@@ -849,6 +1201,7 @@ while let Ok(fd) = accept_peer(&listener) {
                 invocation_id,
             },
             payload: &payload,
+            context,
             fds,
             fd_kind,
         })) {
@@ -921,6 +1274,8 @@ while let Ok(fd) = accept_peer(&listener) {
             audit_join: None,
             max_fds: 0,
             fd_kind: None,
+            state_cell: None,
+            cell_durability: None,
         }
     }
 
@@ -1511,5 +1866,185 @@ while let Ok(fd) = accept_peer(&listener) {
         assert_eq!(refusal.code, FD_LEG);  // (also = WIRE_FD_LEG)
         assert_eq!(WIRE_FD_LEG, "fd-leg");
         assert_eq!(peer.calls(), 1);
+    }
+
+    use d2b_contracts_broker::broker_wire::{
+        ForwardContext, PublishTrustedContextValues, STALE_CONTEXT as WIRE_STALE_CONTEXT,
+    };
+
+    /// A daemon publication for a test Zone, stated once.
+    fn published(zone: &str) -> PublishTrustedContextValues {
+        PublishTrustedContextValues {
+            zone: zone.to_owned(),
+            provider_set_revision: 2,
+            controller_generation: 4,
+            guest_generation: 7,
+        }
+    }
+
+    fn context_store() -> (tempfile::TempDir, Arc<TrustedContextStore>) {
+        let dir = tempfile::tempdir().expect("store dir");
+        let store = Arc::new(TrustedContextStore::open(dir.path()).expect("open the store"));
+        (dir, store)
+    }
+
+    #[test]
+    fn the_envelope_refuses_to_mint_until_the_daemon_publishes() {
+        // The broker refuses to attest a call into a Zone it holds no
+        // published values for: the call is refused with the stale-context
+        // code before dispatch, so it never reaches the forwarding peer.
+        let peer = loopback_peer(echo_table());
+        let (_dir, store) = context_store();
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
+        )
+        .with_trusted_context(store)
+        .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+        .build();
+        let refusal = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect_err("a Zone with no published values cannot be attested");
+        assert_eq!(refusal.code, STALE_CONTEXT);
+        assert_eq!(refusal.code, WIRE_STALE_CONTEXT);
+        assert_eq!(peer.calls(), 0, "the refusal must come before dispatch");
+        // And once the daemon publishes the Zone, the same envelope mints.
+        let (_dir, store) = context_store();
+        store
+            .publish(&published("zone-a"))
+            .expect("the daemon published the Zone");
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
+        )
+        .with_trusted_context(store)
+        .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+        .build();
+        runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect("a published Zone is attested");
+    }
+
+    #[test]
+    fn the_minted_context_reaches_the_forwarding_peer_verbatim() {
+        use d2b_contracts_broker::broker_wire::DEFAULT_CONTEXT_DEADLINE_MS;
+        // The context the broker mints must cross the socket and reach the
+        // declaring process as the same closed block: the peer's handler
+        // reads it back through its invocation, and an envelope that minted
+        // a different block, or none, could not produce these values.
+        let observed: Arc<Mutex<Option<ForwardContext>>> = Arc::default();
+        let slot = Arc::clone(&observed);
+        let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", move |invocation| {
+            *Arc::clone(&slot).lock().expect("slot") = invocation.context.cloned();
+            Ok(DispatchOutcome {
+                result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
+                    .expect("canonical"),
+                fds: Vec::new(),
+            })
+        }));
+        let (_dir, store) = context_store();
+        store
+            .publish(&published("zone-a"))
+            .expect("the daemon published the Zone");
+        let envelope = BrokerEnvelope::over(
+            BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(peer.forwarder())),
+        )
+        .with_trusted_context(store)
+        .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+        .build();
+        runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect("the peer served the attested call");
+        assert_eq!(peer.calls(), 1);
+        let context = observed
+            .lock()
+            .expect("slot")
+            .take()
+            .expect("the peer received the minted context");
+        assert_eq!(context.broker_epoch, 1, "the first store instance mints under epoch one");
+        assert_eq!(context.zone, "zone-a");
+        assert_eq!(context.provider_set_revision, 2);
+        assert_eq!(context.controller_generation, 4);
+        assert_eq!(context.guest_generation, 7);
+        assert_eq!(context.initiating_identity, "daemon");
+        assert_eq!(context.deadline_ms, DEFAULT_CONTEXT_DEADLINE_MS);
+    }
+
+    #[test]
+    fn the_store_cache_is_monotonic_and_durable() {
+        let (dir, store) = context_store();
+        store
+            .publish(&published("zone-a"))
+            .expect("the first publication lands");
+        // A rollback is not a fresh publication: re-publishing older state
+        // over newer is refused with the stale-context code and leaves the
+        // cached values where they were.
+        let mut rolled_back = published("zone-a");
+        rolled_back.guest_generation = 1;
+        let error = store
+            .publish(&rolled_back)
+            .expect_err("a publication that moves a generation backwards is refused");
+        assert_eq!(error.code(), STALE_CONTEXT);
+        assert_eq!(store.epoch(), 1);
+
+        // A reopen is a fresh broker instance: the cache survives it, and
+        // the epoch strictly advances so no prior context can be re-minted
+        // into validity.
+        drop(store);
+        let reopened = TrustedContextStore::open(dir.path()).expect("reopen the store");
+        assert_eq!(reopened.epoch(), 2, "restart mints under a fresh epoch");
+        assert!(reopened.holds_zone("zone-a"), "published values survive restart");
+        let context = reopened
+            .mint("zone-a", "daemon", DEFAULT_CONTEXT_DEADLINE_MS)
+            .expect("the reopened store mints the Zone");
+        assert_eq!(context.broker_epoch, 2);
+        assert_eq!(context.provider_set_revision, 2);
+        assert_eq!(context.guest_generation, 7);
+    }
+
+    #[test]
+    fn a_restarting_broker_invalidates_every_previous_context_via_the_epoch() {
+        // Any context minted before a restart fails it regardless of
+        // generation equality: the reopened store mints under a strictly
+        // larger epoch, so a previously minted block cannot be re-minted -
+        // it still carries the old epoch.
+        let (dir, store) = context_store();
+        store
+            .publish(&published("zone-a"))
+            .expect("the daemon published the Zone");
+        let before = store
+            .mint("zone-a", "daemon", DEFAULT_CONTEXT_DEADLINE_MS)
+            .expect("the store mints before restart");
+        assert_eq!(before.broker_epoch, 1);
+        drop(store);
+
+        let reopened = TrustedContextStore::open(dir.path()).expect("the broker restarts");
+        assert_eq!(reopened.epoch(), 2);
+        // The pre-restart context was minted under epoch one; the restarted
+        // broker's epoch is two, so the old block can never be admitted
+        // again - re-minting it is the restarted broker's mint, which
+        // carries the fresh nonce.
+        let after = reopened
+            .mint("zone-a", "daemon", DEFAULT_CONTEXT_DEADLINE_MS)
+            .expect("the restarted broker mints");
+        assert_eq!(after.broker_epoch, 2);
+        assert_ne!(before.broker_epoch, after.broker_epoch);
+        assert_ne!(before, after, "the contexts differ in the epoch alone");
     }
 }

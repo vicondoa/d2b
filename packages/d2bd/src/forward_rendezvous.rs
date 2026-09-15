@@ -18,16 +18,30 @@
 //! registered - so an operation no started provider declares is refused by
 //! name before any handler runs.
 //!
-//! The forwarded hop was authorized at the broker against the committed rows;
-//! the carrier deliberately carries no caller identity, because a second
-//! identity on this side would be a second authority to keep in sync. The
-//! one identity this endpoint does check is the transport peer's: nothing in
-//! the frame binds the call to the authorization the broker performed, so
-//! `SO_PEERCRED` must name the broker before a single frame is read (see
-//! [`ServingPosture`]). The provider-side envelope then runs each declared
-//! operation under the declaring provider's own reference, which is the one
-//! caller fact this process owns: a provider may run the handlers it
-//! declared, and the envelope refuses every caller it holds no grant for.
+//! Freshness is broker-attested. The broker is the sole minter of the
+//! context block that rides each forwarded request: it names the broker's
+//! epoch nonce, the Zone, the provider-set revision, the controller and
+//! guest generations, the initiating identity, and the operation's deadline
+//! budget. Those values are daemon-owned, so the daemon publishes its
+//! current provider-set revision and generations to the broker; the broker
+//! caches them as durable, monotonically increasing state and refuses to
+//! mint until it holds a value for the Zone a call names. This endpoint
+//! enforces the attestation field-wise against its own current values: a
+//! stale broker epoch, a Zone not bound to the call, an older provider-set
+//! revision, a lower controller or guest generation, or a block a mutator
+//! changed is refused with the dedicated stale-context code - the broker is
+//! the sole minter, so any mismatch is freshness failure or tampering, and
+//! a broker restart invalidates every previously minted context through its
+//! fresh epoch nonce. The context's deadline budget is served as the
+//! per-call handler deadline here, bounded by an absolute ceiling. The one
+//! identity this endpoint checks beyond the attestation is the transport
+//! peer's: nothing in the frame binds the call to the authorization the
+//! broker performed, so `SO_PEERCRED` must name the broker before a single
+//! frame is read (see [`ServingPosture`]). The provider-side envelope then
+//! runs each declared operation under the declaring provider's own
+//! reference, which is the one caller fact this process owns: a provider
+//! may run the handlers it declared, and the envelope refuses every caller
+//! it holds no grant for.
 //!
 //! The endpoint serves on the daemon's runtime rather than on a thread per
 //! call: the listener and every accepted connection are registered with the
@@ -42,13 +56,15 @@ use std::collections::BTreeMap;
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use d2b_contracts_broker::FORWARD_SOCKET_ENV;
 use d2b_contracts_broker::broker_wire::{
-    FD_LEG, FdKind, MAX_FRAME_FDS, ForwardOperationOutcome, ForwardOperationRequest,
-    ForwardOperationResponse,
+    DEFAULT_CONTEXT_DEADLINE_MS, FD_LEG, FdKind, ForwardContext, ForwardOperationOutcome,
+    ForwardOperationRequest, ForwardOperationResponse, MAX_CONTEXT_DEADLINE_MS, MAX_FRAME_FDS,
+    STALE_CONTEXT,
 };
 use d2b_contracts_resource::v3::CanonicalJsonObject;
 use d2b_provider_toolkit::operations::{UNCOMMITTED_OPERATION, UNGRANTED_CALLER};
@@ -81,12 +97,16 @@ pub(crate) const FORWARD_TIMEOUT: &str = "forward-timeout";
 /// sends nothing is closed rather than holding an in-flight slot.
 const FORWARD_REQUEST_DEADLINE: Duration = Duration::from_secs(30);
 
-/// The handler deadline for one forwarded invocation.
+/// The handler deadline for one forwarded invocation on a context-free
+/// carrier, and the default budget a minted context carries.
 ///
 /// It sits below the broker's default forward round trip (30 s), so a stalled
 /// handler is refused by name while the caller is still listening rather than
-/// reported as a peer that never answered.
-const FORWARD_HANDLER_DEADLINE: Duration = Duration::from_secs(25);
+/// reported as a peer that never answered. The value is the carrier's shared
+/// default (see [`DEFAULT_CONTEXT_DEADLINE_MS`]): the context block carries
+/// the operation's own budget, and a request that rides a context is served
+/// under that budget instead of this constant, bounded by the shared ceiling.
+const FORWARD_HANDLER_DEADLINE: Duration = Duration::from_millis(DEFAULT_CONTEXT_DEADLINE_MS);
 
 /// The write deadline for one reply frame: a peer that will not read must not
 /// hold an in-flight slot open either.
@@ -118,10 +138,32 @@ pub(crate) fn configured_socket() -> Option<PathBuf> {
         .filter(|path| !path.as_os_str().is_empty())
 }
 
-/// The started providers of every Zone, keyed by Zone label.
+/// One Zone's forwarding binding: the started providers, the provider-set
+/// revision of the current publication, and the daemon-owned controller and
+/// guest generations the rendezvous enforces attestations against.
+struct ZoneBinding {
+    /// The provider-set revision: bumped by every publication, so a context
+    /// minted against the previous set refuses once a republish lands.
+    revision: u64,
+    /// The Zone's current controller generation, as the daemon publishes it.
+    controller_generation: u64,
+    /// The Zone's current guest generation, as the daemon publishes it.
+    guest_generation: u64,
+    /// The started providers of the current set.
+    providers: Arc<ProviderRuntime>,
+}
+
+/// The started providers of every Zone, keyed by Zone label, plus the
+/// attestation state the rendezvous enforces freshness against: the current
+/// provider-set revision and generations per Zone, and the broker epoch this
+/// process last observed from a publication acknowledgement.
 #[derive(Default)]
 pub(crate) struct ForwardRendezvous {
-    zones: Mutex<BTreeMap<String, Arc<ProviderRuntime>>>,
+    zones: Mutex<BTreeMap<String, ZoneBinding>>,
+    /// The broker epoch this process currently validates contexts against.
+    /// Zero means no publication has been acknowledged yet: no context can
+    /// be verified, so every attested call is refused fail-closed.
+    broker_epoch: AtomicU64,
 }
 
 impl ForwardRendezvous {
@@ -133,12 +175,91 @@ impl ForwardRendezvous {
     /// Publish the providers one Zone started.
     ///
     /// A Zone whose plane re-opens republishes its new provider set; the last
-    /// published set is the one that answers.
+    /// published set is the one that answers, and the republish bumps the
+    /// provider-set revision a minted context must match.
     pub(crate) fn publish(&self, zone: &str, providers: Arc<ProviderRuntime>) {
-        self.zones
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(zone.to_owned(), providers);
+        let mut zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = zones.entry(zone.to_owned()).or_insert(ZoneBinding {
+            revision: 0,
+            controller_generation: 0,
+            guest_generation: 0,
+            providers: Arc::clone(&providers),
+        });
+        entry.revision = entry.revision.saturating_add(1);
+        entry.providers = providers;
+    }
+
+    /// Publish the daemon-owned controller and guest generations one Zone
+    /// currently holds.
+    ///
+    /// The same values the daemon publishes to the broker over the
+    /// origination leg; the rendezvous enforces an attestation's generations
+    /// against these, so a context minted from older generations refuses
+    /// once the daemon's current values move on.
+    pub(crate) fn publish_generations(
+        &self,
+        zone: &str,
+        controller_generation: u64,
+        guest_generation: u64,
+    ) {
+        let mut zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // A Zone with no started providers has no binding to carry values
+        // for; the daemon publishes generations alongside the set that
+        // serves them.
+        if let Some(entry) = zones.get_mut(zone) {
+            entry.controller_generation = controller_generation;
+            entry.guest_generation = guest_generation;
+        }
+    }
+
+    /// Record the broker epoch this process validated against.
+    ///
+    /// The epoch is what the daemon reads from the broker's publication
+    /// acknowledgement: every context minted before a broker restart carries
+    /// an older epoch, so the moment a fresh acknowledgement lands, every
+    /// pre-restart context stops validating regardless of generation
+    /// equality.
+    pub(crate) fn set_broker_epoch(&self, epoch: u64) {
+        self.broker_epoch.store(epoch, Ordering::SeqCst);
+    }
+
+    /// Whether one attested context block is fresh against this process's
+    /// current values, for a call naming `request_zone`.
+    ///
+    /// Field-wise, in every field the attestation carries: the block's
+    /// broker epoch must be the epoch this process observed from the broker
+    /// (a pre-restart block carries an older one), the Zone must be bound to
+    /// the call's Zone, the provider-set revision and the controller and
+    /// guest generations must match the Zone's current published values, and
+    /// the deadline budget must be a positive value under the shared
+    /// ceiling. The broker is the sole minter, so any mismatch is a stale
+    /// or mutated attestation.
+    fn context_admitted(&self, context: &ForwardContext, request_zone: &str) -> bool {
+        let observed_epoch = self.broker_epoch.load(Ordering::SeqCst);
+        if observed_epoch == 0 {
+            // No epoch observed yet: the attestation cannot be verified, so
+            // no context is admitted - the fail-closed half of the rule that
+            // the broker refuses to mint until it holds a value.
+            return false;
+        }
+        if context.broker_epoch != observed_epoch {
+            return false;
+        }
+        if context.zone != request_zone {
+            return false;
+        }
+        if context.deadline_ms == 0 || context.deadline_ms > MAX_CONTEXT_DEADLINE_MS {
+            return false;
+        }
+        let zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match zones.get(request_zone) {
+            Some(binding) => {
+                context.provider_set_revision == binding.revision
+                    && context.controller_generation == binding.controller_generation
+                    && context.guest_generation == binding.guest_generation
+            }
+            None => false,
+        }
     }
 
     /// Answer one forwarded invocation.
@@ -157,7 +278,7 @@ impl ForwardRendezvous {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&request.zone)
-            .map(Arc::clone);
+            .map(|binding| Arc::clone(&binding.providers));
         let Some(providers) = providers else {
             return refused(UNCOMMITTED_OPERATION);
         };
@@ -219,6 +340,35 @@ impl ForwardRendezvous {
                 .write_frame_with_fds(&encode_reply(&response)?, &[], FORWARD_REPLY_DEADLINE)
                 .await;
         }
+        // The attestation, when the request rides one: the block is
+        // broker-minted, so the field-wise freshness comparison against this
+        // process's current values is the whole admission - a stale epoch, a
+        // Zone not bound to the call, an older provider-set revision or
+        // generation, or a mutated block is refused with the stale-context
+        // code before any handler runs. The block's deadline budget replaces
+        // the fixed handler deadline for the call, already checked under the
+        // shared ceiling by the admission.
+        let handler_deadline = match request.context.as_ref() {
+            Some(context) => {
+                if !self.context_admitted(context, &request.zone) {
+                    tracing::warn!(
+                        operation = %request.operation,
+                        zone = %request.zone,
+                        "forwarded call carries a stale or mismatched broker context; refusing"
+                    );
+                    let response = refused(STALE_CONTEXT);
+                    return connection
+                        .write_frame_with_fds(
+                            &encode_reply(&response)?,
+                            &[],
+                            FORWARD_REPLY_DEADLINE,
+                        )
+                        .await;
+                }
+                Duration::from_millis(context.deadline_ms)
+            }
+            None => handler_deadline,
+        };
         let response = match tokio::time::timeout(
             handler_deadline,
             self.invoke(&request, fds.as_slice()),
@@ -1090,10 +1240,38 @@ mod tests {
             .await
         }
 
+        /// The same rendezvous bound with the attestation state a context
+        /// test needs: the daemon's current generations for the Zone and the
+        /// broker epoch its last publication acknowledged.
+        async fn start_attesting() -> Self {
+            Self::served_by(move |rendezvous, listener| {
+                rendezvous.publish_generations("test", 1, 1);
+                rendezvous.set_broker_epoch(5);
+                spawn_server(rendezvous, listener, tokio::runtime::Handle::current())
+            })
+            .await
+        }
+
         async fn served_by<F>(serve: F) -> Self
         where
             F: FnOnce(Arc<ForwardRendezvous>, Socket) -> Result<(), TypedError>,
         {
+            let (rendezvous, socket_path, scratch, providers) = Self::fixture().await;
+            let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
+            serve(rendezvous, listener).expect("start the rendezvous server");
+            Self {
+                socket_path,
+                _scratch: scratch,
+                _providers: providers,
+            }
+        }
+
+        async fn fixture() -> (
+            Arc<ForwardRendezvous>,
+            PathBuf,
+            tempfile::TempDir,
+            Arc<ProviderRuntime>,
+        ) {
             let zone = ZoneId::parse("test").expect("the test zone label is canonical");
             let scratch = tempfile::tempdir().expect("test scratch");
             let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
@@ -1125,13 +1303,7 @@ mod tests {
             let rendezvous = Arc::new(ForwardRendezvous::new());
             rendezvous.publish(zone.as_str(), Arc::clone(&providers));
             let socket_path = scratch.path().join("d2bd-forward.sock");
-            let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
-            serve(Arc::clone(&rendezvous), listener).expect("start the rendezvous server");
-            Self {
-                socket_path,
-                _scratch: scratch,
-                _providers: providers,
-            }
+            (rendezvous, socket_path, scratch, providers)
         }
     }
 
@@ -1149,6 +1321,7 @@ mod tests {
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
             payload,
+            context: None,
             fd_indexes: vec![],
             fd_kinds: vec![],
         };
@@ -1201,6 +1374,7 @@ mod tests {
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
             payload,
+            context: None,
             fd_indexes: vec![],
             fd_kinds: vec![],
         };
@@ -1232,6 +1406,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
             payload,
+            context: None,
             fd_indexes: (0..fds.len() as u32).collect(),
             fd_kinds: vec![FdKind::Fifo; fds.len()],
         };
@@ -1257,6 +1432,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
             zone: "test".to_owned(),
             invocation_id: "invocation-7".to_owned(),
             payload: serde_json::json!({}),
+            context: None,
             fd_indexes,
             fd_kinds,
         };
@@ -1605,4 +1781,349 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         );
     }
 
+    use d2b_contracts_broker::broker_wire::{ForwardContext, STALE_CONTEXT};
+
+    /// The attestation state the context tests below agree on: the fixture
+    /// Zone "test" with one provider publication (revision 1), controller
+    /// and guest generations 1, under broker epoch 5.
+    fn context_for(epoch: u64, zone: &str, revision: u64, guest_generation: u64) -> ForwardContext {
+        ForwardContext {
+            broker_epoch: epoch,
+            zone: zone.to_owned(),
+            provider_set_revision: revision,
+            controller_generation: 1,
+            guest_generation,
+            initiating_identity: "daemon".to_owned(),
+            deadline_ms: DEFAULT_CONTEXT_DEADLINE_MS,
+        }
+    }
+
+    fn fresh_context() -> ForwardContext {
+        context_for(5, "test", 1, 1)
+    }
+
+    /// Forward one invocation carrying a broker-minted context, the way the
+    /// broker's forwarder does once the envelope attests its calls: one
+    /// connection, one canonical request frame carrying the context block,
+    /// one reply frame.
+    fn forward_with_context(
+        socket_path: &Path,
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+        context: ForwardContext,
+    ) -> ForwardOperationResponse {
+        let request = ForwardOperationRequest {
+            operation: operation.to_owned(),
+            zone: zone.to_owned(),
+            invocation_id: "invocation-7".to_owned(),
+            payload,
+            context: Some(context),
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        };
+        let encoded =
+            canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
+        let socket = connect_seqpacket(socket_path).expect("dial the rendezvous");
+        d2bd_runtime::unix_transport::write_frame(&socket, &encoded)
+            .expect("write the request frame");
+        let frame = read_frame(&socket).expect("read the reply frame");
+        serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
+    }
+
+    /// Forward one invocation with a context on the runtime, so a stalled
+    /// handler test can exercise the budget the context declares.
+    async fn forward_with_context_async(
+        socket_path: PathBuf,
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+        context: ForwardContext,
+    ) -> ForwardOperationResponse {
+        let request = ForwardOperationRequest {
+            operation: operation.to_owned(),
+            zone: zone.to_owned(),
+            invocation_id: "invocation-7".to_owned(),
+            payload,
+            context: Some(context),
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        };
+        let encoded =
+            canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
+        let socket = connect_seqpacket(&socket_path).expect("dial the rendezvous");
+        let connection =
+            AsyncSeqpacket::register(Socket::from(socket)).expect("register the forwarded call");
+        let deadline = Duration::from_secs(10);
+        connection
+            .write_frame(&encoded, deadline)
+            .await
+            .expect("write the request frame");
+        let frame = connection
+            .read_frame(deadline)
+            .await
+            .expect("read the reply frame");
+        serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
+    }
+
+    /// A freshly minted context passes the field-wise freshness check: the
+    /// epoch is the daemon's observed one, the Zone binds to the call, and
+    /// the revision and generations match the daemon's current values.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fresh_context_passes_the_rendezvous() {
+        let serving = ServingRendezvous::start_attesting().await;
+        let response = forward_with_context(
+            &serving.socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            fresh_context(),
+        );
+        assert!(
+            matches!(response.outcome, ForwardOperationOutcome::Result { .. }),
+            "a fresh context must be admitted, got {response:?}"
+        );
+    }
+
+    /// Before the daemon has observed any broker epoch, no context can be
+    /// verified: the attestation's epoch half is uncheckable, so every
+    /// attested call refuses fail-closed - the receiving side of the rule
+    /// that the broker refuses to mint until it holds a value.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn contexts_refuse_until_the_daemon_observes_a_broker_epoch() {
+        let serving = ServingRendezvous::start().await;
+        let response = forward_with_context(
+            &serving.socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            context_for(5, "test", 1, 1),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "an epoch the daemon has never observed cannot validate a context"
+        );
+    }
+
+    /// A context minted against an older provider-set revision refuses: the
+    /// daemon republished its provider set since the broker minted.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_context_minted_against_an_older_provider_set_revision_is_refused() {
+        let serving = ServingRendezvous::start_attesting().await;
+        let response = forward_with_context(
+            &serving.socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            context_for(5, "test", 0, 1),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "an older provider-set revision is stale"
+        );
+    }
+
+    /// A context minted against a lower guest generation refuses: the
+    /// daemon's current guest generation moved past the minted one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_context_minted_against_a_lower_guest_generation_is_refused() {
+        let serving = ServingRendezvous::start_attesting().await;
+        let response = forward_with_context(
+            &serving.socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            context_for(5, "test", 1, 0),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "a lower guest generation is stale"
+        );
+    }
+
+    /// A context whose Zone is not the call's Zone is not bound to the
+    /// connection: the attestation names another Zone, so the call refuses.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_context_minted_against_another_zone_is_refused() {
+        let serving = ServingRendezvous::start_attesting().await;
+        let response = forward_with_context(
+            &serving.socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            context_for(5, "other-zone", 1, 1),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "a context for another zone is stale on this call"
+        );
+    }
+
+    /// A mutated context refuses even when every field it touched moved the
+    /// "right" way: the broker is the sole minter, so any difference from
+    /// the daemon's current values is tampering, never a fresher truth.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mutated_context_is_refused() {
+        let serving = ServingRendezvous::start_attesting().await;
+        let mut mutated = fresh_context();
+        mutated.controller_generation = 999;
+        let response = forward_with_context(
+            &serving.socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            mutated,
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "a mutated context cannot name a fresher truth than the mint"
+        );
+    }
+
+    /// A broker restart is a changed epoch: every context minted before it
+    /// refuses regardless of generation equality, and once the daemon
+    /// observes the fresh nonce only contexts minted under it pass - a
+    /// pre-restart context cannot be re-minted into validity.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_broker_restart_invalidates_every_previous_context_via_the_epoch() {
+        let (rendezvous, socket_path, _scratch, _providers) = ServingRendezvous::fixture().await;
+        rendezvous.publish_generations("test", 1, 1);
+        rendezvous.set_broker_epoch(5);
+        let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
+        spawn_server(rendezvous.clone(), listener, tokio::runtime::Handle::current())
+            .expect("start the rendezvous server");
+
+        // Before the restart: the context minted under epoch 5 passes.
+        let before = forward_with_context(
+            &socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            fresh_context(),
+        );
+        assert!(
+            matches!(before.outcome, ForwardOperationOutcome::Result { .. }),
+            "a context minted under the current epoch passes"
+        );
+
+        // The broker restarts and mints under a fresh epoch; the daemon's
+        // next publication acknowledgement carries it.
+        rendezvous.set_broker_epoch(6);
+
+        // Every previously minted context now refuses via the changed
+        // epoch, with the generations equal - the epoch alone is the
+        // invalidation.
+        let after_restart = forward_with_context(
+            &socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            fresh_context(),
+        );
+        assert_eq!(
+            after_restart.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "a pre-restart context fails via the changed broker epoch"
+        );
+        // A re-mint under the fresh epoch passes; the old block still
+        // carries the old epoch, so no context survives the restart by
+        // re-mint - only a brand-new mint under the fresh nonce does.
+        let re_minted = forward_with_context(
+            &socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            context_for(6, "test", 1, 1),
+        );
+        assert!(
+            matches!(re_minted.outcome, ForwardOperationOutcome::Result { .. }),
+            "a context minted under the fresh epoch passes"
+        );
+    }
+
+    /// The context's deadline budget is the per-call handler deadline: a
+    /// handler that never finishes is refused by the budget the context
+    /// declares, not by the posture's fixed constant.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_context_deadline_budget_bounds_the_handler() {
+        const BUDGET: Duration = Duration::from_millis(150);
+        let (rendezvous, socket_path, _scratch, _providers) = ServingRendezvous::fixture().await;
+        rendezvous.publish_generations("test", 1, 1);
+        rendezvous.set_broker_epoch(5);
+        let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
+        let listener = AsyncSeqpacket::register(listener).expect("register the listener");
+        // The posture's deadline is 10 s; the context's 150 ms must own the
+        // call, so the refusal lands on the budget, not the constant.
+        tokio::spawn(serve_accepted(
+            rendezvous,
+            listener,
+            posture(1, Duration::from_secs(10)),
+        ));
+        let started = Instant::now();
+        let mut stalled = fresh_context();
+        stalled.deadline_ms = BUDGET.as_millis() as u64;
+        let refused = forward_with_context_async(
+            socket_path,
+            STALL_FOREVER,
+            "test",
+            serde_json::json!({}),
+            stalled,
+        )
+        .await;
+        assert_eq!(
+            refused.outcome,
+            ForwardOperationOutcome::Refused {
+                code: FORWARD_TIMEOUT.to_owned(),
+            },
+            "a handler that never finishes is refused by the context's budget"
+        );
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= BUDGET && elapsed < Duration::from_secs(5),
+            "the refusal is the context budget's, not the posture's: {elapsed:?}"
+        );
+    }
+
+    /// A deadline budget outside the shared ceiling is a block the broker
+    /// did not mint: zero or oversized budgets refuse with the stale-context
+    /// code rather than serving an unbounded handler grant.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_context_whose_budget_escapes_the_ceiling_is_refused() {
+        let serving = ServingRendezvous::start_attesting().await;
+        for budget in [0, MAX_CONTEXT_DEADLINE_MS + 1] {
+            let mut context = fresh_context();
+            context.deadline_ms = budget;
+            let response = forward_with_context(
+                &serving.socket_path,
+                "inspect-process-family",
+                "test",
+                serde_json::json!({ "resourceType": "Process" }),
+                context,
+            );
+            assert_eq!(
+                response.outcome,
+                ForwardOperationOutcome::Refused {
+                    code: STALE_CONTEXT.to_owned(),
+                },
+                "a budget of {budget} ms is not one the broker mints"
+            );
+        }
+    }
     }

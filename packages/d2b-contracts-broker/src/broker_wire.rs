@@ -356,6 +356,110 @@ pub enum FdKind {
     Directory,
 }
 
+/// The refusal code for a forwarded request whose broker-attested context
+/// block is stale or does not match the values the daemon currently holds.
+///
+/// The broker is the sole minter of the context block, so every mismatch
+/// this code names is a freshness failure or tampering, never a legitimate
+/// re-spelling. The code is shared by both legs of the forward carrier: the
+/// broker refuses to mint until it holds the daemon's published values, and
+/// the rendezvous refuses a request whose context's broker epoch, Zone,
+/// provider-set revision, controller generation, or guest generation does
+/// not match its own current values.
+
+pub const STALE_CONTEXT: &str = "stale-context";
+
+/// The deadline budget a minted context carries when the operation's
+/// committed row declares no tier.
+///
+/// The value is the rendezvous's historical fixed handler deadline (25 s),
+/// carried on the context block instead so that a context-carrying
+/// deployment keeps the same per-call bound while the row-level deadline-
+/// tier facet (KTD4) is wired; the receiving leg serves the budget the
+/// context declares, not a private constant.
+
+pub const DEFAULT_CONTEXT_DEADLINE_MS: u64 = 25_000;
+
+/// The absolute ceiling a context's deadline budget must sit under.
+///
+/// The budget is broker-minted, so a budget over this ceiling means the
+/// block was not minted as the broker wrote it; the receiving leg refuses
+/// the call with [`STALE_CONTEXT`] rather than serve an unbounded or
+/// oversized handler grant.
+
+pub const MAX_CONTEXT_DEADLINE_MS: u64 = 60_000;
+
+/// The broker-attested context block riding one forwarded request.
+///
+/// The broker is the sole minter. The block names the authenticating value
+/// that binds the call to the attestation (`broker_epoch`: any context
+/// minted before a broker restart fails it regardless of generation
+/// equality), the Zone and the daemon-owned generational state the broker
+/// cached from the daemon's publications (provider-set revision, controller
+/// and guest generations), the initiating identity of the call as the
+/// broker classified it, and the operation's deadline budget in
+/// milliseconds, which the receiving leg serves as the per-call handler
+/// deadline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForwardContext {
+    /// The broker-epoch nonce the broker minted this block under. A broker
+    /// restart bumps it, so every block minted before the restart fails the
+    /// rendezvous's epoch check regardless of generation equality.
+    pub broker_epoch: u64,
+    /// The Zone the invocation runs in, bound to the connection's Zone by
+    /// the receiving leg.
+    pub zone: String,
+    /// The provider-set revision the broker cached from the daemon's
+    /// publication for this Zone.
+    pub provider_set_revision: u64,
+    /// The controller generation the broker cached from the daemon's
+    /// publication for this Zone.
+    pub controller_generation: u64,
+    /// The guest generation the broker cached from the daemon's publication
+    /// for this Zone.
+    pub guest_generation: u64,
+    /// The initiating identity as the broker classified the caller.
+    pub initiating_identity: String,
+    /// The operation's deadline budget, in milliseconds, served by the
+    /// receiving leg as the per-call handler deadline.
+    pub deadline_ms: u64,
+}
+
+/// The daemon-owned values one publication carries over the established
+/// origination leg.
+///
+/// Provider-set revision and the controller/guest generations are daemon
+/// state, so the daemon publishes its current values to the broker over the
+/// leg its operations already originate on; the broker caches them as
+/// durable, monotonically increasing state and refuses to mint a context
+/// until it holds a value for the Zone the call names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublishTrustedContextValues {
+    /// The Zone the published values describe.
+    pub zone: String,
+    /// The Zone's current provider-set revision.
+    pub provider_set_revision: u64,
+    /// The Zone's current controller generation.
+    pub controller_generation: u64,
+    /// The Zone's current guest generation.
+    pub guest_generation: u64,
+}
+
+/// The broker's acknowledgement of one [`PublishTrustedContextValues`].
+///
+/// The reply carries the broker-epoch nonce the broker is currently minting
+/// with, so the daemon's rendezvous can refuse every context minted before
+/// a broker restart: the epoch it observed stops matching the moment the
+/// broker reopens its store and starts minting under a fresh nonce.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublishTrustedContextResponse {
+    /// The broker-epoch nonce the broker is currently minting with.
+    pub broker_epoch: u64,
+}
+
 /// One validated, authorized operation forwarded to the process that
 /// declares it.
 ///
@@ -368,6 +472,11 @@ pub enum FdKind {
 ///
 /// The invocation identifier travels with the payload so the peer's record
 /// and the broker's record name the same invocation.
+///
+/// The broker-minted context block rides beside the payload when the broker
+/// holds a context store; a context-free carrier stays the pre-attestation
+/// mode, and the receiving leg refuses a context it cannot validate with
+/// [`STALE_CONTEXT`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ForwardOperationRequest {
@@ -380,6 +489,12 @@ pub struct ForwardOperationRequest {
     pub invocation_id: String,
     /// The canonical payload object the row validated.
     pub payload: serde_json::Value,
+    /// The broker-attested context block the broker minted for this
+    /// invocation, when the broker holds a context store. Absent on a
+    /// context-free carrier; the receiving leg refuses a present block it
+    /// cannot validate field-wise with [`STALE_CONTEXT`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ForwardContext>,
     /// The positions,in the frame's SCM_RIGHTS attachment list,of the
     /// descriptors this request carries. Empty when the request carries none.
 
@@ -4406,6 +4521,7 @@ mod tests {
             zone: "zone-a".to_owned(),
             invocation_id: "invocation-1".to_owned(),
             payload: serde_json::json!({ "label": "x" }),
+            context: None,
             fd_indexes: vec![0, 1],
             fd_kinds: vec![FdKind::Fifo, FdKind::Fifo],
         };
@@ -4454,5 +4570,119 @@ mod tests {
     fn the_fd_leg_refusal_code_is_the_shared_carrier_code() {
         assert_eq!(FD_LEG, "fd-leg");
         assert_eq!(MAX_FRAME_FDS, 8);
+    }
+
+    /// The fixture context a broker would mint: every field the attestation
+    /// carries, stated once so the round-trip tests cannot drift from it.
+    fn minted_context() -> ForwardContext {
+        ForwardContext {
+            broker_epoch: 3,
+            zone: "zone-a".to_owned(),
+            provider_set_revision: 2,
+            controller_generation: 4,
+            guest_generation: 7,
+            initiating_identity: "daemon".to_owned(),
+            deadline_ms: DEFAULT_CONTEXT_DEADLINE_MS,
+        }
+    }
+
+    fn published_values() -> PublishTrustedContextValues {
+        PublishTrustedContextValues {
+            zone: "zone-a".to_owned(),
+            provider_set_revision: 2,
+            controller_generation: 4,
+            guest_generation: 7,
+        }
+    }
+
+    #[test]
+    fn a_minted_context_round_trips_through_canonical_json() {
+        // The context crosses the forward carrier as canonical JSON: the
+        // spelling is the camelCase shape both legs serialize, so a field
+        // renamed on one side is a decode failure on the other, never a
+        // silently dropped comparison value.
+        let context = minted_context();
+        let frame = encode_frame(&context).expect("encodes");
+        let decoded =
+            decode_frame::<ForwardContext>("ForwardContext", &frame).expect("decodes");
+        assert_eq!(decoded, context);
+
+        let json = serde_json::to_value(&context).expect("serializes");
+        assert_eq!(json["brokerEpoch"], 3);
+        assert_eq!(json["zone"], "zone-a");
+        assert_eq!(json["providerSetRevision"], 2);
+        assert_eq!(json["controllerGeneration"], 4);
+        assert_eq!(json["guestGeneration"], 7);
+        assert_eq!(json["initiatingIdentity"], "daemon");
+        assert_eq!(json["deadlineMs"], DEFAULT_CONTEXT_DEADLINE_MS);
+        assert_eq!(
+            json.as_object().map(|fields| fields.len()),
+            Some(7),
+            "the context is a closed block: seven fields, nothing else"
+        );
+    }
+
+    #[test]
+    fn a_context_round_trips_inside_the_forward_request() {
+        let context = minted_context();
+        let request = ForwardOperationRequest {
+            operation: "ProbeOperation".to_owned(),
+            zone: "zone-a".to_owned(),
+            invocation_id: "invocation-1".to_owned(),
+            payload: serde_json::json!({ "label": "x" }),
+            context: Some(context.clone()),
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        };
+        let frame = encode_frame(&request).expect("encodes");
+        let decoded =
+            decode_frame::<ForwardOperationRequest>("ForwardOperationRequest", &frame)
+                .expect("decodes");
+        assert_eq!(decoded, request);
+        assert_eq!(decoded.context, Some(context));
+    }
+
+    #[test]
+    fn a_frame_without_a_context_decodes_as_absent() {
+        // The two binaries swap within one generation: an old sender's frame
+        // carries no context block, and the receiving side must read it as
+        // the context-free mode rather than a malformed unknown field.
+        let frame = encode_frame(&serde_json::json!({
+            "operation": "ProbeOperation",
+            "zone": "zone-a",
+            "invocationId": "invocation-2",
+            "payload": { "label": "x" },
+        }))
+        .expect("encodes");
+        let decoded = decode_frame::<ForwardOperationRequest>("ForwardOperationRequest", &frame)
+            .expect("decodes");
+        assert_eq!(decoded.context, None);
+    }
+
+    #[test]
+    fn the_daemon_publication_round_trips_and_names_the_shared_code() {
+        let values = published_values();
+        let frame = encode_frame(&values).expect("encodes");
+        let decoded =
+            decode_frame::<PublishTrustedContextValues>("PublishTrustedContextValues", &frame)
+                .expect("decodes");
+        assert_eq!(decoded, values);
+
+        let reply = PublishTrustedContextResponse { broker_epoch: 3 };
+        let frame = encode_frame(&reply).expect("encodes");
+        let decoded =
+            decode_frame::<PublishTrustedContextResponse>("PublishTrustedContextResponse", &frame)
+                .expect("decodes");
+        assert_eq!(decoded, reply);
+    }
+
+    #[test]
+    fn the_stale_context_code_is_the_shared_carrier_code() {
+        assert_eq!(STALE_CONTEXT, "stale-context");
+        // The default budget is the receiving leg's historical fixed
+        // deadline, and the ceiling bounds a mutator: both are shared
+        // contract, never private numbers.
+        assert_eq!(DEFAULT_CONTEXT_DEADLINE_MS, 25_000);
+        assert!(MAX_CONTEXT_DEADLINE_MS > DEFAULT_CONTEXT_DEADLINE_MS);
     }
 }

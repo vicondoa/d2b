@@ -74,6 +74,11 @@ pub struct ForwardedOperation<'a> {
     /// the peer verbatim.
 
     pub fd_kind: Option<FdKind>,
+    /// The broker-attested context block the envelope minted for this
+    /// invocation, when the broker holds a context store. The forwarder
+    /// transports it verbatim; it never mints, edits, or drops a block the
+    /// envelope handed it.
+    pub context: Option<&'a d2b_contracts_broker::broker_wire::ForwardContext>,
 }
 
 /// The round-trip budget the environment names, when it names one.
@@ -204,6 +209,10 @@ impl SocketForwarder {
             zone: invocation.zone.to_owned(),
             invocation_id: invocation.invocation_id.to_owned(),
             payload,
+            // The broker-minted context crosses verbatim: the forwarder
+            // transports the block the envelope attested, never a copy it
+            // re-derived from the request.
+            context: invocation.context.cloned(),
             fd_indexes,
             fd_kinds,
         };
@@ -477,6 +486,7 @@ mod tests {
             payload,
             fds: &[],
             fd_kind: None,
+            context: None,
         }))
     }
 
@@ -576,6 +586,7 @@ mod tests {
                 payload: &payload(),
                 fds: &[],
                 fd_kind: None,
+                context: None,
             }))
             .expect_err("no peer is configured");
         assert_eq!(failure.code, crate::envelope::UNREGISTERED_HANDLER);
@@ -687,5 +698,58 @@ mod tests {
             .expect_err("declarations over the frame ceiling are refused");
         assert_eq!(failure.code, FD_LEG);
         assert_eq!(peer.calls(), 1);
+    }
+
+    #[test]
+    fn a_minted_context_crosses_the_wire_verbatim() {
+        use d2b_contracts_broker::broker_wire::{ForwardContext, STALE_CONTEXT};
+        // The peer echoes the context block it received: a forwarder that
+        // dropped, edited, or re-derived the block could not produce the
+        // minted value, so the attestation provably reaches the declaring
+        // process unchanged.
+        let peer = Peer::spawn(|request| ForwardOperationResponse {
+            outcome: ForwardOperationOutcome::Result {
+                result: serde_json::json!({
+                    "epoch": request.context.as_ref().map(|c| c.broker_epoch).unwrap_or(0),
+                    "zone": request.context.as_ref().map(|c| c.zone.as_str()).unwrap_or(""),
+                    "revision": request.context.as_ref().map(|c| c.provider_set_revision).unwrap_or(0),
+                    "controller": request.context.as_ref().map(|c| c.controller_generation).unwrap_or(0),
+                    "guest": request.context.as_ref().map(|c| c.guest_generation).unwrap_or(0),
+                    "identity": request.context.as_ref().map(|c| c.initiating_identity.as_str()).unwrap_or(""),
+                    "deadline": request.context.as_ref().map(|c| c.deadline_ms).unwrap_or(0),
+                }),
+                fd_indexes: vec![],
+                fd_kinds: vec![],
+            },
+        });
+        let context = ForwardContext {
+            broker_epoch: 1,
+            zone: "work".to_owned(),
+            provider_set_revision: 2,
+            controller_generation: 3,
+            guest_generation: 4,
+            initiating_identity: "daemon".to_owned(),
+            deadline_ms: 25_000,
+        };
+        let outcome = runtime().block_on(peer.forwarder().forward(ForwardedOperation {
+            operation: "UsbipBind",
+            zone: "work",
+            invocation_id: "invocation-16",
+            payload: &payload(),
+            fds: &[],
+            fd_kind: None,
+            context: Some(&context),
+        }))
+        .expect("the peer answered");
+        let rendered = String::from_utf8(outcome.result.to_canonical_bytes()).expect("utf-8");
+        assert!(rendered.contains("\"epoch\":1"), "{rendered}");
+        assert!(rendered.contains("\"zone\":\"work\""), "{rendered}");
+        assert!(rendered.contains("\"revision\":2"), "{rendered}");
+        assert!(rendered.contains("\"controller\":3"), "{rendered}");
+        assert!(rendered.contains("\"guest\":4"), "{rendered}");
+        assert!(rendered.contains("\"identity\":\"daemon\""), "{rendered}");
+        assert!(rendered.contains("\"deadline\":25000"), "{rendered}");
+        assert_eq!(peer.calls(), 1);
+        assert_eq!(STALE_CONTEXT, "stale-context");
     }
 }
