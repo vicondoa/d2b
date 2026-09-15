@@ -822,7 +822,11 @@ fn request_fds_admitted(request: &ForwardOperationRequest, fds: &[RawFd]) -> boo
     fds
         .iter()
         .zip(&request.fd_kinds)
-        .all(|(fd, declared)| fd_kind_of(*fd) == Some(*declared))
+        .all(|(fd, declared)| {
+            // An `Any` declaration admits every descriptor regardless of
+            // fstat kind (the mixed or anon-inode legs, U10).
+            *declared == FdKind::Any || fd_kind_of(*fd) == Some(*declared)
+        })
 }
 
 /// The kernel kind one descriptor presents,or None when its fstat reports

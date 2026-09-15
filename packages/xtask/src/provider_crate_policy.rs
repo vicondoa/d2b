@@ -1139,6 +1139,12 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 tpm/device step",
     },
     SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-broker/src/kernel_ops.rs",
+        token: "swtpm",
+        family: "device-tpm",
+        retires_with: "U12 tpm/device step",
+    },
+    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "device_tpm",
         family: "device-tpm",
@@ -3096,6 +3102,12 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_runtime.rs",
+        token: "notification",
+        family: "notification-desktop",
+        retires_with: "U10-U12 family rollout (notification-desktop)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-broker/src/kernel_ops.rs",
         token: "notification",
         family: "notification-desktop",
         retires_with: "U10-U12 family rollout (notification-desktop)",

@@ -149,6 +149,16 @@ _SURFACES = {
         "package": "tests/unit/nix",
         "raw_cases": True,
     },
+    "privileges-json-drift": {
+        "cases": [],
+        "files": [
+            "docs/reference/policy/broker-operations.json",
+        ],
+        "modules": [
+            "nixos-modules/privileges-json.nix",
+        ],
+        "raw_cases": True,
+    },
 }
 
 nix_surface_suite(_SURFACES)

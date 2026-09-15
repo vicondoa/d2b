@@ -33,7 +33,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use d2b_audit::evidence_chain::{
     ChainAuditSink, ChainLeg, ChainOutcome, ChainRecord, ChainRecordClass, EvidenceChain,
-    MAX_NESTED_DEPTH, root_record_count,
+    MAX_NESTED_DEPTH,
 };
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, DEFAULT_CONTEXT_DEADLINE_MS, FdKind, ForwardContext, MAX_FRAME_FDS,
@@ -725,6 +725,19 @@ pub trait OperationDispatcher: Send + Sync {
     fn serves_locally(&self) -> bool {
         false
     }
+
+    /// Whether this dispatcher executes ONE operation inside the broker's
+    /// own process.
+    ///
+    /// A mixed dispatcher (the U10 kernel seam) serves some operations
+    /// in-broker and forwards the rest: the per-operation answer decides
+    /// which side owns the leg's audit record for THAT operation, so a
+    /// single envelope over both legs never double-records (KTD6). The
+    /// default is the dispatcher-wide [`Self::serves_locally`] answer.
+    fn serves_operation(&self, operation: &str) -> bool {
+        let _ = operation;
+        self.serves_locally()
+    }
 }
 
 /// The broker-side operation envelope.
@@ -898,7 +911,7 @@ impl BrokerEnvelope {
                 outcome: ChainOutcome::Refused,
                 code: Some(NESTED_DEPTH_EXCEEDED.to_owned()),
             };
-            if self.dispatcher.serves_locally() {
+            if self.dispatcher.serves_operation(operation) {
                 self.record_chain_outcome(record);
             }
             return Err(EnvelopeRefusal::new(
@@ -939,8 +952,10 @@ impl BrokerEnvelope {
         // The audit rule needs the executing leg: the envelope writes
         // broker-side records only for in-broker executions, and nothing
         // for forwarded ops - those are the daemon side's records alone
-        // (KTD6).
-        let serves_locally = self.dispatcher.serves_locally();
+        // (KTD6). A mixed dispatcher answers per operation, never
+        // dispatcher-wide, so one envelope over both legs cannot
+        // double-record a forwarded call.
+        let serves_locally = self.dispatcher.serves_operation(operation);
         let dispatched: Result<(DispatchOutcome, Option<String>), EnvelopeRefusal> = async {
             let Some(row) = self.rows.iter().find(|row| row.operation == operation) else {
                 return Err(EnvelopeRefusal::new(
@@ -1195,7 +1210,13 @@ impl BrokerEnvelope {
             let Some(kind) = row.fd_kind else {
                 return false;
             };
-            if !fds.iter().all(|fd| Self::fd_kind_of(fd) == Some(kind)) {
+            // An `Any` row admits every attached descriptor regardless of
+            // fstat kind - the mixed or anon-inode legs (an fd-inheriting
+            // spawn, pidfds) cannot be reduced to one named kernel kind
+            // (U10).
+            if kind != FdKind::Any
+                && !fds.iter().all(|fd| Self::fd_kind_of(fd) == Some(kind))
+            {
                 return false;
             }
         }
@@ -1476,10 +1497,30 @@ impl HandlerTable {
     }
 }
 
+impl HandlerTable {
+    /// Whether a handler is registered for `operation`.
+    ///
+    /// The public probe a mixed dispatcher uses to route one invocation to
+    /// its in-broker leg without duplicating the table's private entries.
+    pub fn serves(&self, operation: &str) -> bool {
+        self.handlers
+            .iter()
+            .any(|(registered, _)| *registered == operation)
+    }
+}
+
 impl OperationDispatcher for HandlerTable {
     /// The handler table executes its handlers in the broker's own process:
     /// this is the in-broker leg, so the envelope audits its executions
-    /// broker-side (KTD6).
+    /// broker-side.
+    ///
+    /// `serves_operation` keeps the dispatcher-wide answer (the default):
+    /// every outcome the table's leg produces - a handler's result, an
+    /// admission refusal, or the table's own unregistered-handler refusal -
+    /// is produced inside the broker's process, so the broker side records
+    /// it. The per-operation [`Self::serves`] probe exists for the mixed
+    /// [`KernelDispatcher`], whose forwarded half must not record
+    /// broker-side.
     fn serves_locally(&self) -> bool {
         true
     }
@@ -1656,9 +1697,58 @@ impl OperationDispatcher for ForwardingDispatcher {
     }
 }
 
+/// The broker's own-process kernel seam (U10).
+///
+/// The U10 sandwich serves each process-family operation's privileged,
+/// resource-agnostic kernel in-broker as a broker-generic committed row
+/// while the family operation itself stays forwarded to the declaring
+/// process. This dispatcher routes an in-broker registered kernel to the
+/// local handler table and every other operation to the forward carrier,
+/// and answers the audit-rule question per operation - so one envelope
+/// over both legs records the in-broker leg broker-side and leaves the
+/// forwarded leg's record to the daemon side, never both (KTD6).
+pub struct KernelDispatcher {
+    kernels: HandlerTable,
+    forwarded: ForwardingDispatcher,
+}
+
+impl std::fmt::Debug for KernelDispatcher {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("KernelDispatcher")
+            .finish_non_exhaustive()
+    }
+}
+
+impl KernelDispatcher {
+    /// Build the mixed dispatcher over `kernels` and the forward carrier.
+    pub fn new(kernels: HandlerTable, forwarded: ForwardingDispatcher) -> Self {
+        Self { kernels, forwarded }
+    }
+}
+
+impl OperationDispatcher for KernelDispatcher {
+    fn serves_locally(&self) -> bool {
+        false
+    }
+
+    fn serves_operation(&self, operation: &str) -> bool {
+        self.kernels.serves(operation)
+    }
+
+    fn dispatch<'a>(&'a self, invocation: DirectInvocation<'a>) -> DispatchFuture<'a> {
+        if self.kernels.serves(invocation.ctx.operation) {
+            self.kernels.dispatch(invocation)
+        } else {
+            self.forwarded.dispatch(invocation)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_audit::evidence_chain::root_record_count;
     use crate::catalog::{BrokerAuthzFacets, DeadlineTier, OperationOwner};
     use crate::forwarding::{ForwardFuture, ForwardedOperation, OperationForwarder, SocketForwarder};
     use std::io;

@@ -698,7 +698,7 @@ fn generate_catalog(catalog: &Catalog) -> String {
         rows.push_str(&format!(
             "        fd_kind: {},\n",
             match row.fds.fd_kind.as_deref() {
-                Some(kind) => format!("Some(FdKind::{kind}),"),
+                Some(kind) => format!("Some(FdKind::{kind})"),
                 None => "None".to_owned(),
             }
         ));
@@ -1009,5 +1009,28 @@ mod tests {
                 row.operation
             );
         }
+    }
+
+    /// A row declaring an fd kind renders exactly one comma after the kind:
+    /// the inner and outer format strings both used to append one, emitting
+    /// `Some(FdKind::Any),,` — invalid Rust that only a row with a declared
+    /// kind could hit, so the all-None catalog never caught it (U10
+    /// regression).
+    #[test]
+    fn a_row_declaring_an_fd_kind_renders_exactly_one_comma() {
+        let mut catalog = parse_text(&committed_catalog_text()).expect("committed rows validate");
+        let row = catalog
+            .rows
+            .iter_mut()
+            .find(|row| row.fds.fd_kind.is_none())
+            .expect("a row without a declared fd kind");
+        row.fds.max_fds = 1;
+        row.fds.fd_kind = Some("Any".to_owned());
+        let rendered = generate_catalog(&catalog);
+        let line = rendered
+            .lines()
+            .find(|line| line.contains("fd_kind: Some(FdKind::Any)"))
+            .expect("the declared kind renders");
+        assert_eq!(line, "        fd_kind: Some(FdKind::Any),");
     }
 }

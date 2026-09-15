@@ -74,6 +74,7 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "DiskInit",
     "SecurityKeyOpenDevice",
     "SecurityKeyApplyUdevRules",
+    "EnvelopeInvoke",
 ];
 
 /// Guest-local process and broker lifecycle effects. Host networking,
@@ -98,4 +99,5 @@ pub const GUEST_OPERATION_CATALOG: &[&str] = &[
     "SignalRunner",
     "DeregisterRunnerPidfd",
     "SpawnRunner",
+    "EnvelopeInvoke",
 ];

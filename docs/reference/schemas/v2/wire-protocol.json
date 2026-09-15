@@ -2629,6 +2629,25 @@
               "$ref": "#/definitions/SecurityKeyApplyUdevRulesRequest"
             }
           }
+        },
+        {
+          "description": "Invoke one committed operation through the broker's generic operation envelope (U10, KTD10).\n\nThis is the generic invocation surface of the retirement template: a caller names a committed operation and carries the canonical payload the row's schema admits, and the broker runs the envelope's five steps - resolve the committed row, authorize the caller against the row's grants, validate the payload, audit with an invocation id, and dispatch - in place of one typed dispatch arm per operation. A root call carries no evidence chain and is authorized as the attested caller's own class; a handler's nested (sandwich) call carries the chain it was dispatched under and is authorized against the chain's initiating principal (KTD6). The reply rides [`BrokerResponse::EnvelopeInvoke`] with any descriptors the dispatch minted attached via SCM_RIGHTS.\n\nThe variant replaces per-operation wire variants as their typed arms retire; a retired variant's name stays gated on the Hello-negotiated wire version (KTD10) so a straggler peer gets the stale-wire-version refusal plus an audit record, never a silent malformed-wire drop.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EnvelopeInvoke"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/EnvelopeInvokeRequest"
+            }
+          }
         }
       ]
     },
@@ -3278,6 +3297,25 @@
             },
             "payload": {
               "$ref": "#/definitions/ValidateLockSpecResponse"
+            }
+          }
+        },
+        {
+          "description": "The reply to one generic envelope invocation ([`BrokerRequest::EnvelopeInvoke`]): the dispatch's canonical result or its closed refusal, plus any descriptors the dispatching leg minted via the response frame's SCM_RIGHTS attachments.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EnvelopeInvoke"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/EnvelopeInvokeResponse"
             }
           }
         }
@@ -4601,6 +4639,118 @@
           ]
         }
       ]
+    },
+    "EnvelopeInvokeRequest": {
+      "description": "One generic envelope invocation the daemon or a provider handler sends over the origination leg (U10, KTD10).\n\nThe operation names a committed row exactly as the catalog declares it; the payload is the canonical object the envelope validates against the row's declared shape. A root call (a driver invoking a service) carries no chain; a nested call (a provider handler's sandwich leg reaching a broker-generic core) carries the evidence chain it was dispatched under, so the graft rule authorizes the call against the chain's initiating principal and the DB-side records the correlation leg (KTD6).\n\nThe chain crosses as its two parts - the root invocation id and the ordered identities - so the contract crate needs no evidence-chain dependency; the broker reassembles the chain before the envelope admission.",
+      "type": "object",
+      "required": [
+        "fdIndexes",
+        "fdKinds",
+        "operation",
+        "payload",
+        "zone"
+      ],
+      "properties": {
+        "chainIdentities": {
+          "description": "The ordered chain identities, root first; present exactly when [`Self::chain_root_invocation_id`] is, and never empty then (the first identity is the initiating principal).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "chainRootInvocationId": {
+          "description": "The root invocation id of the evidence chain a nested call presents; absent for a root call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fdIndexes": {
+          "description": "The SCM_RIGHTS request attachments' indexes, in frame order.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "fdKinds": {
+          "description": "The kernel kinds of the attached descriptors, in frame order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FdKind"
+          }
+        },
+        "operation": {
+          "description": "The committed operation name the call resolves to, exactly as the committed row declares it.",
+          "type": "string"
+        },
+        "payload": {
+          "description": "The canonical payload object the envelope validates against the row's declared shape."
+        },
+        "zone": {
+          "description": "The Zone the invocation runs in.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvelopeInvokeResponse": {
+      "description": "The reply to one [`BrokerRequest::EnvelopeInvoke`].\n\nA success carries the canonical result the dispatch returned plus the descriptors the answering leg minted (via the response frame's SCM_RIGHTS attachments); a refusal carries the envelope's closed refusal code and its detail. Both carry the invocation id the audit record keys on, so a caller can join the reply to the audit log either way.",
+      "type": "object",
+      "required": [
+        "fdIndexes",
+        "fdKinds",
+        "invocationId",
+        "operation"
+      ],
+      "properties": {
+        "detail": {
+          "description": "Detail of the refusal, when the refusing side contributed one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fdIndexes": {
+          "description": "The response frame's SCM_RIGHTS attachments this result owns, by index.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "fdKinds": {
+          "description": "The kernel kinds of the returned descriptors, in frame order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FdKind"
+          }
+        },
+        "invocationId": {
+          "description": "The invocation identifier the audit record carries.",
+          "type": "string"
+        },
+        "operation": {
+          "description": "The committed operation name that ran.",
+          "type": "string"
+        },
+        "refusal": {
+          "description": "The closed envelope refusal code, present exactly when the invocation was refused.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "description": "The canonical result object, present exactly when [`Self::refusal`] is absent."
+        }
+      },
+      "additionalProperties": false
     },
     "EnvironmentClass": {
       "description": "Semantic environment inheritance class.",
@@ -6099,6 +6249,60 @@
         }
       },
       "additionalProperties": false
+    },
+    "FdKind": {
+      "description": "The kernel kind one forwarded descriptor must present.from\n\nThe kind is declared per descriptor on the wire,index-aligned with the fd-index declarations,and validated against the received descriptor's fstat mode on the receiving leg;a mismatch is the [`FD_LEG`] refusal。",
+      "oneOf": [
+        {
+          "description": "A FIFO (pipe) end。",
+          "type": "string",
+          "enum": [
+            "fifo"
+          ]
+        },
+        {
+          "description": "A socket。",
+          "type": "string",
+          "enum": [
+            "socket"
+          ]
+        },
+        {
+          "description": "A character device。",
+          "type": "string",
+          "enum": [
+            "char-device"
+          ]
+        },
+        {
+          "description": "A block device。",
+          "type": "string",
+          "enum": [
+            "block-device"
+          ]
+        },
+        {
+          "description": "Any descriptor kind.\n\nDeclared by an operation whose leg carries a mixed or anon-inode set (an fd-inheriting spawn, or descriptors whose fstat reports no named kind). Admission treats a declared `Any` as accepting every attached descriptor regardless of fstat kind - including anon-inodes such as pidfds, whose fstat mode carries no file type (U10 fd leg).",
+          "type": "string",
+          "enum": [
+            "any"
+          ]
+        },
+        {
+          "description": "A regular file。",
+          "type": "string",
+          "enum": [
+            "regular"
+          ]
+        },
+        {
+          "description": "A directory。",
+          "type": "string",
+          "enum": [
+            "directory"
+          ]
+        }
+      ]
     },
     "FeatureFlag": {
       "type": "string"

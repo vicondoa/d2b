@@ -22,7 +22,7 @@ use crate::{
     ops::audit_op::{BrokerAuditRecordClass, OpAuditRecord},
     sys::path_safe,
 };
-use d2b_audit::evidence_chain::{ChainLeg, ChainOutcome, ChainRecord, ChainRecordClass};
+use d2b_audit::evidence_chain::ChainRecord;
 use d2b_contracts_broker::broker_wire::{
     AuditExportCursor, AuditExportEntry, AuditExportErrorCode, BrokerAuditFilter,
     BrokerAuditSeverity, ExportBrokerAuditResponse,
@@ -2137,6 +2137,7 @@ fn discard_oversized_line<R: BufRead>(reader: &mut R) -> io::Result<DiscardedLin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_audit::evidence_chain::{ChainLeg, ChainOutcome, ChainRecordClass};
 
     fn target_scratch_root(prefix: &str) -> PathBuf {
         let base = crate::test_scratch_root();

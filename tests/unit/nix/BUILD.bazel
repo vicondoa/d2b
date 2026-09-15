@@ -47,4 +47,5 @@ exports_files([
     "surfaces/storage-volume.nix",
     "surfaces/zone-control.nix",
     "surfaces/zone-only.nix",
+    "surfaces/privileges-json-drift.nix",
 ])

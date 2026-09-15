@@ -381,6 +381,7 @@ wire_variants! {
         BrokerRequest::DiskInit(..) => "DiskInit",
         BrokerRequest::SecurityKeyOpenDevice(..) => "SecurityKeyOpenDevice",
         BrokerRequest::SecurityKeyApplyUdevRules(..) => "SecurityKeyApplyUdevRules",
+        BrokerRequest::EnvelopeInvoke(..) => "EnvelopeInvoke",
 }
 
 /// The committed row one wire variant names, when a row declares it.

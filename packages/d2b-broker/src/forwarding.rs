@@ -212,8 +212,14 @@ impl SocketForwarder {
         // The request-leg kinds were validated against the committed row before
         // dispatch, so the forwarder only transports the indexes; the peer
         // maps each declared index to the kernel attachment the frame order
-        // assigns it.
+        // assigns it. An `Any` row's descriptors keep their own fstat kinds
+        // so the receiving leg can still validate them per index.
         let fd_kinds: Vec<FdKind> = match invocation.fd_kind {
+            Some(FdKind::Any) => invocation
+                .fds
+                .iter()
+                .map(|fd| Self::fd_kind_of(fd).unwrap_or(FdKind::Any))
+                .collect(),
             Some(kind) => vec![kind; invocation.fds.len()],
             None => Vec::new(),
         };
@@ -288,7 +294,11 @@ impl SocketForwarder {
         if !declared_kinds
             .iter()
             .zip(received)
-            .all(|(declared, fd)| Self::fd_kind_of(fd) == Some(*declared))
+            .all(|(declared, fd)| {
+                // An `Any` declaration admits every descriptor regardless
+                // of fstat kind (the mixed or anon-inode legs, U10).
+                *declared == FdKind::Any || Self::fd_kind_of(fd) == Some(*declared)
+            })
         {
             return false;
         }

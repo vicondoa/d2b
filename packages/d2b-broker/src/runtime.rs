@@ -290,7 +290,7 @@ impl From<io::Error> for RunError {
     }
 }
 
-enum BrokerError {
+pub(crate) enum BrokerError {
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     MinijailValidation {
         reason: String,
@@ -1009,6 +1009,13 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     #[cfg(not(feature = "layer1-bootstrap"))]
     crate::state_cells::init_broker_store(&config.state_dir)
         .map_err(|error| RunError::Protocol(format!("state cell store: {error}")))?;
+
+    // Install the committed-operation envelope before any connection is
+    // accepted: the kernel seam's handlers capture the fixed process
+    // config, and every dispatch resolves its operations against this one
+    // envelope (U10).
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    install_live_operation_envelope(&config)?;
     // The trusted-context store is deliberately NOT opened at startup: a
     // state root that cannot host `trusted-context/` (a read-only or absent
     // daemon state dir in a constrained sandbox) must not take the whole
@@ -2713,7 +2720,9 @@ fn dispatch_request(
 fn request_accepts_fd(request: &BrokerRequest) -> bool {
     matches!(
         request,
-        BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_) | BrokerRequest::SpawnRunner(_)
+        BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_)
+            | BrokerRequest::SpawnRunner(_)
+            | BrokerRequest::EnvelopeInvoke(_)
     )
 }
 
@@ -3237,6 +3246,99 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 )
                 .map_err(|err| BrokerError::Protocol(err.to_string()))?;
             Ok(DispatchResult::no_fds(ack_response("OwnershipMatrixCheck")))
+        }
+        RealBrokerRequest::EnvelopeInvoke(req) => {
+            // The generic envelope invocation surface (U10, KTD10): one
+            // origination-leg control path in place of one typed dispatch
+            // arm per operation. The broker runs the committed operation's
+            // five envelope steps - resolve the row, authorize the caller,
+            // validate the payload, audit, dispatch - and the dispatch
+            // answers from the declaring process (forwarded leg) or from
+            // the broker's own broker-generic handlers (in-broker leg).
+            // A root call is authorized as the attested caller's own class;
+            // a handler's nested (sandwich) call reconstructs the evidence
+            // chain from the carrier and is authorized against the chain's
+            // initiating principal (KTD6). Retired per-operation wire
+            // variants are refused by the wire-version gate before this
+            // match, so a straggler peer gets the stale-wire-version
+            // refusal plus an audit record, never a silent malformed-wire
+            // drop (KTD10).
+            let caller = crate::envelope::CallerAuthority::classify(&caller_role);
+            let operation = req.operation.as_str();
+            let zone = req.zone.as_str();
+            let invocation = match (&req.chain_root_invocation_id, &req.chain_identities) {
+                (Some(root), Some(identities)) => {
+                    let Some((head, tail)) = identities.split_first() else {
+                        return Err(BrokerError::RequestValidation {
+                            operation: "EnvelopeInvoke",
+                            reason: "a chain with no identities is not a chain",
+                        });
+                    };
+                    let mut chain =
+                        d2b_audit::evidence_chain::EvidenceChain::root(root.clone(), head.clone());
+                    for identity in tail {
+                        chain = chain.nested(identity.clone());
+                    }
+                    envelope_call_runtime().block_on(
+                        backend
+                            .operation_envelope()
+                            .call_nested_with_fds(chain, operation, zone, &req.payload, &request_fds),
+                    )
+                }
+                (None, None) => envelope_call_runtime().block_on(
+                    backend
+                        .operation_envelope()
+                        .call_with_fds(caller, operation, zone, &req.payload, &request_fds),
+                ),
+                _ => {
+                    return Err(BrokerError::RequestValidation {
+                        operation: "EnvelopeInvoke",
+                        reason: "the evidence chain is partial",
+                    });
+                }
+            };
+            match invocation {
+                Ok(invocation) => {
+                    let crate::envelope::DispatchOutcome { result, fds } = invocation.outcome;
+                    let fd_indexes: Vec<u32> = (0..fds.len() as u32).collect();
+                    let fd_kinds: Vec<d2b_contracts_broker::broker_wire::FdKind> =
+                        match crate::catalog::BrokerOperationRow::find(operation)
+                            .and_then(|row| row.fd_kind)
+                        {
+                            // The row's declared kind labels every returned
+                            // descriptor; a row that mints fds without one
+                            // still labels them `Any` so the index and kind
+                            // lists never diverge (U10).
+                            Some(kind) => vec![kind; fds.len()],
+                            None => vec![d2b_contracts_broker::broker_wire::FdKind::Any; fds.len()],
+                        };
+                    Ok(DispatchResult::with_fds(
+                        BrokerResponse::EnvelopeInvoke(
+                            d2b_contracts_broker::broker_wire::EnvelopeInvokeResponse {
+                                operation: operation.to_owned(),
+                                invocation_id: invocation.invocation_id,
+                                result: serde_json::to_value(&result).ok(),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes,
+                                fd_kinds,
+                            },
+                        ),
+                        fds,
+                    ))
+                }
+                Err(refusal) => Ok(DispatchResult::no_fds(BrokerResponse::EnvelopeInvoke(
+                    d2b_contracts_broker::broker_wire::EnvelopeInvokeResponse {
+                        operation: operation.to_owned(),
+                        invocation_id: refusal.invocation_id,
+                        result: None,
+                        refusal: Some(refusal.code.to_owned()),
+                        detail: refusal.detail,
+                        fd_indexes: Vec::new(),
+                        fd_kinds: Vec::new(),
+                    },
+                ))),
+            }
         }
         RealBrokerRequest::ExportBrokerAudit(req) => {
             // Real wire filter is a typed BrokerAuditFilter struct;
@@ -6923,11 +7025,11 @@ fn complete_lifecycle_lease(
 /// matching the map semantics they replace.
 #[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, Copy)]
-struct RunnerPidfdCell;
+pub(crate) struct RunnerPidfdCell;
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 impl RunnerPidfdCell {
-    fn cell() -> (&'static str, crate::catalog::CellDurability) {
+    pub(crate) fn cell() -> (&'static str, crate::catalog::CellDurability) {
         let row = crate::catalog::BrokerOperationRow::find("DeregisterRunnerPidfd")
             .expect("DeregisterRunnerPidfd is a committed row");
         (
@@ -6938,7 +7040,7 @@ impl RunnerPidfdCell {
         )
     }
 
-    fn contains_key(self, runner_id: &str) -> bool {
+    pub(crate) fn contains_key(self, runner_id: &str) -> bool {
         let (cell, _) = Self::cell();
         crate::state_cells::broker_store().contains(cell, runner_id)
     }
@@ -6946,7 +7048,7 @@ impl RunnerPidfdCell {
     /// The registered pidfd handle, so the caller signals the live process
     /// (or dups) without racing a concurrent deregistration: the record's
     /// `Arc` keeps the descriptor valid.
-    fn get(self, runner_id: &str) -> Option<Arc<OwnedFd>> {
+    pub(crate) fn get(self, runner_id: &str) -> Option<Arc<OwnedFd>> {
         let (cell, _) = Self::cell();
         crate::state_cells::broker_store()
             .payload(cell, runner_id)
@@ -6955,7 +7057,7 @@ impl RunnerPidfdCell {
     }
 
     /// Duplicate the registered pidfd.
-    fn duplicate(self, runner_id: &str) -> Option<OwnedFd> {
+    pub(crate) fn duplicate(self, runner_id: &str) -> Option<OwnedFd> {
         self.get(runner_id).and_then(|pidfd| match dup(pidfd.as_raw_fd()).map(owned_fd_from_raw) {
             Ok(pidfd) => Some(pidfd),
             Err(error) => {
@@ -6965,7 +7067,7 @@ impl RunnerPidfdCell {
         })
     }
 
-    fn insert(self, runner_id: &str, pidfd: OwnedFd) -> Result<(), BrokerError> {
+    pub(crate) fn insert(self, runner_id: &str, pidfd: OwnedFd) -> Result<(), BrokerError> {
         let (cell, _) = Self::cell();
         crate::state_cells::broker_store()
             .insert_payload(
@@ -6977,24 +7079,24 @@ impl RunnerPidfdCell {
             .map_err(cell_store_error)
     }
 
-    fn remove(self, runner_id: &str) -> bool {
+    pub(crate) fn remove(self, runner_id: &str) -> bool {
         let (cell, _) = Self::cell();
         crate::state_cells::broker_store().remove(cell, runner_id)
     }
 
-    fn keys(self) -> Vec<String> {
+    pub(crate) fn keys(self) -> Vec<String> {
         let (cell, _) = Self::cell();
         crate::state_cells::broker_store().keys(cell)
     }
 
-    fn clear(self) -> usize {
+    pub(crate) fn clear(self) -> usize {
         let (cell, _) = Self::cell();
         crate::state_cells::broker_store().clear(cell)
     }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn runner_pidfds() -> RunnerPidfdCell {
+pub(crate) fn runner_pidfds() -> RunnerPidfdCell {
     RunnerPidfdCell
 }
 
@@ -7724,7 +7826,7 @@ fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
 /// a `std::sync::Mutex` so both the tokio reap task and the synchronous
 /// accept loop can access it safely.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn child_reap_buffer() -> &'static Mutex<
+pub(crate) fn child_reap_buffer() -> &'static Mutex<
     std::collections::VecDeque<d2b_contracts_broker::broker_wire::ChildReapedNotification>,
 > {
     use std::collections::VecDeque;
@@ -7741,7 +7843,7 @@ const CHILD_REAP_BUFFER_CAP: usize = 256;
 /// Push one notification to the ring buffer.
 /// If the buffer is full, drops the oldest entry and logs a warning.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn push_child_reap_notification(notif: d2b_contracts_broker::broker_wire::ChildReapedNotification) {
+pub(crate) fn push_child_reap_notification(notif: d2b_contracts_broker::broker_wire::ChildReapedNotification) {
     let mut buf = match child_reap_buffer().lock() {
         Ok(g) => g,
         Err(_) => {
@@ -7764,7 +7866,7 @@ fn push_child_reap_notification(notif: d2b_contracts_broker::broker_wire::ChildR
 
 /// Drain the ring buffer (used by PollChildReaped handler).
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn drain_child_reap_buffer() -> Vec<d2b_contracts_broker::broker_wire::ChildReapedNotification> {
+pub(crate) fn drain_child_reap_buffer() -> Vec<d2b_contracts_broker::broker_wire::ChildReapedNotification> {
     match child_reap_buffer().lock() {
         Ok(mut buf) => buf.drain(..).collect(),
         Err(_) => {
@@ -8207,9 +8309,9 @@ fn prepare_runner_preopened_fds(
 #[cfg(not(feature = "layer1-bootstrap"))]
 impl DispatchBackend for LiveDispatchBackend {
     fn operation_envelope(&self) -> &crate::envelope::BrokerEnvelope {
-        // The forward socket is fixed at process start, so the cell's runtime
-        // input cannot change after the first call.
-        live_operation_envelope(self.profile, self.forward_socket_path.as_deref())
+        // The envelope is installed once at serve time with the kernel
+        // seam's handlers captured over the fixed process config (U10).
+        live_operation_envelope()
     }
 
     fn apply_nftables(
@@ -8717,33 +8819,56 @@ fn envelope_call_runtime() -> &'static tokio::runtime::Runtime {
 
 /// The committed-operation envelope of this broker instance.
 ///
-/// The rows are the committed catalog; the handlers live in the declaring
-/// crates' processes, so the dispatch step forwards to the peer that serves
-/// them. The envelope is built once per process so an invocation identifier
-/// is unique across the instance's lifetime.
+/// The rows are the committed catalog. The dispatch step answers per
+/// operation from the mixed kernel seam (U10): the broker-generic kernel
+/// rows run in-broker on the kernel handler table, and every other
+/// committed row forwards to the declaring process that serves it. The
+/// envelope is built once at serve time from the fixed process config
+/// (runtime input, so a plain `OnceLock` cell rather than a `LazyLock`),
+/// and an invocation identifier is unique across the instance's lifetime.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn live_operation_envelope(
-    profile: BrokerProfile,
-    forward_socket_path: Option<&Path>,
-) -> &'static crate::envelope::BrokerEnvelope {
-    static ENVELOPE: OnceLock<crate::envelope::BrokerEnvelope> = OnceLock::new();
-    ENVELOPE.get_or_init(|| {
-        let profile = match profile {
-            BrokerProfile::Host => crate::catalog::BrokerProfileId::Host,
-            BrokerProfile::Guest => crate::catalog::BrokerProfileId::Guest,
-        };
-        let forwarder = match forward_socket_path {
-            Some(path) => crate::envelope::ForwardingDispatcher::new(
-                crate::forwarding::SocketForwarder::new(path),
-            ),
-            // No peer is configured: every forwarded operation refuses rather
-            // than being served by a process that does not declare it.
-            None => crate::envelope::ForwardingDispatcher::default(),
-        };
-        crate::envelope::BrokerEnvelope::over(profile, Box::new(forwarder))
-            .commit_forwarded()
-            .build()
-    })
+static LIVE_OPERATION_ENVELOPE: OnceLock<crate::envelope::BrokerEnvelope> = OnceLock::new();
+
+/// Install the envelope at serve time, before any connection is accepted.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn install_live_operation_envelope(config: &ServerConfig) -> Result<(), RunError> {
+    let profile = match config.profile {
+        BrokerProfile::Host => crate::catalog::BrokerProfileId::Host,
+        BrokerProfile::Guest => crate::catalog::BrokerProfileId::Guest,
+    };
+    let forwarder = match config.forward_socket_path.as_deref() {
+        Some(path) => crate::envelope::ForwardingDispatcher::new(
+            crate::forwarding::SocketForwarder::new(path),
+        ),
+        // No peer is configured: every forwarded operation refuses rather
+        // than being served by a process that does not declare it.
+        None => crate::envelope::ForwardingDispatcher::default(),
+    };
+    let kernels = crate::kernel_ops::kernel_table(&crate::kernel_ops::KernelConfig {
+        state_dir: config.state_dir.clone(),
+        runtime_root: config
+            .socket_path
+            .parent()
+            .unwrap_or_else(|| Path::new(DEFAULT_BROKER_RUNTIME_DIR))
+            .to_path_buf(),
+        daemon_uid: config.d2bd_uid,
+        daemon_gid: config.d2bd_gid,
+    });
+    let dispatcher = crate::envelope::KernelDispatcher::new(kernels, forwarder);
+    let envelope = crate::envelope::BrokerEnvelope::over(profile, Box::new(dispatcher))
+        .commit_forwarded()
+        .build();
+    LIVE_OPERATION_ENVELOPE
+        .set(envelope)
+        .map_err(|_| RunError::Protocol("live envelope installed twice".to_owned()))
+}
+
+/// The envelope this process installed at serve time.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn live_operation_envelope() -> &'static crate::envelope::BrokerEnvelope {
+    LIVE_OPERATION_ENVELOPE
+        .get()
+        .expect("live envelope installed at serve time before any dispatch")
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -13197,7 +13322,7 @@ fn broker_audit_log_handle() -> &'static OnceLock<Arc<AuditLog>> {
 /// child for the SIGCHLD loop.
 #[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TargetedReapOutcome {
+pub(crate) enum TargetedReapOutcome {
     Reaped,
     AlreadyReaped,
     StillAlive,
@@ -13205,7 +13330,7 @@ enum TargetedReapOutcome {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn targeted_reap_runner(
+pub(crate) fn targeted_reap_runner(
     runner_id: &str,
     pidfd: std::os::fd::BorrowedFd<'_>,
 ) -> TargetedReapOutcome {
@@ -14003,6 +14128,7 @@ mod tests {
             "DeletePersistentTap",
             "DeregisterRunnerPidfd",
             "DiskInit",
+            "EnvelopeInvoke",
             "ExportBrokerAudit",
             "Hello",
             "ModprobeIfAllowed",
@@ -14105,6 +14231,11 @@ mod tests {
                 "PollChildReaped",
                 "QemuMediaQueryStatus",
                 "OwnershipMatrixCheck",
+                // The generic invocation surface (U10): its wire arm runs the
+                // committed operation's envelope, whose per-invocation audit
+                // record is the named operation's record - the transport
+                // variant itself carries no typed audit shape of its own.
+                "EnvelopeInvoke",
             ];
             for name in crate::catalog::WIRE_VARIANTS {
                 if crate::catalog::stub_target(name).is_some() || UNAUDITED.contains(name)
@@ -16500,6 +16631,194 @@ mod tests {
                 "the refusal names the documented prebind code, got {error:?}"
             ),
             other => panic!("expected the prebind refusal, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The generic envelope invocation surface (U10, KTD10) drives the
+    /// committed-operation envelope over the origination leg: the arm
+    /// classifies the attested caller, the envelope resolves/authorizes/
+    /// validates/audits the committed row, and the dispatch crosses the
+    /// forward carrier to the declaring process, whose answer travels back
+    /// as the generic `EnvelopeInvoke` response. The peer is the daemon's
+    /// rendezvous-shaped half and answers only from bytes it read off the
+    /// accepted connection, so the operation/zone/payload assertions are
+    /// grounded in what actually crossed the socket.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn an_envelope_invoke_root_call_crosses_the_carrier_and_returns_the_result() {
+        use d2b_contracts_broker::broker_wire::{
+            BrokerCallerRole, BrokerRequest, EnvelopeInvokeRequest,
+            ForwardOperationOutcome, ForwardOperationRequest, ForwardOperationResponse,
+        };
+        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
+        use crate::forwarding::SocketForwarder;
+        use crate::protocol::{bind_seqpacket, recv_json_frame, send_json_frame};
+        use nix::sys::socket::{SockFlag, accept4};
+
+        let root = test_audit_dir("envelope-invoke-happy");
+        fs::create_dir_all(&root).expect("create audit test dir");
+        let config = test_server_config(&root, &root.join("unused-bundle.json"));
+        let (log, _capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+
+        let socket_root = tempfile::tempdir().expect("forward socket dir");
+        let forward_path = socket_root.path().join("d2bd-forward.sock");
+        let listener = bind_seqpacket(&forward_path).expect("bind the test forwarding peer");
+        let peer = std::thread::spawn(move || {
+            let fd = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
+                .expect("the broker's forwarder dials the peer");
+            let request = recv_json_frame::<ForwardOperationRequest>(fd.as_raw_fd())
+                .expect("read the forwarded invocation")
+                .expect("the broker's forwarder sent a frame");
+            assert_eq!(request.operation, "inspect-process-family");
+            assert_eq!(request.zone, "test");
+            assert_eq!(
+                request.payload,
+                serde_json::json!({ "resourceType": "Process" })
+            );
+            send_json_frame(
+                fd.as_raw_fd(),
+                &ForwardOperationResponse {
+                    outcome: ForwardOperationOutcome::Result {
+                        result: serde_json::json!({
+                            "family": "process",
+                            "resourceType": "Process",
+                            "zone": "test",
+                        }),
+                        fd_indexes: vec![],
+                        fd_kinds: vec![],
+                    },
+                },
+            )
+            .expect("write the forwarded reply");
+        });
+
+        let envelope = BrokerEnvelope::over(
+            crate::catalog::BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::new(SocketForwarder::new(forward_path))),
+        )
+        .commit_forwarded()
+        .build();
+        let backend = FakeDispatchBackend {
+            envelope,
+            ..FakeDispatchBackend::default()
+        };
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let request = BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+            operation: "inspect-process-family".to_owned(),
+            zone: "test".to_owned(),
+            payload: serde_json::json!({ "resourceType": "Process" }),
+            chain_root_invocation_id: None,
+            chain_identities: None,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        });
+        let audit_context =
+            DispatchAuditContext::from_request(&request, 4242, &caller_role).expect("audit context");
+        let result = dispatch_request_with_backend(
+            request,
+            1000,
+            Gid::current().as_raw(),
+            caller_role,
+            &audit_context,
+            &config,
+            &log,
+            None,
+            &backend,
+        )
+        .expect("the generic invocation dispatches through the envelope");
+        match result.response {
+            BrokerResponse::EnvelopeInvoke(response) => {
+                assert_eq!(response.operation, "inspect-process-family");
+                assert!(!response.invocation_id.is_empty());
+                assert_eq!(response.refusal, None);
+                let result = response
+                    .result
+                    .expect("the happy path carries the canonical result");
+                assert_eq!(result.get("family").and_then(serde_json::Value::as_str), Some("process"));
+                assert_eq!(
+                    result.get("zone").and_then(serde_json::Value::as_str),
+                    Some("test")
+                );
+            }
+            other => panic!("expected an EnvelopeInvoke response, got {other:?}"),
+        }
+        peer.join().expect("the forwarding peer completes");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The generic invocation's error path: an operation no serving peer
+    /// holds is refused with the envelope's closed `unregistered-handler`
+    /// code inside the `EnvelopeInvoke` response, so the caller sees the
+    /// refusal code and the invocation id instead of a transport error.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn an_envelope_invoke_call_without_a_serving_peer_refuses_with_the_closed_code() {
+        use d2b_contracts_broker::broker_wire::{
+            BrokerCallerRole, BrokerRequest, EnvelopeInvokeRequest,
+        };
+        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
+
+        let root = test_audit_dir("envelope-invoke-prebind");
+        fs::create_dir_all(&root).expect("create audit test dir");
+        let config = test_server_config(&root, &root.join("unused-bundle.json"));
+        let (log, _capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let envelope = BrokerEnvelope::over(
+            crate::catalog::BrokerProfileId::Host,
+            Box::new(ForwardingDispatcher::default()),
+        )
+        .commit_forwarded()
+        .build();
+        let backend = FakeDispatchBackend {
+            envelope,
+            ..FakeDispatchBackend::default()
+        };
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let request = BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+            operation: "inspect-process-family".to_owned(),
+            zone: "test".to_owned(),
+            payload: serde_json::json!({ "resourceType": "Process" }),
+            chain_root_invocation_id: None,
+            chain_identities: None,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        });
+        let audit_context =
+            DispatchAuditContext::from_request(&request, 4242, &caller_role).expect("audit context");
+        let result = dispatch_request_with_backend(
+            request,
+            1000,
+            Gid::current().as_raw(),
+            caller_role,
+            &audit_context,
+            &config,
+            &log,
+            None,
+            &backend,
+        )
+        .expect("the refusal travels inside the EnvelopeInvoke response");
+        match result.response {
+            BrokerResponse::EnvelopeInvoke(response) => {
+                assert_eq!(response.operation, "inspect-process-family");
+                assert_eq!(
+                    response.refusal.as_deref(),
+                    Some(crate::envelope::UNREGISTERED_HANDLER)
+                );
+                assert!(!response.invocation_id.is_empty());
+            }
+            other => panic!("expected an EnvelopeInvoke refusal, got {other:?}"),
         }
         let _ = fs::remove_dir_all(&root);
     }

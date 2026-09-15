@@ -128,4 +128,5 @@ pub const BROKER_OPERATION_VALUES: &[&str] = &[
     "DiskInit",
     "SecurityKeyOpenDevice",
     "SecurityKeyApplyUdevRules",
+    "EnvelopeInvoke",
 ];

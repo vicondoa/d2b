@@ -272,6 +272,27 @@ pub enum BrokerRequest {
     ///
     /// Typed stub - live handler target: `live_security_key_apply_udev_rules`.
     SecurityKeyApplyUdevRules(d2b_contracts::security_key::SecurityKeyApplyUdevRulesRequest),
+    /// Invoke one committed operation through the broker's generic
+    /// operation envelope (U10, KTD10).
+    ///
+    /// This is the generic invocation surface of the retirement template: a
+    /// caller names a committed operation and carries the canonical payload
+    /// the row's schema admits, and the broker runs the envelope's five
+    /// steps - resolve the committed row, authorize the caller against the
+    /// row's grants, validate the payload, audit with an invocation id, and
+    /// dispatch - in place of one typed dispatch arm per operation. A root
+    /// call carries no evidence chain and is authorized as the attested
+    /// caller's own class; a handler's nested (sandwich) call carries the
+    /// chain it was dispatched under and is authorized against the chain's
+    /// initiating principal (KTD6). The reply rides
+    /// [`BrokerResponse::EnvelopeInvoke`] with any descriptors the
+    /// dispatch minted attached via SCM_RIGHTS.
+    ///
+    /// The variant replaces per-operation wire variants as their typed arms
+    /// retire; a retired variant's name stays gated on the Hello-negotiated
+    /// wire version (KTD10) so a straggler peer gets the stale-wire-version
+    /// refusal plus an audit record, never a silent malformed-wire drop.
+    EnvelopeInvoke(EnvelopeInvokeRequest),
 }
 
 /// Path-free result of a source-to-target generation handoff.
@@ -348,6 +369,18 @@ pub enum FdKind {
 
 
     BlockDevice,
+    /// Any descriptor kind.
+    ///
+    /// Declared by an operation whose leg carries a mixed or
+    /// anon-inode set (an fd-inheriting spawn, or descriptors whose
+    /// fstat reports no named kind). Admission treats a declared
+    /// `Any` as accepting every attached descriptor regardless of
+    /// fstat kind - including anon-inodes such as pidfds, whose
+    /// fstat mode carries no file type (U10 fd leg).
+
+
+
+    Any,
     /// A regular file。
 
 
@@ -562,6 +595,75 @@ pub struct ForwardOperationResponse {
     pub outcome: ForwardOperationOutcome,
 }
 
+/// One generic envelope invocation the daemon or a provider handler sends
+/// over the origination leg (U10, KTD10).
+///
+/// The operation names a committed row exactly as the catalog declares it;
+/// the payload is the canonical object the envelope validates against the
+/// row's declared shape. A root call (a driver invoking a service) carries
+/// no chain; a nested call (a provider handler's sandwich leg reaching a
+/// broker-generic core) carries the evidence chain it was dispatched under,
+/// so the graft rule authorizes the call against the chain's initiating
+/// principal and the DB-side records the correlation leg (KTD6).
+///
+/// The chain crosses as its two parts - the root invocation id and the
+/// ordered identities - so the contract crate needs no evidence-chain
+/// dependency; the broker reassembles the chain before the envelope
+/// admission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EnvelopeInvokeRequest {
+    /// The committed operation name the call resolves to, exactly as the
+    /// committed row declares it.
+    pub operation: String,
+    /// The Zone the invocation runs in.
+    pub zone: String,
+    /// The canonical payload object the envelope validates against the
+    /// row's declared shape.
+    pub payload: serde_json::Value,
+    /// The root invocation id of the evidence chain a nested call
+    /// presents; absent for a root call.
+    pub chain_root_invocation_id: Option<String>,
+    /// The ordered chain identities, root first; present exactly when
+    /// [`Self::chain_root_invocation_id`] is, and never empty then (the
+    /// first identity is the initiating principal).
+    pub chain_identities: Option<Vec<String>>,
+    /// The SCM_RIGHTS request attachments' indexes, in frame order.
+    pub fd_indexes: Vec<u32>,
+    /// The kernel kinds of the attached descriptors, in frame order.
+    pub fd_kinds: Vec<FdKind>,
+}
+
+/// The reply to one [`BrokerRequest::EnvelopeInvoke`].
+///
+/// A success carries the canonical result the dispatch returned plus the
+/// descriptors the answering leg minted (via the response frame's
+/// SCM_RIGHTS attachments); a refusal carries the envelope's closed
+/// refusal code and its detail. Both carry the invocation id the audit
+/// record keys on, so a caller can join the reply to the audit log either
+/// way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EnvelopeInvokeResponse {
+    /// The committed operation name that ran.
+    pub operation: String,
+    /// The invocation identifier the audit record carries.
+    pub invocation_id: String,
+    /// The canonical result object, present exactly when [`Self::refusal`]
+    /// is absent.
+    pub result: Option<serde_json::Value>,
+    /// The closed envelope refusal code, present exactly when the
+    /// invocation was refused.
+    pub refusal: Option<String>,
+    /// Detail of the refusal, when the refusing side contributed one.
+    pub detail: Option<String>,
+    /// The response frame's SCM_RIGHTS attachments this result owns, by
+    /// index.
+    pub fd_indexes: Vec<u32>,
+    /// The kernel kinds of the returned descriptors, in frame order.
+    pub fd_kinds: Vec<FdKind>,
+}
+
 impl BrokerRequest {
     /// Stable operation name for audit records.
     ///
@@ -640,6 +742,7 @@ impl BrokerRequest {
             Self::DiskInit(_) => "DiskInit",
             Self::SecurityKeyOpenDevice(_) => "SecurityKeyOpenDevice",
             Self::SecurityKeyApplyUdevRules(_) => "SecurityKeyApplyUdevRules",
+            Self::EnvelopeInvoke(_) => "EnvelopeInvoke",
         }
     }
 
@@ -665,6 +768,7 @@ impl BrokerRequest {
             Self::PollChildReaped => "pidfd-reap-buffer",
             Self::OpenPeerPidfdFromAcceptedSocket(_) => "accepted-socket",
             Self::ConsumeLifecycleLease(_) => "guest-lifecycle",
+            Self::EnvelopeInvoke(_) => "envelope",
             _ => "operation",
         }
     }
@@ -1035,7 +1139,8 @@ impl BrokerRequest {
             Self::ExportBrokerAudit(_)
             | Self::Hello(_)
             | Self::PublishTrustedContext(_)
-            | Self::PollChildReaped => return None,
+            | Self::PollChildReaped
+            | Self::EnvelopeInvoke(_) => return None,
         };
         Some((
             d2b_contracts_resource::v3::canonical_digest("d2b:broker-zone:v2", scope.as_bytes()),
@@ -1057,6 +1162,7 @@ impl BrokerRequest {
                 | Self::Hello(_)
                 | Self::PublishTrustedContext(_)
                 | Self::PollChildReaped
+                | Self::EnvelopeInvoke(_)
         )
     }
 }
@@ -1323,6 +1429,11 @@ pub enum BrokerResponse {
     /// + start traces.
     StoreSync(StoreSyncResponse),
     ValidateLockSpec(ValidateLockSpecResponse),
+    /// The reply to one generic envelope invocation
+    /// ([`BrokerRequest::EnvelopeInvoke`]): the dispatch's canonical
+    /// result or its closed refusal, plus any descriptors the dispatching
+    /// leg minted via the response frame's SCM_RIGHTS attachments.
+    EnvelopeInvoke(EnvelopeInvokeResponse),
 }
 
 /// Typed broker error envelope for the real wire. Mirrors the
@@ -4534,6 +4645,66 @@ mod tests {
             }
             other => panic!("expected BrokerResponse::SpawnRunner, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn envelope_invoke_round_trips_root_and_nested() {
+        let root = BrokerRequestEnvelope {
+            request: BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+                operation: "PollChildReaped".to_owned(),
+                zone: "zone-a".to_owned(),
+                payload: serde_json::json!({}),
+                chain_root_invocation_id: None,
+                chain_identities: None,
+                fd_indexes: vec![],
+                fd_kinds: vec![],
+            }),
+            caller_role: BrokerCallerRole::AdminUid { uid: 1000 },
+            test_peer_uid: None,
+            audit_join: None,
+        };
+        let frame = encode_frame(&root).expect("encodes");
+        let parsed: BrokerRequestEnvelope =
+            decode_frame("BrokerRequestEnvelope", &frame).expect("decodes");
+        assert_eq!(parsed, root);
+        assert_eq!(parsed.request.op_name(), "EnvelopeInvoke");
+        let nested = BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+            operation: "drain-reap-buffer".to_owned(),
+            zone: "zone-a".to_owned(),
+            payload: serde_json::json!({}),
+            chain_root_invocation_id: Some("invocation-1".to_owned()),
+            chain_identities: Some(vec!["daemon".to_owned(), "d2b-provider-process".to_owned()]),
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        });
+        let frame = encode_frame(&nested).expect("encodes");
+        let parsed: BrokerRequest =
+            decode_frame("BrokerRequest", &frame).expect("decodes");
+        assert_eq!(parsed, nested);
+        let reply = BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+            operation: "PollChildReaped".to_owned(),
+            invocation_id: "invocation-1".to_owned(),
+            result: Some(serde_json::json!({ "notifications": [] })),
+            refusal: None,
+            detail: None,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        });
+        let frame = encode_frame(&reply).expect("encodes");
+        let parsed: BrokerResponse = decode_frame("BrokerResponse", &frame).expect("decodes");
+        assert_eq!(parsed, reply);
+        let refused = BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+            operation: "PollChildReaped".to_owned(),
+            invocation_id: "invocation-1".to_owned(),
+            result: None,
+            refusal: Some("unknown-operation".to_owned()),
+            detail: None,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        });
+        let frame = encode_frame(&refused).expect("encodes");
+        let parsed: BrokerResponse = decode_frame("BrokerResponse", &frame).expect("decodes");
+        assert_eq!(parsed, refused);
     }
 
     #[test]
