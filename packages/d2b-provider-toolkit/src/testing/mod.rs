@@ -49,7 +49,8 @@ use async_trait::async_trait;
 use d2b_contracts_resource::v3::resource_schema::{CanonicalJsonObject, CanonicalJsonValue};
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_resource_types::{
-    ChildCreation, DriverDescriptor, OperationDef, ProviderDeclaration, StartupStep, WellKnownType,
+    ChildCreation, DriverDescriptor, OperationDef, ProviderDeclaration, ServiceDecl, StartupStep,
+    WellKnownType,
 };
 
 use crate::audit::ProviderAgentAuditLog;
@@ -369,6 +370,9 @@ pub struct HarnessDeclarations {
     pub owned_types: &'static [WellKnownType],
     /// One row per declaring driver: the children it may create.
     pub creations: &'static [(WellKnownType, &'static [ChildCreation])],
+    /// The services the drivers declared, whose methods carry the contract
+    /// facets and resolve the operations (U7).
+    pub services: &'static [ServiceDecl],
     /// The operations the drivers declared, with their handlers.
     pub operations: &'static [OperationDef],
     /// The startup steps the drivers declared.
@@ -472,6 +476,7 @@ impl<P: ProviderBase> TestHarness<P> {
             Some(declarations) => OperationEnvelope::from_operations(
                 zone.clone(),
                 provider_ref,
+                declarations.services,
                 declarations.operations,
                 Arc::clone(&audit),
             ),

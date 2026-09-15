@@ -464,6 +464,7 @@ impl ZonePlanePort for ProductionPlanePort {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_provider_toolkit::ServiceMethod;
 
     const ZONE: &str = "test";
 
@@ -704,7 +705,7 @@ mod tests {
     async fn an_undeclared_service_refuses_named() {
         const SERVICE: ServiceDecl = ServiceDecl {
             id: "d2b.provider.v3",
-            methods: &["start"],
+            methods: &[ServiceMethod::zone_plane("start")],
             attach_kinds: &[],
             streams: &[],
             endpoint_policy: None,

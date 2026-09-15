@@ -7,6 +7,9 @@
   "roots": [
     "d2b",
     "d2b-audit",
+    "d2b-broker-composition",
+    "d2b-broker-fixture-handlers",
+    "d2b-broker-fixture-syscall-surface",
     "d2b-bus",
     "d2b-contracts",
     "d2b-contracts-broker",
@@ -96,7 +99,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "ef8f59f1c9134fba10b00758c0cf3e19b4374b46af4f27f5dc79793c8b6c8117",
+  "lock_sha256": "8591a4f02ec8ca0797aeed31973a63765deaec94c92ee66291e6b2afe69e9420",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -589,6 +592,38 @@
     {
       "id": "d2b-audit@0.0.0-bootstrap#path",
       "name": "d2b-audit",
+      "version": "0.0.0-bootstrap",
+      "source": null,
+      "checksum": null,
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "id": "d2b-broker-composition@0.0.0-bootstrap#path",
+      "name": "d2b-broker-composition",
+      "version": "0.0.0-bootstrap",
+      "source": null,
+      "checksum": null,
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "id": "d2b-broker-fixture-handlers@0.0.0-bootstrap#path",
+      "name": "d2b-broker-fixture-handlers",
+      "version": "0.0.0-bootstrap",
+      "source": null,
+      "checksum": null,
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "id": "d2b-broker-fixture-syscall-surface@0.0.0-bootstrap#path",
+      "name": "d2b-broker-fixture-syscall-surface",
+      "version": "0.0.0-bootstrap",
+      "source": null,
+      "checksum": null,
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "id": "d2b-broker@0.0.0-bootstrap#path",
+      "name": "d2b-broker",
       "version": "0.0.0-bootstrap",
       "source": null,
       "checksum": null,
@@ -1947,6 +1982,14 @@
       "target": "x86_64-unknown-linux-gnu"
     },
     {
+      "id": "matchers@0.2.0#registry+https://github.com/rust-lang/crates.io-index",
+      "name": "matchers",
+      "version": "0.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
       "id": "memchr@2.8.3#registry+https://github.com/rust-lang/crates.io-index",
       "name": "memchr",
       "version": "2.8.3",
@@ -2024,6 +2067,14 @@
       "version": "4.18.0",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": "c5b4c1b4f2aa9f25f63a7a49d3dd0ed567b3670da15330a66b29434be899b891",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "id": "nu-ansi-term@0.50.3#registry+https://github.com/rust-lang/crates.io-index",
+      "name": "nu-ansi-term",
+      "version": "0.50.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5",
       "target": "x86_64-unknown-linux-gnu"
     },
     {
@@ -2547,6 +2598,14 @@
       "target": "x86_64-unknown-linux-gnu"
     },
     {
+      "id": "sharded-slab@0.1.7#registry+https://github.com/rust-lang/crates.io-index",
+      "name": "sharded-slab",
+      "version": "0.1.7",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
       "id": "shlex@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
       "name": "shlex",
       "version": "2.0.1",
@@ -2731,6 +2790,14 @@
       "target": "x86_64-unknown-linux-gnu"
     },
     {
+      "id": "thread_local@1.1.10#registry+https://github.com/rust-lang/crates.io-index",
+      "name": "thread_local",
+      "version": "1.1.10",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
       "id": "tinyvec@1.12.0#registry+https://github.com/rust-lang/crates.io-index",
       "name": "tinyvec",
       "version": "1.12.0",
@@ -2824,6 +2891,22 @@
       "version": "0.1.36",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "id": "tracing-log@0.2.0#registry+https://github.com/rust-lang/crates.io-index",
+      "name": "tracing-log",
+      "version": "0.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "id": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "name": "tracing-subscriber",
+      "version": "0.3.23",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319",
       "target": "x86_64-unknown-linux-gnu"
     },
     {
@@ -4055,6 +4138,144 @@
     {
       "from": "d2b-audit@0.0.0-bootstrap#path",
       "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker-composition@0.0.0-bootstrap#path",
+      "to": "d2b-broker-fixture-handlers@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker-composition@0.0.0-bootstrap#path",
+      "to": "d2b-broker@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker-composition@0.0.0-bootstrap#path",
+      "to": "regex@1.13.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker-composition@0.0.0-bootstrap#path",
+      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker-composition@0.0.0-bootstrap#path",
+      "to": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker-fixture-handlers@0.0.0-bootstrap#path",
+      "to": "d2b-broker@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker-fixture-syscall-surface@0.0.0-bootstrap#path",
+      "to": "libc@0.2.189#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "d2b-audit@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-broker@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "d2b-contracts@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "d2b-core@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "d2b-host@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "hmac@0.12.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "nix@0.29.0#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "rustix@0.38.44#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "sha2@0.10.9#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "tracing@0.1.44#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-broker@0.0.0-bootstrap#path",
+      "to": "zbus@5.19.0#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -9165,6 +9386,12 @@
       "target": null
     },
     {
+      "from": "matchers@0.2.0#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "regex-automata@0.4.18#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
       "from": "memoffset@0.7.1#registry+https://github.com/rust-lang/crates.io-index",
       "to": "autocfg@1.5.1#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "build",
@@ -10191,6 +10418,12 @@
       "target": null
     },
     {
+      "from": "sharded-slab@0.1.7#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "lazy_static@1.5.0#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
       "from": "signal-hook-registry@1.4.8#registry+https://github.com/rust-lang/crates.io-index",
       "to": "errno@0.3.14#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
@@ -10497,6 +10730,12 @@
       "target": null
     },
     {
+      "from": "thread_local@1.1.10#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "cfg-if@1.0.4#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
       "from": "tinyvec@1.12.0#registry+https://github.com/rust-lang/crates.io-index",
       "to": "tinyvec_macros@0.1.1#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
@@ -10709,6 +10948,84 @@
     {
       "from": "tracing-core@0.1.36#registry+https://github.com/rust-lang/crates.io-index",
       "to": "once_cell@1.21.4#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-log@0.2.0#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "log@0.4.33#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-log@0.2.0#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "once_cell@1.21.4#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-log@0.2.0#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "tracing-core@0.1.36#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "matchers@0.2.0#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "nu-ansi-term@0.50.3#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "once_cell@1.21.4#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "regex-automata@0.4.18#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "sharded-slab@0.1.7#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "smallvec@1.15.2#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "thread_local@1.1.10#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "tracing-core@0.1.36#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "tracing-log@0.2.0#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "tracing-subscriber@0.3.23#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "tracing@0.1.44#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },

@@ -181,6 +181,7 @@
             "PrepareRuntimeDir",
             "PrepareStateDir",
             "PrepareSwtpmDir",
+            "PublishTrustedContext",
             "QemuMediaAttach",
             "QemuMediaBoot",
             "QemuMediaDetach",

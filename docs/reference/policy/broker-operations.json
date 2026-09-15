@@ -166,7 +166,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "open-pidfd"
   },
   {
    "operation": "OpenPeerPidfdFromAcceptedSocket",
@@ -206,7 +208,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "open-peer-pidfd-from-accepted-socket"
   },
   {
    "operation": "ObserveRunner",
@@ -246,7 +250,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "observe-runner"
   },
   {
    "operation": "StartSystemdUnit",
@@ -286,7 +292,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process-systemd",
+   "method": "start-systemd-unit"
   },
   {
    "operation": "CheckSystemdUserManager",
@@ -326,7 +334,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process-systemd",
+   "method": "check-systemd-user-manager"
   },
   {
    "operation": "ObserveSystemdUnit",
@@ -366,7 +376,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process-systemd",
+   "method": "observe-systemd-unit"
   },
   {
    "operation": "OpenSystemdUnitPidfd",
@@ -406,7 +418,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process-systemd",
+   "method": "open-systemd-unit-pidfd"
   },
   {
    "operation": "StopSystemdUnit",
@@ -446,7 +460,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process-systemd",
+   "method": "stop-systemd-unit"
   },
   {
    "operation": "PollChildReaped",
@@ -484,7 +500,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "poll-child-reaped"
   },
   {
    "operation": "PrepareRuntimeDir",
@@ -524,7 +542,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "prepare-runtime-dir"
   },
   {
    "operation": "PrepareStateDir",
@@ -565,7 +585,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "prepare-state-dir"
   },
   {
    "operation": "CgroupKill",
@@ -605,7 +627,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "cgroup-kill"
   },
   {
    "operation": "SignalRunner",
@@ -645,7 +669,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "signal-runner"
   },
   {
    "operation": "DeregisterRunnerPidfd",
@@ -690,7 +716,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "deregister-runner-pidfd"
   },
   {
    "operation": "SpawnRunner",
@@ -731,7 +759,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "spawn-runner"
   },
   {
    "operation": "ApplyHostGenerationHandoff",
@@ -810,7 +840,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "apply-nftables"
   },
   {
    "operation": "ApplyNftablesProjection",
@@ -849,7 +881,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "apply-nftables-projection"
   },
   {
    "operation": "ApplyNmUnmanaged",
@@ -888,7 +922,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "apply-nm-unmanaged"
   },
   {
    "operation": "ApplyRoute",
@@ -927,7 +963,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "apply-route"
   },
   {
    "operation": "ApplySysctl",
@@ -966,7 +1004,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "apply-sysctl"
   },
   {
    "operation": "CreateOrReconcileUsersGroups",
@@ -1003,7 +1043,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.user",
+   "method": "create-or-reconcile-users-groups"
   },
   {
    "operation": "CreateBridge",
@@ -1042,7 +1084,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "create-bridge"
   },
   {
    "operation": "DeleteBridge",
@@ -1081,7 +1125,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "delete-bridge"
   },
   {
    "operation": "CreatePersistentTap",
@@ -1120,7 +1166,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "create-persistent-tap"
   },
   {
    "operation": "DeletePersistentTap",
@@ -1159,7 +1207,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "delete-persistent-tap"
   },
   {
    "operation": "CreateTapFd",
@@ -1198,7 +1248,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "create-tap-fd"
   },
   {
    "operation": "DelegateCgroupV2",
@@ -1237,7 +1289,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "delegate-cgroup-v2"
   },
   {
    "operation": "InjectSecretById",
@@ -1274,7 +1328,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.credential",
+   "method": "inject-secret-by-id"
   },
   {
    "operation": "LaunchMinijailChild",
@@ -1311,7 +1367,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "launch-minijail-child"
   },
   {
    "operation": "ModprobeIfAllowed",
@@ -1350,7 +1408,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device",
+   "method": "modprobe-if-allowed"
   },
   {
    "operation": "OpenCgroupDir",
@@ -1389,7 +1449,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "open-cgroup-dir"
   },
   {
    "operation": "OpenDevice",
@@ -1428,7 +1490,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device",
+   "method": "open-device"
   },
   {
    "operation": "OpenFuse",
@@ -1467,7 +1531,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device",
+   "method": "open-fuse"
   },
   {
    "operation": "OpenHidrawSecurityKey",
@@ -1506,7 +1572,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device-security-key",
+   "method": "open-hidraw-security-key"
   },
   {
    "operation": "OpenKvm",
@@ -1545,7 +1613,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device",
+   "method": "open-kvm"
   },
   {
    "operation": "QemuMediaEnroll",
@@ -1584,7 +1654,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.guest",
+   "method": "qemu-media-enroll"
   },
   {
    "operation": "QemuMediaRefreshRegistry",
@@ -1623,7 +1695,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.guest",
+   "method": "qemu-media-refresh-registry"
   },
   {
    "operation": "QemuMediaBoot",
@@ -1662,7 +1736,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.guest",
+   "method": "qemu-media-boot"
   },
   {
    "operation": "QemuMediaSystemPowerdown",
@@ -1701,7 +1777,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.guest",
+   "method": "qemu-media-system-powerdown"
   },
   {
    "operation": "QemuMediaQueryStatus",
@@ -1738,7 +1816,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.guest",
+   "method": "qemu-media-query-status"
   },
   {
    "operation": "QemuMediaQuit",
@@ -1777,7 +1857,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.guest",
+   "method": "qemu-media-quit"
   },
   {
    "operation": "QemuMediaAttach",
@@ -1816,7 +1898,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.guest",
+   "method": "qemu-media-attach"
   },
   {
    "operation": "QemuMediaDetach",
@@ -1855,7 +1939,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.guest",
+   "method": "qemu-media-detach"
   },
   {
    "operation": "ConsumeLifecycleLease",
@@ -1898,7 +1984,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "consume-lifecycle-lease"
   },
   {
    "operation": "inspect-process-family",
@@ -1949,7 +2037,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.process",
+   "method": "inspect-process-family"
   },
   {
    "operation": "PipeWireAudio",
@@ -1988,7 +2078,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.audio",
+   "method": "pipe-wire-audio"
   },
   {
    "operation": "OpenVhostNet",
@@ -2027,7 +2119,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device",
+   "method": "open-vhost-net"
   },
   {
    "operation": "ReconcileStorageScope",
@@ -2066,7 +2160,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.volume-binding",
+   "method": "reconcile-storage-scope"
   },
   {
    "operation": "ValidateLockSpec",
@@ -2105,7 +2201,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.volume-binding",
+   "method": "validate-lock-spec"
   },
   {
    "operation": "StoreSync",
@@ -2144,7 +2242,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.volume",
+   "method": "store-sync"
   },
   {
    "operation": "ReadSecretById",
@@ -2181,7 +2281,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.credential",
+   "method": "read-secret-by-id"
   },
   {
    "operation": "RotateSecretById",
@@ -2218,7 +2320,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.credential",
+   "method": "rotate-secret-by-id"
   },
   {
    "operation": "SetBridgePortFlags",
@@ -2257,7 +2361,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "set-bridge-port-flags"
   },
   {
    "operation": "UpdateHostsFile",
@@ -2296,7 +2402,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "update-hosts-file"
   },
   {
    "operation": "UsbipBind",
@@ -2336,7 +2444,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device-usbip",
+   "method": "usbip-bind"
   },
   {
    "operation": "UsbipBindFirewallRule",
@@ -2375,7 +2485,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device-usbip",
+   "method": "usbip-bind-firewall-rule"
   },
   {
    "operation": "UsbipProxyReconcile",
@@ -2414,7 +2526,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device-usbip",
+   "method": "usbip-proxy-reconcile"
   },
   {
    "operation": "UsbipUnbind",
@@ -2453,7 +2567,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device-usbip",
+   "method": "usbip-unbind"
   },
   {
    "operation": "UsbipExplicitBind",
@@ -2493,7 +2609,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device-usbip",
+   "method": "usbip-explicit-bind"
   },
   {
    "operation": "UsbipExplicitFirewallRule",
@@ -2532,7 +2650,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device-usbip",
+   "method": "usbip-explicit-firewall-rule"
   },
   {
    "operation": "SeedDnsmasqLease",
@@ -2571,7 +2691,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.network",
+   "method": "seed-dnsmasq-lease"
   },
   {
    "operation": "OwnershipMatrixCheck",
@@ -2618,7 +2740,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.volume",
+   "method": "ownership-matrix-check"
   },
   {
    "operation": "SshHostKeyPreflight",
@@ -2655,7 +2779,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device-security-key",
+   "method": "ssh-host-key-preflight"
   },
   {
    "operation": "DiskInit",
@@ -2694,7 +2820,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.volume",
+   "method": "disk-init"
   },
   {
    "operation": "SecurityKeyOpenDevice",
@@ -2731,7 +2859,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device-security-key",
+   "method": "security-key-open-device"
   },
   {
    "operation": "SecurityKeyApplyUdevRules",
@@ -2768,7 +2898,9 @@
    },
    "deadline": {
     "tier": "standard"
-   }
+   },
+   "service": "d2b.device-security-key",
+   "method": "security-key-apply-udev-rules"
   },
   {
    "operation": "PrepareSwtpmDir",

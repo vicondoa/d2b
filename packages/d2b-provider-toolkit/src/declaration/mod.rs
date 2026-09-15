@@ -10,8 +10,9 @@
 
 pub use d2b_resource_types::{
     AllowedSources, Cardinality, ChildCreation, ChildCustody, DriverDescriptor, IsolationPosture,
-    OperationDef, OperationHandler, PlaneAdapter, PrincipalName, ProviderDeclaration, SelfBinding,
-    ServiceDecl, StartupStep, StorageRoot, WellKnownType,
+    MethodFdContract, OperationDef, OperationHandler, PlaneAdapter, PrincipalName,
+    ProviderDeclaration, SelfBinding, ServiceDecl, ServiceMethod, StartupStep, StorageRoot,
+    WellKnownType,
 };
 
 pub mod manifest;

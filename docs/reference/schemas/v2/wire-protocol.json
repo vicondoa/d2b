@@ -1632,6 +1632,25 @@
           }
         },
         {
+          "description": "One daemon publication of the trusted-context values it currently holds for one Zone.\n\nThe daemon owns the provider-set revision and the controller/guest generations, so it publishes them over the same origination leg its other broker operations use; the broker caches them as durable, monotonically increasing state and refuses to mint a context block until it holds a value for the Zone a call names. The reply carries the broker-epoch nonce every context minted from that point on carries.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PublishTrustedContext"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/PublishTrustedContextValues"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind",
@@ -2741,6 +2760,25 @@
             },
             "payload": {
               "$ref": "#/definitions/HelloResponse"
+            }
+          }
+        },
+        {
+          "description": "Acknowledgement of one [`BrokerRequest::PublishTrustedContext`]. Carries the broker-epoch nonce the broker is currently minting with, so the daemon's receiving leg can refuse every context minted before a broker restart.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PublishTrustedContext"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/PublishTrustedContextResponse"
             }
           }
         },
@@ -8883,6 +8921,57 @@
           ]
         },
         "virtiofsd": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PublishTrustedContextResponse": {
+      "description": "The broker's acknowledgement of one [`PublishTrustedContextValues`].\n\nThe reply carries the broker-epoch nonce the broker is currently minting with, so the daemon's rendezvous can refuse every context minted before a broker restart: the epoch it observed stops matching the moment the broker reopens its store and starts minting under a fresh nonce.",
+      "type": "object",
+      "required": [
+        "brokerEpoch"
+      ],
+      "properties": {
+        "brokerEpoch": {
+          "description": "The broker-epoch nonce the broker is currently minting with.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "PublishTrustedContextValues": {
+      "description": "The daemon-owned values one publication carries over the established origination leg.\n\nProvider-set revision and the controller/guest generations are daemon state, so the daemon publishes its current values to the broker over the leg its operations already originate on; the broker caches them as durable, monotonically increasing state and refuses to mint a context until it holds a value for the Zone the call names.",
+      "type": "object",
+      "required": [
+        "controllerGeneration",
+        "guestGeneration",
+        "providerSetRevision",
+        "zone"
+      ],
+      "properties": {
+        "controllerGeneration": {
+          "description": "The Zone's current controller generation.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "guestGeneration": {
+          "description": "The Zone's current guest generation.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "providerSetRevision": {
+          "description": "The Zone's current provider-set revision.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "zone": {
+          "description": "The Zone the published values describe.",
           "type": "string"
         }
       },

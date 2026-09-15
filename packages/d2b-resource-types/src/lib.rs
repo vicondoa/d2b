@@ -37,5 +37,5 @@ pub use provider::{
     StorageRoot,
 };
 pub use resource_type::WellKnownType;
-pub use service::ServiceDecl;
+pub use service::{MethodFdContract, ServiceDecl, ServiceMethod};
 pub use startup::StartupStep;
