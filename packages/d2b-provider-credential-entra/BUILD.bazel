@@ -1,6 +1,10 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-credential:__pkg__", "//packages/d2b-provider-toolkit:__pkg__", "//packages/d2bd:__pkg__"])
+
 exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
@@ -9,7 +13,6 @@ rust_library(
     name = "d2b_provider_credential_entra",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -23,7 +26,6 @@ rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     crate_name = "d2b_provider_credential_entra",
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -36,7 +38,6 @@ rust_binary(
     name = "d2b-provider-credential-entra",
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [":d2b_provider_credential_entra"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -52,7 +53,6 @@ rust_test(
     rustc_env = {
         "CARGO_BIN_EXE_d2b-provider-credential-entra": "$(rootpath :d2b-provider-credential-entra)",
     },
-    visibility = ["//visibility:public"],
     deps = [":d2b_provider_credential_entra"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -64,7 +64,6 @@ rust_test(
     ],
     compile_data = ["Cargo.toml"],
     crate_root = "tests/canary.rs",
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -81,7 +80,6 @@ rust_test(
     ],
     compile_data = ["Cargo.toml"],
     crate_root = "tests/conformance.rs",
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -99,7 +97,6 @@ rust_test(
     ],
     compile_data = ["Cargo.toml"],
     crate_root = "tests/delivery.rs",
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -116,7 +113,6 @@ rust_test(
     ],
     compile_data = ["Cargo.toml"],
     crate_root = "tests/faults.rs",
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -133,7 +129,6 @@ rust_test(
     ],
     compile_data = ["Cargo.toml"],
     crate_root = "tests/lifecycle.rs",
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -146,7 +141,6 @@ rust_test(
     name = "placement",
     srcs = ["tests/placement.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -167,7 +161,6 @@ rust_test(
         "tests/controller.rs",
     ] + glob(["tests/common/**/*.rs"]),
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",

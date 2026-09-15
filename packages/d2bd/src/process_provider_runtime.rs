@@ -4752,14 +4752,14 @@ mod tests {
             SockFlag::SOCK_CLOEXEC,
         )
         .expect("bootstrap socketpair");
-        let writer = std::thread::spawn(move || {
+        let writer = tokio::task::spawn_blocking(move || {
             nix::sys::socket::send(sender.as_raw_fd(), b"ready", nix::sys::socket::MsgFlags::empty())
                 .expect("bootstrap readiness frame");
         });
         let endpoint = wait_for_controller_bootstrap_endpoint(receiver, Duration::from_secs(1))
             .await
             .expect("bootstrap endpoint should become readable");
-        writer.join().expect("bootstrap writer");
+        writer.await.expect("bootstrap writer");
         drop(endpoint);
     }
 

@@ -18,16 +18,45 @@
 //! registered - so an operation no started provider declares is refused by
 //! name before any handler runs.
 //!
-//! The forwarded hop was authorized at the broker against the committed rows;
-//! the carrier deliberately carries no caller identity, because a second
-//! identity on this side would be a second authority to keep in sync. The
-//! one identity this endpoint does check is the transport peer's: nothing in
-//! the frame binds the call to the authorization the broker performed, so
-//! `SO_PEERCRED` must name the broker before a single frame is read (see
-//! [`ServingPosture`]). The provider-side envelope then runs each declared
-//! operation under the declaring provider's own reference, which is the one
-//! caller fact this process owns: a provider may run the handlers it
-//! declared, and the envelope refuses every caller it holds no grant for.
+//! Freshness is broker-attested. The broker is the sole minter of the
+//! context block that rides each forwarded request: it names the broker's
+//! epoch nonce, the Zone, the provider-set revision, the controller and
+//! guest generations, the initiating identity, and the operation's deadline
+//! budget. Those values are daemon-owned, so the daemon publishes its
+//! current provider-set revision and generations to the broker; the broker
+//! caches them as durable, monotonically increasing state and refuses to
+//! mint until it holds a value for the Zone a call names. This endpoint
+//! enforces the attestation field-wise against its own current values: a
+//! stale broker epoch, a Zone not bound to the call, an older provider-set
+//! revision, a lower controller or guest generation, or a block a mutator
+//! changed is refused with the dedicated stale-context code - the broker is
+//! the sole minter, so any mismatch is freshness failure or tampering, and
+//! a broker restart invalidates every previously minted context through its
+//! fresh epoch nonce. The context's deadline budget is served as the
+//! per-call handler deadline here, bounded by an absolute ceiling. The one
+//! identity this endpoint checks beyond the attestation is the transport
+//! peer's: nothing in the frame binds the call to the authorization the
+//! broker performed, so `SO_PEERCRED` must name the broker before a single
+//! frame is read (see [`ServingPosture`]). The provider-side envelope then
+//! runs each declared operation under the declaring provider's own
+//! reference, which is the one caller fact this process owns: a provider
+//! may run the handlers it declared, and the envelope refuses every caller
+//! it holds no grant for.
+//!
+//! Effect-service methods ride the same carrier (U8, KTD5). A forwarded
+//! operation is served by an effect service exactly when a declared
+//! method's `operation` facet names it (KD6: operations resolve to
+//! services); this endpoint resolves the operation to the declaring
+//! service's live generational binding through the hosting API
+//! (`ProviderRuntime::resolve_effect_service_for_operation`) and dispatches
+//! the canonical payload to the hosted actor. The binding's revision is
+//! captured when the call starts and checked again at dispatch: a respawn
+//! or republish that bumped the revision in between - or an actor that
+//! died under the in-flight call - is refused with the dedicated
+//! `stale-revision` code, never hung against a dead or superseded
+//! generation. An operation no hosted service declares falls through to
+//! the provider operation tables, and an operation nothing in this process
+//! declares is refused like any uncommitted operation.
 //!
 //! The endpoint serves on the daemon's runtime rather than on a thread per
 //! call: the listener and every accepted connection are registered with the
@@ -40,20 +69,29 @@
 
 use std::collections::BTreeMap;
 use std::io;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use d2b_audit::evidence_chain::{
+    ChainAuditSink, ChainLeg, ChainOutcome, ChainRecord, ChainRecordClass, EvidenceChain,
+    MAX_NESTED_DEPTH, NESTED_DEPTH_EXCEEDED,
+};
 use d2b_contracts_broker::FORWARD_SOCKET_ENV;
 use d2b_contracts_broker::broker_wire::{
-    ForwardOperationOutcome, ForwardOperationRequest, ForwardOperationResponse,
+    DEFAULT_CONTEXT_DEADLINE_MS, FD_LEG, FdKind, ForwardContext, ForwardOperationOutcome,
+    ForwardOperationRequest, ForwardOperationResponse, MAX_CONTEXT_DEADLINE_MS, MAX_FRAME_FDS,
+    STALE_CONTEXT,
 };
-use d2b_contracts_resource::v3::CanonicalJsonObject;
+use d2b_contracts_resource::v3::{CanonicalJsonObject, canonical_json_bytes};
 use d2b_provider_toolkit::operations::{UNCOMMITTED_OPERATION, UNGRANTED_CALLER};
+use d2b_resource_types::{KernelCaller, OperationResult};
 use d2bd_runtime::concurrency::DEFAULT_MAX_INFLIGHT_CONNECTIONS;
 use d2bd_runtime::runtime_process::{RuntimeIdentity, bind_public_socket};
 use d2bd_runtime::typed_error::TypedError;
+use d2bd_runtime::unix_transport::{close_received_fds, read_frame_with_fds, write_frame_with_fds};
 use d2bd_runtime::wire::MAX_FRAME_SIZE;
 use nix::sys::socket::{MsgFlags, getsockopt, recv, send, sockopt};
 use socket2::Socket;
@@ -61,6 +99,7 @@ use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::Semaphore;
 
+use crate::effect_service_actors::{EffectServiceBinding, EffectServiceError};
 use crate::provider_lifecycle::ProviderRuntime;
 
 /// The refusal code for a forwarded payload this endpoint cannot read as the
@@ -75,16 +114,47 @@ pub(crate) const INVALID_PAYLOAD: &str = "invalid-payload";
 /// handler inside it stalls past the daemon's own.
 pub(crate) const FORWARD_TIMEOUT: &str = "forward-timeout";
 
+/// The refusal code for a forwarded handler that panicked mid-dispatch.
+///
+/// The spelling is the envelope's closed peer-code entry (KTD7): a crash on
+/// this leg is a named refusal the broker's envelope surfaces under its own
+/// `handler-crashed` code, never a dropped socket the broker reads as a
+/// round-trip timeout.
+pub(crate) const HANDLER_CRASHED: &str = "handler-crashed";
+
+/// The refusal code for an effect-service call whose generation this
+/// process moved past (KTD5).
+///
+/// A respawn or provider-set republish bumps the service's generational
+/// binding revision; a call that resolved its binding under the older
+/// revision - or was still in flight when the actor died under it - is
+/// refused with this dedicated code, never hung against a dead or
+/// superseded generation. The spelling is this endpoint's own refusal
+/// entry for the KTD5 dedicated code, beside the `stale-context` code the
+/// attestation path uses for provider-set freshness.
+pub(crate) const STALE_REVISION: &str = "stale-revision";
+
+/// The refusal code for an effect service that declined a call.
+///
+/// The spelling is the taxonomy's handler-refused entry (KTD7): the
+/// service answered with its own refusal, and the call crosses back under
+/// the code the broker's envelope already admits.
+pub(crate) const HANDLER_REFUSED: &str = "handler-refused";
+
 /// The read deadline for one forwarded request frame: a connected peer that
 /// sends nothing is closed rather than holding an in-flight slot.
 const FORWARD_REQUEST_DEADLINE: Duration = Duration::from_secs(30);
 
-/// The handler deadline for one forwarded invocation.
+/// The handler deadline for one forwarded invocation on a context-free
+/// carrier, and the default budget a minted context carries.
 ///
 /// It sits below the broker's default forward round trip (30 s), so a stalled
 /// handler is refused by name while the caller is still listening rather than
-/// reported as a peer that never answered.
-const FORWARD_HANDLER_DEADLINE: Duration = Duration::from_secs(25);
+/// reported as a peer that never answered. The value is the carrier's shared
+/// default (see [`DEFAULT_CONTEXT_DEADLINE_MS`]): the context block carries
+/// the operation's own budget, and a request that rides a context is served
+/// under that budget instead of this constant, bounded by the shared ceiling.
+const FORWARD_HANDLER_DEADLINE: Duration = Duration::from_millis(DEFAULT_CONTEXT_DEADLINE_MS);
 
 /// The write deadline for one reply frame: a peer that will not read must not
 /// hold an in-flight slot open either.
@@ -116,10 +186,47 @@ pub(crate) fn configured_socket() -> Option<PathBuf> {
         .filter(|path| !path.as_os_str().is_empty())
 }
 
-/// The started providers of every Zone, keyed by Zone label.
+/// One Zone's forwarding binding: the started providers, the provider-set
+/// revision of the current publication, and the daemon-owned controller and
+/// guest generations the rendezvous enforces attestations against.
+struct ZoneBinding {
+    /// The provider-set revision: bumped by every publication, so a context
+    /// minted against the previous set refuses once a republish lands.
+    revision: u64,
+    /// The Zone's current controller generation, as the daemon publishes it.
+    controller_generation: u64,
+    /// The Zone's current guest generation, as the daemon publishes it.
+    guest_generation: u64,
+    /// The started providers of the current set.
+    providers: Arc<ProviderRuntime>,
+    /// The U10 family seam: the broker kernel socket, the caller role, the
+    /// Zone's trusted bundle, and the daemon-side runner lookup the family
+    /// handlers invoke kernels through. Absent when the composition point
+    /// wired no seam.
+    kernel: Option<KernelCaller>,
+}
+
+/// The started providers of every Zone, keyed by Zone label, plus the
+/// attestation state the rendezvous enforces freshness against: the current
+/// provider-set revision and generations per Zone, and the broker epoch this
+/// process last observed from a publication acknowledgement.
 #[derive(Default)]
 pub(crate) struct ForwardRendezvous {
-    zones: Mutex<BTreeMap<String, Arc<ProviderRuntime>>>,
+    zones: Mutex<BTreeMap<String, ZoneBinding>>,
+    /// The broker epoch this process currently validates contexts against.
+    /// Zero means no publication has been acknowledged yet: no context can
+    /// be verified, so every attested call is refused fail-closed.
+    broker_epoch: AtomicU64,
+    /// The sink this process's daemon-side leg writes evidence-chain audit
+    /// records to, when one is wired.
+    ///
+    /// Absent, the leg serves without chain records (the seam's unwired
+    /// state; the production daemon wires its audit log at its composition
+    /// point). The audit rule (KTD6): the leg executing the root operation
+    /// writes exactly one root record per root invocation, each nested leg
+    /// writes a correlation record keyed by the root invocation id and its
+    /// depth, and forwarded ops audit here alone - never also broker-side.
+    chain_audit: Mutex<Option<Arc<dyn ChainAuditSink>>>,
 }
 
 impl ForwardRendezvous {
@@ -131,53 +238,319 @@ impl ForwardRendezvous {
     /// Publish the providers one Zone started.
     ///
     /// A Zone whose plane re-opens republishes its new provider set; the last
-    /// published set is the one that answers.
-    pub(crate) fn publish(&self, zone: &str, providers: Arc<ProviderRuntime>) {
-        self.zones
+    /// published set is the one that answers, and the republish bumps the
+    /// provider-set revision a minted context must match. Returns the new
+    /// revision, so the daemon publishes the SAME revision to the broker over
+    /// the origination leg: a context the broker mints against it then
+    /// matches, and a republish that outran the broker's cache refuses the
+    /// pre-republish contexts by the same comparison.
+    pub(crate) fn publish(&self, zone: &str, providers: Arc<ProviderRuntime>) -> u64 {
+        let revision = {
+            let mut zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let entry = zones.entry(zone.to_owned()).or_insert(ZoneBinding {
+                revision: 0,
+                controller_generation: 0,
+                guest_generation: 0,
+                providers: Arc::clone(&providers),
+                kernel: None,
+            });
+            entry.revision = entry.revision.saturating_add(1);
+            entry.providers = Arc::clone(&providers);
+            entry.revision
+        };
+        // Outside the binding lock: the daemon publishes the SAME revision
+        // to the broker over the origination leg, and the acknowledgement
+        // path re-enters these bindings through the generation/epoch
+        // setters. A set that carries no publication binding (tests,
+        // context-free deployments) publishes nothing, and the rendezvous
+        // stays fail-closed on its zero epoch.
+        providers.publish_trusted_context(self, revision);
+        revision
+    }
+
+    /// Publish the daemon-owned controller and guest generations one Zone
+    /// currently holds.
+    ///
+    /// The same values the daemon publishes to the broker over the
+    /// origination leg; the rendezvous enforces an attestation's generations
+    /// against these, so a context minted from older generations refuses
+    /// once the daemon's current values move on.
+    pub(crate) fn publish_generations(
+        &self,
+        zone: &str,
+        controller_generation: u64,
+        guest_generation: u64,
+    ) {
+        let mut zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // A Zone with no started providers has no binding to carry values
+        // for; the daemon publishes generations alongside the set that
+        // serves them.
+        if let Some(entry) = zones.get_mut(zone) {
+            entry.controller_generation = controller_generation;
+            entry.guest_generation = guest_generation;
+        }
+    }
+
+    /// Record the broker epoch this process validated against.
+    ///
+    /// The epoch is what the daemon reads from the broker's publication
+    /// acknowledgement: every context minted before a broker restart carries
+    /// an older epoch, so the moment a fresh acknowledgement lands, every
+    /// pre-restart context stops validating regardless of generation
+    /// equality.
+    pub(crate) fn set_broker_epoch(&self, epoch: u64) {
+        self.broker_epoch.store(epoch, Ordering::SeqCst);
+    }
+
+    /// Wire one Zone's U10 family seam (the kernel socket, the caller
+    /// role, the Zone's trusted bundle, and the daemon-side runner lookup)
+    /// into its forwarding binding.
+    ///
+    /// The composition point calls this once per Zone alongside the
+    /// provider publication; a Zone whose seam was never wired serves
+    /// forwarded family operations without a kernel leg (they refuse when
+    /// their handler needs one).
+    pub(crate) fn set_kernel_seam(&self, zone: &str, kernel: KernelCaller) {
+        let mut zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match zones.get_mut(zone) {
+            Some(binding) => binding.kernel = Some(kernel),
+            None => tracing::warn!(
+                zone = %zone,
+                "kernel seam published for a Zone with no provider binding"
+            ),
+        }
+    }
+
+    /// Wire this rendezvous's daemon-side chain audit records to `sink`.
+    ///
+    /// The daemon calls this once at its composition point; a rendezvous
+    /// without a sink serves without chain records. The seam's consumers
+    /// are its tests and the future composition wiring (U9 note: the
+    /// composition seam owns this call).
+    #[allow(dead_code)]
+    pub(crate) fn set_chain_audit(&self, sink: Arc<dyn ChainAuditSink>) {
+        *self
+            .chain_audit
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sink);
+    }
+
+    /// Write one chain record through the wired sink, logging an append
+    /// failure rather than changing the call's outcome.
+    fn record_chain(&self, record: ChainRecord) {
+        let Some(sink) = self
+            .chain_audit
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(zone.to_owned(), providers);
+            .clone()
+        else {
+            return;
+        };
+        if let Err(error) = sink.record(&record) {
+            tracing::error!(
+                error = %error,
+                operation = %record.operation,
+                "daemon-side chain audit record failed"
+            );
+        }
+    }
+
+    /// Whether one attested context block is fresh against this process's
+    /// current values, for a call naming `request_zone`.
+    ///
+    /// Field-wise, in every field the attestation carries: the block's
+    /// broker epoch must be the epoch this process observed from the broker
+    /// (a pre-restart block carries an older one), the Zone must be bound to
+    /// the call's Zone, the provider-set revision and the controller and
+    /// guest generations must match the Zone's current published values, and
+    /// the deadline budget must be a positive value under the shared
+    /// ceiling. The broker is the sole minter, so any mismatch is a stale
+    /// or mutated attestation.
+    fn context_admitted(&self, context: &ForwardContext, request_zone: &str) -> bool {
+        let observed_epoch = self.broker_epoch.load(Ordering::SeqCst);
+        if observed_epoch == 0 {
+            // No epoch observed yet: the attestation cannot be verified, so
+            // no context is admitted - the fail-closed half of the rule that
+            // the broker refuses to mint until it holds a value.
+            return false;
+        }
+        if context.broker_epoch != observed_epoch {
+            return false;
+        }
+        if context.zone != request_zone {
+            return false;
+        }
+        if context.deadline_ms == 0 || context.deadline_ms > MAX_CONTEXT_DEADLINE_MS {
+            return false;
+        }
+        let zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match zones.get(request_zone) {
+            Some(binding) => {
+                context.provider_set_revision == binding.revision
+                    && context.controller_generation == binding.controller_generation
+                    && context.guest_generation == binding.guest_generation
+            }
+            None => false,
+        }
     }
 
     /// Answer one forwarded invocation.
     ///
-    /// A Zone with no started providers and an operation no started provider
-    /// declares are the same refusal: nothing in this process serves the
-    /// call, and the code the broker's own envelope uses for that state names
-    /// it.
+    /// An operation a declared effect-service method serves (the method's
+    /// `operation` facet names it, U8) resolves through the hosting binding
+    /// and is answered by the hosted actor; every other operation resolves
+    /// to the started provider that declared it. A Zone with no started
+    /// providers and an operation nothing in this process declares are the
+    /// same refusal: nothing serves the call, and the code the broker's own
+    /// envelope uses for that state names it.
     pub(crate) async fn invoke(
         &self,
         request: &ForwardOperationRequest,
-    ) -> ForwardOperationResponse {
-        let providers = self
-            .zones
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(&request.zone)
-            .map(Arc::clone);
-        let Some(providers) = providers else {
-            return refused(UNCOMMITTED_OPERATION);
+        fds: &[RawFd],
+        chain: &EvidenceChain,
+    ) -> (ForwardOperationResponse, Vec<OwnedFd>) {
+        let zone = request.zone.clone();
+        let (providers, kernel) = {
+            let zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            match zones.get(&zone) {
+                Some(binding) => (
+                    Some(Arc::clone(&binding.providers)),
+                    binding.kernel.clone(),
+                ),
+                None => (None, None),
+            }
         };
+        let Some(providers) = providers else {
+            return (refused(UNCOMMITTED_OPERATION), Vec::new());
+        };
+        // The effect-service leg (U8, KTD5): an operation the hosted
+        // services declare resolves through the live hosting binding, and a
+        // call against a generation this process moved past is refused with
+        // the dedicated stale-revision code instead of hanging. An
+        // operation no service declares falls through to the provider
+        // tables.
+        match providers.resolve_effect_service_for_operation(&request.operation).await {
+            Ok(binding) => return (invoke_effect_service(&binding, request).await, Vec::new()),
+            Err(EffectServiceError::OperationUnserved { .. }) => {}
+            Err(error) => return (refused(effect_refusal_code(&error)), Vec::new()),
+        }
         let Some(provider) = providers.declaring_provider(&request.operation) else {
-            return refused(UNCOMMITTED_OPERATION);
+            return (refused(UNCOMMITTED_OPERATION), Vec::new());
         };
         let Ok(bytes) = serde_json::to_vec(&request.payload) else {
-            return refused(INVALID_PAYLOAD);
+            return (refused(INVALID_PAYLOAD), Vec::new());
         };
         let Ok(payload) = CanonicalJsonObject::parse(&bytes) else {
-            return refused(INVALID_PAYLOAD);
+            return (refused(INVALID_PAYLOAD), Vec::new());
         };
         match provider
-            .invoke(&request.operation, &request.invocation_id, payload)
+            .invoke_under_chain(
+                &request.operation,
+                &request.invocation_id,
+                payload,
+                fds,
+                chain.identities(),
+                kernel.as_ref(),
+            )
             .await
         {
-            Ok(result) => ForwardOperationResponse {
-                outcome: ForwardOperationOutcome::Result {
-                    result: serde_json::to_value(result.object())
-                        .expect("canonical JSON objects always serialize"),
-                },
-            },
-            Err(failure) => refused(failure.code()),
+            Ok(result) => {
+                let (response, fds) = result_response_with_fds(result);
+                (response, fds)
+            }
+            Err(failure) => (refused(failure.code()), Vec::new()),
+        }
+    }
+
+    /// Serve one nested invocation a handler presented, under its evidence
+    /// chain.
+    ///
+    /// The chain is the trusted-context evidence (KTD6): the nested call
+    /// presents the chain with the invoking handler's identity appended and
+    /// never re-presents as the daemon class. This endpoint refuses a chain
+    /// past the depth cap with the dedicated loop-refusal code - so a call
+    /// loop trips its own code, never an uncommitted or resolution
+    /// refusal, and records the leg's correlation record keyed on the root
+    /// invocation id and the leg's depth. Resolution and dispatch are the
+    /// same as a forwarded call's, so a nested leg is served by the same
+    /// resolution (effect services first, then the declaring provider).
+    /// The graft rule's committed-row check is the broker side's: this
+    /// process holds no committed rows, so the chain's admission and grants
+    /// were decided where the rows live, and this leg enforces the cap and
+    /// records the correlation key.
+    #[allow(dead_code)] // U9 seam: its tests drive it; the composition seam owns the production call
+    pub(crate) async fn invoke_nested(
+        &self,
+        chain: &EvidenceChain,
+        operation: &str,
+        zone: &str,
+        payload: &serde_json::Value,
+    ) -> ForwardOperationResponse {
+        if chain.depth() > MAX_NESTED_DEPTH {
+            let response = refused(NESTED_DEPTH_EXCEEDED);
+            self.record_chain(self.chain_record(
+                ChainRecordClass::Correlation,
+                chain,
+                operation,
+                zone,
+                &response,
+            ));
+            return response;
+        }
+        let request = ForwardOperationRequest {
+            operation: operation.to_owned(),
+            zone: zone.to_owned(),
+            invocation_id: chain.root_invocation_id().to_owned(),
+            payload: payload.clone(),
+            context: None,
+            chain_identities: None,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        };
+        let (response, _response_fds) = self.invoke(&request, &[], chain).await;
+        self.record_chain(self.chain_record(
+            ChainRecordClass::Correlation,
+            chain,
+            operation,
+            zone,
+            &response,
+        ));
+        response
+    }
+
+    /// The chain record one leg of an invocation writes on this side: a
+    /// root record for the root invocation, a correlation record for a
+    /// nested leg, both on the shared shape and keyed on the root
+    /// invocation id plus the leg's depth (KTD6).
+    fn chain_record(
+        &self,
+        record_class: ChainRecordClass,
+        chain: &EvidenceChain,
+        operation: &str,
+        zone: &str,
+        response: &ForwardOperationResponse,
+    ) -> ChainRecord {
+        let (outcome, code) = match response.outcome {
+            ForwardOperationOutcome::Refused { ref code } => {
+                (ChainOutcome::Refused, Some(code.clone()))
+            }
+            ForwardOperationOutcome::Result { .. } => (ChainOutcome::Succeeded, None),
+        };
+        ChainRecord {
+            ts_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            record_class,
+            leg: ChainLeg::Daemon,
+            invocation_id: chain.root_invocation_id().to_owned(),
+            depth: chain.depth() as u32,
+            initiating_identity: chain.initiating_identity().to_owned(),
+            invoking_identity: chain.invoking_identity().to_owned(),
+            operation: operation.to_owned(),
+            zone: zone.to_owned(),
+            outcome,
+            code,
         }
     }
 
@@ -185,36 +558,425 @@ impl ForwardRendezvous {
     /// declared handler under the handler deadline, write one reply frame.
     ///
     /// Driven on the runtime: every wait here is awaited, so a call holds its
-    /// admission permit and no thread of its own.
+    /// admission permit and no thread of its own. The dispatch itself runs
+    /// on its own task (KTD7's crash guard): a handler that panics dies in
+    /// the task, not in the accept loop, and the call is refused by name.
     async fn serve_connection(
-        &self,
+        self: &Arc<Self>,
         connection: &AsyncSeqpacket,
         handler_deadline: Duration,
     ) -> Result<(), TypedError> {
-        let frame = connection.read_frame(FORWARD_REQUEST_DEADLINE).await?;
+        let (frame, request_fds) = connection
+            .read_frame_with_fds(FORWARD_REQUEST_DEADLINE)
+            .await?;
+        // The frame's descriptors belong to this call:they are closed
+        // whether the call is served or refused, after the reply frame has
+        // gone (or when this connection errors out).
+        let fds = ScmFds::new(request_fds);
         let request: ForwardOperationRequest =
             serde_json::from_slice(&frame).map_err(|error| TypedError::WireInvalidFrame {
                 detail: format!(
                     "forwarded request frame is not a ForwardOperationRequest: {error}"
                 ),
             })?;
-        let response = match tokio::time::timeout(handler_deadline, self.invoke(&request)).await {
-            Ok(response) => response,
+        // The forwarded call's evidence chain, re-rooted from the carrier:
+        // a nested leg carries its ordered identities on the wire (U10,
+        // KTD6), so this side re-roots the chain from the root invocation
+        // id plus those identities and records the leg as a correlation
+        // record; a root call carries no chain and re-roots from the
+        // attestation's initiating identity, recorded as the invocation's
+        // root leg.
+        let chain = match &request.chain_identities {
+            Some(identities) => {
+                let mut chain = match identities.split_first() {
+                    Some((head, tail)) => {
+                        let mut chain = EvidenceChain::root(
+                            request.invocation_id.clone(),
+                            head.clone(),
+                        );
+                        for identity in tail {
+                            chain = chain.nested(identity.clone());
+                        }
+                        chain
+                    }
+                    None => EvidenceChain::root(
+                        request.invocation_id.clone(),
+                        request
+                            .context
+                            .as_ref()
+                            .map(|context| context.initiating_identity.clone())
+                            .unwrap_or_else(|| "daemon".to_owned()),
+                    ),
+                };
+                // The handler-side legs append the invoking handler's own
+                // identity; the daemon-side record of a forwarded nested leg
+                // keys on the root id and the chain's depth exactly as the
+                // broker-side record of the in-broker leg does.
+                let _ = &mut chain;
+                chain
+            }
+            None => EvidenceChain::root(
+                request.invocation_id.clone(),
+                request
+                    .context
+                    .as_ref()
+                    .map(|context| context.initiating_identity.clone())
+                    .unwrap_or_else(|| "daemon".to_owned()),
+            ),
+        };
+        let chain_bearing = request.chain_identities.is_some();
+        if !request_fds_admitted(&request, fds.as_slice()) {
+            // The declared leg and the attached leg disagree - not in the
+            // count, not in index order, not in kernel kind - so the call is
+            // refused with the carrier's own fd-leg code rather than letting
+            // an anonymous truncation pass as the invocation.
+            let response = refused(FD_LEG);
+            self.record_chain(self.chain_record(
+                if chain_bearing {
+                    ChainRecordClass::Correlation
+                } else {
+                    ChainRecordClass::Root
+                },
+                &chain,
+                &request.operation,
+                &request.zone,
+                &response,
+            ));
+            return connection
+                .write_frame_with_fds(&encode_reply(&response)?, &[], FORWARD_REPLY_DEADLINE)
+                .await;
+        }
+        // The attestation, when the request rides one: the block is
+        // broker-minted, so the field-wise freshness comparison against this
+        // process's current values is the whole admission - a stale epoch, a
+        // Zone not bound to the call, an older provider-set revision or
+        // generation, or a mutated block is refused with the stale-context
+        // code before any handler runs. The block's deadline budget replaces
+        // the fixed handler deadline for the call, already checked under the
+        // shared ceiling by the admission.
+        let handler_deadline = match request.context.as_ref() {
+            Some(context) => {
+                if !self.context_admitted(context, &request.zone) {
+                    tracing::warn!(
+                        operation = %request.operation,
+                        zone = %request.zone,
+                        "forwarded call carries a stale or mismatched broker context; refusing"
+                    );
+                    let response = refused(STALE_CONTEXT);
+                    self.record_chain(self.chain_record(
+                        if chain_bearing {
+                            ChainRecordClass::Correlation
+                        } else {
+                            ChainRecordClass::Root
+                        },
+                        &chain,
+                        &request.operation,
+                        &request.zone,
+                        &response,
+                    ));
+                    return connection
+                        .write_frame_with_fds(
+                            &encode_reply(&response)?,
+                            &[],
+                            FORWARD_REPLY_DEADLINE,
+                        )
+                        .await;
+                }
+                Duration::from_millis(context.deadline_ms)
+            }
+            None => handler_deadline,
+        };
+        // The dispatch runs on its own task so a handler crash cannot
+        // unwind through the accept loop: the task boundary catches the
+        // panic (KTD7), and the call is refused by name with the envelope's
+        // handler-crashed code instead of a dropped socket the broker would
+        // read as a round-trip timeout. The call's artifacts move with it,
+        // exactly as a spawned forward leg owns its frame.
+        let operation = request.operation.clone();
+        let zone = request.zone.clone();
+        let rendezvous = Arc::clone(self);
+        let chain_for_dispatch = chain.clone();
+        let dispatch = tokio::spawn(async move {
+            rendezvous
+                .invoke(&request, fds.as_slice(), &chain_for_dispatch)
+                .await
+        });
+        let abort = dispatch.abort_handle();
+        let (response, response_fds) = match tokio::time::timeout(handler_deadline, dispatch).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(join)) if join.is_panic() => {
+                // The closing refusal of a crashed call: the panic is caught
+                // at the task boundary and the caller is answered by name,
+                // while the panic's message goes to the daemon's journal for
+                // the operator following the refusal record.
+                tracing::error!(
+                    operation = %operation,
+                    panic = %panic_message(join.into_panic()).unwrap_or_else(|| "(no message)".to_owned()),
+                    "forwarded handler panicked; refusing the call"
+                );
+                (refused(HANDLER_CRASHED), Vec::new())
+            }
+            Ok(Err(join)) => {
+                // A task that ended without a panic was cancelled, and the
+                // only cancellation below fires after the deadline refusal
+                // was already chosen, so this arm cannot normally be
+                // reached; it refuses by name rather than unwinding.
+                tracing::error!(
+                    operation = %operation,
+                    join = %join,
+                    "forwarded dispatch task ended without a result; refusing the call"
+                );
+                (refused(HANDLER_CRASHED), Vec::new())
+            }
             Err(_) => {
                 // A handler that never finished is the daemon's answer to
                 // give: the call is refused by name while the caller is still
                 // listening, and the slot it held is free the moment this
-                // call returns.
+                // call returns. The task is aborted so a non-yielding handler
+                // cannot linger past its deadline on a worker.
+                abort.abort();
                 tracing::warn!(
-                    operation = %request.operation,
+                    operation = %operation,
                     "forwarded handler exceeded its deadline; refusing the call"
                 );
-                refused(FORWARD_TIMEOUT)
+                (refused(FORWARD_TIMEOUT), Vec::new())
             }
         };
-        connection
-            .write_frame(&encode_reply(&response)?, FORWARD_REPLY_DEADLINE)
-            .await
+        // The forwarded invocation's daemon-side record: exactly one root
+        // record per root invocation, whatever the outcome - the leg
+        // executing the root operation records its result or its refusal -
+        // and a correlation record for every nested leg that re-presents
+        // the root invocation id (KTD6).
+        self.record_chain(self.chain_record(
+            if chain_bearing {
+                ChainRecordClass::Correlation
+            } else {
+                ChainRecordClass::Root
+            },
+            &chain,
+            &operation,
+            &zone,
+            &response,
+        ));
+        // The reply frame carries the descriptors the handler minted for
+        // this invocation, index-aligned with the outcome's declarations
+        // (U10); a response that mints none carries no attachments.
+        let declared = response_fds.len();
+        let reply = encode_reply(&response)?;
+        // The frame writer takes the raw descriptors; the handler-minted
+        // fds stay owned here and close with the reply scope.
+        let response_raw_fds: Vec<i32> = response_fds
+            .iter()
+            .map(|fd| fd.as_raw_fd())
+            .collect();
+        let write = connection
+            .write_frame_with_fds(&reply, &response_raw_fds, FORWARD_REPLY_DEADLINE)
+            .await;
+        if declared != 0 {
+            tracing::debug!(
+                operation = %operation,
+                zone = %zone,
+                descriptors = declared,
+                "forwarded response carried minted descriptors"
+            );
+        }
+        write
+    }
+}
+
+/// The wire code one effect-service failure surfaces under.
+///
+/// KTD5's dedicated refusal: the service's generational revision moved past
+/// the one the call started against, or the actor died under the in-flight
+/// call - the call rode a stale generation and is refused by name, never
+/// hung. An unbound service and an operation no hosted service declares are
+/// the same refusal as an operation this process does not serve, and a
+/// declined call crosses back under the taxonomy's handler-refused entry
+/// (KTD7).
+fn effect_refusal_code(error: &EffectServiceError) -> &'static str {
+    match error {
+        EffectServiceError::UnboundService { .. } => UNCOMMITTED_OPERATION,
+        EffectServiceError::OperationUnserved { .. } => UNCOMMITTED_OPERATION,
+        EffectServiceError::WrongZone { .. } => UNCOMMITTED_OPERATION,
+        EffectServiceError::StaleRevision { .. } => STALE_REVISION,
+        EffectServiceError::ServiceUnavailable { .. } => STALE_REVISION,
+        EffectServiceError::InFlightStale { .. } => STALE_REVISION,
+        EffectServiceError::Declined { .. } => HANDLER_REFUSED,
+    }
+}
+
+/// Invoke one effect-service operation through its live hosting binding.
+///
+/// The operation resolved to this binding through the declaring service's
+/// method facets, so the service is live and serves the call; the binding's
+/// revision is captured when the call starts and re-checked at dispatch, so
+/// a generation that moved past the call mid-flight is refused with the
+/// dedicated stale-revision code (KTD5). The payload rides the carrier as
+/// the canonical object the broker validated, and the actor's answer
+/// returns the same way - there is no second transport.
+async fn invoke_effect_service(
+    binding: &EffectServiceBinding,
+    request: &ForwardOperationRequest,
+) -> ForwardOperationResponse {
+    // The distinct name this operation resolves to, for the operator
+    // following the refusal records; the declaration it resolved through
+    // named it, and a binding carries the declaration.
+    let method = binding
+        .decl()
+        .methods
+        .iter()
+        .find(|declared| declared.operation == Some(request.operation.as_str()))
+        .map(|declared| declared.name);
+    let Ok(bytes) = serde_json::to_vec(&request.payload) else {
+        return refused(INVALID_PAYLOAD);
+    };
+    let Ok(payload) = CanonicalJsonObject::parse(&bytes) else {
+        return refused(INVALID_PAYLOAD);
+    };
+    let Ok(request_bytes) = canonical_json_bytes(&payload) else {
+        return refused(INVALID_PAYLOAD);
+    };
+    match binding
+        .call_expected(binding.revision(), request_bytes)
+        .await
+    {
+        Ok(response) => match CanonicalJsonObject::parse(&response) {
+            Ok(object) => result_response(&object),
+            Err(_) => {
+                // The actor answered outside the canonical object the
+                // carrier validates; the call is refused by name.
+                tracing::warn!(
+                    operation = %request.operation,
+                    zone = %request.zone,
+                    service = %binding.service(),
+                    method = ?method,
+                    "effect service answered a non-canonical payload; refusing"
+                );
+                refused(INVALID_PAYLOAD)
+            }
+        },
+        Err(error) => {
+            tracing::warn!(
+                operation = %request.operation,
+                zone = %request.zone,
+                service = %binding.service(),
+                method = ?method,
+                error = %error,
+                "effect-service call refused; its generation moved past the call"
+            );
+            refused(effect_refusal_code(&error))
+        }
+    }
+}
+
+/// The normal result reply: one canonical object rendered onto the forward
+/// carrier.
+fn result_response(object: &CanonicalJsonObject) -> ForwardOperationResponse {
+    ForwardOperationResponse {
+        outcome: ForwardOperationOutcome::Result {
+            result: serde_json::to_value(object)
+                .expect("canonical JSON objects always serialize"),
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        },
+    }
+}
+
+/// The normal result reply of one invocation whose handler minted
+    /// descriptors (U10): the canonical object plus the descriptors over the
+    /// carrier's response fd leg.
+    ///
+    /// The descriptors are the handler's own mints for this invocation; the
+    /// reply declares them index-aligned in frame order, and the broker's
+    /// forwarder re-validates the leg against the row's declared facet before
+    /// the caller sees it.
+    fn result_response_with_fds(
+        result: OperationResult,
+    ) -> (ForwardOperationResponse, Vec<OwnedFd>) {
+        let (payload, fds) = result.into_parts();
+        let fd_indexes: Vec<u32> = (0..fds.len() as u32).collect();
+        // The family rows declare no fd facet of their own, so the returned
+        // descriptors are labelled with the permissive kind; the broker's
+        // forwarder re-checks the actual kernel kinds against the row's
+        // declared facet on its side.
+        let fd_kinds = vec![FdKind::Any; fds.len()];
+        (
+            ForwardOperationResponse {
+                outcome: ForwardOperationOutcome::Result {
+                    result: serde_json::to_value(&payload)
+                        .expect("canonical JSON objects always serialize"),
+                    fd_indexes,
+                    fd_kinds,
+                },
+            },
+            fds,
+        )
+    }
+
+struct ScmFds(Vec<RawFd>);
+
+impl ScmFds {
+
+    fn new(fds: Vec<RawFd>) -> Self {
+        Self(fds)
+    }
+
+    /// The received descriptors,borrowed across the invocation..
+    fn as_slice(&self) -> &[RawFd] {
+        &self.0
+    }
+}
+
+impl Drop for ScmFds {
+
+    fn drop(&mut self) {
+        close_received_fds(&self.0);
+    }
+}
+
+/// Whether one request's declared fd leg is admitted by the descriptors the
+/// frame actually attached:count equal (never truncated), indexes in frame
+/// order, kinds against the kernel stat of each received descriptor,and the
+/// whole leg within the carrier's frame ceiling.
+fn request_fds_admitted(request: &ForwardOperationRequest, fds: &[RawFd]) -> bool {
+    if request.fd_indexes.len() != request.fd_kinds.len() {
+        return false;
+    }
+    if request.fd_indexes.len() > MAX_FRAME_FDS {
+        return false;
+    }
+    if request.fd_indexes
+        .iter()
+        .enumerate()
+        .any(|(position, declared)| *declared != position as u32)
+    {
+        return false;
+    }
+    if fds.len() != request.fd_indexes.len() {
+        return false;
+    }
+    fds
+        .iter()
+        .zip(&request.fd_kinds)
+        .all(|(fd, declared)| {
+            // An `Any` declaration admits every descriptor regardless of
+            // fstat kind (the mixed or anon-inode legs, U10).
+            *declared == FdKind::Any || fd_kind_of(*fd) == Some(*declared)
+        })
+}
+
+/// The kernel kind one descriptor presents,or None when its fstat reports
+/// a kind the carrier vocabulary does not carry..
+fn fd_kind_of(fd: RawFd) -> Option<FdKind> {
+    let stat = nix::sys::stat::fstat(fd).ok()?;
+    match stat.st_mode & nix::libc::S_IFMT {
+        nix::libc::S_IFIFO => Some(FdKind::Fifo),
+        nix::libc::S_IFSOCK => Some(FdKind::Socket),
+        nix::libc::S_IFCHR => Some(FdKind::CharDevice),
+        nix::libc::S_IFBLK => Some(FdKind::BlockDevice),
+        nix::libc::S_IFREG => Some(FdKind::Regular),
+        nix::libc::S_IFDIR => Some(FdKind::Directory),
+        _ => None,
     }
 }
 
@@ -224,6 +986,14 @@ fn refused(code: &str) -> ForwardOperationResponse {
         outcome: ForwardOperationOutcome::Refused {
             code: code.to_owned(),
         },
+    }
+}
+
+/// The message one dispatch panic carried, when it carried a message.
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> Option<String> {
+    match payload.downcast_ref::<&str>() {
+        Some(message) => Some((*message).to_owned()),
+        None => payload.downcast_ref::<String>().cloned(),
     }
 }
 
@@ -487,6 +1257,65 @@ impl AsyncSeqpacket {
         Ok(())
     }
 
+    /// Read one frame and the descriptors its SCM_RIGHTS attachments carried,
+    /// waiting at most `deadline` for it to arrive.
+    ///
+    /// A frame and its attachments arrive together or not at all,so the
+    /// received descriptor count is exactly what the sender put on the
+    /// carrier;an oversized cmsg set is capped by the kernel at the receive
+    /// buffer's ceiling,which is why the caller-side declaration check
+    /// refuses a count over that ceiling rather than let a truncation pass..
+    async fn read_frame_with_fds(&self, deadline: Duration) -> Result<(Vec<u8>, Vec<RawFd>), TypedError> {
+        // The blocking transport read the prefixed frame and stripped the
+        // length prefix itself, so the returned body is already the frame
+        // payload,length-checked and cmsg-truncation-checked.
+        match tokio::time::timeout(deadline, self.recv_frame_with_fds()).await {
+            Ok(Ok(pair)) => Ok(pair),
+            Ok(Err(error)) => Err(recv_failure(error.to_string())),
+            Err(_) => Err(recv_failure(format!("no frame within {deadline:?}"))),
+        }
+    }
+
+    /// Write one frame,attaching `fds` to it,waiting at most `deadline`
+    /// for the peer to take it.
+    async fn write_frame_with_fds(
+        &self,
+        body: &[u8],
+        fds: &[RawFd],
+        deadline: Duration,
+    ) -> Result<(), TypedError> {
+        // The transport writes the length prefix itself,so the body crosses
+        // as-is;the receiving transport strips the same prefix back off..
+        match tokio::time::timeout(deadline, self.send_datagram_with_fds(body, fds)).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(send_failure(error.to_string())),
+            Err(_) => Err(send_failure(format!("no write within {deadline:?}"))),
+        }
+    }
+
+    /// One datagram read with its attachments,awaited for readiness. The
+    /// blocking transport's `recvmsg` owns the control-message buffer for
+    /// this read,and MSG_CMSG_CLOEXEC is set there,so the received descriptors
+    /// arrive close-on-exec exactly as they do on the broker leg.
+    async fn recv_frame_with_fds(&self) -> io::Result<(Vec<u8>, Vec<RawFd>)> {
+        self.io
+            .async_io(Interest::READABLE, |socket| {
+                read_frame_with_fds(socket)
+                    .map_err(|error| io::Error::other(format!("{error:?}")))
+            })
+            .await
+    }
+
+    /// One datagram write with its attachments,awaited for readiness..
+    async fn send_datagram_with_fds(&self, frame: &[u8], fds: &[RawFd]) -> io::Result<()> {
+        self.io
+            .async_io(Interest::WRITABLE, |socket| {
+                write_frame_with_fds(socket, frame, fds)
+                    .map_err(|error| io::Error::other(format!("{error:?}")))
+            })
+            .await
+    }
+
     /// One datagram read, awaited for readiness.
     async fn recv_datagram(&self, datagram: &mut [u8]) -> io::Result<usize> {
         self.io
@@ -588,6 +1417,7 @@ fn decode_frame(datagram: &[u8]) -> Result<Vec<u8>, TypedError> {
 
 #[cfg(test)]
 mod tests {
+    use d2b_audit::evidence_chain::root_record_count;
     use std::sync::LazyLock;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
@@ -601,14 +1431,22 @@ mod tests {
         ProcessFamilySpec, ProcessResourceIdentity, ProviderAdoption, ProviderLiveness,
         process_family_descriptors,
     };
+    use d2b_resource_runtime::context::SpecDecoder;
+    use d2b_resource_runtime::driver::{DynResourceDriver, ResourceDriverFactory};
+    use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
     use d2b_resource_types::{
-        DriverDescriptor, OperationCtx, OperationDef, OperationFailure, OperationHandler,
-        OperationResult, ValidatedPayload,
+        AllowedSources, DriverDescriptor, OperationCtx, OperationDef, OperationFailure,
+        OperationHandler, OperationResult, ServiceDecl, ServiceMethod, ValidatedPayload,
+        WellKnownType,
     };
-    use d2bd_runtime::unix_transport::{connect_seqpacket, read_frame};
-    use tokio::sync::Semaphore;
+    use d2bd_runtime::target_runtime::DaemonMode;
+    use d2bd_runtime::unix_transport::{connect_seqpacket, read_frame, write_frame};
+    use tokio::sync::{Notify, Semaphore};
 
     use super::*;
+    use crate::effect_service_actors::{
+        EffectRequest, EffectResponse, EffectService, EffectServiceFactory, EffectServiceRow,
+    };
     use crate::provider_lifecycle::{ProviderSet, family_declaration};
 
     /// A port that refuses every effect: the pilot operation answers from the
@@ -828,8 +1666,96 @@ mod tests {
     };
     static STALLED_HANDLER: StalledHandler = StalledHandler;
 
-    /// The stall operations the fixture's EphemeralProcess driver declares.
-    static STALL_OPERATIONS: LazyLock<[OperationDef; 3]> = LazyLock::new(|| {
+    /// A handler that panics mid-dispatch: only the crash guard can answer a
+    /// call it is handed - the panic must die at the task boundary and the
+    /// call must be refused by name instead of dropped.
+    struct PanicHandler;
+
+    #[async_trait::async_trait]
+    impl OperationHandler for PanicHandler {
+        async fn execute(
+            &self,
+            _ctx: OperationCtx<'_>,
+            _payload: ValidatedPayload,
+        ) -> Result<OperationResult, OperationFailure> {
+            panic!("injected forward-leg handler crash")
+        }
+    }
+
+    static PANIC_HANDLER: PanicHandler = PanicHandler;
+
+    /// A handler whose work outruns the historical fixed 25 s deadline: the
+    /// context budget (the Extended row's) must let it finish rather than
+    /// aborting the call at the tier-less constant.
+    struct Slow30sHandler;
+
+    #[async_trait::async_trait]
+    impl OperationHandler for Slow30sHandler {
+        async fn execute(
+            &self,
+            _ctx: OperationCtx<'_>,
+            _payload: ValidatedPayload,
+        ) -> Result<OperationResult, OperationFailure> {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok(stall_result())
+        }
+    }
+
+    static SLOW_30S_HANDLER: Slow30sHandler = Slow30sHandler;
+
+    /// A handler that runs and fails: its failure code must cross back to the
+    /// caller under its own name, never flattened into the missing-handler
+    /// refusal.
+    struct ErroringHandler;
+
+    #[async_trait::async_trait]
+    impl OperationHandler for ErroringHandler {
+        async fn execute(
+            &self,
+            _ctx: OperationCtx<'_>,
+            _payload: ValidatedPayload,
+        ) -> Result<OperationResult, OperationFailure> {
+            Err(OperationFailure::new("handler-errored"))
+        }
+    }
+
+    static ERRORING_HANDLER: ErroringHandler = ErroringHandler;
+
+    /// A handler that reads the descriptor the carrier attached to its
+    /// call. The forwarded request leg carries the caller's descriptor over
+    /// SCM_RIGHTS;the rendezvous validates it against the wire declarations
+    /// and hands it to the declared handler,so this handler reading it back
+    /// proves the round trip through the real socket and the provider envelope.to
+    struct FdEchoHandler;
+
+    #[async_trait::async_trait]
+    impl OperationHandler for FdEchoHandler {
+        async fn execute(
+            &self,
+            ctx: OperationCtx<'_>,
+            _payload: ValidatedPayload,
+        ) -> Result<OperationResult, OperationFailure> {
+            use std::os::fd::AsRawFd;
+            use nix::unistd::read;
+            let fd = ctx.fds.first().ok_or_else(|| OperationFailure::new(FD_LEG))?;
+            let mut buf = [0_u8; 4];
+            let n = read(fd.as_raw_fd(), &mut buf)
+                .map_err(|error| OperationFailure::with_detail(FD_LEG, error.to_string()))?;
+            let bytes = buf[..n].to_vec();
+            let result = CanonicalJsonObject::parse(
+                &canonical_json_bytes(&serde_json::json!({ "read": String::from_utf8_lossy(&bytes).to_string() }))
+                    .expect("the read-back result is canonical JSON"),
+            )
+            .expect("the read-back result is a JSON object");
+            Ok(OperationResult::new(result))
+        }
+    }
+
+    static FD_ECHO_HANDLER: FdEchoHandler = FdEchoHandler;
+
+    /// The stall operations plus the fd-echo operation the fixture's
+    /// EphemeralProcess driver declares.
+    static STALL_OPERATIONS: LazyLock<[OperationDef; 7]> = LazyLock::new(|| {
         [
             OperationDef {
                 operation_ref: operation_ref(STALL_THREADS),
@@ -842,6 +1768,22 @@ mod tests {
             OperationDef {
                 operation_ref: operation_ref(STALL_FOREVER),
                 handler: &STALLED_HANDLER,
+            },
+            OperationDef {
+                operation_ref: operation_ref("fd-echo"),
+                handler: &FD_ECHO_HANDLER,
+            },
+            OperationDef {
+                operation_ref: operation_ref("panic-boom"),
+                handler: &PANIC_HANDLER,
+            },
+            OperationDef {
+                operation_ref: operation_ref("slow-30s"),
+                handler: &SLOW_30S_HANDLER,
+            },
+            OperationDef {
+                operation_ref: operation_ref("error-boom"),
+                handler: &ERRORING_HANDLER,
             },
         ]
     });
@@ -868,6 +1810,9 @@ mod tests {
         socket_path: PathBuf,
         _scratch: tempfile::TempDir,
         _providers: Arc<ProviderRuntime>,
+        /// The serving rendezvous itself, so a test can attach audit sinks
+        /// and drive nested calls at the seam.
+        rendezvous: Arc<ForwardRendezvous>,
     }
 
     impl ServingRendezvous {
@@ -892,10 +1837,77 @@ mod tests {
             .await
         }
 
+        /// The same rendezvous bound with the attestation state a context
+        /// test needs: the daemon's current generations for the Zone and the
+        /// broker epoch its last publication acknowledged.
+        async fn start_attesting() -> Self {
+            Self::served_by(move |rendezvous, listener| {
+                rendezvous.publish_generations("test", 1, 1);
+                rendezvous.set_broker_epoch(5);
+                spawn_server(rendezvous, listener, tokio::runtime::Handle::current())
+            })
+            .await
+        }
+
         async fn served_by<F>(serve: F) -> Self
         where
             F: FnOnce(Arc<ForwardRendezvous>, Socket) -> Result<(), TypedError>,
         {
+            let (rendezvous, socket_path, scratch, providers) = Self::fixture().await;
+            let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
+            serve(Arc::clone(&rendezvous), listener).expect("start the rendezvous server");
+            Self {
+                socket_path,
+                _scratch: scratch,
+                _providers: providers,
+                rendezvous,
+            }
+        }
+
+        /// The same rendezvous over a set that hosts a fixture effect
+        /// service (U8, KTD5): the composition point hosts the declared
+        /// service, and the forwarded calls below reach the actor through
+        /// the live hosting binding, served by the production entry point.
+        async fn start_with_effect_service() -> Self {
+            Self::effect_served_by(Arc::new(EchoFactory), |rendezvous, listener| {
+                spawn_server(rendezvous, listener, tokio::runtime::Handle::current())
+            })
+            .await
+        }
+
+        /// The same rendezvous over a set that hosts one pre-built fixture
+        /// service (gated/declining fixtures).
+        async fn start_with_effect_service_factory(
+            factory: Arc<dyn EffectServiceFactory>,
+        ) -> Self {
+            Self::effect_served_by(factory, |rendezvous, listener| {
+                spawn_server(rendezvous, listener, tokio::runtime::Handle::current())
+            })
+            .await
+        }
+
+        async fn effect_served_by<F>(factory: Arc<dyn EffectServiceFactory>, serve: F) -> Self
+        where
+            F: FnOnce(Arc<ForwardRendezvous>, Socket) -> Result<(), TypedError>,
+        {
+            let (rendezvous, socket_path, scratch, providers) =
+                effect_fixture_with(factory).await;
+            let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
+            serve(Arc::clone(&rendezvous), listener).expect("start the rendezvous server");
+            Self {
+                socket_path,
+                _scratch: scratch,
+                _providers: providers,
+                rendezvous,
+            }
+        }
+
+        async fn fixture() -> (
+            Arc<ForwardRendezvous>,
+            PathBuf,
+            tempfile::TempDir,
+            Arc<ProviderRuntime>,
+        ) {
             let zone = ZoneId::parse("test").expect("the test zone label is canonical");
             let scratch = tempfile::tempdir().expect("test scratch");
             let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
@@ -927,14 +1939,35 @@ mod tests {
             let rendezvous = Arc::new(ForwardRendezvous::new());
             rendezvous.publish(zone.as_str(), Arc::clone(&providers));
             let socket_path = scratch.path().join("d2bd-forward.sock");
-            let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
-            serve(Arc::clone(&rendezvous), listener).expect("start the rendezvous server");
-            Self {
-                socket_path,
-                _scratch: scratch,
-                _providers: providers,
-            }
+            (rendezvous, socket_path, scratch, providers)
         }
+    }
+
+    /// One started Zone whose fixture provider hosts a declared effect
+    /// service (U8, KTD5), served by a rendezvous on a real socket. The
+    /// fixture driver declares the service and nothing else, so the effect
+    /// tests cannot accidentally route to a provider operation handler.
+    async fn effect_fixture_with(
+        factory: Arc<dyn EffectServiceFactory>,
+    ) -> (
+        Arc<ForwardRendezvous>,
+        PathBuf,
+        tempfile::TempDir,
+        Arc<ProviderRuntime>,
+    ) {
+        let zone = ZoneId::parse("test").expect("the test zone label is canonical");
+        let scratch = tempfile::tempdir().expect("test scratch");
+        let providers = ProviderSet::new(zone.clone(), scratch.path().to_path_buf())
+            .with(family_declaration("fixture"), vec![effect_descriptor(&[ECHO_SERVICE])])
+            .with_effect_service_factory(ECHO_SERVICE.id, factory)
+            .start()
+            .await
+            .expect("the fixture provider starts through the base");
+        let providers = Arc::new(providers);
+        let rendezvous = Arc::new(ForwardRendezvous::new());
+        rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+        let socket_path = scratch.path().join("d2bd-forward.sock");
+        (rendezvous, socket_path, scratch, providers)
     }
 
     /// Forward one invocation the way the broker's forwarder does, driven on
@@ -946,12 +1979,25 @@ mod tests {
         zone: &str,
         payload: serde_json::Value,
     ) -> ForwardOperationResponse {
-        let request = ForwardOperationRequest {
+        forward_request_async(socket_path, ForwardOperationRequest {
+            chain_identities: None,
             operation: operation.to_owned(),
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
             payload,
-        };
+            context: None,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        })
+        .await
+    }
+
+    /// Forward one explicit request frame, so a test controls the invocation
+    /// id and the broker-attested context its call carries.
+    async fn forward_request_async(
+        socket_path: PathBuf,
+        request: ForwardOperationRequest,
+    ) -> ForwardOperationResponse {
         let encoded =
             canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
         let socket = connect_seqpacket(&socket_path).expect("dial the rendezvous");
@@ -967,6 +2013,68 @@ mod tests {
             .await
             .expect("read the reply frame");
         serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
+    }
+
+    /// The request the broker mints for one attested call, with the fields a
+    /// context test controls.
+    fn attested_request(
+        invocation_id: &str,
+        operation: &str,
+        initiating_identity: &str,
+    ) -> ForwardOperationRequest {
+        ForwardOperationRequest {
+            chain_identities: None,
+            operation: operation.to_owned(),
+            zone: "test".to_owned(),
+            invocation_id: invocation_id.to_owned(),
+            payload: serde_json::json!({}),
+            // Matches the attestation state `start_attesting` publishes:
+            // epoch 5, revision 1, generations (1, 1), default budget.
+            context: Some(ForwardContext {
+                broker_epoch: 5,
+                zone: "test".to_owned(),
+                provider_set_revision: 1,
+                controller_generation: 1,
+                guest_generation: 1,
+                initiating_identity: initiating_identity.to_owned(),
+                deadline_ms: DEFAULT_CONTEXT_DEADLINE_MS,
+            }),
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        }
+    }
+
+    /// An in-memory chain audit sink the tests assert on: every record the
+    /// daemon-side leg writes lands here.
+    #[derive(Default)]
+    struct RecordingChainSink {
+        records: Mutex<Vec<ChainRecord>>,
+    }
+
+    impl RecordingChainSink {
+        fn snapshot(&self) -> Vec<ChainRecord> {
+            self.records
+                .lock()
+                .expect("chain sink")
+                .clone()
+        }
+    }
+
+    impl ChainAuditSink for RecordingChainSink {
+        fn record(&self, record: &ChainRecord) -> std::io::Result<()> {
+            self.records
+                .lock()
+                .expect("chain sink")
+                .push(record.clone());
+            Ok(())
+        }
+    }
+
+    /// Wire `sink` into `serving`'s rendezvous and return it.
+    fn attached_sink(serving: &ServingRendezvous) -> Arc<RecordingChainSink> {
+        let sink = Arc::new(RecordingChainSink::default());
+        serving.rendezvous.set_chain_audit(sink.clone());
+        sink
     }
 
     /// The threads this process is running, one per task entry.
@@ -997,10 +2105,14 @@ mod tests {
     ) -> ForwardOperationResponse {
         let socket = connect_seqpacket(socket_path).expect("dial the rendezvous");
         let request = ForwardOperationRequest {
+            chain_identities: None,
             operation: operation.to_owned(),
             zone: zone.to_owned(),
             invocation_id: "invocation-7".to_owned(),
             payload,
+            context: None,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
         };
         // The broker encodes the request with the canonical profile, so the
         // endpoint is exercised against the exact bytes the broker sends.
@@ -1009,14 +2121,221 @@ mod tests {
         d2bd_runtime::unix_transport::write_frame(&socket, &encoded)
             .expect("write the request frame");
         let frame = read_frame(&socket).expect("read the reply frame");
+serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
+    }
+
+    use std::os::fd::{AsRawFd, RawFd};
+    use d2b_contracts_broker::broker_wire::{FD_LEG, FdKind, MAX_FRAME_FDS};
+    use d2bd_runtime::unix_transport::write_frame_with_fds;
+    /// Forward one invocation with SCM_RIGHTS attachments on the request
+    /// frame, the way the broker's forwarder does once the request leg
+    /// carries fds.to
+    fn forward_with_fds(
+        socket_path: &Path,
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+        fds: &[RawFd],
+    ) -> ForwardOperationResponse {
+        let request = ForwardOperationRequest {
+            chain_identities: None,
+            operation: operation.to_owned(),
+            zone: zone.to_owned(),
+            invocation_id: "invocation-7".to_owned(),
+            payload,
+            context: None,
+            fd_indexes: (0..fds.len() as u32).collect(),
+            fd_kinds: vec![FdKind::Fifo; fds.len()],
+        };
+        let encoded =
+            canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
+        let socket = connect_seqpacket(socket_path).expect("dial the rendezvous");
+        write_frame_with_fds(&socket, &encoded, fds).expect("write the request frame with fds");
+        let frame = read_frame(&socket).expect("read the reply frame");
         serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     }
 
+    /// Forward one invocation with explicit fd declarations, so a test can
+    /// drive a request whose declarations disagree with its frame.
+    fn forward_raw_declared(
+        socket_path: &Path,
+        fd_indexes: Vec<u32>,
+        fd_kinds: Vec<FdKind>,
+        fds: &[RawFd],
+    ) -> ForwardOperationResponse {
+        let request = ForwardOperationRequest {
+            chain_identities: None,
+            operation: "fd-echo".to_owned(),
+            zone: "test".to_owned(),
+            invocation_id: "invocation-7".to_owned(),
+            payload: serde_json::json!({}),
+            context: None,
+            fd_indexes,
+            fd_kinds,
+        };
+        let encoded =
+            canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
+        let socket = connect_seqpacket(socket_path).expect("dial the rendezvous");
+        write_frame_with_fds(&socket, &encoded, fds).expect("write the request frame");
+        let frame = read_frame(&socket).expect("read the reply frame");
+        serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
+    }
+
+    // ---- U8 effect-service dispatch through the rendezvous (KTD5) ----
+    //
+    // The plan's unit tests drive the effect service "through the
+    // envelope": a forwarded call naming `service/method` crosses the
+    // carrier, the rendezvous resolves the service to its live hosting
+    // binding and the hosted actor answers - and a respawn or republish
+    // that bumps the generational revision, or an actor that dies under an
+    // in-flight call, surfaces as the dedicated stale-revision refusal,
+    // never a hang.
+
+    /// The declared effect service the effect tests host.
+    ///
+    /// The `ping` method serves the committed operation fixture-echo-ping:
+    /// the forwarded call names that operation, and the declaration's
+    /// operation facet resolves it to this service (KD6, U7). The zone-plane
+    /// `echo` method carries no operation facet: the session layer addresses
+    /// it, never the envelope.
+    const ECHO_SERVICE: ServiceDecl = ServiceDecl {
+        id: "fixture.echo",
+        methods: &[
+            ServiceMethod::serving("fixture-echo-ping", "ping"),
+            ServiceMethod::zone_plane("echo"),
+        ],
+        attach_kinds: &[],
+        streams: &[],
+        endpoint_policy: None,
+    };
+
+    /// Echo fixture: answers with the request payload (same shape as the
+    /// hosting site's harness).
+    struct EchoService;
+
+    #[async_trait::async_trait]
+    impl EffectService for EchoService {
+        async fn handle(
+            &self,
+            request: EffectRequest,
+        ) -> Result<EffectResponse, EffectServiceError> {
+            Ok(request)
+        }
+    }
+
+    /// Builds one echo service per respawn.
+    struct EchoFactory;
+
+    impl EffectServiceFactory for EchoFactory {
+        fn build(&self) -> Arc<dyn EffectService> {
+            Arc::new(EchoService)
+        }
+    }
+
+    /// Returns one pre-built service (gated/declining fixtures).
+    struct OnceFactory(Arc<dyn EffectService>);
+
+    impl EffectServiceFactory for OnceFactory {
+        fn build(&self) -> Arc<dyn EffectService> {
+            self.0.clone()
+        }
+    }
+
+    /// Gated fixture: parks inside `handle` until released, signalling that
+    /// the call is genuinely in flight.
+    struct GatedService {
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl EffectService for GatedService {
+        async fn handle(
+            &self,
+            request: EffectRequest,
+        ) -> Result<EffectResponse, EffectServiceError> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(request)
+        }
+    }
+
+    /// Declining fixture: answers with its own refusal.
+    struct DecliningService;
+
+    #[async_trait::async_trait]
+    impl EffectService for DecliningService {
+        async fn handle(
+            &self,
+            _request: EffectRequest,
+        ) -> Result<EffectResponse, EffectServiceError> {
+            Err(EffectServiceError::Declined {
+                service: ECHO_SERVICE.id.to_owned(),
+                reason: "fixture refuses".to_owned(),
+            })
+        }
+    }
+
+    /// A driver that registers cleanly beside its service declaration; its
+    /// spec/driver methods are unreachable at the rendezvous site.
+    fn effect_descriptor(services: &'static [ServiceDecl]) -> DriverDescriptor {
+        DriverDescriptor {
+            resource_type: WellKnownType::PROCESS,
+            allowed_sources: AllowedSources::STARTUP,
+            verbs: &[],
+            execution: &[],
+            exportable: false,
+            reads: &[],
+            operations: &[],
+            creations: &[],
+            startup: &[],
+            services,
+            decoder: Arc::new(NoSpecs),
+            factory: Arc::new(NoDrivers),
+        }
+    }
+
+    struct NoSpecs;
+
+    impl SpecDecoder for NoSpecs {
+        fn decode(
+            &self,
+            _envelope: &[u8],
+        ) -> Result<Box<dyn std::any::Any + Send>, Box<dyn std::error::Error + Send + Sync>> {
+            unreachable!("the rendezvous site decodes no specs")
+        }
+    }
+
+    struct NoDrivers;
+
+    #[async_trait::async_trait]
+    impl ResourceDriverFactory for NoDrivers {
+        fn resource_types(&self) -> &[ResourceTypeName] {
+            &[]
+        }
+
+        async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
+            unreachable!("the rendezvous site creates no resource drivers")
+        }
+    }
+
+    /// Wait until a condition holds (the supervisor respawns asynchronously
+    /// after a kill).
+    async fn until(condition: impl Fn() -> bool) {
+        for _ in 0..200 {
+            if condition() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("condition never became true within the deadline");
+    }
+
     /// A forwarded call crosses a real socket and the declared handler
-    /// answers it: the result carries the family's own declaration, the Zone,
+    /// answers it:the result carries the family's own declaration, the Zone,
     /// and the invocation identifier the caller forwarded. A carrier that
     /// never reached the handler could not produce these values.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_forwarded_call_crosses_the_socket_and_the_declared_handler_answers() {
         let serving = ServingRendezvous::start().await;
         let response = forward(
@@ -1025,7 +2344,7 @@ mod tests {
             "test",
             serde_json::json!({ "resourceType": "Process" }),
         );
-        let ForwardOperationOutcome::Result { result } = response.outcome else {
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
             panic!("the declared operation must answer, got a refusal");
         };
         assert_eq!(result["family"], "process");
@@ -1037,7 +2356,19 @@ mod tests {
         assert_eq!(result["zone"], "test");
         assert_eq!(
             result["operations"],
-            serde_json::json!(["inspect-process-family"])
+            serde_json::json!([
+                "inspect-process-family",
+                "OpenPidfd",
+                "OpenPeerPidfdFromAcceptedSocket",
+                "ObserveRunner",
+                "PollChildReaped",
+                "PrepareRuntimeDir",
+                "PrepareStateDir",
+                "CgroupKill",
+                "SignalRunner",
+                "DeregisterRunnerPidfd",
+                "SpawnRunner",
+            ])
         );
         assert_eq!(result["verbs"][0], "get");
         assert_eq!(result["execution"], serde_json::json!(["host", "guest"]));
@@ -1048,7 +2379,7 @@ mod tests {
 
     /// An operation no started provider declares is refused by name, and so is
     /// a call naming a Zone this process has no providers for.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_undeclared_operation_is_refused_by_name() {
         let serving = ServingRendezvous::start().await;
         for (operation, zone) in [
@@ -1074,7 +2405,7 @@ mod tests {
     /// A refusal the handler itself decided crosses the socket under its own
     /// code, so the peer's record and the passed-through detail keep the
     /// family's vocabulary rather than a carrier-level one.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_handler_refusal_crosses_back_under_its_own_code() {
         let serving = ServingRendezvous::start().await;
         let response = forward(
@@ -1095,7 +2426,7 @@ mod tests {
     /// they do not queue behind one another, and calls in flight do not add a
     /// thread each - before this the serving path owned one thread per call,
     /// so four stalled calls added four.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_calls_are_held_on_the_runtime_without_a_thread_each() {
         const CALLS: usize = 4;
         let serving = ServingRendezvous::start().await;
@@ -1127,8 +2458,15 @@ mod tests {
         // second call does not wait for the first.
         THREADS_GATE.wait_for(CALLS).await;
         let held = thread_count();
+        // The counter is process-wide (/proc/self/task): other tests'
+        // runtimes and their blocking pools grow concurrently under
+        // parallel test load, and this runtime's own blocking pool expands
+        // amortized (reused, bounded by peak concurrency), so the bound is
+        // a few slots per call, never a thread owned per call. A
+        // per-call thread-ownership regression - one OS thread held for
+        // the lifetime of each in-flight call - blows far past this.
         assert!(
-            held <= before + 2,
+            held <= before + CALLS * 4,
             "{CALLS} calls in flight must not each own a thread: {before} -> {held}"
         );
 
@@ -1146,7 +2484,7 @@ mod tests {
     /// deadline - by name, while the caller is still listening - and the slot
     /// it held is free again, so the call that follows is served rather than
     /// refused at the cap.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_stalled_handler_is_refused_by_name_and_frees_its_slot() {
         const HANDLER_DEADLINE: Duration = Duration::from_millis(200);
         let serving = ServingRendezvous::start_with(posture(1, HANDLER_DEADLINE)).await;
@@ -1195,10 +2533,145 @@ mod tests {
         }
     }
 
+    /// A crashing handler is refused by name: the panic dies at the dispatch
+    /// task boundary, the caller is answered with the handler-crashed code
+    /// while the broker is still listening - not a dropped socket the broker
+    /// would read as a round-trip timeout - and the accept loop (and its
+    /// capacity slot) survives to serve the next call.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_crashing_handler_is_refused_by_name_and_the_rendezvous_keeps_serving() {
+        const HANDLER_DEADLINE: Duration = Duration::from_secs(5);
+        let serving = ServingRendezvous::start_with(posture(1, HANDLER_DEADLINE)).await;
+
+        let started = Instant::now();
+        let refused = forward_async(
+            serving.socket_path.clone(),
+            "panic-boom",
+            "test",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(
+            refused.outcome,
+            ForwardOperationOutcome::Refused {
+                code: HANDLER_CRASHED.to_owned(),
+            },
+            "a crashed handler is refused by name, never as a timeout or a drop"
+        );
+        assert!(
+            started.elapsed() < HANDLER_DEADLINE,
+            "the crashed call is answered immediately, not at the deadline: {:?}",
+            started.elapsed()
+        );
+
+        // The crashed handler did not take down the accept loop or hold its
+        // slot: with a cap of one, the call that follows is served. The
+        // refusal is written before the crashed call's permit is released,
+        // so the follow-up retries briefly until the slot is free.
+        let after = Instant::now();
+        loop {
+            let served = forward_async(
+                serving.socket_path.clone(),
+                "inspect-process-family",
+                "test",
+                serde_json::json!({ "resourceType": "Process" }),
+            )
+            .await;
+            if matches!(served.outcome, ForwardOperationOutcome::Result { .. }) {
+                break;
+            }
+            assert!(
+                after.elapsed() < Duration::from_secs(5),
+                "the crashed call's slot was never released: {served:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// A handler that ran and failed crosses its own code back to the
+    /// caller: the rendezvous relays the provider's failure code, so
+    /// handler-errored is never flattened into the missing-handler refusal.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_erroring_handler_crosses_back_under_its_own_code() {
+        let serving = ServingRendezvous::start().await;
+        let response = forward(
+            &serving.socket_path,
+            "error-boom",
+            "test",
+            serde_json::json!({}),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: "handler-errored".to_owned(),
+            },
+            "a handler error keeps its own code on the forwarded leg"
+        );
+    }
+
+    /// A row with a large deadline tier runs past the historical fixed 25 s
+    /// bound on the forwarded leg and completes: the context's budget is the
+    /// Extended tier's (`MAX_CONTEXT_DEADLINE_MS`, the shared ceiling the
+    /// broker mints for an extended row), and the rendezvous serves the
+    /// context's budget as the per-call handler deadline instead of the
+    /// tier-less constant.
+    ///
+    /// The run is a genuine 25 s+ completion (30 s of handler work under a
+    /// 60 s budget), so it is a real 30-second test. The local leg's half of
+    /// the same contract is the broker-side wiring test: the mint puts the
+    /// Extended tier's 60 s budget into the context block (which this
+    /// rendezvous then serves), and the local leg serves that same block's
+    /// budget - a sync 30 s local handler would monopolize the
+    /// process-wide two-worker handler set for the duration of the suite,
+    /// so the real 25 s+ run lives on this leg, where the handler is an
+    /// async task on its own runtime.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_row_with_a_large_deadline_tier_runs_past_twenty_five_seconds_on_the_forwarded_leg() {
+        let (rendezvous, socket_path, _scratch, _providers) = ServingRendezvous::fixture().await;
+        rendezvous.publish_generations("test", 1, 1);
+        rendezvous.set_broker_epoch(5);
+        let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
+        let listener = AsyncSeqpacket::register(listener).expect("register the listener");
+        // The posture's tier-less deadline is the historical 25 s constant;
+        // the context's Extended-tier budget (the shared 60 s ceiling) must
+        // own the call, so the 30 s run completes instead of being refused
+        // at the old fixed bound.
+        tokio::spawn(serve_accepted(
+            rendezvous,
+            listener,
+            posture(1, Duration::from_millis(DEFAULT_CONTEXT_DEADLINE_MS)),
+        ));
+        let mut extended = fresh_context();
+        extended.deadline_ms = MAX_CONTEXT_DEADLINE_MS;
+        let started = Instant::now();
+        let answered = forward_with_context_async(
+            socket_path,
+            "slow-30s",
+            "test",
+            serde_json::json!({}),
+            extended,
+            Duration::from_secs(60),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        assert!(
+            matches!(answered.outcome, ForwardOperationOutcome::Result { .. }),
+            "the Extended-tier budget let the 30 s handler finish: {answered:?}"
+        );
+        assert!(
+            elapsed >= Duration::from_secs(30),
+            "the handler ran its full 30 s: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(55),
+            "the completion is the handler's, not the budget's expiry: {elapsed:?}"
+        );
+    }
+
     /// A call the rendezvous is at its cap for is answered with the daemon's
     /// own capacity code - a named refusal, not a silent close - and the
     /// calls already in flight are undisturbed.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_call_over_the_in_flight_cap_is_refused_by_name() {
         let serving = ServingRendezvous::start_with(posture(1, Duration::from_secs(10))).await;
         let held = tokio::spawn(forward_async(
@@ -1240,7 +2713,7 @@ mod tests {
     /// only way to exercise the refusal from inside one process. The root arm
     /// cannot be moved - root is the privileged broker and is always
     /// accepted - so a run as root has nothing to refuse here.
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_peer_that_is_not_the_broker_is_refused_by_name() {
         if nix::unistd::geteuid().is_root() {
             return;
@@ -1265,4 +2738,1247 @@ mod tests {
             "the dialing process is not the accepted peer"
         );
     }
-}
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_fd_carrying_request_crosses_the_socket_and_the_declared_handler_reads_it_back() {
+        use nix::unistd::{pipe, write};
+        let serving = ServingRendezvous::start().await;
+        let (read_end, write_end) = pipe().expect("pipe");
+        write(&write_end, b"ok").expect("write the payload bytes");
+        drop(write_end);
+        let response = forward_with_fds(
+            &serving.socket_path,
+            "fd-echo",
+            "test",
+            serde_json::json!({}),
+            &[read_end.as_raw_fd()],
+        );
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
+            panic!("the fd-echo operation must answer, got a refusal");
+        };
+        assert_eq!(
+            result["read"],
+            "ok",
+            "the handler must have read the caller's bytes through the received descriptor"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_request_whose_fd_count_mismatches_is_refused_with_the_fd_leg_code() {
+        use nix::unistd::{pipe, write};
+        let serving = ServingRendezvous::start().await;
+        let (read_end, write_end) = pipe().expect("pipe");
+        write(&write_end, b"x").expect("write payload bytes");
+        let response = forward_raw_declared(
+            &serving.socket_path,
+            vec![0, 1],
+            vec![FdKind::Fifo, FdKind::Fifo],
+            &[read_end.as_raw_fd()],
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: FD_LEG.to_owned(),
+            },
+            "a declared count that disagrees with the frame is refused with the fd-leg code"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_request_whose_fd_kind_mismatches_is_refused_with_the_fd_leg_code() {
+        use nix::unistd::pipe;
+        let serving = ServingRendezvous::start().await;
+        let (read_end, _write_end) = pipe().expect("pipe");
+        let response = forward_raw_declared(
+            &serving.socket_path,
+            vec![0],
+            vec![FdKind::Socket],
+            &[read_end.as_raw_fd()],
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: FD_LEG.to_owned(),
+            },
+            "a descriptor whose kernel kind mismatches the declaration is refused"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_request_whose_fd_declarations_exceed_the_frame_ceiling_is_refused_with_the_fd_leg_code() {
+        let serving = ServingRendezvous::start().await;
+        let response = forward_raw_declared(
+            &serving.socket_path,
+            (0..=MAX_FRAME_FDS as u32).collect(),
+            vec![FdKind::Fifo; MAX_FRAME_FDS + 1],
+            &[],
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: FD_LEG.to_owned(),
+            },
+            "declarations over the frame ceiling are refused with the fd-leg code, never truncated"
+        );
+    }
+
+    use d2b_contracts_broker::broker_wire::{ForwardContext, STALE_CONTEXT};
+
+    /// The attestation state the context tests below agree on: the fixture
+    /// Zone "test" with one provider publication (revision 1), controller
+    /// and guest generations 1, under broker epoch 5.
+    fn context_for(epoch: u64, zone: &str, revision: u64, guest_generation: u64) -> ForwardContext {
+        ForwardContext {
+            broker_epoch: epoch,
+            zone: zone.to_owned(),
+            provider_set_revision: revision,
+            controller_generation: 1,
+            guest_generation,
+            initiating_identity: "daemon".to_owned(),
+            deadline_ms: DEFAULT_CONTEXT_DEADLINE_MS,
+        }
+    }
+
+    fn fresh_context() -> ForwardContext {
+        context_for(5, "test", 1, 1)
+    }
+
+    /// Forward one invocation carrying a broker-minted context, the way the
+    /// broker's forwarder does once the envelope attests its calls: one
+    /// connection, one canonical request frame carrying the context block,
+    /// one reply frame.
+    fn forward_with_context(
+        socket_path: &Path,
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+        context: ForwardContext,
+    ) -> ForwardOperationResponse {
+        let request = ForwardOperationRequest {
+            chain_identities: None,
+            operation: operation.to_owned(),
+            zone: zone.to_owned(),
+            invocation_id: "invocation-7".to_owned(),
+            payload,
+            context: Some(context),
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        };
+        let encoded =
+            canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
+        let socket = connect_seqpacket(socket_path).expect("dial the rendezvous");
+        d2bd_runtime::unix_transport::write_frame(&socket, &encoded)
+            .expect("write the request frame");
+        let frame = read_frame(&socket).expect("read the reply frame");
+        serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
+    }
+
+    /// Forward one invocation with a context on the runtime, so a stalled
+    /// handler test can exercise the budget the context declares.
+    ///
+    /// `reply_deadline` bounds the frame read: a test that proves a 25 s+
+    /// completion passes the budget the call's context declares (longer than
+    /// the default 10 s read bound), so the frame read cannot outrun the
+    /// completion it is watching.
+    async fn forward_with_context_async(
+        socket_path: PathBuf,
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+        context: ForwardContext,
+        reply_deadline: Duration,
+    ) -> ForwardOperationResponse {
+        let request = ForwardOperationRequest {
+            chain_identities: None,
+            operation: operation.to_owned(),
+            zone: zone.to_owned(),
+            invocation_id: "invocation-7".to_owned(),
+            payload,
+            context: Some(context),
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        };
+        let encoded =
+            canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
+        let socket = connect_seqpacket(&socket_path).expect("dial the rendezvous");
+        let connection =
+            AsyncSeqpacket::register(Socket::from(socket)).expect("register the forwarded call");
+        connection
+            .write_frame(&encoded, reply_deadline)
+            .await
+            .expect("write the request frame");
+        let frame = connection
+            .read_frame(reply_deadline)
+            .await
+            .expect("read the reply frame");
+        serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
+    }
+
+    /// A freshly minted context passes the field-wise freshness check: the
+    /// epoch is the daemon's observed one, the Zone binds to the call, and
+    /// the revision and generations match the daemon's current values.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_fresh_context_passes_the_rendezvous() {
+        let serving = ServingRendezvous::start_attesting().await;
+        let response = forward_with_context(
+            &serving.socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            fresh_context(),
+        );
+        assert!(
+            matches!(response.outcome, ForwardOperationOutcome::Result { .. }),
+            "a fresh context must be admitted, got {response:?}"
+        );
+    }
+
+    /// Before the daemon has observed any broker epoch, no context can be
+    /// verified: the attestation's epoch half is uncheckable, so every
+    /// attested call refuses fail-closed - the receiving side of the rule
+    /// that the broker refuses to mint until it holds a value.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn contexts_refuse_until_the_daemon_observes_a_broker_epoch() {
+        let serving = ServingRendezvous::start().await;
+        let response = forward_with_context(
+            &serving.socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            context_for(5, "test", 1, 1),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "an epoch the daemon has never observed cannot validate a context"
+        );
+    }
+
+    /// A context minted against an older provider-set revision refuses: the
+    /// daemon republished its provider set since the broker minted.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_context_minted_against_an_older_provider_set_revision_is_refused() {
+        let serving = ServingRendezvous::start_attesting().await;
+        let response = forward_with_context(
+            &serving.socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            context_for(5, "test", 0, 1),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "an older provider-set revision is stale"
+        );
+    }
+
+    /// A context minted against a lower guest generation refuses: the
+    /// daemon's current guest generation moved past the minted one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_context_minted_against_a_lower_guest_generation_is_refused() {
+        let serving = ServingRendezvous::start_attesting().await;
+        let response = forward_with_context(
+            &serving.socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            context_for(5, "test", 1, 0),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "a lower guest generation is stale"
+        );
+    }
+
+    /// A context whose Zone is not the call's Zone is not bound to the
+    /// connection: the attestation names another Zone, so the call refuses.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_context_minted_against_another_zone_is_refused() {
+        let serving = ServingRendezvous::start_attesting().await;
+        let response = forward_with_context(
+            &serving.socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            context_for(5, "other-zone", 1, 1),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "a context for another zone is stale on this call"
+        );
+    }
+
+    /// A mutated context refuses even when every field it touched moved the
+    /// "right" way: the broker is the sole minter, so any difference from
+    /// the daemon's current values is tampering, never a fresher truth.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_mutated_context_is_refused() {
+        let serving = ServingRendezvous::start_attesting().await;
+        let mut mutated = fresh_context();
+        mutated.controller_generation = 999;
+        let response = forward_with_context(
+            &serving.socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            mutated,
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "a mutated context cannot name a fresher truth than the mint"
+        );
+    }
+
+    /// A broker restart is a changed epoch: every context minted before it
+    /// refuses regardless of generation equality, and once the daemon
+    /// observes the fresh nonce only contexts minted under it pass - a
+    /// pre-restart context cannot be re-minted into validity.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_broker_restart_invalidates_every_previous_context_via_the_epoch() {
+        let (rendezvous, socket_path, _scratch, _providers) = ServingRendezvous::fixture().await;
+        rendezvous.publish_generations("test", 1, 1);
+        rendezvous.set_broker_epoch(5);
+        let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
+        spawn_server(rendezvous.clone(), listener, tokio::runtime::Handle::current())
+            .expect("start the rendezvous server");
+
+        // Before the restart: the context minted under epoch 5 passes.
+        let before = forward_with_context(
+            &socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            fresh_context(),
+        );
+        assert!(
+            matches!(before.outcome, ForwardOperationOutcome::Result { .. }),
+            "a context minted under the current epoch passes"
+        );
+
+        // The broker restarts and mints under a fresh epoch; the daemon's
+        // next publication acknowledgement carries it.
+        rendezvous.set_broker_epoch(6);
+
+        // Every previously minted context now refuses via the changed
+        // epoch, with the generations equal - the epoch alone is the
+        // invalidation.
+        let after_restart = forward_with_context(
+            &socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            fresh_context(),
+        );
+        assert_eq!(
+            after_restart.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "a pre-restart context fails via the changed broker epoch"
+        );
+        // A re-mint under the fresh epoch passes; the old block still
+        // carries the old epoch, so no context survives the restart by
+        // re-mint - only a brand-new mint under the fresh nonce does.
+        let re_minted = forward_with_context(
+            &socket_path,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            context_for(6, "test", 1, 1),
+        );
+        assert!(
+            matches!(re_minted.outcome, ForwardOperationOutcome::Result { .. }),
+            "a context minted under the fresh epoch passes"
+        );
+    }
+
+    /// The context's deadline budget is the per-call handler deadline: a
+    /// handler that never finishes is refused by the budget the context
+    /// declares, not by the posture's fixed constant.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_context_deadline_budget_bounds_the_handler() {
+        const BUDGET: Duration = Duration::from_millis(150);
+        let (rendezvous, socket_path, _scratch, _providers) = ServingRendezvous::fixture().await;
+        rendezvous.publish_generations("test", 1, 1);
+        rendezvous.set_broker_epoch(5);
+        let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
+        let listener = AsyncSeqpacket::register(listener).expect("register the listener");
+        // The posture's deadline is 10 s; the context's 150 ms must own the
+        // call, so the refusal lands on the budget, not the constant.
+        tokio::spawn(serve_accepted(
+            rendezvous,
+            listener,
+            posture(1, Duration::from_secs(10)),
+        ));
+        let started = Instant::now();
+        let mut stalled = fresh_context();
+        stalled.deadline_ms = BUDGET.as_millis() as u64;
+        let refused = forward_with_context_async(
+            socket_path,
+            STALL_FOREVER,
+            "test",
+            serde_json::json!({}),
+            stalled,
+            Duration::from_secs(10),
+        )
+        .await;
+        assert_eq!(
+            refused.outcome,
+            ForwardOperationOutcome::Refused {
+                code: FORWARD_TIMEOUT.to_owned(),
+            },
+            "a handler that never finishes is refused by the context's budget"
+        );
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= BUDGET && elapsed < Duration::from_secs(5),
+            "the refusal is the context budget's, not the posture's: {elapsed:?}"
+        );
+    }
+
+    /// A deadline budget outside the shared ceiling is a block the broker
+    /// did not mint: zero or oversized budgets refuse with the stale-context
+    /// code rather than serving an unbounded handler grant.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_context_whose_budget_escapes_the_ceiling_is_refused() {
+        let serving = ServingRendezvous::start_attesting().await;
+        for budget in [0, MAX_CONTEXT_DEADLINE_MS + 1] {
+            let mut context = fresh_context();
+            context.deadline_ms = budget;
+            let response = forward_with_context(
+                &serving.socket_path,
+                "inspect-process-family",
+                "test",
+                serde_json::json!({ "resourceType": "Process" }),
+                context,
+            );
+            assert_eq!(
+                response.outcome,
+                ForwardOperationOutcome::Refused {
+                    code: STALE_CONTEXT.to_owned(),
+                },
+                "a budget of {budget} ms is not one the broker mints"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // The origination leg: the daemon publishes its current values to the
+    // broker, and the rendezvous advances exactly on the acknowledgement.
+    // -----------------------------------------------------------------
+
+    use d2b_contracts_broker::broker_wire::{
+        BrokerCallerRole, BrokerErrorResponse, BrokerRequest, BrokerRequestEnvelope,
+        BrokerResponse, PublishTrustedContextResponse, PublishTrustedContextValues,
+    };
+    use crate::provider_lifecycle::TrustedContextPublication;
+
+    /// The broker's half of one origination-leg publication: bind the broker
+    /// socket, read the daemon's request envelope, assert the published
+    /// values, and reply with `reply`. The envelope the daemon actually sent
+    /// is delivered on `seen`.
+    fn serve_one_publication(
+        socket_path: PathBuf,
+        expected: PublishTrustedContextValues,
+        reply: BrokerResponse,
+        seen: std::sync::mpsc::Sender<BrokerRequestEnvelope>,
+    ) -> std::thread::JoinHandle<()> {
+        // The listener binds before the thread spawns, so the daemon's
+        // one-shot publication dial (started by the test after this returns)
+        // can never race the bind: a dial before the bind would error, the
+        // daemon would never retry, and the accept below would block the
+        // test's `broker.join()` forever.
+        let listener = bind_public_socket(&socket_path, &test_identity())
+            .expect("bind the test broker socket");
+        std::thread::spawn(move || {
+            listener
+                .set_nonblocking(false)
+                .expect("the test broker accepts blockingly");
+            let (peer, _) = listener.accept().expect("the daemon dials the broker");
+            let frame = read_frame(&peer).expect("read the publication frame");
+            let envelope: BrokerRequestEnvelope =
+                serde_json::from_slice(&frame).expect("the publication is a broker envelope");
+            match &envelope.request {
+                BrokerRequest::PublishTrustedContext(values) => {
+                    assert_eq!(
+                        &expected, values,
+                        "the daemon publishes its current provider-set values"
+                    );
+                }
+                other => {
+                    panic!(
+                        "expected a PublishTrustedContext request, got {}",
+                        other.op_name()
+                    )
+                }
+            }
+            let acknowledged = canonical_json_bytes(&reply)
+                .expect("the acknowledgement encodes as canonical JSON");
+            write_frame(&peer, &acknowledged).expect("write the acknowledgement frame");
+            let _ = seen.send(envelope);
+        })
+    }
+
+    /// The daemon publishes the Zone's current values over the origination
+    /// leg when its started set carries a publication binding, and the
+    /// rendezvous advances exactly on the acknowledged broker epoch: a
+    /// context minted against the acked epoch, revision, and generations is
+    /// admitted, and any pre-ack state is stale.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_daemon_publishes_over_the_origination_leg_and_advances_on_the_ack() {
+        let zone = ZoneId::parse("test").expect("the test zone label is canonical");
+        let scratch = tempfile::tempdir().expect("test scratch");
+        let broker_socket = scratch.path().join("broker.sock");
+        let rendezvous_socket = scratch.path().join("d2bd-forward.sock");
+        let expected = PublishTrustedContextValues {
+            zone: zone.as_str().to_owned(),
+            provider_set_revision: 1,
+            controller_generation: 4,
+            guest_generation: 1,
+        };
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+        let broker = serve_one_publication(
+            broker_socket.clone(),
+            expected.clone(),
+            BrokerResponse::PublishTrustedContext(PublishTrustedContextResponse {
+                broker_epoch: 7,
+            }),
+            seen_tx,
+        );
+
+        let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
+            zone: zone.clone(),
+            effects: Arc::new(RefusingEffects),
+            zone_uid: None,
+            policy_revision: None,
+            provider_assignment_generation: None,
+            controller_generation: ControllerGeneration::new(1)
+                .expect("the test generation is canonical"),
+            guest_execution: None,
+            mode: ExecutionMode::Host,
+        });
+        let providers = Arc::new(
+            ProviderSet::new(zone.clone(), scratch.path().join("state"))
+                .with_trusted_context_publication(Some(
+                    TrustedContextPublication::production(
+                        DaemonMode::Host,
+                        broker_socket,
+                        nix::unistd::getuid().as_raw(),
+                        4,
+                    ),
+                ))
+                .with(
+                    family_declaration("process"),
+                    vec![
+                        process,
+                        DriverDescriptor {
+                            operations: &STALL_OPERATIONS[..],
+                            ..ephemeral
+                        },
+                    ],
+                )
+                .start()
+                .await
+                .expect("the process family starts through the base"),
+        );
+        let rendezvous = Arc::new(ForwardRendezvous::new());
+        let revision = rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+        assert_eq!(revision, 1, "the first publication is revision 1");
+        let envelope =
+            seen_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("one publication reaches the broker");
+        assert_eq!(
+            envelope.caller_role,
+            BrokerCallerRole::AdminUid {
+                uid: nix::unistd::getuid().as_raw(),
+            },
+            "the publication presents the daemon's caller role"
+        );
+        broker.join().expect("the test broker completes");
+
+        let listener = bind(&rendezvous_socket, &test_identity()).expect("bind the rendezvous");
+        spawn_server(rendezvous.clone(), listener, tokio::runtime::Handle::current())
+            .expect("start the rendezvous server");
+
+        // The acked epoch, revision, and generations pass field-wise.
+        let acknowledged = forward_with_context(
+            &rendezvous_socket,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            ForwardContext {
+                broker_epoch: 7,
+                zone: "test".to_owned(),
+                provider_set_revision: 1,
+                controller_generation: 4,
+                guest_generation: 1,
+                initiating_identity: "daemon".to_owned(),
+                deadline_ms: DEFAULT_CONTEXT_DEADLINE_MS,
+            },
+        );
+        assert!(
+            matches!(acknowledged.outcome, ForwardOperationOutcome::Result { .. }),
+            "a context minted against the acknowledged state is admitted, got {acknowledged:?}"
+        );
+
+        // Pre-ack epochs, older revisions, and older generations refuse.
+        for stale in [
+            context_for(5, "test", 1, 1),
+            context_for(7, "test", 2, 1),
+            context_for(7, "other", 1, 1),
+        ] {
+            let response = forward_with_context(
+                &rendezvous_socket,
+                "inspect-process-family",
+                "test",
+                serde_json::json!({ "resourceType": "Process" }),
+                stale,
+            );
+            assert_eq!(
+                response.outcome,
+                ForwardOperationOutcome::Refused {
+                    code: STALE_CONTEXT.to_owned(),
+                },
+                "a context outside the acknowledged state is stale"
+            );
+        }
+    }
+
+    /// A refused publication advances nothing: a broker that refuses the
+    /// publication leaves the rendezvous fail-closed on its zero epoch, so
+    /// no context validates - the daemon never trusts an epoch it was not
+    /// acknowledged.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refused_publication_leaves_the_rendezvous_fail_closed() {
+        let zone = ZoneId::parse("test").expect("the test zone label is canonical");
+        let scratch = tempfile::tempdir().expect("test scratch");
+        let broker_socket = scratch.path().join("broker.sock");
+        let rendezvous_socket = scratch.path().join("d2bd-forward.sock");
+        let expected = PublishTrustedContextValues {
+            zone: zone.as_str().to_owned(),
+            provider_set_revision: 1,
+            controller_generation: 1,
+            guest_generation: 1,
+        };
+        let (seen_tx, _) = std::sync::mpsc::channel();
+        let broker = serve_one_publication(
+            broker_socket.clone(),
+            expected.clone(),
+            BrokerResponse::Error(BrokerErrorResponse {
+                kind: "refused".to_owned(),
+                operation: "PublishTrustedContext".to_owned(),
+                target_wave: None,
+                message: "stale publication".to_owned(),
+                action: "republish".to_owned(),
+            }),
+            seen_tx,
+        );
+
+        let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
+            zone: zone.clone(),
+            effects: Arc::new(RefusingEffects),
+            zone_uid: None,
+            policy_revision: None,
+            provider_assignment_generation: None,
+            controller_generation: ControllerGeneration::new(1)
+                .expect("the test generation is canonical"),
+            guest_execution: None,
+            mode: ExecutionMode::Host,
+        });
+        let providers = Arc::new(
+            ProviderSet::new(zone.clone(), scratch.path().join("state"))
+                .with_trusted_context_publication(Some(
+                    TrustedContextPublication::production(
+                        DaemonMode::Host,
+                        broker_socket,
+                        nix::unistd::getuid().as_raw(),
+                        1,
+                    ),
+                ))
+                .with(
+                    family_declaration("process"),
+                    vec![
+                        process,
+                        DriverDescriptor {
+                            operations: &STALL_OPERATIONS[..],
+                            ..ephemeral
+                        },
+                    ],
+                )
+                .start()
+                .await
+                .expect("the process family starts through the base"),
+        );
+        let rendezvous = Arc::new(ForwardRendezvous::new());
+        rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+        broker.join().expect("the test broker completes");
+
+        let listener = bind(&rendezvous_socket, &test_identity()).expect("bind the rendezvous");
+        spawn_server(rendezvous.clone(), listener, tokio::runtime::Handle::current())
+            .expect("start the rendezvous server");
+
+        for context in [context_for(7, "test", 1, 1), context_for(1, "test", 1, 1)] {
+            let response = forward_with_context(
+                &rendezvous_socket,
+                "inspect-process-family",
+                "test",
+                serde_json::json!({ "resourceType": "Process" }),
+                context,
+            );
+            assert_eq!(
+                response.outcome,
+                ForwardOperationOutcome::Refused {
+                    code: STALE_CONTEXT.to_owned(),
+                },
+                "a refused publication acknowledges no epoch, so every context is stale"
+            );
+        }
+    }
+
+    /// A broker that never answers the publication leaves the rendezvous
+    /// fail-closed too: the transport failure is the same refusal boundary,
+    /// observed before any epoch could be acknowledged.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unreachable_broker_leaves_the_rendezvous_fail_closed() {
+        let zone = ZoneId::parse("test").expect("the test zone label is canonical");
+        let scratch = tempfile::tempdir().expect("test scratch");
+        let missing_broker = scratch.path().join("broker.sock");
+        let rendezvous_socket = scratch.path().join("d2bd-forward.sock");
+        let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
+            zone: zone.clone(),
+            effects: Arc::new(RefusingEffects),
+            zone_uid: None,
+            policy_revision: None,
+            provider_assignment_generation: None,
+            controller_generation: ControllerGeneration::new(1)
+                .expect("the test generation is canonical"),
+            guest_execution: None,
+            mode: ExecutionMode::Host,
+        });
+        let providers = Arc::new(
+            ProviderSet::new(zone.clone(), scratch.path().join("state"))
+                .with_trusted_context_publication(Some(
+                    TrustedContextPublication::production(
+                        DaemonMode::Host,
+                        missing_broker,
+                        nix::unistd::getuid().as_raw(),
+                        1,
+                    ),
+                ))
+                .with(
+                    family_declaration("process"),
+                    vec![
+                        process,
+                        DriverDescriptor {
+                            operations: &STALL_OPERATIONS[..],
+                            ..ephemeral
+                        },
+                    ],
+                )
+                .start()
+                .await
+                .expect("the process family starts through the base"),
+        );
+        let rendezvous = Arc::new(ForwardRendezvous::new());
+        rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+
+        let listener = bind(&rendezvous_socket, &test_identity()).expect("bind the rendezvous");
+        spawn_server(rendezvous.clone(), listener, tokio::runtime::Handle::current())
+            .expect("start the rendezvous server");
+
+        let response = forward_with_context(
+            &rendezvous_socket,
+            "inspect-process-family",
+            "test",
+            serde_json::json!({ "resourceType": "Process" }),
+            context_for(7, "test", 1, 1),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_CONTEXT.to_owned(),
+            },
+            "a broker that never answered acknowledges no epoch"
+        );
+    }
+
+    // ---- U8 effect-service dispatch tests (KTD5) ----
+
+    /// U8 happy path through the rendezvous: a driver's forwarded call
+    /// naming a declared effect-service method crosses the carrier, the
+    /// rendezvous resolves the service to its live hosting binding, and the
+    /// hosted actor answers with the canonical payload round-tripping
+    /// untouched - the effect service rides the normal forward carrier, no
+    /// second transport.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_forwarded_effect_service_call_is_answered_by_the_hosted_actor() {
+        let serving = ServingRendezvous::start_with_effect_service().await;
+        let response = forward(
+            &serving.socket_path,
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({ "echo": "ping" }),
+        );
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
+            panic!("the declared effect service must answer, got a refusal");
+        };
+        assert_eq!(result, serde_json::json!({ "echo": "ping" }));
+    }
+
+    /// An operation nothing in this process declares is refused like any
+    /// uncommitted operation: neither a hosted service's operation facet nor
+    /// a provider's handler table names it. A `service/method` spelling
+    /// works for no operation - the wire names the committed operation, and
+    /// the declaration's operation facet resolves it to the service (KD6).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_operation_no_effect_service_or_provider_declares_is_refused_by_name() {
+        let serving = ServingRendezvous::start_with_effect_service().await;
+        for (operation, what) in [
+            ("no-such-operation", "no declaration names it"),
+            ("fixture.echo/ping", "the service/method spelling is not a committed operation"),
+        ] {
+            let response = forward(&serving.socket_path, operation, "test", serde_json::json!({}));
+            assert_eq!(
+                response.outcome,
+                ForwardOperationOutcome::Refused {
+                    code: UNCOMMITTED_OPERATION.to_owned(),
+                },
+                "{operation}: {what}; it must refuse as uncommitted"
+            );
+        }
+    }
+
+    /// U8 error path through the rendezvous, `manager.rs:1190-1211`
+    /// semantics: killing the actor mid-supervision respawns the service
+    /// from its durable row and bumps the generational revision; the next
+    /// forwarded call succeeds against the fresh generation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn killing_a_hosted_effect_service_respawns_and_the_next_forwarded_call_succeeds() {
+        let serving = ServingRendezvous::start_with_effect_service().await;
+        let providers = Arc::clone(&serving._providers);
+        let binding = providers
+            .resolve_effect_service(ECHO_SERVICE.id)
+            .await
+            .expect("the declared service resolves");
+        let revision_before = binding.revision();
+
+        let response = forward(
+            &serving.socket_path,
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({ "one": true }),
+        );
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
+            panic!("the declared effect service must answer, got a refusal");
+        };
+        assert_eq!(result, serde_json::json!({ "one": true }));
+
+        // Kill the actor mid-supervision (aborts any in-flight work).
+        binding.kill();
+
+        // The zone supervisor respawns from the durable row and bumps the
+        // generational revision.
+        until(|| binding.revision() != revision_before).await;
+        let respawned = providers
+            .resolve_effect_service(ECHO_SERVICE.id)
+            .await
+            .expect("resolve after respawn");
+        assert_eq!(
+            respawned.revision(),
+            revision_before + 1,
+            "respawn bumped the revision"
+        );
+
+        // The next forwarded call succeeds against the respawned generation.
+        let response = forward(
+            &serving.socket_path,
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({ "two": true }),
+        );
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
+            panic!("the respawned service must answer, got a refusal");
+        };
+        assert_eq!(result, serde_json::json!({ "two": true }));
+    }
+
+    /// U8 edge through the rendezvous: an in-flight forwarded call whose
+    /// actor dies is refused with the dedicated stale-revision code, never
+    /// hung, and the service still respawns from its durable row.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_in_flight_effect_service_call_refuses_with_the_stale_revision_code_when_the_actor_dies()
+    {
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let gated: Arc<dyn EffectService> = Arc::new(GatedService {
+            entered: entered.clone(),
+            release: release.clone(),
+        });
+        let serving =
+            ServingRendezvous::start_with_effect_service_factory(Arc::new(OnceFactory(gated)))
+                .await;
+        let binding = serving
+            ._providers
+            .resolve_effect_service(ECHO_SERVICE.id)
+            .await
+            .expect("the declared service resolves");
+
+        let caller = tokio::spawn(forward_async(
+            serving.socket_path.clone(),
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({ "in-flight": true }),
+        ));
+        // Wait until the call is genuinely parked inside the service.
+        entered.notified().await;
+
+        binding.kill();
+
+        let outcome = tokio::time::timeout(Duration::from_secs(2), caller)
+            .await
+            .expect("in-flight call must refuse, not hang");
+        let response = outcome.expect("the call completed");
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: STALE_REVISION.to_owned(),
+            },
+            "the in-flight call rode a dead generation; the dedicated refusal must name it"
+        );
+
+        // The service still respawns from its durable row afterwards.
+        until(|| binding.revision() != 1).await;
+        let respawned = serving
+            ._providers
+            .resolve_effect_service(ECHO_SERVICE.id)
+            .await
+            .expect("resolve after respawn");
+        assert_eq!(respawned.revision(), 2);
+    }
+
+    /// U8 republish through the hosting seam keeps the rendezvous serving:
+    /// the republish bumps the generational revision and a fresh resolve
+    /// dispatches to the rebuilt actor (provider-set republish, KTD5).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_republished_effect_service_keeps_answering_through_the_rendezvous() {
+        let serving = ServingRendezvous::start_with_effect_service().await;
+        let rebound = serving
+            ._providers
+            .publish_effect_service(EffectServiceRow::declared(
+                "test",
+                &ECHO_SERVICE,
+                Arc::new(EchoFactory),
+            ))
+            .await
+            .expect("republish");
+        assert_eq!(rebound.revision(), 2, "republish bumped the revision");
+
+        let response = forward(
+            &serving.socket_path,
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({ "again": true }),
+        );
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
+            panic!("the republished service must answer, got a refusal");
+        };
+        assert_eq!(result, serde_json::json!({ "again": true }));
+    }
+
+    /// A declined effect-service call crosses back under the taxonomy's
+    /// handler-refused code (KTD7), not a carrier-level or uncommitted
+    /// refusal.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_declining_effect_service_refuses_under_the_handler_refused_code() {
+        let declining: Arc<dyn EffectService> = Arc::new(DecliningService);
+        let serving =
+            ServingRendezvous::start_with_effect_service_factory(Arc::new(OnceFactory(declining)))
+                .await;
+        let response = forward(
+            &serving.socket_path,
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({}),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: HANDLER_REFUSED.to_owned(),
+            }
+        );
+    }
+
+    /// The dedicated KTD5 refusal code covers every stale-generation failure
+    /// shape: a captured revision that a respawn or republish moved past, a
+    /// binding whose actor died, and a call still in flight when its actor
+    /// died. An unbound service flattens to the uncommitted refusal, and a
+    /// decline to the handler-refused entry.
+    #[test]
+    fn stale_generation_failures_map_to_the_dedicated_stale_revision_code() {
+        let stale = EffectServiceError::StaleRevision {
+            service: "s".to_owned(),
+            expected: 1,
+            current: 2,
+        };
+        let unavailable = EffectServiceError::ServiceUnavailable {
+            service: "s".to_owned(),
+        };
+        let in_flight = EffectServiceError::InFlightStale {
+            service: "s".to_owned(),
+        };
+        for error in [stale, unavailable, in_flight] {
+            assert_eq!(effect_refusal_code(&error), STALE_REVISION, "{error:?}");
+        }
+assert_eq!(
+            effect_refusal_code(&EffectServiceError::UnboundService {
+                zone: "z".to_owned(),
+                service: "s".to_owned(),
+            }),
+            UNCOMMITTED_OPERATION
+        );
+        assert_eq!(
+            effect_refusal_code(&EffectServiceError::OperationUnserved {
+                operation: "no-such-operation".to_owned(),
+            }),
+            UNCOMMITTED_OPERATION
+        );
+        assert_eq!(
+            effect_refusal_code(&EffectServiceError::Declined {
+                service: "s".to_owned(),
+                reason: "nope".to_owned(),
+            }),
+            HANDLER_REFUSED
+        );
+        assert_eq!(
+            effect_refusal_code(&EffectServiceError::WrongZone {
+                zone: "z".to_owned(),
+                service: "s".to_owned(),
+                row_zone: "other".to_owned(),
+            }),
+            UNCOMMITTED_OPERATION
+        );
+    }
+
+    /// A forwarded root invocation is recorded by the daemon-side leg
+    /// exactly once, whatever its outcome (KTD6): the leg executing the
+    /// root operation writes one root record per root invocation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_forwarded_root_writes_exactly_one_daemon_side_root_record_per_outcome() {
+        let serving = ServingRendezvous::start().await;
+        let sink = attached_sink(&serving);
+
+        let refused = forward_request_async(
+            serving.socket_path.clone(),
+            ForwardOperationRequest {
+                chain_identities: None,
+                operation: "error-boom".to_owned(),
+                zone: "test".to_owned(),
+                invocation_id: "invocation-root-1".to_owned(),
+                payload: serde_json::json!({}),
+                context: None,
+                fd_indexes: vec![],
+                fd_kinds: vec![],
+            },
+        )
+        .await;
+        assert!(matches!(
+            refused.outcome,
+            ForwardOperationOutcome::Refused { .. }
+        ));
+
+        let succeeded = forward_request_async(
+            serving.socket_path.clone(),
+            ForwardOperationRequest {
+                chain_identities: None,
+                operation: "inspect-process-family".to_owned(),
+                zone: "test".to_owned(),
+                invocation_id: "invocation-root-2".to_owned(),
+                payload: serde_json::json!({ "resourceType": "Process" }),
+                context: None,
+                fd_indexes: vec![],
+                fd_kinds: vec![],
+            },
+        )
+        .await;
+        assert!(matches!(
+            succeeded.outcome,
+            ForwardOperationOutcome::Result { .. }
+        ));
+
+        let records = sink.snapshot();
+        assert_eq!(
+            records.len(),
+            2,
+            "one record per root invocation: {records:?}"
+        );
+        let first = records
+            .iter()
+            .find(|record| record.invocation_id == "invocation-root-1")
+            .expect("the refused invocation was recorded");
+        assert!(first.is_root());
+        assert_eq!(first.depth, 0);
+        assert_eq!(first.leg, ChainLeg::Daemon);
+        assert_eq!(first.outcome, ChainOutcome::Refused);
+        assert_eq!(first.code.as_deref(), Some("handler-errored"));
+        assert_eq!(first.initiating_identity, "daemon");
+        let second = records
+            .iter()
+            .find(|record| record.invocation_id == "invocation-root-2")
+            .expect("the succeeded invocation was recorded");
+        assert!(second.is_root());
+        assert_eq!(second.outcome, ChainOutcome::Succeeded);
+        assert_eq!(second.code, None);
+        // The consumer invariant: exactly one root record per invocation
+        // id, whichever way the leg ended.
+        assert_eq!(root_record_count(&records, "invocation-root-1"), 1);
+        assert_eq!(root_record_count(&records, "invocation-root-2"), 1);
+    }
+
+    /// One nested leg writes one correlation record keyed on the root
+    /// invocation id and its own depth - and never a second root record
+    /// for the invocation, which is the mixed-leg invariant (KTD6).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_nested_leg_writes_one_correlation_record_and_never_a_second_root() {
+        let serving = ServingRendezvous::start().await;
+        let sink = attached_sink(&serving);
+
+        let refused_chain =
+            EvidenceChain::root("invocation-nested-1", "daemon").nested("provider-alpha");
+        let refused = serving
+            .rendezvous
+            .invoke_nested(&refused_chain, "error-boom", "test", &serde_json::json!({}))
+            .await;
+        assert!(matches!(
+            refused.outcome,
+            ForwardOperationOutcome::Refused { .. }
+        ));
+
+        let succeeded_chain =
+            EvidenceChain::root("invocation-nested-2", "provider-beta").nested("provider-alpha");
+        let succeeded = serving
+            .rendezvous
+            .invoke_nested(
+                &succeeded_chain,
+                "inspect-process-family",
+                "test",
+                &serde_json::json!({ "resourceType": "Process" }),
+            )
+            .await;
+        assert!(matches!(
+            succeeded.outcome,
+            ForwardOperationOutcome::Result { .. }
+        ));
+
+        let records = sink.snapshot();
+        assert_eq!(records.len(), 2, "one correlation record per leg: {records:?}");
+        for record in &records {
+            assert_eq!(
+                record.record_class,
+                ChainRecordClass::Correlation,
+                "a nested leg never writes a root record: {record:?}"
+            );
+            assert_eq!(record.leg, ChainLeg::Daemon);
+        }
+        let first = records
+            .iter()
+            .find(|record| record.invocation_id == "invocation-nested-1")
+            .expect("the refused nested leg was recorded");
+        assert_eq!(first.correlation_key(), ("invocation-nested-1", 1));
+        assert_eq!(first.outcome, ChainOutcome::Refused);
+        assert_eq!(first.code.as_deref(), Some("handler-errored"));
+        assert_eq!(first.initiating_identity, "daemon");
+        assert_eq!(first.invoking_identity, "provider-alpha");
+        let second = records
+            .iter()
+            .find(|record| record.invocation_id == "invocation-nested-2")
+            .expect("the succeeded nested leg was recorded");
+        assert_eq!(second.correlation_key(), ("invocation-nested-2", 1));
+        assert_eq!(second.outcome, ChainOutcome::Succeeded);
+        assert_eq!(second.code, None);
+        assert_eq!(second.initiating_identity, "provider-beta");
+        assert_eq!(second.invoking_identity, "provider-alpha");
+        // The mixed-leg consumer invariant: zero root records for the ids
+        // the nested legs alone carried.
+        assert_eq!(root_record_count(&records, "invocation-nested-1"), 0);
+        assert_eq!(root_record_count(&records, "invocation-nested-2"), 0);
+    }
+
+    /// A nested chain past the depth cap is refused with the dedicated
+    /// loop-refusal code before any dispatch, and the refusing leg still
+    /// writes its correlation record with the code (KTD6).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_nested_chain_past_the_depth_cap_is_refused_with_the_loop_code() {
+        let serving = ServingRendezvous::start().await;
+        let sink = attached_sink(&serving);
+
+        let mut chain = EvidenceChain::root("invocation-loop-1", "daemon");
+        for _ in 0..=MAX_NESTED_DEPTH {
+            chain = chain.nested("provider-alpha");
+        }
+        assert_eq!(chain.depth(), MAX_NESTED_DEPTH + 1);
+        let response = serving
+            .rendezvous
+            .invoke_nested(
+                &chain,
+                "inspect-process-family",
+                "test",
+                &serde_json::json!({ "resourceType": "Process" }),
+            )
+            .await;
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: NESTED_DEPTH_EXCEEDED.to_owned()
+            }
+        );
+        let records = sink.snapshot();
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(
+            records[0].correlation_key(),
+            ("invocation-loop-1", (MAX_NESTED_DEPTH + 1) as u32)
+        );
+        assert_eq!(records[0].code.as_deref(), Some(NESTED_DEPTH_EXCEEDED));
+        assert_eq!(root_record_count(&records, "invocation-loop-1"), 0);
+    }
+
+    /// An attested forwarded root is recorded under the identity the
+    /// broker attested, never the daemon class the socket peer re-presents:
+    /// the record names the initiating provider (KTD6).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_attested_forwarded_root_is_recorded_under_the_initiating_identity() {
+        let serving = ServingRendezvous::start_attesting().await;
+        let sink = attached_sink(&serving);
+        let response = forward_request_async(
+            serving.socket_path.clone(),
+            attested_request("invocation-attr-1", "error-boom", "provider-alpha"),
+        )
+        .await;
+        assert!(matches!(
+            response.outcome,
+            ForwardOperationOutcome::Refused { .. }
+        ));
+        let records = sink.snapshot();
+        assert_eq!(records.len(), 1, "{records:?}");
+        let record = &records[0];
+        assert!(record.is_root());
+        assert_eq!(record.initiating_identity, "provider-alpha");
+        assert_eq!(record.invoking_identity, "provider-alpha");
+        assert_eq!(record.leg, ChainLeg::Daemon);
+        assert_eq!(root_record_count(&records, "invocation-attr-1"), 1);
+    }
+    }

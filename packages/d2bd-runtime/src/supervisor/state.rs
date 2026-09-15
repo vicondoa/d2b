@@ -320,12 +320,9 @@ pub fn reconcile(
 ///   The production opener lives outside this module because
 ///   `d2bd` is `#![forbid(unsafe_code)]` and `pidfd_open(2)`
 ///   syscall access lives in `d2b-broker::sys::pidfd_sys`.
-///   The W*-fu wiring sends a `BrokerRequest::OpenPidfd { pid,
-///   expected_start_time }` shim over the broker socket, and the
-///   broker returns the verified-fd over SCM_RIGHTS. That shim is
-///   tracked as a follow-up commit - the trait + verification
-///   contract land here so the daemon-side caller is correct
-///   the moment the shim ships.
+///   The wiring sends the envelope `open-pidfd` kernel
+///   invocation over the broker socket, and the broker returns the
+///   verified-fd over SCM_RIGHTS.
 ///
 /// - tests: deterministic fake that returns canned outcomes.
 ///

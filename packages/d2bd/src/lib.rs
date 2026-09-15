@@ -17,6 +17,7 @@ pub(crate) mod guest_target_session;
 pub(crate) mod zone_enrollment;
 pub(crate) mod foundation_seed;
 pub(crate) mod forward_rendezvous;
+pub(crate) mod effect_service_actors;
 pub(crate) mod plane_port;
 pub mod principal_allocation;
 pub(crate) mod provider_lifecycle;

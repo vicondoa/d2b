@@ -18,77 +18,104 @@ no resource family.
 - `transport-excluded` - the name is a transport-layer concern the
 operation envelope does not carry.
 
-Counts: 66 family-owned, 4 broker-generic, 0 transport-excluded (68 rows carry a wire discriminant, 2 rows do not).
+Counts: 65 family-owned, 32 broker-generic, 0 transport-excluded (46 rows carry a wire discriminant, 51 rows do not).
 
-| Operation | Owner | Family | Declaring provider | Profiles | Disposition | Target | Justification |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Hello | broker-generic | - | - | host, guest | callable-read-only | live read-only callable | transport handshake: the first frame on the private socket, answered from the broker's own capability table, with no host effect and no resource family behind it |
-| ExportBrokerAudit | broker-generic | - | - | host, guest | callable-read-only | live read-only callable | broker self-audit: the broker reads its own append-only audit log, so the effect is the broker's record keeping rather than a family effect |
-| OpenPidfd | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
-| OpenPeerPidfdFromAcceptedSocket | family | process | d2b-provider-process | host, guest | callable-read-only | live read-only callable | - |
-| ObserveRunner | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
-| StartSystemdUnit | family | process-systemd | d2b-provider-process-systemd | host, guest | promoted-live | live in production broker | - |
-| CheckSystemdUserManager | family | process-systemd | d2b-provider-process-systemd | host, guest | promoted-live | live in production broker | - |
-| ObserveSystemdUnit | family | process-systemd | d2b-provider-process-systemd | host, guest | promoted-live | live in production broker | - |
-| OpenSystemdUnitPidfd | family | process-systemd | d2b-provider-process-systemd | host, guest | promoted-live | live in production broker | - |
-| StopSystemdUnit | family | process-systemd | d2b-provider-process-systemd | host, guest | promoted-live | live in production broker | - |
-| PollChildReaped | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
-| PrepareRuntimeDir | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
-| PrepareStateDir | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
-| CgroupKill | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
-| SignalRunner | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
-| DeregisterRunnerPidfd | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
-| SpawnRunner | family | process | d2b-provider-process | host, guest | promoted-live | live in production broker | - |
-| ApplyHostGenerationHandoff | broker-generic | - | - | host | promoted-live | live in production broker | broker-owned host effect: the handoff runs in the broker against the broker's own helper path and state dir, the activation family requests it through its effect port, so no declaring crate holds the handler |
-| ApplyNftables | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| ApplyNftablesProjection | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| ApplyNmUnmanaged | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| ApplyRoute | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| ApplySysctl | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| CreateOrReconcileUsersGroups | family | user | d2b-provider-user | host | stubbed-unimplemented | bootstrap-only | - |
-| CreateBridge | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| DeleteBridge | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| CreatePersistentTap | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| DeletePersistentTap | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| CreateTapFd | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| DelegateCgroupV2 | family | process | d2b-provider-process | host | promoted-live | live in production broker | - |
-| InjectSecretById | family | credential | d2b-provider-credential | host | stubbed-unimplemented | future work | - |
-| LaunchMinijailChild | family | process | d2b-provider-process | host | stubbed-unimplemented | future work | - |
-| ModprobeIfAllowed | family | device | d2b-provider-device | host | promoted-live | live in production broker | - |
-| OpenCgroupDir | family | process | d2b-provider-process | host | promoted-live | live in production broker | - |
-| OpenDevice | family | device | d2b-provider-device | host | promoted-live | live in production broker | - |
-| OpenFuse | family | device | d2b-provider-device | host | promoted-live | live in production broker | - |
-| OpenHidrawSecurityKey | family | device-security-key | d2b-provider-device-security-key | host | promoted-live | live in production broker | - |
-| OpenKvm | family | device | d2b-provider-device | host | promoted-live | live in production broker | - |
-| QemuMediaEnroll | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker | - |
-| QemuMediaRefreshRegistry | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker | - |
-| QemuMediaBoot | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker | - |
-| QemuMediaSystemPowerdown | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker | - |
-| QemuMediaQueryStatus | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker | - |
-| QemuMediaQuit | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker | - |
-| QemuMediaAttach | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker | - |
-| QemuMediaDetach | family | guest | d2b-provider-guest-qemu-media | host | promoted-live | live in production broker | - |
-| ConsumeLifecycleLease | family | process | d2b-provider-process | host | untriaged | broker-generic row | - |
-| inspect-process-family | family | process | d2b-provider-process | host | callable-read-only | live read-only callable | - |
-| PipeWireAudio | family | audio | d2b-provider-audio-service | host | promoted-live | live in production broker | - |
-| OpenVhostNet | family | device | d2b-provider-device | host | promoted-live | live in production broker | - |
-| ReconcileStorageScope | family | volume-binding | d2b-provider-volume-binding | host | promoted-live | live in production broker | - |
-| ValidateLockSpec | family | volume-binding | d2b-provider-volume-binding | host | promoted-live | live in production broker | - |
-| StoreSync | family | volume | d2b-provider-volume-local | host | promoted-live | live in production broker | - |
-| ReadSecretById | family | credential | d2b-provider-credential | host | stubbed-unimplemented | future work | - |
-| RotateSecretById | family | credential | d2b-provider-credential | host | stubbed-unimplemented | future work | - |
-| SetBridgePortFlags | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| UpdateHostsFile | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| UsbipBind | family | device-usbip | d2b-provider-device-usbip | host | promoted-live | live in production broker | - |
-| UsbipBindFirewallRule | family | device-usbip | d2b-provider-device-usbip | host | promoted-live | live in production broker | - |
-| UsbipProxyReconcile | family | device-usbip | d2b-provider-device-usbip | host | promoted-live | live in production broker | - |
-| UsbipUnbind | family | device-usbip | d2b-provider-device-usbip | host | promoted-live | live in production broker | - |
-| UsbipExplicitBind | family | device-usbip | d2b-provider-device-usbip | host | promoted-live | live in production broker | - |
-| UsbipExplicitFirewallRule | family | device-usbip | d2b-provider-device-usbip | host | promoted-live | live in production broker | - |
-| SeedDnsmasqLease | family | network | d2b-provider-network-local | host | promoted-live | live in production broker | - |
-| OwnershipMatrixCheck | family | volume | d2b-provider-volume-local | host | stubbed-unimplemented | future work | - |
-| SshHostKeyPreflight | family | device-security-key | d2b-provider-device-security-key | host | stubbed-unimplemented | future work | - |
-| DiskInit | family | volume | d2b-provider-volume-local | host | promoted-live | live in production broker | - |
-| SecurityKeyOpenDevice | family | device-security-key | d2b-provider-device-security-key | host | stubbed-unimplemented | future work | - |
-| SecurityKeyApplyUdevRules | family | device-security-key | d2b-provider-device-security-key | host | stubbed-unimplemented | future work | - |
-| PrepareSwtpmDir | broker-generic | - | - | host | compile-time-only | broker `SpawnRunner` side-effect | broker pre-spawn step: the broker provisions and hardens the per-VM swtpm state dir from its SpawnRunner step before the child starts, and the row carries that record shape only |
+| Operation | Owner | Family | Declaring provider | Service | Method | Profiles | Disposition | Target | Justification |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Hello | broker-generic | - | - | - | - | host, guest | callable-read-only | live read-only callable | transport handshake: the first frame on the private socket, answered from the broker's own capability table, with no host effect and no resource family behind it |
+| PublishTrustedContext | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | broker-held attestation cache: the daemon publishes the Zone's daemon-owned provider-set revision and controller/guest generations over the origination leg, and the broker caches them as durable, monotonically increasing state from which it mints; no resource family holds the store |
+| ExportBrokerAudit | broker-generic | - | - | - | - | host, guest | callable-read-only | live read-only callable | broker self-audit: the broker reads its own append-only audit log, so the effect is the broker's record keeping rather than a family effect |
+| OpenPidfd | family | process | d2b-provider-process | d2b.process | open-pidfd | host, guest | promoted-live | live in production broker | - |
+| OpenPeerPidfdFromAcceptedSocket | family | process | d2b-provider-process | d2b.process | open-peer-pidfd-from-accepted-socket | host, guest | callable-read-only | live read-only callable | - |
+| ObserveRunner | family | process | d2b-provider-process | d2b.process | observe-runner | host, guest | promoted-live | live in production broker | - |
+| StartSystemdUnit | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | start-systemd-unit | host, guest | promoted-live | live in production broker | - |
+| CheckSystemdUserManager | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | check-systemd-user-manager | host, guest | promoted-live | live in production broker | - |
+| ObserveSystemdUnit | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | observe-systemd-unit | host, guest | promoted-live | live in production broker | - |
+| OpenSystemdUnitPidfd | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | open-systemd-unit-pidfd | host, guest | promoted-live | live in production broker | - |
+| StopSystemdUnit | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | stop-systemd-unit | host, guest | promoted-live | live in production broker | - |
+| PollChildReaped | family | process | d2b-provider-process | d2b.process | poll-child-reaped | host, guest | promoted-live | live in production broker | - |
+| PrepareRuntimeDir | family | process | d2b-provider-process | d2b.process | prepare-runtime-dir | host, guest | promoted-live | live in production broker | - |
+| PrepareStateDir | family | process | d2b-provider-process | d2b.process | prepare-state-dir | host, guest | promoted-live | live in production broker | - |
+| CgroupKill | family | process | d2b-provider-process | d2b.process | cgroup-kill | host, guest | promoted-live | live in production broker | - |
+| SignalRunner | family | process | d2b-provider-process | d2b.process | signal-runner | host, guest | promoted-live | live in production broker | - |
+| DeregisterRunnerPidfd | family | process | d2b-provider-process | d2b.process | deregister-runner-pidfd | host, guest | promoted-live | live in production broker | - |
+| SpawnRunner | family | process | d2b-provider-process | d2b.process | spawn-runner | host, guest | promoted-live | live in production broker | - |
+| ApplyHostGenerationHandoff | broker-generic | - | - | - | - | host | promoted-live | live in production broker | broker-owned host effect: the handoff runs in the broker against the broker's own helper path and state dir, the activation family requests it through its effect port, so no declaring crate holds the handler |
+| ApplyNftables | family | network | d2b-provider-network-local | d2b.network | apply-nftables | host | promoted-live | live in production broker | - |
+| ApplyNftablesProjection | family | network | d2b-provider-network-local | d2b.network | apply-nftables-projection | host | promoted-live | live in production broker | - |
+| ApplyNmUnmanaged | family | network | d2b-provider-network-local | d2b.network | apply-nm-unmanaged | host | promoted-live | live in production broker | - |
+| ApplyRoute | family | network | d2b-provider-network-local | d2b.network | apply-route | host | promoted-live | live in production broker | - |
+| ApplySysctl | family | network | d2b-provider-network-local | d2b.network | apply-sysctl | host | promoted-live | live in production broker | - |
+| CreateOrReconcileUsersGroups | family | user | d2b-provider-user | d2b.user | create-or-reconcile-users-groups | host | stubbed-unimplemented | bootstrap-only | - |
+| CreateBridge | family | network | d2b-provider-network-local | d2b.network | create-bridge | host | promoted-live | live in production broker | - |
+| DeleteBridge | family | network | d2b-provider-network-local | d2b.network | delete-bridge | host | promoted-live | live in production broker | - |
+| CreatePersistentTap | family | network | d2b-provider-network-local | d2b.network | create-persistent-tap | host | promoted-live | live in production broker | - |
+| DeletePersistentTap | family | network | d2b-provider-network-local | d2b.network | delete-persistent-tap | host | promoted-live | live in production broker | - |
+| CreateTapFd | family | network | d2b-provider-network-local | d2b.network | create-tap-fd | host | promoted-live | live in production broker | - |
+| DelegateCgroupV2 | family | process | d2b-provider-process | d2b.process | delegate-cgroup-v2 | host | promoted-live | live in production broker | - |
+| InjectSecretById | family | credential | d2b-provider-credential | d2b.credential | inject-secret-by-id | host | stubbed-unimplemented | future work | - |
+| LaunchMinijailChild | family | process | d2b-provider-process | d2b.process | launch-minijail-child | host | stubbed-unimplemented | future work | - |
+| ModprobeIfAllowed | family | device | d2b-provider-device | d2b.device | modprobe-if-allowed | host | promoted-live | live in production broker | - |
+| OpenCgroupDir | family | process | d2b-provider-process | d2b.process | open-cgroup-dir | host | promoted-live | live in production broker | - |
+| OpenDevice | family | device | d2b-provider-device | d2b.device | open-device | host | promoted-live | live in production broker | - |
+| OpenFuse | family | device | d2b-provider-device | d2b.device | open-fuse | host | promoted-live | live in production broker | - |
+| OpenHidrawSecurityKey | family | device-security-key | d2b-provider-device-security-key | d2b.device-security-key | open-hidraw-security-key | host | promoted-live | live in production broker | - |
+| OpenKvm | family | device | d2b-provider-device | d2b.device | open-kvm | host | promoted-live | live in production broker | - |
+| QemuMediaEnroll | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-enroll | host | promoted-live | live in production broker | - |
+| QemuMediaRefreshRegistry | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-refresh-registry | host | promoted-live | live in production broker | - |
+| QemuMediaBoot | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-boot | host | promoted-live | live in production broker | - |
+| QemuMediaSystemPowerdown | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-system-powerdown | host | promoted-live | live in production broker | - |
+| QemuMediaQueryStatus | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-query-status | host | promoted-live | live in production broker | - |
+| QemuMediaQuit | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-quit | host | promoted-live | live in production broker | - |
+| QemuMediaAttach | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-attach | host | promoted-live | live in production broker | - |
+| QemuMediaDetach | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-detach | host | promoted-live | live in production broker | - |
+| inspect-process-family | family | process | d2b-provider-process | d2b.process | inspect-process-family | host | callable-read-only | live read-only callable | - |
+| PipeWireAudio | family | audio | d2b-provider-audio-service | d2b.audio | pipe-wire-audio | host | promoted-live | live in production broker | - |
+| OpenVhostNet | family | device | d2b-provider-device | d2b.device | open-vhost-net | host | promoted-live | live in production broker | - |
+| ReconcileStorageScope | family | volume-binding | d2b-provider-volume-binding | d2b.volume-binding | reconcile-storage-scope | host | promoted-live | live in production broker | - |
+| ValidateLockSpec | family | volume-binding | d2b-provider-volume-binding | d2b.volume-binding | validate-lock-spec | host | promoted-live | live in production broker | - |
+| StoreSync | family | volume | d2b-provider-volume-local | d2b.volume | store-sync | host | promoted-live | live in production broker | - |
+| ReadSecretById | family | credential | d2b-provider-credential | d2b.credential | read-secret-by-id | host | stubbed-unimplemented | future work | - |
+| RotateSecretById | family | credential | d2b-provider-credential | d2b.credential | rotate-secret-by-id | host | stubbed-unimplemented | future work | - |
+| SetBridgePortFlags | family | network | d2b-provider-network-local | d2b.network | set-bridge-port-flags | host | promoted-live | live in production broker | - |
+| UpdateHostsFile | family | network | d2b-provider-network-local | d2b.network | update-hosts-file | host | promoted-live | live in production broker | - |
+| UsbipBind | family | device-usbip | d2b-provider-device-usbip | d2b.device-usbip | usbip-bind | host | promoted-live | live in production broker | - |
+| UsbipBindFirewallRule | family | device-usbip | d2b-provider-device-usbip | d2b.device-usbip | usbip-bind-firewall-rule | host | promoted-live | live in production broker | - |
+| UsbipProxyReconcile | family | device-usbip | d2b-provider-device-usbip | d2b.device-usbip | usbip-proxy-reconcile | host | promoted-live | live in production broker | - |
+| UsbipUnbind | family | device-usbip | d2b-provider-device-usbip | d2b.device-usbip | usbip-unbind | host | promoted-live | live in production broker | - |
+| UsbipExplicitBind | family | device-usbip | d2b-provider-device-usbip | d2b.device-usbip | usbip-explicit-bind | host | promoted-live | live in production broker | - |
+| UsbipExplicitFirewallRule | family | device-usbip | d2b-provider-device-usbip | d2b.device-usbip | usbip-explicit-firewall-rule | host | promoted-live | live in production broker | - |
+| SeedDnsmasqLease | family | network | d2b-provider-network-local | d2b.network | seed-dnsmasq-lease | host | promoted-live | live in production broker | - |
+| OwnershipMatrixCheck | family | volume | d2b-provider-volume-local | d2b.volume | ownership-matrix-check | host | promoted-live | live in production broker | - |
+| SshHostKeyPreflight | family | device-security-key | d2b-provider-device-security-key | d2b.device-security-key | ssh-host-key-preflight | host | stubbed-unimplemented | future work | - |
+| DiskInit | family | volume | d2b-provider-volume-local | d2b.volume | disk-init | host | promoted-live | live in production broker | - |
+| SecurityKeyOpenDevice | family | device-security-key | d2b-provider-device-security-key | d2b.device-security-key | security-key-open-device | host | stubbed-unimplemented | future work | - |
+| SecurityKeyApplyUdevRules | family | device-security-key | d2b-provider-device-security-key | d2b.device-security-key | security-key-apply-udev-rules | host | stubbed-unimplemented | future work | - |
+| PrepareSwtpmDir | broker-generic | - | - | - | - | host | compile-time-only | broker `SpawnRunner` side-effect | broker pre-spawn step: the broker provisions and hardens the per-VM swtpm state dir from its SpawnRunner step before the child starts, and the row carries that record shape only |
+| EnvelopeInvoke | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | generic envelope invocation surface (U10/KTD10): the one daemon-to-broker control path that replaces per-operation typed wire variants as their typed arms retire; the broker runs the committed operation's five envelope steps in place of a typed dispatch arm, and a retired variant stays version-gated so a straggler peer gets the stale-wire-version refusal plus an audit record |
+| open-pidfd | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the pidfd_open syscall plus start-time verification, served in-broker and invoked as the nested core of the forwarded OpenPidfd family operation; returns the pidfd over the fd leg. |
+| open-peer-pidfd-from-accepted-socket | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the peer-pidfd derivation (SO_PEERCRED + pidfd_open) from an accepted socket descriptor, served in-broker as the nested core of the forwarded OpenPeerPidfdFromAcceptedSocket family operation. |
+| poll-child-reaped | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the pidfd-keyed non-blocking waitid reap probe, served in-broker as the nested core of the forwarded PollChildReaped family operation; the daemon-side handler reaps each of its children against its own pidfds. |
+| prepare-directory | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the path-safe mkdir/chown/chmod directory-preparation primitive, served in-broker as the nested core of the forwarded PrepareRuntimeDir and PrepareStateDir family operations; path resolution stays on the family side. |
+| kill-cgroup | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the cgroup.kill write, served in-broker as the nested core of the forwarded CgroupKill family operation; cgroup path resolution stays on the family side. |
+| signal-pidfd | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: pidfd_send_signal, served in-broker as the nested core of the forwarded SignalRunner family operation; the pidfd arrives over the fd leg. |
+| deregister-pidfd | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the pidfd close/forget step, served in-broker as the nested core of the forwarded DeregisterRunnerPidfd family operation; the pidfd arrives over the fd leg. |
+| spawn-process | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the process spawn (user namespace, mount namespace, seccomp, cgroup placement, inherited fds, activation stdin) served in-broker as the nested core of the forwarded SpawnRunner family operation; the launch task is fully parameterised while bundle/posture/device-worker resolution stays on the family side. |
+| delegate-cgroup-v2 | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U10 sandwich kernel: the cgroup v2 delegation write, served in-broker as the nested core of the forwarded DelegateCgroupV2 family operation. |
+| open-cgroup-dir | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U10 sandwich kernel: the cgroup directory open, served in-broker as the nested core of the forwarded OpenCgroupDir family operation; returns a directory fd over the fd leg. |
+| observe-process | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the /proc observation probe (presence, executable, cgroup path, start time) served in-broker as the nested core of the forwarded ObserveRunner family operation; expectation comparison stays on the family side. |
+| consume-cell | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U11 cell kernel: compare-and-consume one declared one-time state cell under the canonical identity the payload carries and the envelope-attested initiating principal, served in-broker as the generic core of the retired ConsumeLifecycleLease arm (AE2: one-time consume wins exactly once, replay refuses). |
+| complete-cell | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U11 cell kernel: record completion for one claimed one-time state cell under the canonical identity the payload carries and the envelope-attested initiating principal, served in-broker as the generic completion phase of the retired ConsumeLifecycleLease arm; the durable completed marker is what refuses replay across broker restarts (AE2). |
+| apply-nftables | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired ApplyNftables family operation, served in-broker: install or flush the framework's own inet d2b table with the coexistence fence and persisted-hash drift check. |
+| apply-nftables-projection | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired ApplyNftablesProjection family operation, served in-broker: install or remove one Provider-owned nftables projection under its ownership marker with the installed-generation and desired-hash fences. |
+| apply-nm-unmanaged | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired ApplyNmUnmanaged family operation, served in-broker: write or remove the NetworkManager unmanaged drop-in file with the reload behavior. |
+| apply-route | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired ApplyRoute family operation, served in-broker: apply or remove one ownership-marked route with the durable UID-bound marker-record preflight. |
+| apply-sysctl | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired ApplySysctl family operation, served in-broker: write one key with readback verification or restore the destroy default. |
+| create-bridge | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired CreateBridge family operation, served in-broker: create the framework-owned bridge from the resolved intent with the ownership-marker fence. |
+| delete-bridge | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired DeleteBridge family operation, served in-broker: remove the framework-owned bridge after its TAP removals. |
+| create-persistent-tap | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired CreatePersistentTap family operation, served in-broker: create the persistent TAP from the typed request, re-deriving the trusted tap intent from the broker's own bundle copy, and persist the realization record. |
+| delete-persistent-tap | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired DeletePersistentTap family operation, served in-broker: remove one trusted attachment realization under the exact generation fences. |
+| create-tap-fd | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired CreateTapFd family operation, served in-broker: create one VMM TAP and return its descriptor over the fd leg (the only fd-bearing network kernel). |
+| set-bridge-port-flags | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired SetBridgePortFlags family operation, served in-broker: apply the trusted per-role bridge port flag set under the installed-generation fence. |
+| update-hosts-file | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired UpdateHostsFile family operation, served in-broker: write or remove the managed /etc/hosts marker block from the resolved intent. |
+| seed-dnsmasq-lease | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired SeedDnsmasqLease family operation, served in-broker: the retired arm's live core was its admission check - the expected child VM name is re-derived from the admitted Network identity and a mismatch refuses; the lease file write remains a committed follow-up. |

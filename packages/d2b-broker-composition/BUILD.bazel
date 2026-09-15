@@ -1,0 +1,99 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
+
+# The broker executable's composition root (U6/KTD1): provider handler
+# crates are linked here; `d2b-broker` the crate stays provider-free. The
+# binary name is preserved so the socket/service units and the prebuilt
+# host-tool selection keep referencing `d2b-broker`.
+
+d2b_broker_composition_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+d2b_broker_composition_shared_deps = [
+    "//packages/d2b-broker:d2b_broker",
+    "//packages/d2b-broker-fixture-handlers:d2b_broker_fixture_handlers",
+]
+
+rust_library(
+    name = "d2b_broker_composition",
+    srcs = d2b_broker_composition_srcs,
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = d2b_broker_composition_shared_deps +
+           all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_binary(
+    name = "d2b-broker",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-broker:d2b_broker",
+        ":d2b_broker_composition",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_broker_composition_layer1_bootstrap",
+    srcs = d2b_broker_composition_srcs,
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_broker_composition",
+    crate_features = ["layer1-bootstrap"],
+    deps = [
+        "//packages/d2b-broker:d2b_broker_layer1_bootstrap",
+        "//packages/d2b-broker-fixture-handlers:d2b_broker_fixture_handlers",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_binary(
+    name = "d2b-broker-layer1-bootstrap",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_features = ["layer1-bootstrap"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-broker:d2b_broker_layer1_bootstrap",
+        ":d2b_broker_composition_layer1_bootstrap",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+# The fixture handler crates' sources ride along as data so the
+# dependency-surface audit and the registration-time source probes see the
+# same crate trees in the sandbox they see in a cargo checkout.
+rust_test(
+    name = "d2b_broker_composition_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_broker_composition",
+    data = [
+        "//packages/d2b-broker-fixture-handlers:src/lib.rs",
+        "//packages/d2b-broker-fixture-syscall-surface:src/lib.rs",
+    ],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-broker:d2b_broker",
+        "//packages/d2b-broker-fixture-handlers:d2b_broker_fixture_handlers",
+        "//packages/d2b-broker-fixture-syscall-surface:d2b_broker_fixture_syscall_surface",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

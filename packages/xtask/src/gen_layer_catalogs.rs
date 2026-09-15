@@ -703,8 +703,16 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(values, expected);
         assert!(
-            values.iter().any(|value| value == "SpawnRunner"),
-            "a committed family operation is in the domain"
+            values.iter().any(|value| value == "UsbipBind"),
+            "a committed wire operation is in the domain"
+        );
+        // U10 retired the process-family wire variants: their rows stay
+        // committed (audit history) but declare no wire variant, so the
+        // domain - the wire request names nothing can emit as the metric
+        // `op` label - leaves them with the wire enum.
+        assert!(
+            !values.iter().any(|value| value == "SpawnRunner"),
+            "a row whose wire variant was retired is not in the domain"
         );
         assert!(
             !values.iter().any(|value| value == "vmStart"),

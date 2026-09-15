@@ -99,7 +99,8 @@ use crate::endpoint_effects::{
 use crate::process_effects::ProductionProcessDriverEffects;
 use crate::volume_effects::ProductionVolumeDriverEffects;
 use crate::provider_lifecycle::{
-    ProviderRuntime, ProviderSet, ProviderStartupError, family_declaration,
+    ProviderRuntime, ProviderSet, ProviderStartupError, TrustedContextPublication,
+    family_declaration,
 };
 use d2b_provider_device::{DeviceDriverArgs, device_descriptor};
 use d2b_provider_device_security_key::{SecurityKeyDriverArgs, security_key_descriptors};
@@ -1381,6 +1382,12 @@ pub struct ConstructionInputs {
     pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
     pub guest_effects: Arc<dyn GuestDriverEffects>,
     pub interaction_effects: Arc<dyn InteractionDriverEffects>,
+    /// The origination-leg publication binding for this Zone's
+    /// trusted-context values: the broker socket, the daemon's caller role,
+    /// and the generations the Zone serves. The production constructor
+    /// binds the set; a test or context-free deployment leaves it unbound
+    /// and nothing is published.
+    pub trusted_context_publication: Option<TrustedContextPublication>,
     /// The committed policy rows this plane seeds before its manager spawns.
     ///
     /// The composition sets this for the foundation plane - the durable
@@ -1473,7 +1480,7 @@ impl ConstructionInputs {
             registry: Arc::clone(&registry),
             provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
             process_effects: Arc::new(
-                ProductionProcessDriverEffects::new(process_providers)
+                ProductionProcessDriverEffects::new(Arc::clone(&process_providers))
                     .with_committed_provider_identities(registry_source)
                     .with_guest_owner_identities(Arc::new(PlaneGuestOwnerIdentities {
                         state: Arc::clone(state),
@@ -1587,6 +1594,14 @@ impl ConstructionInputs {
                 Arc::clone(state),
                 zone.clone(),
             )),
+            trusted_context_publication: Some(
+                crate::provider_lifecycle::TrustedContextPublication::production(
+                    process_providers.mode(),
+                    broker_socket,
+                    state.daemon_uid,
+                    controller_generation.get(),
+                ),
+            ),
             foundation: None,
         })
     }
@@ -1855,6 +1870,10 @@ impl ResourcePlaneV3 {
                 effects: Arc::clone(&inputs.credential_effects),
             })],
         );
+        // The trusted-context publication rides the set: when production
+        // bound one, the rendezvous publishes this Zone's attestation
+        // values over the origination leg the moment the set is published.
+        set = set.with_trusted_context_publication(inputs.trusted_context_publication.clone());
         // The NixosGeneration type starts through its driver declaration: the
         // registry serves the type's decoder and factory from it, and the
         // declaration carries the family's verbs, execution domains,
@@ -2734,6 +2753,7 @@ mod tests {
                 },
                 guest_effects: Arc::new(FakeGuestEffects),
                 interaction_effects: Arc::new(FakeInteractionEffects),
+                trusted_context_publication: None,
                 foundation: None,
             },
             readiness,

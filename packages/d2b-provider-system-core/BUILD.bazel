@@ -1,6 +1,10 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-host:__pkg__", "//packages/d2b-provider-provider:__pkg__", "//packages/d2b-provider-user:__pkg__", "//packages/d2bd:__pkg__"])
+
 exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
@@ -9,7 +13,6 @@ rust_library(
     name = "d2b_provider_system_core",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -20,7 +23,6 @@ rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     crate_name = "d2b_provider_system_core",
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -30,7 +32,6 @@ rust_test(
     name = "host_reconciliation",
     srcs = ["tests/host_reconciliation.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         ":d2b_provider_system_core",
@@ -41,7 +42,6 @@ rust_test(
     name = "ownership",
     srcs = ["tests/ownership.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         ":d2b_provider_system_core",
@@ -52,7 +52,6 @@ rust_test(
     name = "user_discovery",
     srcs = ["tests/user_discovery.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         ":d2b_provider_system_core",

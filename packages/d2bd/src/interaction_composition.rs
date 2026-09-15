@@ -8592,7 +8592,11 @@ mod tests {
         let replay = RequestId::new(vec![0x43; 16]).unwrap();
         assert!(driver.start_ttrpc(replay, replay_frame,).await.is_err());
         drop(listener);
-        std::fs::remove_file(&path).unwrap();
+        let cleanup_path = path.clone();
+        tokio::task::spawn_blocking(move || std::fs::remove_file(&cleanup_path))
+            .await
+            .expect("listener socket cleanup task panicked")
+            .unwrap();
         assert!(!path.exists());
     }
 

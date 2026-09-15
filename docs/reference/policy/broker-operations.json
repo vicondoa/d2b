@@ -37,6 +37,50 @@
       "payload": {
         "provenance": "wire",
         "schema": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "PublishTrustedContext",
+      "wireVariant": "PublishTrustedContext",
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "broker-held attestation cache: the daemon publishes the Zone's daemon-owned provider-set revision and controller/guest generations over the origination leg, and the broker caches them as durable, monotonically increasing state from which it mints; no resource family holds the store",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "handshake",
+        "scope": "global",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "PublishTrustedContext"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      },
+      "deadline": {
+        "tier": "standard"
       }
     },
     {
@@ -75,11 +119,13 @@
       "payload": {
         "provenance": "wire",
         "schema": null
+      },
+      "deadline": {
+        "tier": "standard"
       }
     },
     {
       "operation": "OpenPidfd",
-      "wireVariant": "OpenPidfd",
       "owner": "family",
       "family": "process",
       "declaringProvider": "d2b-provider-process",
@@ -110,13 +156,77 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "bundleRunnerIntentRef": {
+              "type": "string"
+            },
+            "pid": {
+              "type": "integer"
+            },
+            "expectedStartTimeTicks": {
+              "type": "integer"
+            },
+            "resourceRef": {
+              "type": "string"
+            },
+            "resourceUid": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "ownerRef": {
+              "type": "string"
+            },
+            "providerRef": {
+              "type": "string"
+            },
+            "providerIdentity": {
+              "type": "string"
+            },
+            "templateIdentity": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "runtimeScope": {
+              "type": "array"
+            },
+            "guestExecution": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "pid",
+            "expectedStartTimeTicks"
+          ]
+        }
+      },
+      "stateCell": {
+        "cell": "runner-pidfd-registry",
+        "durability": "ephemeral"
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "open-pidfd"
     },
     {
       "operation": "OpenPeerPidfdFromAcceptedSocket",
-      "wireVariant": "OpenPeerPidfdFromAcceptedSocket",
       "owner": "family",
       "family": "process",
       "declaringProvider": "d2b-provider-process",
@@ -147,13 +257,22 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {},
+          "required": []
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "open-peer-pidfd-from-accepted-socket"
     },
     {
       "operation": "ObserveRunner",
-      "wireVariant": "ObserveRunner",
       "owner": "family",
       "family": "process",
       "declaringProvider": "d2b-provider-process",
@@ -184,9 +303,67 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            },
+            "bundleRunnerIntentRef": {
+              "type": "string"
+            },
+            "resourceRef": {
+              "type": "string"
+            },
+            "resourceUid": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "ownerRef": {
+              "type": "string"
+            },
+            "providerRef": {
+              "type": "string"
+            },
+            "providerIdentity": {
+              "type": "string"
+            },
+            "templateIdentity": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "runtimeScope": {
+              "type": "array"
+            },
+            "guestExecution": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "role",
+            "bundleRunnerIntentRef"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "observe-runner"
     },
     {
       "operation": "StartSystemdUnit",
@@ -223,7 +400,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process-systemd",
+      "method": "start-systemd-unit"
     },
     {
       "operation": "CheckSystemdUserManager",
@@ -260,7 +442,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process-systemd",
+      "method": "check-systemd-user-manager"
     },
     {
       "operation": "ObserveSystemdUnit",
@@ -297,7 +484,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process-systemd",
+      "method": "observe-systemd-unit"
     },
     {
       "operation": "OpenSystemdUnitPidfd",
@@ -334,7 +526,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process-systemd",
+      "method": "open-systemd-unit-pidfd"
     },
     {
       "operation": "StopSystemdUnit",
@@ -371,11 +568,15 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process-systemd",
+      "method": "stop-systemd-unit"
     },
     {
       "operation": "PollChildReaped",
-      "wireVariant": "PollChildReaped",
       "owner": "family",
       "family": "process",
       "declaringProvider": "d2b-provider-process",
@@ -404,13 +605,22 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {},
+          "required": []
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "poll-child-reaped"
     },
     {
       "operation": "PrepareRuntimeDir",
-      "wireVariant": "PrepareRuntimeDir",
       "owner": "family",
       "family": "process",
       "declaringProvider": "d2b-provider-process",
@@ -441,13 +651,32 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "pathClass": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "pathClass"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "prepare-runtime-dir"
     },
     {
       "operation": "PrepareStateDir",
-      "wireVariant": "PrepareStateDir",
       "owner": "family",
       "family": "process",
       "declaringProvider": "d2b-provider-process",
@@ -479,13 +708,32 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "pathClass": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "pathClass"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "prepare-state-dir"
     },
     {
       "operation": "CgroupKill",
-      "wireVariant": "CgroupKill",
       "owner": "family",
       "family": "process",
       "declaringProvider": "d2b-provider-process",
@@ -516,13 +764,32 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "cgroup-kill"
     },
     {
       "operation": "SignalRunner",
-      "wireVariant": "SignalRunner",
       "owner": "family",
       "family": "process",
       "declaringProvider": "d2b-provider-process",
@@ -553,13 +820,72 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "signal": {
+              "type": "string"
+            },
+            "pid": {
+              "type": "integer"
+            },
+            "expectedStartTimeTicks": {
+              "type": "integer"
+            },
+            "resourceRef": {
+              "type": "string"
+            },
+            "resourceUid": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "ownerRef": {
+              "type": "string"
+            },
+            "providerRef": {
+              "type": "string"
+            },
+            "providerIdentity": {
+              "type": "string"
+            },
+            "templateIdentity": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "runtimeScope": {
+              "type": "array"
+            },
+            "guestExecution": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "signal"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "signal-runner"
     },
     {
       "operation": "DeregisterRunnerPidfd",
-      "wireVariant": "DeregisterRunnerPidfd",
       "owner": "family",
       "family": "process",
       "declaringProvider": "d2b-provider-process",
@@ -591,13 +917,72 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "pid": {
+              "type": "integer"
+            },
+            "expectedStartTimeTicks": {
+              "type": "integer"
+            },
+            "resourceRef": {
+              "type": "string"
+            },
+            "resourceUid": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "ownerRef": {
+              "type": "string"
+            },
+            "providerRef": {
+              "type": "string"
+            },
+            "providerIdentity": {
+              "type": "string"
+            },
+            "templateIdentity": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "runtimeScope": {
+              "type": "array"
+            },
+            "guestExecution": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId"
+          ]
+        }
+      },
+      "stateCell": {
+        "cell": "runner-pidfd-registry",
+        "durability": "ephemeral"
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "deregister-runner-pidfd"
     },
     {
       "operation": "SpawnRunner",
-      "wireVariant": "SpawnRunner",
       "owner": "family",
       "family": "process",
       "declaringProvider": "d2b-provider-process",
@@ -629,9 +1014,105 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "resourceRef": {
+              "type": "string"
+            },
+            "resourceUid": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "ownerRef": {
+              "type": "string"
+            },
+            "ownerUid": {
+              "type": "string"
+            },
+            "providerRef": {
+              "type": "string"
+            },
+            "bundleContentIdentity": {
+              "type": "string"
+            },
+            "providerIdentity": {
+              "type": "string"
+            },
+            "templateIdentity": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "runtimeScope": {
+              "type": "array"
+            },
+            "activationInput": {
+              "type": "object"
+            },
+            "launchArgs": {
+              "type": "array"
+            },
+            "sandboxPlan": {
+              "type": "object"
+            },
+            "role": {
+              "type": "string"
+            },
+            "bundleRunnerIntentRef": {
+              "type": "string"
+            },
+            "executionRef": {
+              "type": "string"
+            },
+            "executionDomain": {
+              "type": "string"
+            },
+            "userRef": {
+              "type": "string"
+            },
+            "guestExecution": {
+              "type": "object"
+            },
+            "runtimeAllocations": {
+              "type": "array"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            },
+            "workloadIdentity": {
+              "type": "string"
+            },
+            "inheritedFdCount": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "role",
+            "bundleRunnerIntentRef",
+            "runtimeAllocations",
+            "inheritedFdCount"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "spawn-runner"
     },
     {
       "operation": "ApplyHostGenerationHandoff",
@@ -668,11 +1149,13 @@
       "payload": {
         "provenance": "wire",
         "schema": null
+      },
+      "deadline": {
+        "tier": "standard"
       }
     },
     {
       "operation": "ApplyNftables",
-      "wireVariant": "ApplyNftables",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -702,13 +1185,41 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleNftIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "desiredHash": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleNftIntentRef",
+            "scopeId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "apply-nftables"
     },
     {
       "operation": "ApplyNftablesProjection",
-      "wireVariant": "ApplyNftablesProjection",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -738,13 +1249,66 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleNftProjectionIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "apply",
+                "remove"
+              ]
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "expectedGenerationId": {
+              "type": "string"
+            },
+            "desiredHash": {
+              "type": "string"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleNftProjectionIntentRef",
+            "scopeId",
+            "action",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "expectedGenerationId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "apply-nftables-projection"
     },
     {
       "operation": "ApplyNmUnmanaged",
-      "wireVariant": "ApplyNmUnmanaged",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -774,13 +1338,38 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleNmIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleNmIntentRef",
+            "scopeId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "apply-nm-unmanaged"
     },
     {
       "operation": "ApplyRoute",
-      "wireVariant": "ApplyRoute",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -810,13 +1399,58 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleRouteIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleRouteIntentRef",
+            "scopeId",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "bundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "apply-route"
     },
     {
       "operation": "ApplySysctl",
-      "wireVariant": "ApplySysctl",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -846,9 +1480,55 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleSysctlIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleSysctlIntentRef",
+            "scopeId",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "bundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "apply-sysctl"
     },
     {
       "operation": "CreateOrReconcileUsersGroups",
@@ -882,11 +1562,15 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.user",
+      "method": "create-or-reconcile-users-groups"
     },
     {
       "operation": "CreateBridge",
-      "wireVariant": "CreateBridge",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -916,13 +1600,55 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleBridgeIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleBridgeIntentRef",
+            "scopeId",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "bundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "create-bridge"
     },
     {
       "operation": "DeleteBridge",
-      "wireVariant": "DeleteBridge",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -952,13 +1678,55 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleBridgeIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleBridgeIntentRef",
+            "scopeId",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "bundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "delete-bridge"
     },
     {
       "operation": "CreatePersistentTap",
-      "wireVariant": "CreatePersistentTap",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -988,13 +1756,70 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "roleId": {
+              "type": "string"
+            },
+            "vmId": {
+              "type": "string"
+            },
+            "bundleTapIntentRef": {
+              "type": "string"
+            },
+            "attachmentId": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "admittedInterfaceNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "roleId",
+            "vmId",
+            "bundleTapIntentRef",
+            "attachmentId",
+            "networkGeneration",
+            "attachmentGeneration",
+            "zoneUid",
+            "networkUid",
+            "bundleGeneration",
+            "admittedInterfaceNames"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "create-persistent-tap"
     },
     {
       "operation": "DeletePersistentTap",
-      "wireVariant": "DeletePersistentTap",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -1024,13 +1849,51 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "attachmentId": {
+              "type": "string"
+            },
+            "expectedZoneUid": {
+              "type": "string"
+            },
+            "expectedNetworkUid": {
+              "type": "string"
+            },
+            "expectedNetworkGeneration": {
+              "type": "integer"
+            },
+            "expectedAttachmentGeneration": {
+              "type": "integer"
+            },
+            "expectedBundleGeneration": {
+              "type": "string"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "attachmentId",
+            "expectedZoneUid",
+            "expectedNetworkUid",
+            "expectedNetworkGeneration",
+            "expectedAttachmentGeneration",
+            "expectedBundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "delete-persistent-tap"
     },
     {
       "operation": "CreateTapFd",
-      "wireVariant": "CreateTapFd",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -1060,9 +1923,67 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "roleId": {
+              "type": "string"
+            },
+            "vmId": {
+              "type": "string"
+            },
+            "bundleTapIntentRef": {
+              "type": "string"
+            },
+            "attachmentId": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "admittedInterfaceNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "roleId",
+            "vmId",
+            "bundleTapIntentRef",
+            "attachmentId",
+            "networkGeneration",
+            "attachmentGeneration",
+            "zoneUid",
+            "networkUid",
+            "bundleGeneration",
+            "admittedInterfaceNames"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "create-tap-fd"
     },
     {
       "operation": "DelegateCgroupV2",
@@ -1098,7 +2019,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "delegate-cgroup-v2"
     },
     {
       "operation": "InjectSecretById",
@@ -1132,7 +2058,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.credential",
+      "method": "inject-secret-by-id"
     },
     {
       "operation": "LaunchMinijailChild",
@@ -1166,7 +2097,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "launch-minijail-child"
     },
     {
       "operation": "ModprobeIfAllowed",
@@ -1202,7 +2138,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device",
+      "method": "modprobe-if-allowed"
     },
     {
       "operation": "OpenCgroupDir",
@@ -1238,7 +2179,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "open-cgroup-dir"
     },
     {
       "operation": "OpenDevice",
@@ -1274,7 +2220,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device",
+      "method": "open-device"
     },
     {
       "operation": "OpenFuse",
@@ -1310,7 +2261,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device",
+      "method": "open-fuse"
     },
     {
       "operation": "OpenHidrawSecurityKey",
@@ -1346,7 +2302,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device-security-key",
+      "method": "open-hidraw-security-key"
     },
     {
       "operation": "OpenKvm",
@@ -1382,7 +2343,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device",
+      "method": "open-kvm"
     },
     {
       "operation": "QemuMediaEnroll",
@@ -1418,7 +2384,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.guest",
+      "method": "qemu-media-enroll"
     },
     {
       "operation": "QemuMediaRefreshRegistry",
@@ -1454,7 +2425,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.guest",
+      "method": "qemu-media-refresh-registry"
     },
     {
       "operation": "QemuMediaBoot",
@@ -1490,7 +2466,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.guest",
+      "method": "qemu-media-boot"
     },
     {
       "operation": "QemuMediaSystemPowerdown",
@@ -1526,7 +2507,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.guest",
+      "method": "qemu-media-system-powerdown"
     },
     {
       "operation": "QemuMediaQueryStatus",
@@ -1560,7 +2546,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.guest",
+      "method": "qemu-media-query-status"
     },
     {
       "operation": "QemuMediaQuit",
@@ -1596,7 +2587,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.guest",
+      "method": "qemu-media-quit"
     },
     {
       "operation": "QemuMediaAttach",
@@ -1632,7 +2628,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.guest",
+      "method": "qemu-media-attach"
     },
     {
       "operation": "QemuMediaDetach",
@@ -1668,43 +2669,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
-    },
-    {
-      "operation": "ConsumeLifecycleLease",
-      "wireVariant": "ConsumeLifecycleLease",
-      "owner": "family",
-      "family": "process",
-      "declaringProvider": "d2b-provider-process",
-      "profiles": [
-        "host"
-      ],
-      "w3": false,
-      "capabilities": false,
-      "disposition": "untriaged",
-      "dispositionTarget": "broker-generic row",
-      "authz": {
-        "subject": "lifecycle",
-        "scope": "per-VM",
-        "allowedGroups": [
-          "d2bd"
-        ],
-        "destructive": true,
-        "secretAccess": "None",
-        "brokerRequired": "Yes",
-        "auditMode": "Yes"
       },
-      "audit": {
-        "fields": [
-          "ConsumeLifecycleLease"
-        ],
-        "required": true,
-        "mode": "yes"
+      "deadline": {
+        "tier": "standard"
       },
-      "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+      "service": "d2b.guest",
+      "method": "qemu-media-detach"
     },
     {
       "operation": "inspect-process-family",
@@ -1752,7 +2722,12 @@
             "resourceType"
           ]
         }
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.process",
+      "method": "inspect-process-family"
     },
     {
       "operation": "PipeWireAudio",
@@ -1788,7 +2763,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.audio",
+      "method": "pipe-wire-audio"
     },
     {
       "operation": "OpenVhostNet",
@@ -1824,7 +2804,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device",
+      "method": "open-vhost-net"
     },
     {
       "operation": "ReconcileStorageScope",
@@ -1860,7 +2845,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.volume-binding",
+      "method": "reconcile-storage-scope"
     },
     {
       "operation": "ValidateLockSpec",
@@ -1896,7 +2886,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.volume-binding",
+      "method": "validate-lock-spec"
     },
     {
       "operation": "StoreSync",
@@ -1932,7 +2927,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.volume",
+      "method": "store-sync"
     },
     {
       "operation": "ReadSecretById",
@@ -1966,7 +2966,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.credential",
+      "method": "read-secret-by-id"
     },
     {
       "operation": "RotateSecretById",
@@ -2000,11 +3005,15 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.credential",
+      "method": "rotate-secret-by-id"
     },
     {
       "operation": "SetBridgePortFlags",
-      "wireVariant": "SetBridgePortFlags",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -2034,13 +3043,38 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "networkTapContext": {
+              "type": "object"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "set-bridge-port-flags"
     },
     {
       "operation": "UpdateHostsFile",
-      "wireVariant": "UpdateHostsFile",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -2070,9 +3104,46 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleHostsIntentRef": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleHostsIntentRef"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "update-hosts-file"
     },
     {
       "operation": "UsbipBind",
@@ -2109,7 +3180,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device-usbip",
+      "method": "usbip-bind"
     },
     {
       "operation": "UsbipBindFirewallRule",
@@ -2145,7 +3221,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device-usbip",
+      "method": "usbip-bind-firewall-rule"
     },
     {
       "operation": "UsbipProxyReconcile",
@@ -2181,7 +3262,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device-usbip",
+      "method": "usbip-proxy-reconcile"
     },
     {
       "operation": "UsbipUnbind",
@@ -2217,7 +3303,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device-usbip",
+      "method": "usbip-unbind"
     },
     {
       "operation": "UsbipExplicitBind",
@@ -2254,7 +3345,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device-usbip",
+      "method": "usbip-explicit-bind"
     },
     {
       "operation": "UsbipExplicitFirewallRule",
@@ -2290,11 +3386,15 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device-usbip",
+      "method": "usbip-explicit-firewall-rule"
     },
     {
       "operation": "SeedDnsmasqLease",
-      "wireVariant": "SeedDnsmasqLease",
       "owner": "family",
       "family": "network",
       "declaringProvider": "d2b-provider-network-local",
@@ -2324,9 +3424,52 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "scopeId",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "bundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.network",
+      "method": "seed-dnsmasq-lease"
     },
     {
       "operation": "OwnershipMatrixCheck",
@@ -2339,8 +3482,8 @@
       ],
       "w3": false,
       "capabilities": false,
-      "disposition": "stubbed-unimplemented",
-      "dispositionTarget": "future work",
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
       "authz": {
         "subject": "host",
         "scope": "per-VM",
@@ -2358,9 +3501,24 @@
         "mode": "yes"
       },
       "payload": {
-        "provenance": "wire",
-        "schema": null
-      }
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "vm": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vm"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.volume",
+      "method": "ownership-matrix-check"
     },
     {
       "operation": "SshHostKeyPreflight",
@@ -2394,7 +3552,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device-security-key",
+      "method": "ssh-host-key-preflight"
     },
     {
       "operation": "DiskInit",
@@ -2430,7 +3593,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.volume",
+      "method": "disk-init"
     },
     {
       "operation": "SecurityKeyOpenDevice",
@@ -2464,7 +3632,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device-security-key",
+      "method": "security-key-open-device"
     },
     {
       "operation": "SecurityKeyApplyUdevRules",
@@ -2498,7 +3671,12 @@
       "payload": {
         "provenance": "wire",
         "schema": null
-      }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "service": "d2b.device-security-key",
+      "method": "security-key-apply-udev-rules"
     },
     {
       "operation": "PrepareSwtpmDir",
@@ -2535,6 +3713,2011 @@
       "payload": {
         "provenance": "wire",
         "schema": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "EnvelopeInvoke",
+      "wireVariant": "EnvelopeInvoke",
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "generic envelope invocation surface (U10/KTD10): the one daemon-to-broker control path that replaces per-operation typed wire variants as their typed arms retire; the broker runs the committed operation's five envelope steps in place of a typed dispatch arm, and a retired variant stays version-gated so a straggler peer gets the stale-wire-version refusal plus an audit record",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "envelope",
+        "scope": "per-operation row",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "open-pidfd",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U10 sandwich kernel: the pidfd_open syscall plus start-time verification, served in-broker and invoked as the nested core of the forwarded OpenPidfd family operation; returns the pidfd over the fd leg.",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "pidfd",
+        "scope": "per-process",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "pid": {
+              "type": "integer"
+            },
+            "expectedStartTimeTicks": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "pid",
+            "expectedStartTimeTicks"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": "Any"
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "open-peer-pidfd-from-accepted-socket",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U10 sandwich kernel: the peer-pidfd derivation (SO_PEERCRED + pidfd_open) from an accepted socket descriptor, served in-broker as the nested core of the forwarded OpenPeerPidfdFromAcceptedSocket family operation.",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "pidfd",
+        "scope": "accepted Unix socket",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "fds": {
+        "maxFds": 1,
+        "fdKind": "Socket"
+      }
+    },
+    {
+      "operation": "poll-child-reaped",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U10 sandwich kernel: the pidfd-keyed non-blocking waitid reap probe, served in-broker as the nested core of the forwarded PollChildReaped family operation; the daemon-side handler reaps each of its children against its own pidfds.",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "global",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "fds": {
+        "maxFds": 1,
+        "fdKind": "Any"
+      }
+    },
+    {
+      "operation": "prepare-directory",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U10 sandwich kernel: the path-safe mkdir/chown/chmod directory-preparation primitive, served in-broker as the nested core of the forwarded PrepareRuntimeDir and PrepareStateDir family operations; path resolution stays on the family side.",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "fs",
+        "scope": "global/per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime",
+                "state"
+              ]
+            },
+            "baseDir": {
+              "type": "string"
+            },
+            "vmIdOrScope": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "integer"
+            },
+            "ownerUid": {
+              "type": "integer"
+            },
+            "ownerGid": {
+              "type": "integer"
+            },
+            "createdPaths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "baseDir",
+            "vmIdOrScope",
+            "mode",
+            "ownerUid",
+            "ownerGid"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "kill-cgroup",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U10 sandwich kernel: the cgroup.kill write, served in-broker as the nested core of the forwarded CgroupKill family operation; cgroup path resolution stays on the family side.",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "cgroup",
+        "scope": "per-VM/role leaf",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "cgroupPath": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cgroupPath"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "signal-pidfd",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U10 sandwich kernel: pidfd_send_signal, served in-broker as the nested core of the forwarded SignalRunner family operation; the pidfd arrives over the fd leg.",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "signal": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "signal"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "fds": {
+        "maxFds": 1,
+        "fdKind": "Any"
+      }
+    },
+    {
+      "operation": "deregister-pidfd",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U10 sandwich kernel: the pidfd close/forget step, served in-broker as the nested core of the forwarded DeregisterRunnerPidfd family operation; the pidfd arrives over the fd leg.",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "fds": {
+        "maxFds": 1,
+        "fdKind": "Any"
+      }
+    },
+    {
+      "operation": "spawn-process",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U10 sandwich kernel: the process spawn (user namespace, mount namespace, seccomp, cgroup placement, inherited fds, activation stdin) served in-broker as the nested core of the forwarded SpawnRunner family operation; the launch task is fully parameterised while bundle/posture/device-worker resolution stays on the family side.",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "vm-runner",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "binaryPath": {
+              "type": "string"
+            },
+            "argv": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "uid": {
+              "type": "integer"
+            },
+            "gid": {
+              "type": "integer"
+            },
+            "supplementaryGroups": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "env": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "namespaces": {},
+            "seccompPolicyRef": {},
+            "mountPolicy": {},
+            "cgroupPlacement": {},
+            "rootCarveOut": {
+              "type": "boolean"
+            },
+            "skipBinaryExistsCheck": {
+              "type": "boolean"
+            },
+            "userNamespace": {},
+            "umask": {},
+            "activationInput": {},
+            "swtpmIdentity": {},
+            "deviceWorker": {},
+            "role": {
+              "type": "string"
+            },
+            "servingWorker": {
+              "type": "boolean"
+            },
+            "runnerIdentity": {
+              "type": "object",
+              "properties": {
+                "vmId": {
+                  "type": "string"
+                },
+                "roleId": {
+                  "type": "string"
+                },
+                "resourceRef": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "resourceUid": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "zoneUid": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "generation": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "runtimeScope": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "minimum": 0.0,
+                    "maximum": 255.0
+                  },
+                  "minItems": 32,
+                  "maxItems": 32
+                },
+                "ownerRef": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "providerRef": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "providerIdentity": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "minimum": 0.0,
+                    "maximum": 255.0
+                  },
+                  "minItems": 32,
+                  "maxItems": 32
+                },
+                "templateIdentity": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "minimum": 0.0,
+                    "maximum": 255.0
+                  },
+                  "minItems": 32,
+                  "maxItems": 32
+                },
+                "bundleRunnerIntentRef": {
+                  "type": "string"
+                },
+                "guestExecution": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "vmId",
+                "roleId",
+                "bundleRunnerIntentRef"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "binaryPath",
+            "argv",
+            "uid",
+            "gid",
+            "supplementaryGroups",
+            "env",
+            "capabilities",
+            "namespaces",
+            "mountPolicy",
+            "cgroupPlacement",
+            "role",
+            "servingWorker",
+            "runnerIdentity"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "extended"
+      },
+      "fds": {
+        "maxFds": 8,
+        "fdKind": "Any"
+      }
+    },
+    {
+      "operation": "delegate-cgroup-v2",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U10 sandwich kernel: the cgroup v2 delegation write, served in-broker as the nested core of the forwarded DelegateCgroupV2 family operation.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "cgroup",
+        "scope": "global/per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "open-cgroup-dir",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U10 sandwich kernel: the cgroup directory open, served in-broker as the nested core of the forwarded OpenCgroupDir family operation; returns a directory fd over the fd leg.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "cgroup",
+        "scope": "global/per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": "Any"
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "observe-process",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U10 sandwich kernel: the /proc observation probe (presence, executable, cgroup path, start time) served in-broker as the nested core of the forwarded ObserveRunner family operation; expectation comparison stays on the family side.",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "pid": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "pid"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "consume-cell",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U11 cell kernel: compare-and-consume one declared one-time state cell under the canonical identity the payload carries and the envelope-attested initiating principal, served in-broker as the generic core of the retired ConsumeLifecycleLease arm (AE2: one-time consume wins exactly once, replay refuses).",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "cell",
+        "scope": "per-invocation",
+        "allowedGroups": [
+          "d2bd",
+          "d2b-admin",
+          "d2b-launcher"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "zoneUid": {
+              "type": "string"
+            },
+            "guestUid": {
+              "type": "string"
+            },
+            "guestGeneration": {
+              "type": "integer"
+            },
+            "providerAssignmentGeneration": {
+              "type": "integer"
+            },
+            "policyRevision": {
+              "type": "integer"
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "operation": {
+              "type": "string"
+            },
+            "stopOnly": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "zoneUid",
+            "guestUid",
+            "guestGeneration",
+            "providerAssignmentGeneration",
+            "policyRevision",
+            "operationId",
+            "operation",
+            "stopOnly"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "stateCell": {
+        "cell": "lifecycle-leases-v2",
+        "durability": "one-time"
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "complete-cell",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U11 cell kernel: record completion for one claimed one-time state cell under the canonical identity the payload carries and the envelope-attested initiating principal, served in-broker as the generic completion phase of the retired ConsumeLifecycleLease arm; the durable completed marker is what refuses replay across broker restarts (AE2).",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "cell",
+        "scope": "per-invocation",
+        "allowedGroups": [
+          "d2bd",
+          "d2b-admin",
+          "d2b-launcher"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "zoneUid": {
+              "type": "string"
+            },
+            "guestUid": {
+              "type": "string"
+            },
+            "guestGeneration": {
+              "type": "integer"
+            },
+            "providerAssignmentGeneration": {
+              "type": "integer"
+            },
+            "policyRevision": {
+              "type": "integer"
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "operation": {
+              "type": "string"
+            },
+            "stopOnly": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "zoneUid",
+            "guestUid",
+            "guestGeneration",
+            "providerAssignmentGeneration",
+            "policyRevision",
+            "operationId",
+            "operation",
+            "stopOnly"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "stateCell": {
+        "cell": "lifecycle-leases-v2",
+        "durability": "one-time"
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "apply-nftables",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired ApplyNftables family operation, served in-broker: install or flush the framework's own inet d2b table with the coexistence fence and persisted-hash drift check.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-host firewall table",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "family": {
+              "type": "string"
+            },
+            "table": {
+              "type": "string"
+            },
+            "scriptBody": {
+              "type": "string"
+            },
+            "ownershipId": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            },
+            "desiredHash": {
+              "type": "string"
+            },
+            "tableHashAfterApply": {
+              "type": "string"
+            },
+            "coexistencePolicy": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "family",
+            "table",
+            "scriptBody",
+            "ownershipId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "apply-nftables-projection",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired ApplyNftablesProjection family operation, served in-broker: install or remove one Provider-owned nftables projection under its ownership marker with the installed-generation and desired-hash fences.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-network firewall projection",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "scriptBody": {
+              "type": "string"
+            },
+            "marker": {
+              "type": "string"
+            },
+            "trustedHash": {
+              "type": "string"
+            },
+            "callerHash": {
+              "type": "string"
+            },
+            "expectedGenerationId": {
+              "type": "string"
+            },
+            "installedGenerationId": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "apply",
+                "remove"
+              ]
+            }
+          },
+          "required": [
+            "scriptBody",
+            "marker",
+            "trustedHash",
+            "expectedGenerationId",
+            "installedGenerationId",
+            "action"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "apply-nm-unmanaged",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired ApplyNmUnmanaged family operation, served in-broker: write or remove the NetworkManager unmanaged drop-in file with the reload behavior.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-host NetworkManager unmanaged",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "intentId": {
+              "type": "string"
+            },
+            "filePath": {
+              "type": "string"
+            },
+            "contents": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "integer"
+            },
+            "owner": {
+              "type": "string"
+            },
+            "group": {
+              "type": "string"
+            },
+            "reloadBehavior": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "intentId",
+            "filePath",
+            "contents",
+            "mode",
+            "owner",
+            "group",
+            "reloadBehavior"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "apply-route",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired ApplyRoute family operation, served in-broker: apply or remove one ownership-marked route with the durable UID-bound marker-record preflight.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-network route",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "intentId": {
+              "type": "string"
+            },
+            "routeSpec": {
+              "type": "string"
+            },
+            "destination": {
+              "type": "string"
+            },
+            "via": {
+              "type": "string"
+            },
+            "device": {
+              "type": "string"
+            },
+            "table": {
+              "type": "string"
+            },
+            "owned": {
+              "type": "boolean"
+            },
+            "routeName": {
+              "type": "string"
+            },
+            "provenance": {
+              "type": "object"
+            },
+            "ownershipMarker": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "intentId",
+            "routeSpec",
+            "destination",
+            "provenance"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "apply-sysctl",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired ApplySysctl family operation, served in-broker: write one key with readback verification or restore the destroy default.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-network sysctl",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "key"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "create-bridge",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired CreateBridge family operation, served in-broker: create the framework-owned bridge from the resolved intent with the ownership-marker fence.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-network bridge",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "intentId": {
+              "type": "string"
+            },
+            "scopeLabel": {
+              "type": "string"
+            },
+            "bridgeIfname": {
+              "type": "string"
+            },
+            "mtu": {
+              "type": "integer"
+            },
+            "stpDisabled": {
+              "type": "boolean"
+            },
+            "multicastSnoopingDisabled": {
+              "type": "boolean"
+            },
+            "ipv6Suppressed": {
+              "type": "boolean"
+            },
+            "provenance": {
+              "type": "object"
+            },
+            "ownershipMarker": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "intentId",
+            "scopeLabel",
+            "bridgeIfname",
+            "mtu"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "delete-bridge",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired DeleteBridge family operation, served in-broker: remove the framework-owned bridge after its TAP removals.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-network bridge",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "intentId": {
+              "type": "string"
+            },
+            "scopeLabel": {
+              "type": "string"
+            },
+            "bridgeIfname": {
+              "type": "string"
+            },
+            "mtu": {
+              "type": "integer"
+            },
+            "stpDisabled": {
+              "type": "boolean"
+            },
+            "multicastSnoopingDisabled": {
+              "type": "boolean"
+            },
+            "ipv6Suppressed": {
+              "type": "boolean"
+            },
+            "provenance": {
+              "type": "object"
+            },
+            "ownershipMarker": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "intentId",
+            "scopeLabel",
+            "bridgeIfname",
+            "mtu"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "create-persistent-tap",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired CreatePersistentTap family operation, served in-broker: create the persistent TAP from the typed request, re-deriving the trusted tap intent from the broker's own bundle copy, and persist the realization record.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-VM/role attachment",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "roleId": {
+              "type": "string"
+            },
+            "vmId": {
+              "type": "string"
+            },
+            "bundleTapIntentRef": {
+              "type": "string"
+            },
+            "attachmentId": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "admittedInterfaceNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "roleId",
+            "vmId",
+            "bundleTapIntentRef",
+            "attachmentId",
+            "networkGeneration",
+            "attachmentGeneration",
+            "zoneUid",
+            "networkUid",
+            "bundleGeneration",
+            "admittedInterfaceNames"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "delete-persistent-tap",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired DeletePersistentTap family operation, served in-broker: remove one trusted attachment realization under the exact generation fences.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-VM/role attachment",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "attachmentId": {
+              "type": "string"
+            },
+            "expectedZoneUid": {
+              "type": "string"
+            },
+            "expectedNetworkUid": {
+              "type": "string"
+            },
+            "expectedNetworkGeneration": {
+              "type": "integer"
+            },
+            "expectedAttachmentGeneration": {
+              "type": "integer"
+            },
+            "expectedBundleGeneration": {
+              "type": "string"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "attachmentId",
+            "expectedZoneUid",
+            "expectedNetworkUid",
+            "expectedNetworkGeneration",
+            "expectedAttachmentGeneration",
+            "expectedBundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "create-tap-fd",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired CreateTapFd family operation, served in-broker: create one VMM TAP and return its descriptor over the fd leg (the only fd-bearing network kernel).",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-VM/role attachment",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "roleId": {
+              "type": "string"
+            },
+            "vmId": {
+              "type": "string"
+            },
+            "bundleTapIntentRef": {
+              "type": "string"
+            },
+            "attachmentId": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "admittedInterfaceNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "roleId",
+            "vmId",
+            "bundleTapIntentRef",
+            "attachmentId",
+            "networkGeneration",
+            "attachmentGeneration",
+            "zoneUid",
+            "networkUid",
+            "bundleGeneration",
+            "admittedInterfaceNames"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": "Any"
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "set-bridge-port-flags",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired SetBridgePortFlags family operation, served in-broker: apply the trusted per-role bridge port flag set under the installed-generation fence.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-VM/role bridge port",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "networkTapContext": {
+              "type": "object"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "update-hosts-file",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired UpdateHostsFile family operation, served in-broker: write or remove the managed /etc/hosts marker block from the resolved intent.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-host hosts file",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "intentId": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "managedBlock": {
+              "type": "string"
+            },
+            "startMarker": {
+              "type": "string"
+            },
+            "endMarker": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "integer"
+            },
+            "provenance": {
+              "type": "object"
+            },
+            "ownershipMarker": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "intentId",
+            "path",
+            "managedBlock",
+            "startMarker",
+            "endMarker",
+            "mode"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "seed-dnsmasq-lease",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U12 network-fds census kernel: the privileged, resource-agnostic core of the retired SeedDnsmasqLease family operation, served in-broker: the retired arm's live core was its admission check - the expected child VM name is re-derived from the admitted Network identity and a mismatch refuses; the lease file write remains a committed follow-up.",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-VM dnsmasq lease",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "scopeId",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "bundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "fds": {
+        "maxFds": 0,
+        "fdKind": null
+      },
+      "deadline": {
+        "tier": "standard"
       }
     }
   ]

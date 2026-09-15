@@ -1,6 +1,10 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-guest:__pkg__", "//packages/d2bd:__pkg__"])
+
 exports_files(
     ["BUILD.bazel", "nix/default.nix", "nix/tests/default.nix"],
     visibility = ["//visibility:public"],
@@ -17,7 +21,6 @@ rust_library(
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
-    visibility = ["//visibility:public"],
 )
 
 rust_test(
@@ -26,7 +29,6 @@ rust_test(
         "tests/bootstrap_hermetic.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_guest_azure_virtual_machine",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -38,7 +40,6 @@ rust_test(
         "tests/error_redaction.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_guest_azure_virtual_machine",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -50,7 +51,6 @@ rust_test(
         "tests/lifecycle_hermetic.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",

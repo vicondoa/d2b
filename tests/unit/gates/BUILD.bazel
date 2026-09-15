@@ -35,3 +35,30 @@ sh_test(
         "no-sandbox",
     ],
 )
+
+# U10 broker-seam pilot: cross-binary E2E for the migrated process-family
+# operations (broker + daemon + forward socket + fd carriage + audit
+# continuity). The broker BINARY lives in //packages/d2b-broker-composition
+# since the U6 split (the d2b-broker package is lib-only), so D2B_BROKER_BIN
+# names the composition target here.
+sh_test(
+    name = "broker-seam-pilot",
+    srcs = ["broker-seam-pilot.sh"],
+    data = [
+        "//packages/d2b:d2b",
+        "//packages/d2b-broker-composition:d2b-broker",
+        "//packages/d2bd:d2bd",
+        "//packages/xtask:xtask",
+        "//:tests_root_sources",
+        "//bazel/checks/rust:source_hygiene_sources",
+    ],
+    env = {
+        "D2B_BROKER_BIN": "$(execpath //packages/d2b-broker-composition:d2b-broker)",
+        "D2B_DAEMON_BIN": "$(execpath //packages/d2bd:d2bd)",
+    },
+    env_inherit = ["PATH", "ROOT"],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)

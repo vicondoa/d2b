@@ -31,4 +31,6 @@ tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "sy
 parking_lot = "0.12"
 
 [dev-dependencies]
+rustix = { version = "0.38", features = ["std", "net", "pipe"] }
+socket2 = { version = "0.5", features = ["all"] }
 tempfile = "3"

@@ -182,8 +182,10 @@ let
     cargoLock = brokerCargoLock;
     cargoVendorDir = brokerCargoVendorDir;
     inherit outputHashes;
-    cargoCheckExtraArgs = "--package d2b-broker --no-default-features";
-    cargoBuildExtraArgs = "--package d2b-broker --no-default-features";
+    # The broker binary is composed in d2b-broker-composition (U6/KTD1);
+    # d2b-broker itself is lib-only.
+    cargoCheckExtraArgs = "--package d2b-broker-composition --bin d2b-broker --no-default-features";
+    cargoBuildExtraArgs = "--package d2b-broker-composition --bin d2b-broker --no-default-features";
   });
 
   installBinaries = binaries:
@@ -221,7 +223,10 @@ let
     cargoToml = ../Cargo.toml;
     cargoLock = brokerCargoLock;
     cargoVendorDir = brokerCargoVendorDir;
-    cargoBuildExtraArgs = "--no-default-features";
+    # The broker binary is composed in d2b-broker-composition (U6/KTD1);
+    # `pname` and the installed binary name stay `d2b-broker` so the
+    # service units and the prebuilt host-tool selection are untouched.
+    cargoBuildExtraArgs = "--package d2b-broker-composition --bin d2b-broker --no-default-features";
     installPhaseCommand = installBinaries [ "d2b-broker" ];
   });
 in

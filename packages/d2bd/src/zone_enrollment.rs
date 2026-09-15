@@ -592,7 +592,12 @@ mod tests {
     async fn a_guest_enrolls_over_the_bound_endpoint() {
         let root =
             std::env::temp_dir().join(format!("d2b-zone-enrollment-serve-{}", std::process::id()));
-        std::fs::create_dir_all(&root).expect("a temporary root");
+        tokio::task::spawn_blocking({
+            let root = root.clone();
+            move || std::fs::create_dir_all(&root).expect("a temporary root")
+        })
+        .await
+        .expect("temporary root creation task panicked");
         let endpoint = GuestEnrollmentEndpoint::new(
             ZoneId::parse("zone-k1").expect("a valid zone"),
             ResourceUid::parse("33333333-3333-4333-8333-333333333333").expect("a valid UID"),
@@ -666,7 +671,10 @@ mod tests {
             }
         );
 
-        let _ = std::fs::remove_file(endpoint.socket_path());
+        let _ =
+            tokio::task::spawn_blocking(move || std::fs::remove_file(endpoint.socket_path()))
+                .await
+                .expect("endpoint socket cleanup task panicked");
         let _ = std::fs::remove_dir(&root);
     }
 

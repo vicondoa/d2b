@@ -1,14 +1,22 @@
 //! Core-owned production adapter for `Provider/network-local`.
 //!
 //! The provider receives no broker socket or raw host intent. This module
-//! resolves the provider's opaque context into the existing typed broker wire
-//! operations and maps only closed broker outcomes back to the provider.
+//! resolves the provider's opaque context into the U12 broker-generic
+//! network kernels (the privileged cores the retired typed network-family
+//! wire arms served) and maps only closed broker outcomes back to the
+//! provider.
+//!
+//! The daemon drives the network effects directly: each method resolves the
+//! trusted bundle intents the retired arms resolved broker-side and invokes
+//! the matching kernel as a direct envelope call over the origination
+//! socket (the U10 legacy-leg pattern), so the broker never grows family
+//! code and the daemon never re-implements a privileged host effect.
 
-use d2b_contracts_broker::broker_wire::{
-    ApplyNftablesProjectionRequest, ApplyNmUnmanagedRequest, ApplyRouteRequest, ApplySysctlRequest,
-    BrokerCallerRole, BrokerRequest, BrokerResponse, CreateBridgeRequest, DeleteBridgeRequest,
-    DeletePersistentTapRequest, NftablesProjectionAction, SeedDnsmasqLeaseRequest,
-    UpdateHostsFileRequest,
+use std::time::Duration;
+
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
+use d2b_contracts_broker::kernel_client::{
+    KernelInvocation, KernelInvokeError, envelope_invoke_kernel,
 };
 use d2b_provider_network_local::{
     broker::{BrokerNetworkEffectPort, NetworkBroker, NetworkBrokerError, NetworkEffectContext},
@@ -17,8 +25,11 @@ use d2b_provider_network_local::{
 
 use crate::ServerState;
 
-/// A Core adapter that sends one typed request through the authenticated
-/// daemon-to-broker transport.
+/// The broker kernel IO budget one direct invocation may take.
+const KERNEL_IO_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A Core adapter that sends one kernel invocation through the
+/// authenticated daemon-to-broker transport.
 pub(crate) struct DaemonNetworkBroker<'a> {
     state: &'a ServerState,
     caller_role: BrokerCallerRole,
@@ -30,20 +41,53 @@ impl<'a> DaemonNetworkBroker<'a> {
         Self { state, caller_role }
     }
 
-    fn dispatch(&self, request: BrokerRequest) -> Result<(), NetworkBrokerError> {
-        match crate::dispatch_broker_request_as(self.state, request, self.caller_role.clone()) {
-            Ok(BrokerResponse::Error(error)) => {
+    /// Invoke one broker-generic network kernel over the origination
+    /// socket. The payload is the resolved values the retired typed arm
+    /// derived broker-side; the kernel runs the same ops-module core.
+    fn invoke_kernel(
+        &self,
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), NetworkBrokerError> {
+        match envelope_invoke_kernel(
+            &crate::broker_socket_path(self.state),
+            KERNEL_IO_TIMEOUT,
+            self.caller_role.clone(),
+            KernelInvocation {
+                operation,
+                zone,
+                payload,
+                fds: &[],
+                chain_root_invocation_id: None,
+                chain_identities: None,
+            },
+        ) {
+            Ok(_) => Ok(()),
+            Err(KernelInvokeError::Refused { code, detail }) => {
+                let message = detail.unwrap_or_default();
                 tracing::warn!(
-                    broker_kind = %error.kind,
-                    broker_operation = %error.operation,
-                    "Network broker rejected a typed effect request"
+                    broker_kind = %code,
+                    broker_operation = operation,
+                    "Network broker refused a kernel effect request"
                 );
-                Err(map_broker_error(&error.kind, &error.message))
+                Err(map_broker_error(&code, &message))
             }
-            Ok(BrokerResponse::Ack(_)) => Ok(()),
-            Ok(_) => Err(NetworkBrokerError::Rejected),
-            Err(_) => Err(NetworkBrokerError::Transport),
+            Err(error) => {
+                tracing::warn!(
+                    broker_operation = operation,
+                    error = %error,
+                    "Network broker kernel invocation failed"
+                );
+                Err(NetworkBrokerError::Transport)
+            }
         }
+    }
+
+    /// The Zone one network effect runs in: the admitted Network identity's
+    /// Zone uid, the same scope the retired arms' audit join keyed on.
+    fn zone_for(&self, context: &NetworkEffectContext) -> Result<String, NetworkBrokerError> {
+        Ok(context.provenance()?.zone_uid().as_str().to_owned())
     }
 }
 
@@ -62,34 +106,38 @@ pub(crate) fn production_port<'a>(
 impl NetworkBroker for DaemonNetworkBroker<'_> {
     fn create_bridge(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
         let provenance = context.provenance()?;
+        let zone = self.zone_for(context)?;
+        let resolver = crate::load_bundle_resolver(self.state).map_err(|_| {
+            NetworkBrokerError::NetworkAdmissionMismatch
+        })?;
         for intent_ref in context.bridge_intent_refs() {
-            self.dispatch(BrokerRequest::CreateBridge(CreateBridgeRequest {
-                bundle_bridge_intent_ref: intent_ref.clone(),
-                scope_id: context.scope_id().clone(),
-                zone_uid: provenance.zone_uid().clone(),
-                network_uid: provenance.network_uid().clone(),
-                network_generation: provenance.network_generation(),
-                attachment_generation: provenance.attachment_generation(),
-                bundle_generation: provenance.bundle_generation().clone(),
-                tracing_span_id: None,
-            }))?;
+            let intent = resolver
+                .resolve_network_bridge_intent(intent_ref.as_str(), &provenance)
+                .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+            self.invoke_kernel(
+                "create-bridge",
+                &zone,
+                resolved_bridge_payload(&intent),
+            )?;
         }
         Ok(())
     }
 
     fn delete_bridge(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
         let provenance = context.provenance()?;
+        let zone = self.zone_for(context)?;
+        let resolver = crate::load_bundle_resolver(self.state).map_err(|_| {
+            NetworkBrokerError::NetworkAdmissionMismatch
+        })?;
         for intent_ref in context.bridge_intent_refs() {
-            self.dispatch(BrokerRequest::DeleteBridge(DeleteBridgeRequest {
-                bundle_bridge_intent_ref: intent_ref.clone(),
-                scope_id: context.scope_id().clone(),
-                zone_uid: provenance.zone_uid().clone(),
-                network_uid: provenance.network_uid().clone(),
-                network_generation: provenance.network_generation(),
-                attachment_generation: provenance.attachment_generation(),
-                bundle_generation: provenance.bundle_generation().clone(),
-                tracing_span_id: None,
-            }))?;
+            let intent = resolver
+                .resolve_network_bridge_intent(intent_ref.as_str(), &provenance)
+                .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+            self.invoke_kernel(
+                "delete-bridge",
+                &zone,
+                resolved_bridge_payload(&intent),
+            )?;
         }
         Ok(())
     }
@@ -97,115 +145,191 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
     fn apply_projection(
         &self,
         context: &NetworkEffectContext,
-        action: NftablesProjectionAction,
+        action: d2b_contracts_broker::broker_wire::NftablesProjectionAction,
     ) -> Result<FirewallDigest, NetworkBrokerError> {
         let provenance = context.provenance()?;
-        self.dispatch(BrokerRequest::ApplyNftablesProjection(
-            ApplyNftablesProjectionRequest {
-                bundle_nft_projection_intent_ref: context.projection_intent_ref().clone(),
-                scope_id: context.scope_id().clone(),
-                action,
-                zone_uid: provenance.zone_uid().clone(),
-                network_uid: provenance.network_uid().clone(),
-                network_generation: provenance.network_generation(),
-                attachment_generation: provenance.attachment_generation(),
-                expected_generation_id: context.expected_generation_id().clone(),
-                desired_hash: None,
-                tracing_span_id: None,
-            },
-        ))?;
+        let zone = self.zone_for(context)?;
+        let resolver = crate::load_bundle_resolver(self.state).map_err(|_| {
+            NetworkBrokerError::NetworkAdmissionMismatch
+        })?;
+        let intent = resolver
+            .resolve_network_projection_intent(
+                context.projection_intent_ref().as_str(),
+                &provenance,
+            )
+            .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+        let marker = resolver
+            .resolve_network_marker_intent(&intent.ownership_marker_intent_ref, &provenance)
+            .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+        let installed = resolver
+            .installed_generation_identity()
+            .ok_or(NetworkBrokerError::StaleGeneration)?;
+        self.invoke_kernel(
+            "apply-nftables-projection",
+            &zone,
+            serde_json::json!({
+                "scriptBody": intent.script_body,
+                "marker": marker.marker,
+                "trustedHash": intent.desired_hash,
+                "callerHash": serde_json::Value::Null,
+                "expectedGenerationId": context.expected_generation_id().as_str(),
+                "installedGenerationId": installed.as_str(),
+                "action": match action {
+                    d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply => "apply",
+                    d2b_contracts_broker::broker_wire::NftablesProjectionAction::Remove => "remove",
+                },
+            }),
+        )?;
         Ok(FirewallDigest::new(context.projection_digest()))
     }
 
     fn apply_nm_unmanaged(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
-        self.dispatch(BrokerRequest::ApplyNmUnmanaged(ApplyNmUnmanagedRequest {
-            bundle_nm_intent_ref: context.nm_intent_ref().clone(),
-            scope_id: context.scope_id().clone(),
-            destroy: false,
-            tracing_span_id: None,
-        }))
+        let zone = context
+            .scope_id()
+            .as_str()
+            .to_owned();
+        let resolver = crate::load_bundle_resolver(self.state).map_err(|_| {
+            NetworkBrokerError::NetworkAdmissionMismatch
+        })?;
+        let intent = resolver
+            .find_nm_unmanaged_intent(context.nm_intent_ref().as_str())
+            .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?
+            .clone();
+        self.invoke_kernel(
+            "apply-nm-unmanaged",
+            &zone,
+            serde_json::json!({
+                "intentId": intent.intent_id,
+                "filePath": intent.file_path.display().to_string(),
+                "contents": intent.contents,
+                "mode": intent.mode,
+                "owner": intent.owner,
+                "group": intent.group,
+                "reloadBehavior": intent.reload_behavior,
+                "destroy": false,
+            }),
+        )
     }
 
     fn apply_routes(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
         let provenance = context.provenance()?;
+        let zone = self.zone_for(context)?;
+        let resolver = crate::load_bundle_resolver(self.state).map_err(|_| {
+            NetworkBrokerError::NetworkAdmissionMismatch
+        })?;
         for intent_ref in context.route_intent_refs() {
-            self.dispatch(BrokerRequest::ApplyRoute(ApplyRouteRequest {
-                bundle_route_intent_ref: intent_ref.clone(),
-                scope_id: context.scope_id().clone(),
-                zone_uid: provenance.zone_uid().clone(),
-                network_uid: provenance.network_uid().clone(),
-                network_generation: provenance.network_generation(),
-                attachment_generation: provenance.attachment_generation(),
-                bundle_generation: provenance.bundle_generation().clone(),
-                destroy: false,
-                tracing_span_id: None,
-            }))?;
+            let intent = resolver
+                .resolve_network_route_intent(intent_ref.as_str(), &provenance)
+                .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+            self.invoke_kernel(
+                "apply-route",
+                &zone,
+                resolved_route_payload(&intent, &provenance, false),
+            )?;
         }
         Ok(())
     }
 
     fn remove_routes(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
         let provenance = context.provenance()?;
+        let zone = self.zone_for(context)?;
+        let resolver = crate::load_bundle_resolver(self.state).map_err(|_| {
+            NetworkBrokerError::NetworkAdmissionMismatch
+        })?;
         for intent_ref in context.route_intent_refs() {
-            self.dispatch(BrokerRequest::ApplyRoute(ApplyRouteRequest {
-                bundle_route_intent_ref: intent_ref.clone(),
-                scope_id: context.scope_id().clone(),
-                zone_uid: provenance.zone_uid().clone(),
-                network_uid: provenance.network_uid().clone(),
-                network_generation: provenance.network_generation(),
-                attachment_generation: provenance.attachment_generation(),
-                bundle_generation: provenance.bundle_generation().clone(),
-                destroy: true,
-                tracing_span_id: None,
-            }))?;
+            let intent = resolver
+                .resolve_network_route_intent(intent_ref.as_str(), &provenance)
+                .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+            self.invoke_kernel(
+                "apply-route",
+                &zone,
+                resolved_route_payload(&intent, &provenance, true),
+            )?;
         }
         Ok(())
     }
 
     fn apply_sysctls(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
         let provenance = context.provenance()?;
+        let zone = self.zone_for(context)?;
+        let resolver = crate::load_bundle_resolver(self.state).map_err(|_| {
+            NetworkBrokerError::NetworkAdmissionMismatch
+        })?;
         for intent_ref in context.sysctl_intent_refs() {
-            self.dispatch(BrokerRequest::ApplySysctl(ApplySysctlRequest {
-                bundle_sysctl_intent_ref: intent_ref.clone(),
-                scope_id: context.scope_id().clone(),
-                zone_uid: provenance.zone_uid().clone(),
-                network_uid: provenance.network_uid().clone(),
-                network_generation: provenance.network_generation(),
-                attachment_generation: provenance.attachment_generation(),
-                bundle_generation: provenance.bundle_generation().clone(),
-                destroy: false,
-                tracing_span_id: None,
-            }))?;
+            let intent = resolver
+                .resolve_network_sysctl_intent(intent_ref.as_str(), &provenance)
+                .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+            self.invoke_kernel(
+                "apply-sysctl",
+                &zone,
+                serde_json::json!({
+                    "key": intent.key,
+                    "value": intent.value,
+                    "destroy": false,
+                }),
+            )?;
         }
         Ok(())
     }
 
     fn update_hosts(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
-        let provenance = context.provenance()?;
-        self.dispatch(BrokerRequest::UpdateHostsFile(UpdateHostsFileRequest {
-            bundle_hosts_intent_ref: context.hosts_intent_ref().clone(),
-            zone_uid: Some(provenance.zone_uid().clone()),
-            network_uid: Some(provenance.network_uid().clone()),
-            network_generation: Some(provenance.network_generation()),
-            attachment_generation: Some(provenance.attachment_generation()),
-            bundle_generation: Some(provenance.bundle_generation().clone()),
-            destroy: false,
-            tracing_span_id: None,
-        }))
+        let resolver = crate::load_bundle_resolver(self.state).map_err(|_| {
+            NetworkBrokerError::NetworkAdmissionMismatch
+        })?;
+        let zone = context
+            .scope_id()
+            .as_str()
+            .to_owned();
+        let (intent, provenance) = if context
+            .hosts_intent_ref()
+            .as_str()
+            .starts_with("network-hosts:")
+        {
+            let provenance = context.provenance()?;
+            let intent = resolver
+                .resolve_network_hosts_intent(context.hosts_intent_ref().as_str(), &provenance)
+                .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+            (intent, Some(provenance))
+        } else {
+            let intent = resolver
+                .find_hosts_intent(context.hosts_intent_ref().as_str())
+                .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?
+                .clone();
+            (intent, None)
+        };
+        self.invoke_kernel(
+            "update-hosts-file",
+            &zone,
+            serde_json::json!({
+                "intentId": intent.intent_id,
+                "path": intent.path.display().to_string(),
+                "managedBlock": intent.managed_block,
+                "startMarker": intent.start_marker,
+                "endMarker": intent.end_marker,
+                "mode": intent.mode,
+                "provenance": provenance.as_ref().map(serde_json::to_value).transpose().map_err(|_| NetworkBrokerError::Rejected)?,
+                "ownershipMarker": intent.ownership_marker,
+                "destroy": false,
+            }),
+        )
     }
 
     fn seed_dhcp(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
         let provenance = context.provenance()?;
-        self.dispatch(BrokerRequest::SeedDnsmasqLease(SeedDnsmasqLeaseRequest {
-            vm_id: context.dnsmasq_vm_id().clone(),
-            scope_id: context.scope_id().clone(),
-            zone_uid: provenance.zone_uid().clone(),
-            network_uid: provenance.network_uid().clone(),
-            network_generation: provenance.network_generation(),
-            attachment_generation: provenance.attachment_generation(),
-            bundle_generation: provenance.bundle_generation().clone(),
-            tracing_span_id: None,
-        }))
+        let zone = self.zone_for(context)?;
+        self.invoke_kernel(
+            "seed-dnsmasq-lease",
+            &zone,
+            serde_json::json!({
+                "vmId": context.dnsmasq_vm_id().as_str(),
+                "scopeId": context.scope_id().as_str(),
+                "zoneUid": provenance.zone_uid().as_str(),
+                "networkUid": provenance.network_uid().as_str(),
+                "networkGeneration": provenance.network_generation().get(),
+                "attachmentGeneration": provenance.attachment_generation().get(),
+                "bundleGeneration": provenance.bundle_generation().as_str(),
+            }),
+        )
     }
 
     fn delete_persistent_tap(
@@ -220,18 +344,59 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
         if handle.opaque_id() != fence.attachment_uid() {
             return Err(NetworkBrokerError::NetworkAdmissionMismatch);
         }
-        self.dispatch(BrokerRequest::DeletePersistentTap(
-            DeletePersistentTapRequest {
-                attachment_id: handle.opaque_id().clone(),
-                expected_zone_uid: proof.key().zone_uid().clone(),
-                expected_network_uid: proof.key().network_uid().clone(),
-                expected_network_generation: fence.network_generation(),
-                expected_attachment_generation: fence.attachment_generation(),
-                expected_bundle_generation: proof.key().bundle_generation().clone(),
-                tracing_span_id: None,
-            },
-        ))
+        let zone = self.zone_for(context)?;
+        self.invoke_kernel(
+            "delete-persistent-tap",
+            &zone,
+            serde_json::json!({
+                "attachmentId": handle.opaque_id().as_str(),
+                "expectedZoneUid": proof.key().zone_uid().as_str(),
+                "expectedNetworkUid": proof.key().network_uid().as_str(),
+                "expectedNetworkGeneration": fence.network_generation().get(),
+                "expectedAttachmentGeneration": fence.attachment_generation().get(),
+                "expectedBundleGeneration": proof.key().bundle_generation().as_str(),
+            }),
+        )
     }
+}
+
+/// The resolved bridge intent payload one bridge kernel invocation carries.
+fn resolved_bridge_payload(
+    intent: &d2b_core::bundle_resolver::ResolvedBridgeIntent,
+) -> serde_json::Value {
+    serde_json::json!({
+        "intentId": intent.intent_id,
+        "scopeLabel": intent.scope_label,
+        "bridgeIfname": intent.bridge_ifname.as_str(),
+        "mtu": intent.mtu,
+        "stpDisabled": intent.stp_disabled,
+        "multicastSnoopingDisabled": intent.multicast_snooping_disabled,
+        "ipv6Suppressed": intent.ipv6_suppressed,
+        "provenance": intent.provenance.as_ref().map(serde_json::to_value).transpose().ok().flatten(),
+        "ownershipMarker": intent.ownership_marker,
+    })
+}
+
+/// The resolved route intent payload one apply-route kernel invocation
+/// carries.
+fn resolved_route_payload(
+    intent: &d2b_core::bundle_resolver::ResolvedRouteIntent,
+    provenance: &d2b_contracts_resource::v3::NetworkProvenance,
+    destroy: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "intentId": intent.intent_id,
+        "routeSpec": intent.route_spec,
+        "destination": intent.destination,
+        "via": intent.via,
+        "device": intent.device,
+        "table": intent.table,
+        "owned": intent.owned,
+        "routeName": intent.route_name,
+        "provenance": serde_json::to_value(provenance).ok(),
+        "ownershipMarker": intent.ownership_marker,
+        "destroy": destroy,
+    })
 }
 
 fn map_broker_error(kind: &str, message: &str) -> NetworkBrokerError {
