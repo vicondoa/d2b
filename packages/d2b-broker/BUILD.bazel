@@ -488,7 +488,8 @@ d2b_rust_doc_test(
 # `//bazel/checks/rust:portable_rust_broker`. Targets go through the d2b
 # wrappers, and the clippy action runs `-Dwarnings` (workspace per-crate
 # rustc flag), so any clippy warning fails the suite. `transitive = False`
-# keeps it to exactly these targets.
+# keeps it to exactly these targets; the test targets cover the crate's
+# `tests/**` sources, which no other suite aggregates.
 rust_clippy_test(
     name = "clippy",
     targets = [
@@ -500,6 +501,24 @@ rust_clippy_test(
         ":d2b_broker_fake_backends_test_support",
         ":d2b-broker",
         ":d2b-broker-layer1-bootstrap",
+        ":bridge_lifecycle",
+        ":broker_export_audit",
+        ":broker_protocol_compatibility",
+        ":broker_socket_acl",
+        ":bundle_tampered_broker",
+        ":kernel_surface",
+        ":persistent_tap_lifecycle",
+        ":pidfd_handoff_scm_rights",
+        ":pidfd_real_spawner",
+        ":security_key_broker",
+        ":socket_activation",
+        ":w12_fd_passing_response",
+        ":d2b_broker_test",
+        ":d2b_broker_layer1_bootstrap_test",
+        ":d2b_broker_fake_backends_test",
+        ":host_profile",
+        ":guest_profile",
+        ":profile_separation",
     ],
     transitive = False,
     visibility = ["//visibility:public"],
