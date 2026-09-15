@@ -1185,7 +1185,7 @@ pub struct ApplyNftablesRequest {
     pub desired_hash: Option<String>,
     #[serde(default)]
     pub destroy: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1221,7 +1221,7 @@ pub struct ApplyNftablesProjectionRequest {
     pub expected_generation_id: ResourceBundleGenerationId,
     #[serde(default)]
     pub desired_hash: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1232,7 +1232,7 @@ pub struct ApplyNmUnmanagedRequest {
     pub scope_id: ScopeId,
     #[serde(default)]
     pub destroy: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1248,7 +1248,7 @@ pub struct ApplyRouteRequest {
     pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub destroy: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1264,7 +1264,7 @@ pub struct ApplySysctlRequest {
     pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub destroy: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1272,7 +1272,7 @@ pub struct ApplySysctlRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateOrReconcileUsersGroupsRequest {
     pub subject_ids: Vec<SubjectId>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1295,7 +1295,7 @@ pub struct CreatePersistentTapRequest {
     pub bundle_generation: ResourceBundleGenerationId,
     /// Exact interface set copied from the live Network admission proof.
     pub admitted_interface_names: Vec<IfName>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1312,7 +1312,7 @@ pub struct DeletePersistentTapRequest {
     pub expected_network_generation: ResourceGeneration,
     pub expected_attachment_generation: ResourceGeneration,
     pub expected_bundle_generation: ResourceBundleGenerationId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1330,7 +1330,7 @@ pub struct CreateBridgeRequest {
     pub network_generation: ResourceGeneration,
     pub attachment_generation: ResourceGeneration,
     pub bundle_generation: ResourceBundleGenerationId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1346,7 +1346,7 @@ pub struct DeleteBridgeRequest {
     pub network_generation: ResourceGeneration,
     pub attachment_generation: ResourceGeneration,
     pub bundle_generation: ResourceBundleGenerationId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1367,7 +1367,7 @@ pub struct CreateTapFdRequest {
     pub bundle_generation: ResourceBundleGenerationId,
     /// Exact interface set copied from the live Network admission proof.
     pub admitted_interface_names: Vec<IfName>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1378,7 +1378,7 @@ pub struct CreateTapFdRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DelegateCgroupV2Request {
     pub scope_id: ScopeId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1443,7 +1443,7 @@ fn default_audit_export_limit() -> u32 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretByIdRequest {
     pub opaque_id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1456,7 +1456,7 @@ pub struct SecretByIdRequest {
 pub struct LaunchMinijailChildRequest {
     pub vm_id: VmId,
     pub role_id: RoleId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1471,7 +1471,7 @@ pub struct ModprobeIfAllowedRequest {
     /// Kernel-module name. The broker validates this against the
     /// trusted module allowlist; anything not present is refused.
     pub module_name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1480,7 +1480,7 @@ pub struct ModprobeIfAllowedRequest {
 pub struct OpenCgroupDirRequest {
     pub scope_id: ScopeId,
     pub path_class: PathClass,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1489,7 +1489,7 @@ pub struct OpenCgroupDirRequest {
 pub struct OpenDeviceRequest {
     pub role_id: RoleId,
     pub device_class: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1497,7 +1497,7 @@ pub struct OpenDeviceRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpenKvmRequest {
     pub role_id: RoleId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1513,7 +1513,7 @@ pub struct QemuMediaEnrollRequest {
     pub vm_id: VmId,
     pub media_ref: MediaRef,
     pub bus_id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1531,7 +1531,7 @@ pub struct QemuMediaEnrollResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QemuMediaRefreshRegistryRequest {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1554,7 +1554,7 @@ pub struct QemuMediaRefreshRegistryResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QemuMediaBootRequest {
     pub vm_id: VmId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1562,7 +1562,7 @@ pub struct QemuMediaBootRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QemuMediaLifecycleRequest {
     pub vm_id: VmId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1576,7 +1576,7 @@ pub struct QemuMediaQueryStatusRequest {
     /// broker errors.
     #[serde(default)]
     pub shutdown_context: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1636,7 +1636,7 @@ pub struct QemuMediaQueryStatusResponse {
 pub struct QemuMediaHotplugRequest {
     pub vm_id: VmId,
     pub bus_id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1766,7 +1766,7 @@ pub struct OpenPidfdRequest {
     /// Exact Guest target/session binding for target-local Process adoption.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_execution: Option<GuestExecutionBinding>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1842,7 +1842,7 @@ pub struct ObserveRunnerRequest {
     /// Exact Guest target/session binding for target-local Process adoption.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_execution: Option<GuestExecutionBinding>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1894,7 +1894,7 @@ pub struct PipeWireAudioRequest {
     pub channel: PipeWireAudioChannel,
     /// Closed effect action.
     pub action: PipeWireAudioAction,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -1991,7 +1991,7 @@ pub struct SystemdUnitRequest {
     /// adapter. Legacy VM runner callers omit this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_plan: Option<SandboxLaunchPlan>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2094,7 +2094,7 @@ pub struct StopSystemdUnitResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpenVhostNetRequest {
     pub role_id: RoleId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2102,7 +2102,7 @@ pub struct OpenVhostNetRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpenFuseRequest {
     pub role_id: RoleId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2122,7 +2122,7 @@ pub struct OpenHidrawSecurityKeyRequest {
     pub device_ref: ResourceRef,
     /// Core-derived Host physical-backing authority digest.
     pub authority_key: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2158,7 +2158,7 @@ pub struct OpenHidrawSecurityKeyResponse {
 pub struct PrepareDirRequest {
     pub vm_id: VmId,
     pub path_class: PathClass,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2181,7 +2181,7 @@ pub struct StoreSyncRequest {
     pub vm_id: VmId,
     pub bundle_closure_ref: BundleClosureRef,
     pub generation_token: u32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2220,7 +2220,7 @@ pub struct SetBridgePortFlagsRequest {
     /// Complete admitted Network identity for a Network-owned port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_tap_context: Option<NetworkTapContext>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2242,7 +2242,7 @@ pub struct UpdateHostsFileRequest {
     pub bundle_generation: Option<ResourceBundleGenerationId>,
     #[serde(default)]
     pub destroy: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2253,7 +2253,7 @@ pub struct UpdateHostsFileRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipBindRequest {
     pub bundle_usbip_bind_intent_ref: BundleOpId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2270,7 +2270,7 @@ pub struct UsbipBindRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipBindFirewallRuleRequest {
     pub bundle_usbip_firewall_intent_ref: BundleOpId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2278,7 +2278,7 @@ pub struct UsbipBindFirewallRuleRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipProxyReconcileRequest {
     pub scope_id: ScopeId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2292,7 +2292,7 @@ pub struct UsbipUnbindRequest {
     /// unbind/ACL revoke.
     #[serde(default)]
     pub preserve_durable_claim: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2313,7 +2313,7 @@ pub struct UsbipExplicitBindRequest {
     pub vm: String,
     /// Env the VM belongs to, used for firewall scope and audit.
     pub env: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2333,7 +2333,7 @@ pub struct UsbipExplicitFirewallRuleRequest {
     pub host_uplink_ip: String,
     /// The per-env net-VM uplink source IP for anti-spoof matching.
     pub net_uplink_ip: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2456,7 +2456,7 @@ pub struct SignalRunnerRequest {
     /// Exact Guest target/session binding for target-local Process control.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_execution: Option<GuestExecutionBinding>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2473,7 +2473,7 @@ pub struct SignalRunnerResponse {
 pub struct CgroupKillRequest {
     pub vm_id: VmId,
     pub role_id: RoleId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2516,7 +2516,7 @@ pub struct DeregisterRunnerPidfdRequest {
     /// Exact Guest target/session binding for target-local Process cleanup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_execution: Option<GuestExecutionBinding>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -2834,7 +2834,7 @@ pub struct SpawnRunnerRequest {
     /// for roles that do not need them (virtiofsd / swtpm).
     #[serde(default)]
     pub runtime_allocations: Vec<RunnerAllocation>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
     /// Universal workload identity from the realm-native model.
     ///
@@ -3099,7 +3099,7 @@ pub struct SeedDnsmasqLeaseRequest {
     pub network_generation: ResourceGeneration,
     pub attachment_generation: ResourceGeneration,
     pub bundle_generation: ResourceBundleGenerationId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -3110,7 +3110,7 @@ pub struct SeedDnsmasqLeaseRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OwnershipMatrixCheckRequest {
     pub vm_id: VmId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -3121,7 +3121,7 @@ pub struct OwnershipMatrixCheckRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SshHostKeyPreflightRequest {
     pub vm_id: VmId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -3137,7 +3137,7 @@ pub struct ReconcileStorageScopeRequest {
     pub storage_ref: BundleOpId,
     #[serde(default)]
     pub apply: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -3172,7 +3172,7 @@ pub struct ReconcileStorageScopeResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ValidateLockSpecRequest {
     pub lock_ref: BundleOpId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
@@ -3206,7 +3206,7 @@ pub struct ValidateLockSpecResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiskInitRequest {
     pub vm_id: VmId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
