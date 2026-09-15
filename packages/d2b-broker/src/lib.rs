@@ -48,6 +48,7 @@ pub mod live_handlers;
 pub mod ops;
 pub mod protocol;
 pub mod runtime;
+pub mod state_cells;
 pub mod sys;
 pub mod zone_identity;
 

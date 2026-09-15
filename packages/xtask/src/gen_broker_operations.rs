@@ -71,6 +71,8 @@ struct Row {
     payload: Payload,
     #[serde(default)]
     fds: Fds,
+    #[serde(default)]
+    state_cell: StateCell,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +119,21 @@ struct Fds {
     max_fds: u32,
     #[serde(default)]
     fd_kind: Option<String>,
+}
+
+/// The state-cell facet of one committed operation row (U3/KTD3).
+///
+/// A row with no declared cell leaves both fields absent; a row that names a
+/// cell declares the broker-owned state its operation lives on and the
+/// cell's durability (one-time records persist under the state root and
+/// refuse re-consume across restarts; ephemeral cells reset in-process).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StateCell {
+    #[serde(default)]
+    cell: Option<String>,
+    #[serde(default)]
+    durability: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,6 +273,34 @@ fn parse(repo_root: &Path) -> Result<Catalog, Box<dyn std::error::Error>> {
                 "{POLICY_PATH}: {} joins on a payload field it does not require: {field}",
                 row.operation
             )));
+        }
+        if row.state_cell.cell.as_deref().is_some() != row.state_cell.durability.is_some() {
+            return Err(render_error(format!(
+                "{POLICY_PATH}: {} declares a partial state cell (cell and durability must travel together)",
+                row.operation
+            )));
+        }
+        if let Some(cell) = row.state_cell.cell.as_deref() {
+            if cell.is_empty()
+                || cell
+                    .chars()
+                    .any(|character| !character.is_ascii_alphanumeric() && character != '-')
+            {
+                return Err(render_error(format!(
+                    "{POLICY_PATH}: {} names an invalid state cell {cell:?}",
+                    row.operation
+                )));
+            }
+            match row.state_cell.durability.as_deref() {
+                Some("one-time") | Some("ephemeral") => {}
+                Some(other) => {
+                    return Err(render_error(format!(
+                        "{POLICY_PATH}: {} declares unknown state cell durability {other:?}",
+                        row.operation
+                    )));
+                }
+                None => unreachable!("validated pairing above"),
+            }
         }
         if !["deny-only", "errors", "yes"].contains(&row.audit.mode.as_str()) {
             return Err(render_error(format!(
@@ -543,6 +588,18 @@ fn generate_catalog(catalog: &Catalog) -> String {
             match row.fds.fd_kind.as_deref() {
                 Some(kind) => format!("Some(FdKind::{kind}),"),
                 None => "None".to_owned(),
+            }
+        ));
+        rows.push_str(&format!(
+            "        state_cell: {},\n",
+            optional_str(row.state_cell.cell.as_deref())
+        ));
+        rows.push_str(&format!(
+            "        cell_durability: {},\n",
+            match row.state_cell.durability.as_deref() {
+                Some("one-time") => "Some(CellDurability::OneTime)".to_owned(),
+                Some("ephemeral") => "Some(CellDurability::Ephemeral)".to_owned(),
+                _ => "None".to_owned(),
             }
         ));
         rows.push_str("    },\n");

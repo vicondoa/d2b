@@ -896,6 +896,14 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
         }
     };
 
+    // Open the broker's state cell store under the daemon state root (the
+    // same root the daemon's ProviderSet state lives under) and recover the
+    // durable one-time records; a malformed durable file fails the broker
+    // closed at startup rather than replaying grants silently.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    crate::state_cells::init_broker_store(&config.state_dir)
+        .map_err(|error| RunError::Protocol(format!("state cell store: {error}")))?;
+
     let audit_log = Arc::new(AuditLog::open(
         &config.audit_dir,
         config.d2bd_gid,
@@ -3430,10 +3438,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                         "runner pidfd candidate cgroup mismatch".to_owned(),
                     ));
                 }
-                let broker_owned = runner_pidfd_registry()
-                    .lock()
-                    .ok()
-                    .is_some_and(|registry| registry.contains_key(&runner_id))
+                let broker_owned = runner_pidfds().contains_key(&runner_id)
                     && runner_metadata_registry()
                         .lock()
                         .ok()
@@ -3520,7 +3525,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     stop_only: req.stop_only,
                 },
             )?;
-            complete_lifecycle_lease(&req)?;
+            complete_lifecycle_lease(&req, &caller_role)?;
             Ok(DispatchResult::no_fds(
                 BrokerResponse::ConsumeLifecycleLease(
                     d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseResponse {
@@ -4143,14 +4148,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     runner_id: runner_id.clone(),
                 });
             }
-            let removed = runner_pidfd_registry()
-                .lock()
-                .map_err(|_| {
-                    BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned())
-                })?
-                .get(&runner_id)
-                .is_some_and(|_| {
-                    runner_metadata_registry()
+            let removed = runner_pidfds().contains_key(&runner_id)
+                && runner_metadata_registry()
                         .lock()
                         .ok()
                         .and_then(|registry| registry.get(&runner_id).cloned())
@@ -4172,15 +4171,9 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                                     req.template_identity,
                                     req.guest_execution.as_ref(),
                                 )
-                        })
-                });
+                        });
             if removed {
-                runner_pidfd_registry()
-                    .lock()
-                    .map_err(|_| {
-                        BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned())
-                    })?
-                    .remove(&runner_id);
+                runner_pidfds().remove(&runner_id);
                 remove_runner_metadata(&runner_id);
             }
             write_success_op_record!(
@@ -6488,66 +6481,79 @@ fn runner_signal_number(signal: d2b_contracts_broker::broker_wire::RunnerSignal)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-const LIFECYCLE_LEASE_TTL_MS: u64 = 300_000;
+const LIFECYCLE_LEASES_CELL: &str = "lifecycle-leases";
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct LifecycleLeaseIdentity {
-    zone_uid: String,
-    guest_uid: String,
-    guest_generation: u64,
-    provider_assignment_generation: u64,
-    policy_revision: u64,
-    operation_id: String,
-    operation: String,
-    stop_only: bool,
+const RUNNER_PIDFD_REGISTRY_CELL: &str = "runner-pidfd-registry";
+
+/// The committed state-cell declaration of the lifecycle lease.
+///
+/// The cell name and its durability facet flow from the committed operation
+/// row (U3/KTD3) — the row is the declaration surface, not the typed arm.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn lifecycle_lease_cell() -> (&'static str, crate::catalog::CellDurability) {
+    let row = crate::catalog::BrokerOperationRow::find("ConsumeLifecycleLease")
+        .expect("ConsumeLifecycleLease is a committed row");
+    (
+        row.state_cell
+            .expect("ConsumeLifecycleLease declares its state cell"),
+        row.cell_durability
+            .expect("ConsumeLifecycleLease declares its cell durability"),
+    )
 }
 
+/// The initiating principal as attested at the envelope boundary, rendered
+/// for cell keys. Invocation ids appear in audit records and are not
+/// secrets, so the principal is the replay gate — never the id alone
+/// (KTD3).
 #[cfg(not(feature = "layer1-bootstrap"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LifecycleLeaseState {
-    Consumed,
-    Completed,
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-#[derive(Debug, Clone, Copy)]
-struct LifecycleLeaseRecord {
-    state: LifecycleLeaseState,
-    expires_at_ms: u64,
-    completed_at_ms: Option<u64>,
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn lifecycle_leases() -> &'static Mutex<BTreeMap<LifecycleLeaseIdentity, LifecycleLeaseRecord>> {
-    static LEASES: OnceLock<Mutex<BTreeMap<LifecycleLeaseIdentity, LifecycleLeaseRecord>>> =
-        OnceLock::new();
-    LEASES.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn lifecycle_lease_identity(
-    request: &d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest,
-) -> LifecycleLeaseIdentity {
-    LifecycleLeaseIdentity {
-        zone_uid: request.zone_uid.as_str().to_owned(),
-        guest_uid: request.guest_uid.as_str().to_owned(),
-        guest_generation: request.guest_generation,
-        provider_assignment_generation: request.provider_assignment_generation,
-        policy_revision: request.policy_revision,
-        operation_id: request.operation_id.clone(),
-        operation: format!("{:?}", request.operation),
-        stop_only: request.stop_only,
+fn caller_principal(caller_role: &CallerRole) -> String {
+    match caller_role {
+        CallerRole::AdminUid { uid } => format!("admin:{uid}"),
+        CallerRole::LauncherUid { uid } => format!("launcher:{uid}"),
+        CallerRole::RootUid { uid } => format!("root:{uid}"),
+        CallerRole::HostShutdownUid { uid } => format!("host-shutdown:{uid}"),
+        CallerRole::NotAuthorized => "unauthorized".to_owned(),
     }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn lifecycle_lease_now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(u128::from(u64::MAX)) as u64
+fn cell_store_error(error: crate::state_cells::CellStoreError) -> BrokerError {
+    BrokerError::Protocol(error.to_string())
+}
+
+/// The canonical invocation id of one lease request.
+///
+/// The full lease identity (zone, guest, generations, policy revision,
+/// operation id, operation, stop-only flag) is the per-invocation identity:
+/// two retries of one operation join under one invocation id, a genuinely
+/// new operation joins under a fresh one.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn lifecycle_lease_identity(
+    request: &d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest,
+) -> String {
+    let mut fields = BTreeMap::new();
+    fields.insert(
+        "zone_uid",
+        serde_json::Value::String(request.zone_uid.as_str().to_owned()),
+    );
+    fields.insert(
+        "guest_uid",
+        serde_json::Value::String(request.guest_uid.as_str().to_owned()),
+    );
+    fields.insert("guest_generation", serde_json::Value::from(request.guest_generation));
+    fields.insert(
+        "provider_assignment_generation",
+        serde_json::Value::from(request.provider_assignment_generation),
+    );
+    fields.insert("policy_revision", serde_json::Value::from(request.policy_revision));
+    fields.insert("operation_id", serde_json::Value::String(request.operation_id.clone()));
+    fields.insert(
+        "operation",
+        serde_json::Value::String(format!("{:?}", request.operation)),
+    );
+    fields.insert("stop_only", serde_json::Value::Bool(request.stop_only));
+    serde_json::to_string(&fields).expect("canonical lease identity serializes")
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -6581,54 +6587,140 @@ fn consume_lifecycle_lease(
             "lifecycle-lease-caller-denied".to_owned(),
         ));
     }
-    let now = lifecycle_lease_now_ms();
+    // The claim is a compare-and-consume on the declared one-time cell,
+    // keyed by the canonical invocation id and the initiating principal.
+    // The cell's durable pre-commit happens before this returns, so a
+    // broker crash between the commit and the completion leaves an
+    // `unknown` record the retried invocation reconciles under its id.
+    let (cell, durability) = lifecycle_lease_cell();
     let identity = lifecycle_lease_identity(request);
-    let mut leases = lifecycle_leases()
-        .lock()
-        .map_err(|_| BrokerError::Protocol("lifecycle lease registry poisoned".to_owned()))?;
-    leases.retain(|_, record| record.expires_at_ms > now);
-    if let Some(record) = leases.get(&identity) {
-        let detail = match record.state {
-            LifecycleLeaseState::Consumed => "lifecycle-lease-in-progress",
-            LifecycleLeaseState::Completed => "lifecycle-lease-replayed",
-        };
-        return Err(BrokerError::LiveHandler(detail.to_owned()));
+    let principal = caller_principal(caller_role);
+    let decision = crate::state_cells::broker_store()
+        .consume(cell, &identity, &principal, durability)
+        .map_err(cell_store_error)?;
+    match decision {
+        crate::state_cells::ConsumeDecision::Granted
+        | crate::state_cells::ConsumeDecision::Reconciled => Ok(()),
+        crate::state_cells::ConsumeDecision::InProgress => {
+            Err(BrokerError::LiveHandler("lifecycle-lease-in-progress".to_owned()))
+        }
+        crate::state_cells::ConsumeDecision::Replayed => {
+            Err(BrokerError::LiveHandler("lifecycle-lease-replayed".to_owned()))
+        }
+        // Replay under a different principal is refused: the invocation id
+        // alone never gates a one-time grant (KTD3).
+        crate::state_cells::ConsumeDecision::ForeignPrincipal => {
+            Err(BrokerError::LiveHandler("lifecycle-lease-caller-denied".to_owned()))
+        }
     }
-    leases.insert(
-        identity,
-        LifecycleLeaseRecord {
-            state: LifecycleLeaseState::Consumed,
-            expires_at_ms: now.saturating_add(LIFECYCLE_LEASE_TTL_MS),
-            completed_at_ms: None,
-        },
-    );
-    Ok(())
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn complete_lifecycle_lease(
     request: &d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest,
+    caller_role: &CallerRole,
 ) -> Result<(), BrokerError> {
-    let now = lifecycle_lease_now_ms();
+    let (cell, _) = lifecycle_lease_cell();
     let identity = lifecycle_lease_identity(request);
-    let mut leases = lifecycle_leases()
-        .lock()
-        .map_err(|_| BrokerError::Protocol("lifecycle lease registry poisoned".to_owned()))?;
-    let Some(record) = leases.get_mut(&identity) else {
-        return Err(BrokerError::Protocol(
-            "lifecycle lease completion record missing".to_owned(),
-        ));
-    };
-    record.state = LifecycleLeaseState::Completed;
-    record.completed_at_ms = Some(now);
-    record.expires_at_ms = now.saturating_add(LIFECYCLE_LEASE_TTL_MS);
-    Ok(())
+    let principal = caller_principal(caller_role);
+    crate::state_cells::broker_store()
+        .complete(cell, &identity, &principal)
+        .map_err(|error| match error {
+            crate::state_cells::CellStoreError::MissingRecord => BrokerError::Protocol(
+                "lifecycle lease completion record missing".to_owned(),
+            ),
+            crate::state_cells::CellStoreError::ForeignPrincipal => BrokerError::Protocol(
+                "lifecycle lease completion principal mismatch".to_owned(),
+            ),
+            other => cell_store_error(other),
+        })
+}
+
+/// The runner pidfd registry as one declared ephemeral state cell.
+///
+/// The typed arm keeps serving registry reads from the cell backing until
+/// the Process family's arm retires (U10/U11): keys are `runner_id`,
+/// records hold the broker's dup of the spawn pidfd, and the cell is
+/// ephemeral — in-process with reset-on-restart semantics, per the
+/// committed row's durability facet. Registered records are broker-internal
+/// spawn state, so the recorded principal is [`BROKER_PRINCIPAL`]; the
+/// reconciler reads (`contains`/`remove`/`keys`) are principal-agnostic,
+/// matching the map semantics they replace.
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[derive(Debug, Clone, Copy)]
+struct RunnerPidfdCell;
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+impl RunnerPidfdCell {
+    fn cell() -> (&'static str, crate::catalog::CellDurability) {
+        let row = crate::catalog::BrokerOperationRow::find("DeregisterRunnerPidfd")
+            .expect("DeregisterRunnerPidfd is a committed row");
+        (
+            row.state_cell
+                .expect("DeregisterRunnerPidfd declares its state cell"),
+            row.cell_durability
+                .expect("DeregisterRunnerPidfd declares its cell durability"),
+        )
+    }
+
+    fn contains_key(self, runner_id: &str) -> bool {
+        let (cell, _) = Self::cell();
+        crate::state_cells::broker_store().contains(cell, runner_id)
+    }
+
+    /// The registered pidfd handle, so the caller signals the live process
+    /// (or dups) without racing a concurrent deregistration: the record's
+    /// `Arc` keeps the descriptor valid.
+    fn get(self, runner_id: &str) -> Option<Arc<OwnedFd>> {
+        let (cell, _) = Self::cell();
+        crate::state_cells::broker_store()
+            .payload(cell, runner_id)
+            .and_then(|payload| payload.downcast::<OwnedFd>().ok())
+            .map(|pidfd| Arc::clone(&pidfd))
+    }
+
+    /// Duplicate the registered pidfd.
+    fn duplicate(self, runner_id: &str) -> Option<OwnedFd> {
+        self.get(runner_id).and_then(|pidfd| match dup(pidfd.as_raw_fd()).map(owned_fd_from_raw) {
+            Ok(pidfd) => Some(pidfd),
+            Err(error) => {
+                warn!(runner_id = %runner_id, error = %error, "duplicate runner pidfd failed");
+                None
+            }
+        })
+    }
+
+    fn insert(self, runner_id: &str, pidfd: OwnedFd) -> Result<(), BrokerError> {
+        let (cell, _) = Self::cell();
+        crate::state_cells::broker_store()
+            .insert_payload(
+                cell,
+                runner_id,
+                crate::state_cells::BROKER_PRINCIPAL,
+                Arc::new(pidfd),
+            )
+            .map_err(cell_store_error)
+    }
+
+    fn remove(self, runner_id: &str) -> bool {
+        let (cell, _) = Self::cell();
+        crate::state_cells::broker_store().remove(cell, runner_id)
+    }
+
+    fn keys(self) -> Vec<String> {
+        let (cell, _) = Self::cell();
+        crate::state_cells::broker_store().keys(cell)
+    }
+
+    fn clear(self) -> usize {
+        let (cell, _) = Self::cell();
+        crate::state_cells::broker_store().clear(cell)
+    }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn runner_pidfd_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<String, OwnedFd>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+fn runner_pidfds() -> RunnerPidfdCell {
+    RunnerPidfdCell
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -6918,9 +7010,6 @@ fn observe_registered_runner(
         // Keep the lock order aligned with deregistration: pidfd registry
         // first, metadata second. This makes the binding update atomic with
         // the live pidfd registration.
-        let pidfd_registry = runner_pidfd_registry().lock().map_err(|_| {
-            BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned())
-        })?;
         let mut metadata_registry = runner_metadata_registry().lock().map_err(|_| {
             BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned())
         })?;
@@ -6933,7 +7022,7 @@ fn observe_registered_runner(
             &mut observed_registration,
             request.guest_execution.as_ref(),
         )?;
-        let pidfd_registered = pidfd_registry.contains_key(&runner_id);
+        let pidfd_registered = runner_pidfds().contains_key(&runner_id);
         if !pidfd_registered
             || observed_registration.vm_id != request.vm_id.as_str()
             || observed_registration.role_id != request.role_id.as_str()
@@ -6964,9 +7053,8 @@ fn observe_registered_runner(
         } else {
             let Some(start_time_ticks) = read_proc_start_time_ticks(observed_registration.pid)?
             else {
-                let pidfd = duplicate_runner_pidfd(&pidfd_registry, &runner_id);
+                let pidfd = runner_pidfds().duplicate(&runner_id);
                 drop(metadata_registry);
-                drop(pidfd_registry);
                 return Ok(Some(
                     reap_registered_runner_after_observation(
                         request,
@@ -6990,9 +7078,8 @@ fn observe_registered_runner(
                 &observed_registration.binary_path,
             )?;
             if executable_observation == RunnerExecutableObservation::Vanished {
-                let pidfd = duplicate_runner_pidfd(&pidfd_registry, &runner_id);
+                let pidfd = runner_pidfds().duplicate(&runner_id);
                 drop(metadata_registry);
-                drop(pidfd_registry);
                 return Ok(Some(
                     reap_registered_runner_after_observation(
                         request,
@@ -7005,9 +7092,8 @@ fn observe_registered_runner(
             let Some(current_start_time_ticks) =
                 read_proc_start_time_ticks(observed_registration.pid)?
             else {
-                let pidfd = duplicate_runner_pidfd(&pidfd_registry, &runner_id);
+                let pidfd = runner_pidfds().duplicate(&runner_id);
                 drop(metadata_registry);
-                drop(pidfd_registry);
                 return Ok(Some(
                     reap_registered_runner_after_observation(
                         request,
@@ -7244,18 +7330,6 @@ fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn duplicate_runner_pidfd(registry: &HashMap<String, OwnedFd>, runner_id: &str) -> Option<OwnedFd> {
-    let pidfd = registry.get(runner_id)?;
-    match dup(pidfd.as_raw_fd()).map(owned_fd_from_raw) {
-        Ok(pidfd) => Some(pidfd),
-        Err(error) => {
-            warn!(runner_id = %runner_id, error = %error, "duplicate runner pidfd failed");
-            None
-        }
-    }
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn present_unverified_runner_response(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
     registration: &RunnerRegistration,
@@ -7430,31 +7504,23 @@ fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerE
     let duplicated = dup(pidfd.as_raw_fd())
         .map(owned_fd_from_raw)
         .map_err(|err| BrokerError::Protocol(format!("dup pidfd for {runner_id}: {err}")))?;
-    let mut registry = runner_pidfd_registry()
-        .lock()
-        .map_err(|_| BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned()))?;
-    registry.insert(runner_id.to_owned(), duplicated);
-    Ok(())
+    runner_pidfds().insert(runner_id, duplicated)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn remove_runner_registration(runner_id: &str) {
-    if let Ok(mut registry) = runner_pidfd_registry().lock() {
-        registry.remove(runner_id);
-    }
+    runner_pidfds().remove(runner_id);
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn remove_runner_registries(runner_id: &str) -> bool {
-    // Keep this order aligned with observation and deregistration so reap
-    // cleanup cannot deadlock with a concurrent registry update.
-    let Ok(mut pidfd_registry) = runner_pidfd_registry().lock() else {
-        return false;
-    };
+    // Keep the metadata ordering aligned with observation and deregistration
+    // so reap cleanup cannot deadlock with a concurrent registry update; the
+    // pidfd registry lives on the cell store with its own lock.
     let Ok(mut metadata_registry) = runner_metadata_registry().lock() else {
         return false;
     };
-    pidfd_registry.remove(runner_id);
+    runner_pidfds().remove(runner_id);
     metadata_registry.remove(runner_id);
     if let Ok(mut bootstrap_registry) = controller_bootstrap_registry().lock() {
         bootstrap_registry.remove(runner_id);
@@ -7477,10 +7543,7 @@ fn remove_runner_registries(runner_id: &str) -> bool {
 /// work-review (W1fu1/fu2).
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn reserve_runner_id_for_spawn(runner_id: &str) -> Result<(), BrokerError> {
-    let registry = runner_pidfd_registry()
-        .lock()
-        .map_err(|_| BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned()))?;
-    if registry.contains_key(runner_id) {
+    if runner_pidfds().contains_key(runner_id) {
         return Err(BrokerError::Protocol(format!(
             "runner {runner_id} already has an active registration; refusing duplicate spawn"
         )));
@@ -7493,10 +7556,7 @@ fn signal_registered_runner(
     runner_id: &str,
     signal: d2b_contracts_broker::broker_wire::RunnerSignal,
 ) -> Result<(), BrokerError> {
-    let registry = runner_pidfd_registry()
-        .lock()
-        .map_err(|_| BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned()))?;
-    let pidfd = registry
+    let pidfd = runner_pidfds()
         .get(runner_id)
         .ok_or_else(|| BrokerError::NoPidfd {
             runner_id: runner_id.to_owned(),
@@ -12738,33 +12798,13 @@ fn reap_all_pidfds(audit_log: &AuditLog) {
     use nix::errno::Errno;
     use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
 
-    let runner_ids: Vec<String> = match runner_pidfd_registry().lock() {
-        Ok(reg) => reg.keys().cloned().collect(),
-        Err(_) => {
-            tracing::warn!("runner_pidfd_registry mutex poisoned in reap loop");
-            return;
-        }
-    };
+    let runner_ids: Vec<String> = runner_pidfds().keys();
 
     for runner_id in runner_ids {
-        let pidfd_dup = {
-            let reg = match runner_pidfd_registry().lock() {
-                Ok(r) => r,
-                Err(_) => {
-                    tracing::warn!("runner_pidfd_registry mutex poisoned in reap loop");
-                    continue;
-                }
-            };
-            let Some(pidfd) = reg.get(&runner_id) else {
-                continue;
-            };
-            match dup(pidfd.as_raw_fd()).map(owned_fd_from_raw) {
-                Ok(d) => d,
-                Err(err) => {
-                    tracing::warn!(runner_id = %runner_id, error = %err, "reap_all_pidfds: dup pidfd failed");
-                    continue;
-                }
-            }
+        let Some(pidfd_dup) = runner_pidfds().duplicate(&runner_id) else {
+            // Absent (concurrent deregistration) or un-duplicable; the cell
+            // accessor warns on dup failure, absence is a silent skip.
+            continue;
         };
 
         let wait_flags = WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG;
@@ -13012,18 +13052,12 @@ fn cleanup_spawned_runner_after_failure(runner_id: &str, pidfd: std::os::fd::Bor
             );
         }
     }
-    if let Ok(mut registry) = runner_pidfd_registry().lock() {
-        registry.remove(runner_id);
-    }
+    runner_pidfds().remove(runner_id);
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn cleanup_registered_runner_after_failure(runner_id: &str) {
-    let pidfd = runner_pidfd_registry().lock().ok().and_then(|registry| {
-        registry
-            .get(runner_id)
-            .and_then(|fd| dup(fd.as_raw_fd()).ok().map(owned_fd_from_raw))
-    });
+    let pidfd = runner_pidfds().duplicate(runner_id);
     if let Some(pidfd) = pidfd {
         cleanup_spawned_runner_after_failure(runner_id, pidfd.as_fd());
     } else {
@@ -13250,7 +13284,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
-    fn lifecycle_lease_registry_tracks_completion_and_expiry() {
+    fn lifecycle_lease_cell_refuses_in_progress_replay_and_foreign_principal() {
         use d2b_contracts_broker::broker_wire::{
             ConsumeLifecycleLeaseRequest, LifecycleLeaseOperation,
         };
@@ -13270,41 +13304,34 @@ mod tests {
         };
         let caller = CallerRole::AdminUid { uid: 1000 };
         consume_lifecycle_lease(&request, &caller).expect("consume lifecycle lease");
-        let identity = lifecycle_lease_identity(&request);
-        assert_eq!(
-            lifecycle_leases()
-                .lock()
-                .expect("lifecycle lease lock")
-                .get(&identity)
-                .map(|record| record.state),
-            Some(LifecycleLeaseState::Consumed)
-        );
-        complete_lifecycle_lease(&request).expect("complete lifecycle lease");
-        assert_eq!(
-            lifecycle_leases()
-                .lock()
-                .expect("lifecycle lease lock")
-                .get(&identity)
-                .map(|record| record.state),
-            Some(LifecycleLeaseState::Completed)
-        );
-
-        let expired = ConsumeLifecycleLeaseRequest {
-            operation_id: format!("runtime-expired-{}", std::process::id()),
+        // Same identity while the claim is live: in-progress refusal, exactly
+        // like the pre-cell arm.
+        assert!(matches!(
+            consume_lifecycle_lease(&request, &caller),
+            Err(BrokerError::LiveHandler(detail)) if detail == "lifecycle-lease-in-progress"
+        ));
+        complete_lifecycle_lease(&request, &caller).expect("complete lifecycle lease");
+        // Completed one-time cell: the same invocation id replays the
+        // recorded outcome — a refusal (AE2).
+        assert!(matches!(
+            consume_lifecycle_lease(&request, &caller),
+            Err(BrokerError::LiveHandler(detail)) if detail == "lifecycle-lease-replayed"
+        ));
+        // Replay under a different principal refuses: the invocation id
+        // alone never gates a one-time grant (KTD3).
+        let other = CallerRole::AdminUid { uid: 1001 };
+        assert!(matches!(
+            consume_lifecycle_lease(&request, &other),
+            Err(BrokerError::LiveHandler(detail)) if detail == "lifecycle-lease-caller-denied"
+        ));
+        // A genuinely new invocation (fresh operation id) is a fresh grant:
+        // the lease stays consumable per operation.
+        let next = ConsumeLifecycleLeaseRequest {
+            operation_id: format!("runtime-lease-next-{}", std::process::id()),
             ..request
         };
-        lifecycle_leases()
-            .lock()
-            .expect("lifecycle lease lock")
-            .insert(
-                lifecycle_lease_identity(&expired),
-                LifecycleLeaseRecord {
-                    state: LifecycleLeaseState::Completed,
-                    expires_at_ms: 0,
-                    completed_at_ms: Some(0),
-                },
-            );
-        consume_lifecycle_lease(&expired, &caller).expect("expired lease can be reissued");
+        consume_lifecycle_lease(&next, &caller).expect("new operation consumes a new lease");
+        complete_lifecycle_lease(&next, &caller).expect("new lease completes");
     }
 
     #[test]
@@ -19284,9 +19311,7 @@ mod tests {
 
         fn clear_reap_state() {
             let _ = drain_child_reap_buffer();
-            if let Ok(mut registry) = runner_pidfd_registry().lock() {
-                registry.clear();
-            }
+            runner_pidfds().clear();
             if let Ok(mut registry) = runner_metadata_registry().lock() {
                 registry.clear();
             }
@@ -19387,13 +19412,7 @@ mod tests {
             let start_time_ticks = read_proc_start_time_ticks(pid)
                 .expect("read start time")
                 .expect("live child");
-            runner_pidfd_registry()
-                .lock()
-                .expect("registry lock")
-                .insert(
-                    runner_id.to_owned(),
-                    pidfd.try_clone().expect("clone pidfd"),
-                );
+runner_pidfds().insert(runner_id, pidfd.try_clone().expect("clone pidfd"),).expect("register runner pidfd");
             runner_metadata_registry()
                 .lock()
                 .expect("metadata lock")
@@ -19413,10 +19432,7 @@ mod tests {
             assert!(!response.cgroup_verified);
             assert!(!response.executable_verified);
             assert!(
-                runner_pidfd_registry()
-                    .lock()
-                    .expect("registry lock")
-                    .contains_key(runner_id),
+                runner_pidfds().contains_key(&runner_id),
                 "StillAlive must preserve the exact pidfd registration"
             );
             assert!(
@@ -19440,13 +19456,7 @@ mod tests {
             let pid = child.id() as i32;
             let runner_id = "reap-vm:ch-runner";
             let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
-            runner_pidfd_registry()
-                .lock()
-                .expect("registry lock")
-                .insert(
-                    runner_id.to_owned(),
-                    pidfd.try_clone().expect("clone pidfd"),
-                );
+runner_pidfds().insert(runner_id, pidfd.try_clone().expect("clone pidfd"),).expect("register runner pidfd");
             runner_metadata_registry()
                 .lock()
                 .expect("metadata lock")
@@ -19458,11 +19468,7 @@ mod tests {
             let deadline = Instant::now() + Duration::from_secs(3);
             let mut response = present_unverified_runner_response(&request, &registration);
             while response.present && Instant::now() < deadline {
-                let retained_pidfd = runner_pidfd_registry()
-                    .lock()
-                    .expect("registry lock")
-                    .get(runner_id)
-                    .and_then(|pidfd| dup(pidfd.as_raw_fd()).ok().map(owned_fd_from_raw));
+                let retained_pidfd = runner_pidfds().duplicate(runner_id);
                 response = reap_registered_runner_after_observation(
                     &request,
                     runner_id,
@@ -19476,10 +19482,7 @@ mod tests {
 
             assert!(!response.present, "reap must precede an absent response");
             assert!(
-                !runner_pidfd_registry()
-                    .lock()
-                    .expect("registry lock")
-                    .contains_key(runner_id),
+                !runner_pidfds().contains_key(&runner_id),
                 "reaped runner must be removed from pidfd registry"
             );
             assert!(
@@ -19504,10 +19507,7 @@ mod tests {
             let runner_id = format!("test-vm:test-role-{pid}");
             {
                 let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
-                runner_pidfd_registry()
-                    .lock()
-                    .expect("registry lock")
-                    .insert(runner_id.clone(), pidfd);
+                runner_pidfds().insert(&runner_id, pidfd).expect("register runner pidfd");
             }
             std::mem::forget(child);
 
@@ -19530,10 +19530,7 @@ mod tests {
             let runner_id = format!("test-vm:sigterm-{pid}");
             {
                 let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
-                runner_pidfd_registry()
-                    .lock()
-                    .expect("registry lock")
-                    .insert(runner_id.clone(), pidfd);
+                runner_pidfds().insert(&runner_id, pidfd).expect("register runner pidfd");
             }
             kill(Pid::from_raw(pid), Signal::SIGTERM).expect("kill SIGTERM");
             std::mem::forget(child);
@@ -19557,10 +19554,7 @@ mod tests {
             let runner_id = format!("test-vm:sigkill-{pid}");
             {
                 let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
-                runner_pidfd_registry()
-                    .lock()
-                    .expect("registry lock")
-                    .insert(runner_id.clone(), pidfd);
+                runner_pidfds().insert(&runner_id, pidfd).expect("register runner pidfd");
             }
             kill(Pid::from_raw(pid), Signal::SIGKILL).expect("kill SIGKILL");
             std::mem::forget(child);
@@ -19585,10 +19579,7 @@ mod tests {
                 let pid = child.id() as i32;
                 let runner_id = format!("test-vm:stress-{i}-{pid}");
                 let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
-                runner_pidfd_registry()
-                    .lock()
-                    .expect("registry lock")
-                    .insert(runner_id.clone(), pidfd);
+                runner_pidfds().insert(&runner_id, pidfd).expect("register runner pidfd");
                 runner_ids.push(runner_id);
                 std::mem::forget(child);
             }
@@ -19626,10 +19617,7 @@ mod tests {
             let runner_id = format!("test-vm:targeted-exited-{pid}");
             let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
             let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
-            runner_pidfd_registry()
-                .lock()
-                .expect("registry lock")
-                .insert(runner_id.clone(), registry_dup);
+runner_pidfds().insert(&runner_id, registry_dup).expect("register runner pidfd");
             std::mem::forget(child);
 
             // The child exits ~immediately; loop the targeted reap until
@@ -19659,10 +19647,7 @@ mod tests {
             // Registry entry must be gone so the SIGCHLD loop won't
             // double-reap a since-reused PID.
             assert!(
-                !runner_pidfd_registry()
-                    .lock()
-                    .expect("registry lock")
-                    .contains_key(&runner_id),
+                !runner_pidfds().contains_key(&runner_id),
                 "registry entry must be removed after targeted reap"
             );
         }
@@ -19681,10 +19666,7 @@ mod tests {
             let runner_id = format!("test-vm:targeted-alive-{pid}");
             let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
             let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
-            runner_pidfd_registry()
-                .lock()
-                .expect("registry lock")
-                .insert(runner_id.clone(), registry_dup);
+runner_pidfds().insert(&runner_id, registry_dup).expect("register runner pidfd");
 
             let outcome = targeted_reap_runner(&runner_id, pidfd.as_fd());
             assert_eq!(outcome, TargetedReapOutcome::StillAlive);
@@ -19698,10 +19680,7 @@ mod tests {
                 "running child must not be reaped by targeted pass"
             );
             assert!(
-                runner_pidfd_registry()
-                    .lock()
-                    .expect("registry lock")
-                    .contains_key(&runner_id),
+                runner_pidfds().contains_key(&runner_id),
                 "running child must remain registered"
             );
 
@@ -19723,10 +19702,7 @@ mod tests {
             let runner_id = format!("test-vm:targeted-signaled-{pid}");
             let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
             let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
-            runner_pidfd_registry()
-                .lock()
-                .expect("registry lock")
-                .insert(runner_id.clone(), registry_dup);
+runner_pidfds().insert(&runner_id, registry_dup).expect("register runner pidfd");
             std::mem::forget(child);
 
             kill(Pid::from_raw(pid), Signal::SIGKILL).expect("kill SIGKILL");
@@ -19767,10 +19743,7 @@ mod tests {
             let runner_id = format!("test-vm:targeted-echild-{pid}");
             let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
             let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
-            runner_pidfd_registry()
-                .lock()
-                .expect("registry lock")
-                .insert(runner_id.clone(), registry_dup);
+runner_pidfds().insert(&runner_id, registry_dup).expect("register runner pidfd");
             runner_metadata_registry()
                 .lock()
                 .expect("metadata lock")
@@ -19784,10 +19757,7 @@ mod tests {
             assert_eq!(outcome, TargetedReapOutcome::AlreadyReaped);
 
             assert!(
-                !runner_pidfd_registry()
-                    .lock()
-                    .expect("registry lock")
-                    .contains_key(&runner_id),
+                !runner_pidfds().contains_key(&runner_id),
                 "ECHILD must clear the stale registry entry"
             );
             assert!(

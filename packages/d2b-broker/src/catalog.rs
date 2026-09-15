@@ -97,6 +97,21 @@ pub struct BrokerAuthzFacets {
     pub audit_mode: &'static str,
 }
 
+/// The declared durability facet of one state cell.
+///
+/// The facet rides the committed row (U3/KTD3): a one-time cell persists its
+/// consumed records under the broker's state root and refuses re-consume of a
+/// completed record across a broker restart; an ephemeral cell keeps
+/// in-process reset-on-restart semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellDurability {
+    /// Completed records persist durably; re-consume refuses across restarts
+    /// and retention never evicts a consumed marker.
+    OneTime,
+    /// Records live in the broker process only and reset on restart.
+    Ephemeral,
+}
+
 /// One committed broker operation row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrokerOperationRow {
@@ -149,6 +164,12 @@ pub struct BrokerOperationRow {
     /// The kernel kind every descriptor this operation carries must present,
     /// required when [`Self::max_fds`] is nonzero. 
     pub fd_kind: Option<FdKind>,
+    /// The declared state cell the operation's broker-owned state lives on,
+    /// when it has one (U3/KTD3).
+    pub state_cell: Option<&'static str>,
+    /// The cell's declared durability facet, present exactly when
+    /// [`Self::state_cell`] is.
+    pub cell_durability: Option<CellDurability>,
 }
 
 include!("generated/broker_operation_catalog.rs");
