@@ -9,9 +9,10 @@ fn host_profile_keeps_the_complete_closed_operation_catalog() {
     // catalog no longer carries them; their privileged cores are the
     // broker-generic kernels served through EnvelopeInvoke. U11 retired
     // ConsumeLifecycleLease the same way — the lease rides the generic
-    // consume-cell/complete-cell kernels.
+    // consume-cell/complete-cell kernels. U12 retired the thirteen
+    // network-fds family variants the same way — their cores are the
+    // broker-generic network kernels served through EnvelopeInvoke.
     for operation in [
-        "ApplyNftables",
         "EnvelopeInvoke",
         "ApplyHostGenerationHandoff",
         "ExportBrokerAudit",
@@ -25,7 +26,25 @@ fn host_profile_keeps_the_complete_closed_operation_catalog() {
             "host profile must admit {operation}"
         );
     }
-    for operation in ["SpawnRunner", "OpenPidfd", "PollChildReaped", "ConsumeLifecycleLease"] {
+    for operation in [
+        "SpawnRunner",
+        "OpenPidfd",
+        "PollChildReaped",
+        "ConsumeLifecycleLease",
+        "ApplyNftables",
+        "ApplyNftablesProjection",
+        "ApplyNmUnmanaged",
+        "ApplyRoute",
+        "ApplySysctl",
+        "CreateBridge",
+        "DeleteBridge",
+        "CreatePersistentTap",
+        "DeletePersistentTap",
+        "CreateTapFd",
+        "SetBridgePortFlags",
+        "UpdateHostsFile",
+        "SeedDnsmasqLease",
+    ] {
         assert!(
             !operations.contains(&operation),
             "host profile must not re-admit the retired operation {operation}"

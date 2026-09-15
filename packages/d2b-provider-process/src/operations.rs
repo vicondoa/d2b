@@ -576,6 +576,21 @@ impl LaunchPosture {
         attached_fd_count: usize,
     ) -> Result<(), OperationFailure> {
         const MAX_REQUEST_INHERITED_FDS: u16 = 256;
+        // The retired arm required a ProviderController spawn to carry its
+        // bootstrap escrow descriptor (1..=2 inherited + 1 attached) and
+        // refused the (0, 0) shape fail-closed. The family rows declare no
+        // fd facet (U10), so the escrow can never cross the forward carrier
+        // today: the posture is unservable outright, and admitting a
+        // (0, 0) controller launch would spawn a controller without its
+        // bootstrap fd - the exact state the retired arm refused.
+        if self == Self::ControllerEscrow {
+            return Err(OperationFailure::with_detail(
+                INHERITED_FDS_UNSUPPORTED,
+                "SpawnRunner: the ControllerEscrow posture needs its bootstrap \
+                 escrow descriptor, which the family row's fd-less contract \
+                 cannot transport",
+            ));
+        }
         if inherited_fd_count > MAX_REQUEST_INHERITED_FDS {
             return Err(OperationFailure::with_detail(
                 KERNEL_REFUSED,

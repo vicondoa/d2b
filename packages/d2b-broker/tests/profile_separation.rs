@@ -139,23 +139,28 @@ fn host_and_guest_instances_keep_separate_runtime_bindings() {
         panic!("guest should return Hello");
     };
     assert!(host_hello.capabilities.contains(&"Hello".to_owned()));
-    // U10 retired the process-family wire variants: the guest advertises
-    // the remaining local-process effects (e.g. StartSystemdUnit) and never
-    // a retired runner op.
+    // U10 retired the process-family wire variants and U12 the
+    // network-fds family variants: the guest advertises the remaining
+    // local-process effects (e.g. StartSystemdUnit) and never a retired
+    // process or network operation.
     assert!(guest_hello
         .capabilities
         .contains(&"StartSystemdUnit".to_owned()));
-    for retired in ["SpawnRunner", "OpenPidfd", "SignalRunner"] {
+    for retired in [
+        "SpawnRunner",
+        "OpenPidfd",
+        "SignalRunner",
+        "ApplyNftables",
+        "CreateTapFd",
+        "SeedDnsmasqLease",
+        "CreateBridge",
+        "ApplySysctl",
+    ] {
         assert!(
             !guest_hello.capabilities.contains(&retired.to_owned()),
-            "guest must not advertise the retired process-family operation {retired}"
+            "guest must not advertise the retired operation {retired}"
         );
     }
-    assert!(
-        !guest_hello
-            .capabilities
-            .contains(&"ApplyNftables".to_owned())
-    );
     assert_ne!(host.audit_path(), guest.audit_path());
 }
 

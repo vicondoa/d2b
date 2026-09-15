@@ -2043,13 +2043,18 @@ while let Ok(fd) = accept_peer(&listener) {
 
     #[test]
     fn a_wire_inherited_operation_is_refused() {
+        // The typed wire rows (U12's network-fds family rows among the
+        // retired set) keep `payload_provenance: Wire` while the family
+        // kernels ride the `Request`-provenance envelope surface;
+        // `StartSystemdUnit` still carries the typed wire contract, so it
+        // is the fixture of an operation the generic envelope cannot carry.
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(echo_table()))
             .commit_all()
             .build();
         let refusal = runtime().block_on(envelope
             .call(
                 CallerAuthority::Daemon,
-                "ApplySysctl",
+                "StartSystemdUnit",
                 "zone-a",
                 &serde_json::json!({}),
             ))

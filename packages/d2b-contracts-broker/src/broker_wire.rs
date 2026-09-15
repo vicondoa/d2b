@@ -34,43 +34,7 @@ pub enum BrokerRequest {
     /// handoff. The broker resolves all host effects from its trusted
     /// installed-generation state; no path or command crosses the wire.
     ApplyHostGenerationHandoff(crate::host_generation::ApplyHostGenerationHandoff),
-    ApplyNftables(ApplyNftablesRequest),
-    /// Apply or remove one Provider-owned nftables projection.
-    ///
-    /// Distinct from [`BrokerRequest::ApplyNftables`], which owns the
-    /// framework's own `inet d2b` table: this op carries a projection a
-    /// Provider owns, and its action is a closed enum rather than a
-    /// boolean, so a caller cannot express a third meaning.
-    ///
-    /// The live handler refuses a request whose fence differs from the
-    /// installed generation, mutating nothing and requeueing as stale.
-    ApplyNftablesProjection(ApplyNftablesProjectionRequest),
-    ApplyNmUnmanaged(ApplyNmUnmanagedRequest),
-    ApplyRoute(ApplyRouteRequest),
-    ApplySysctl(ApplySysctlRequest),
     CreateOrReconcileUsersGroups(CreateOrReconcileUsersGroupsRequest),
-    /// Create the bridge an environment's links attach to. The daemon
-    /// names only the opaque bundle intent ref and scope; the broker
-    /// derives the bridge ifname and its attributes from its own trusted
-    /// bundle copy.
-    ///
-    /// The live handler suppresses IPv6 on the link before bringing it up.
-    CreateBridge(CreateBridgeRequest),
-    /// Delete a bridge this framework created. Follows the same
-    /// opaque-identifier contract as [`BrokerRequest::CreateBridge`].
-    ///
-    /// The live handler removes the bridge only after its TAP removals are
-    /// confirmed.
-    DeleteBridge(DeleteBridgeRequest),
-    CreatePersistentTap(CreatePersistentTapRequest),
-    /// Delete a persistent TAP this framework created. Follows the same
-    /// opaque-identifier contract as
-    /// [`BrokerRequest::CreatePersistentTap`].
-    ///
-    /// The live handler requires both generation fences to match and the
-    /// VMM descriptor to be closed before removing the TAP.
-    DeletePersistentTap(DeletePersistentTapRequest),
-    CreateTapFd(CreateTapFdRequest),
     DelegateCgroupV2(DelegateCgroupV2Request),
     ExportBrokerAudit(ExportBrokerAuditRequest),
     /// Daemon ↔ broker handshake request. The daemon sends its
@@ -171,8 +135,6 @@ pub enum BrokerRequest {
     StoreSync(StoreSyncRequest),
     ReadSecretById(SecretByIdRequest),
     RotateSecretById(SecretByIdRequest),
-    SetBridgePortFlags(SetBridgePortFlagsRequest),
-    UpdateHostsFile(UpdateHostsFileRequest),
     UsbipBind(UsbipBindRequest),
     UsbipBindFirewallRule(UsbipBindFirewallRuleRequest),
     UsbipProxyReconcile(UsbipProxyReconcileRequest),
@@ -196,13 +158,6 @@ pub enum BrokerRequest {
     ///
     /// Currently a typed stub (`Unimplemented`).
     UsbipExplicitFirewallRule(UsbipExplicitFirewallRuleRequest),
-    /// Write the per-VM dnsmasq lease file. Replaces leaves of the
-    /// retired `microvm-setup@<vm>.service`. Currently a typed stub
-    /// (`Unimplemented`) until the live handler is wired.
-    ///
-    /// Live handler target: `live_seed_dnsmasq_lease`, resolved through
-    /// `BundleResolver` from the per-VM dnsmasq lease row.
-    SeedDnsmasqLease(SeedDnsmasqLeaseRequest),
     /// Enforce the per-leaf ownership/mode matrix on
     /// `/var/lib/d2b/vms/<vm>/`. Currently a typed stub
     /// (`Unimplemented`) until the real check is wired.
@@ -652,17 +607,7 @@ impl BrokerRequest {
     pub fn op_name(&self) -> &'static str {
         match self {
             Self::ApplyHostGenerationHandoff(_) => "ApplyHostGenerationHandoff",
-            Self::ApplyNftables(_) => "ApplyNftables",
-            Self::ApplyNftablesProjection(_) => "ApplyNftablesProjection",
-            Self::ApplyNmUnmanaged(_) => "ApplyNmUnmanaged",
-            Self::ApplyRoute(_) => "ApplyRoute",
-            Self::ApplySysctl(_) => "ApplySysctl",
             Self::CreateOrReconcileUsersGroups(_) => "CreateOrReconcileUsersGroups",
-            Self::CreateBridge(_) => "CreateBridge",
-            Self::DeleteBridge(_) => "DeleteBridge",
-            Self::CreatePersistentTap(_) => "CreatePersistentTap",
-            Self::DeletePersistentTap(_) => "DeletePersistentTap",
-            Self::CreateTapFd(_) => "CreateTapFd",
             Self::DelegateCgroupV2(_) => "DelegateCgroupV2",
             Self::ExportBrokerAudit(_) => "ExportBrokerAudit",
             Self::Hello(_) => "Hello",
@@ -695,15 +640,12 @@ impl BrokerRequest {
             Self::StoreSync(_) => "StoreSync",
             Self::ReadSecretById(_) => "ReadSecretById",
             Self::RotateSecretById(_) => "RotateSecretById",
-            Self::SetBridgePortFlags(_) => "SetBridgePortFlags",
-            Self::UpdateHostsFile(_) => "UpdateHostsFile",
             Self::UsbipBind(_) => "UsbipBind",
             Self::UsbipBindFirewallRule(_) => "UsbipBindFirewallRule",
             Self::UsbipProxyReconcile(_) => "UsbipProxyReconcile",
             Self::UsbipUnbind(_) => "UsbipUnbind",
             Self::UsbipExplicitBind(_) => "UsbipExplicitBind",
             Self::UsbipExplicitFirewallRule(_) => "UsbipExplicitFirewallRule",
-            Self::SeedDnsmasqLease(_) => "SeedDnsmasqLease",
             Self::OwnershipMatrixCheck(_) => "OwnershipMatrixCheck",
             Self::SshHostKeyPreflight(_) => "SshHostKeyPreflight",
             Self::DiskInit(_) => "DiskInit",
@@ -744,52 +686,6 @@ impl BrokerRequest {
     /// or a serialization of the whole request.
     pub fn authoritative_audit_join(&self) -> Option<(String, String)> {
         let (scope, operation) = match self {
-            Self::ApplyNftables(request) => (
-                request.scope_id.to_string(),
-                format!(
-                    "{}:{}:{}",
-                    self.op_name(),
-                    request.bundle_nft_intent_ref,
-                    request.destroy
-                ),
-            ),
-            Self::ApplyNftablesProjection(request) => (
-                request.scope_id.to_string(),
-                format!(
-                    "{}:{}:{:?}:{}",
-                    self.op_name(),
-                    request.bundle_nft_projection_intent_ref,
-                    request.action,
-                    request.expected_generation_id.as_str()
-                ),
-            ),
-            Self::ApplyNmUnmanaged(request) => (
-                request.scope_id.to_string(),
-                format!(
-                    "{}:{}:{}",
-                    self.op_name(),
-                    request.bundle_nm_intent_ref,
-                    request.destroy
-                ),
-            ),
-            Self::ApplyRoute(request) => (
-                request.scope_id.to_string(),
-                format!(
-                    "{}:{}:{}",
-                    self.op_name(),
-                    request.bundle_route_intent_ref,
-                    request.destroy
-                ),
-            ),
-            Self::ApplySysctl(request) => (
-                request.scope_id.to_string(),
-                format!(
-                    "{}:{}:{}",
-                    self.op_name(),
-                    request.bundle_sysctl_intent_ref,
-                    request.destroy
-                ),
-            ),
             Self::CreateOrReconcileUsersGroups(request) => (
                 request
                     .subject_ids
@@ -798,32 +694,6 @@ impl BrokerRequest {
                     .collect::<Vec<_>>()
                     .join(","),
                 format!("{}:{}", self.op_name(), request.subject_ids.len()),
-            ),
-            Self::CreateBridge(request) => (
-                request.scope_id.to_string(),
-                format!("{}:{}", self.op_name(), request.bundle_bridge_intent_ref),
-            ),
-            Self::DeleteBridge(request) => (
-                request.scope_id.to_string(),
-                format!("{}:{}", self.op_name(), request.bundle_bridge_intent_ref),
-            ),
-            Self::CreatePersistentTap(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::CreateTapFd(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::DeletePersistentTap(request) => (
-                request.attachment_id.to_string(),
-                format!(
-                    "{}:{}:{}:{}",
-                    self.op_name(),
-                    request.attachment_id,
-                    request.expected_network_generation.get(),
-                    request.expected_attachment_generation.get()
-                ),
             ),
             Self::DelegateCgroupV2(request) => (
                 request.scope_id.to_string(),
@@ -971,19 +841,6 @@ impl BrokerRequest {
                     request.intent.target_generation
                 ),
             ),
-            Self::SetBridgePortFlags(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::UpdateHostsFile(request) => (
-                request.bundle_hosts_intent_ref.to_string(),
-                format!(
-                    "{}:{}:{}",
-                    self.op_name(),
-                    request.bundle_hosts_intent_ref,
-                    request.destroy
-                ),
-            ),
             Self::UsbipBind(request) => (
                 request.bundle_usbip_bind_intent_ref.to_string(),
                 format!(
@@ -1025,10 +882,6 @@ impl BrokerRequest {
                     request.env,
                     request.host_uplink_ip
                 ),
-            ),
-            Self::SeedDnsmasqLease(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.scope_id),
             ),
             Self::OwnershipMatrixCheck(request) => (
                 request.vm_id.to_string(),
@@ -1227,8 +1080,6 @@ pub enum BrokerResponse {
     /// Result of one source-to-target generation handoff.
     ApplyHostGenerationHandoff(ApplyHostGenerationHandoffResponse),
     Ack(AckResponse),
-    CreatePersistentTap(TapReadyResponse),
-    CreateTapFd(TapReadyResponse),
     /// Typed broker error envelope returned in place of an op-specific
     /// response when the broker refuses or fails to handle a request.
     /// Mirrors the bootstrap `BrokerResponse::Error` struct-variant
@@ -1276,7 +1127,6 @@ pub enum BrokerResponse {
     /// Stop response for an exact transient unit identity.
     StopSystemdUnit(StopSystemdUnitResponse),
     ReconcileStorageScope(ReconcileStorageScopeResponse),
-    SetBridgePortFlags(BridgePortFlagsResponse),
     /// Typed response carrying the activated generation (collision-free
     /// `generation_id` plus the u32 `generation_token`), the resolved
     /// hardlink-farm root, and the count of top-level closure paths
@@ -3631,61 +3481,44 @@ mod tests {
 
     /// CreatePersistentTap and CreateTapFd carry opaque runner identity plus
     /// the complete admitted Network provenance. Kernel names and attributes
-    /// remain broker-derived.
+    /// remain broker-derived. U12 retired the typed frames: the envelope
+    /// carrier names the committed family operation and the payload is the
+    /// same opaque-only typed request, so the wire-opacity contract now
+    /// guards the envelope payload.
     #[test]
     fn create_persistent_tap_request_requires_admitted_provenance() {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "CreatePersistentTap",
-            "payload": {
-                "roleId": "runner-lan",
-                "vmId": "corp-vm",
-                "bundleTapIntentRef": "network-tap:716a354d3a6a651a0ad54d65cf0a72b764b91b3ed4167c6af551a4949d591019",
-                "attachmentId": "123e4567-e89b-42d3-a456-426614174000",
-                "networkGeneration": 4,
-                "attachmentGeneration": 7,
-                "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
-                "networkUid": "323e4567-e89b-42d3-a456-426614174002",
-                "admittedInterfaceNames": ["d2b-tap0", "d2b-br0"],
-                "bundleGeneration": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-            }
-        }))
+        let frame = encode_frame(&envelope_invoke_json(
+            "CreatePersistentTap",
+            opaque_create_tap_payload(),
+        ))
         .expect("encodes");
         let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
-        match decoded {
-            BrokerRequest::CreatePersistentTap(req) => {
-                assert_eq!(req.role_id.as_str(), "runner-lan");
-                assert_eq!(req.vm_id.as_str(), "corp-vm");
-            }
-            other => panic!("expected CreatePersistentTap, got {other:?}"),
-        }
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert_eq!(invoke.operation, "CreatePersistentTap");
+        let req: CreatePersistentTapRequest =
+            serde_json::from_value(invoke.payload).expect("payload is the typed tap request");
+        assert_eq!(req.role_id.as_str(), "runner-lan");
+        assert_eq!(req.vm_id.as_str(), "corp-vm");
     }
 
     #[test]
     fn create_tap_fd_request_requires_admitted_provenance() {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "CreateTapFd",
-            "payload": {
-                "roleId": "runner-lan",
-                "vmId": "corp-vm",
-                "bundleTapIntentRef": "network-tap:716a354d3a6a651a0ad54d65cf0a72b764b91b3ed4167c6af551a4949d591019",
-                "attachmentId": "123e4567-e89b-42d3-a456-426614174000",
-                "networkGeneration": 4,
-                "attachmentGeneration": 7,
-                "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
-                "networkUid": "323e4567-e89b-42d3-a456-426614174002",
-                "admittedInterfaceNames": ["d2b-tap0", "d2b-br0"],
-                "bundleGeneration": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-            }
-        }))
+        let frame = encode_frame(&envelope_invoke_json(
+            "CreateTapFd",
+            opaque_create_tap_payload(),
+        ))
         .expect("encodes");
         let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
-        match decoded {
-            BrokerRequest::CreateTapFd(req) => {
-                assert_eq!(req.role_id.as_str(), "runner-lan");
-                assert_eq!(req.vm_id.as_str(), "corp-vm");
-            }
-            other => panic!("expected CreateTapFd, got {other:?}"),
-        }
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert_eq!(invoke.operation, "CreateTapFd");
+        let req: CreateTapFdRequest =
+            serde_json::from_value(invoke.payload).expect("payload is the typed tap request");
+        assert_eq!(req.role_id.as_str(), "runner-lan");
+        assert_eq!(req.vm_id.as_str(), "corp-vm");
     }
 
     #[test]
@@ -3703,13 +3536,15 @@ mod tests {
             ] {
                 let mut payload = opaque_create_tap_payload();
                 payload.as_object_mut().unwrap().remove(field);
-                let frame = encode_frame(&serde_json::json!({
-                    "kind": kind,
-                    "payload": payload,
-                }))
-                .expect("encodes");
+                let frame = encode_frame(&envelope_invoke_json(kind, payload))
+                    .expect("encodes");
+                let decoded =
+                    decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
+                let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+                    panic!("expected EnvelopeInvoke");
+                };
                 assert!(
-                    decode_frame::<BrokerRequest>("BrokerRequest", &frame).is_err(),
+                    serde_json::from_value::<CreatePersistentTapRequest>(invoke.payload).is_err(),
                     "{kind} must reject missing {field}"
                 );
             }
@@ -3734,13 +3569,15 @@ mod tests {
                     .as_object_mut()
                     .unwrap()
                     .insert(field.to_owned(), serde_json::Value::Null);
-                let frame = encode_frame(&serde_json::json!({
-                    "kind": kind,
-                    "payload": payload,
-                }))
-                .expect("encodes");
+                let frame = encode_frame(&envelope_invoke_json(kind, payload))
+                    .expect("encodes");
+                let decoded =
+                    decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
+                let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+                    panic!("expected EnvelopeInvoke");
+                };
                 assert!(
-                    decode_frame::<BrokerRequest>("BrokerRequest", &frame).is_err(),
+                    serde_json::from_value::<CreatePersistentTapRequest>(invoke.payload).is_err(),
                     "{kind} must reject null {field}"
                 );
             }
@@ -3752,58 +3589,68 @@ mod tests {
     /// set from the trusted bundle's per-role BridgePortFlags row.
     #[test]
     fn set_bridge_port_flags_request_is_opaque_only() {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "SetBridgePortFlags",
-            "payload": {
-                "vmId": "corp-vm",
-                "roleId": "workload-lan"
-            }
-        }))
+        let frame = encode_frame(&envelope_invoke_json(
+            "SetBridgePortFlags",
+            opaque_set_bridge_port_flags_payload(),
+        ))
         .expect("encodes");
         let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
-        match decoded {
-            BrokerRequest::SetBridgePortFlags(req) => {
-                assert_eq!(req.vm_id.as_str(), "corp-vm");
-                assert_eq!(req.role_id.as_str(), "workload-lan");
-            }
-            other => panic!("expected SetBridgePortFlags, got {other:?}"),
-        }
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert_eq!(invoke.operation, "SetBridgePortFlags");
+        let req: SetBridgePortFlagsRequest =
+            serde_json::from_value(invoke.payload).expect("payload is the typed flags request");
+        assert_eq!(req.vm_id.as_str(), "corp-vm");
+        assert_eq!(req.role_id.as_str(), "workload-lan");
     }
 
-    /// Regression guard: a wire frame that still contains the legacy raw
-    /// authority field is rejected by `deny_unknown_fields`. This pins
-    /// the opaque-only contract.
+    /// Regression guard: an envelope payload that still contains the
+    /// legacy raw authority fields is rejected by the typed payload
+    /// parse (`deny_unknown_fields`). This pins the opaque-only contract.
     #[test]
     fn set_bridge_port_flags_rejects_raw_bridge_field() {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "SetBridgePortFlags",
-            "payload": {
+        let frame = encode_frame(&envelope_invoke_json(
+            "SetBridgePortFlags",
+            serde_json::json!({
                 "vmId": "corp-vm",
                 "roleId": "workload-lan",
                 "bridge": "br-x",
                 "port": "tap-x",
                 "isolated": true,
                 "neighSuppress": false
-            }
-        }))
+            }),
+        ))
         .expect("encodes");
-        let result = decode_frame::<BrokerRequest>("BrokerRequest", &frame);
-        assert!(result.is_err(), "raw bridge/port/flags must be refused");
+        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert!(
+            serde_json::from_value::<SetBridgePortFlagsRequest>(invoke.payload).is_err(),
+            "raw bridge/port/flags must be refused"
+        );
     }
 
     #[test]
     fn create_persistent_tap_rejects_raw_ifname_field() {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "CreatePersistentTap",
-            "payload": {
+        let frame = encode_frame(&envelope_invoke_json(
+            "CreatePersistentTap",
+            serde_json::json!({
                 "roleId": "runner-lan",
                 "vmId": "corp-vm",
                 "ifnameDerived": "d2b-bXXXXXXXX"
-            }
-        }))
+            }),
+        ))
         .expect("encodes");
-        let result = decode_frame::<BrokerRequest>("BrokerRequest", &frame);
-        assert!(result.is_err(), "raw ifname_derived must be refused");
+        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert!(
+            serde_json::from_value::<CreatePersistentTapRequest>(invoke.payload).is_err(),
+            "raw ifname_derived must be refused"
+        );
     }
 
     #[test]
@@ -3828,32 +3675,29 @@ mod tests {
     /// that reintroduces exactly one of them fails closed with a
     /// precisely-named test.
     ///
-    /// The helper asserts the rejection is specifically
-    /// `wire-unknown-field`, not any error, and the per-field test loops
-    /// use values matching each field's legacy wire type. Without this,
-    /// a future regression that reintroduces a numeric field like
-    /// `ownerUid`/`ownerGid`/`mtu` would still pass via serde
-    /// type-mismatch on a string value - the gate would see an error and
-    /// accept it without proving the wire contract actually refused the
-    /// field name.
-    fn require_wire_unknown_field_rejection(kind: &str, base: serde_json::Value, unknown: &str) {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": kind,
-            "payload": base,
-        }))
-        .expect("encodes");
-        match decode_frame::<BrokerRequest>("BrokerRequest", &frame) {
-            Ok(_) => panic!(
-                "{kind} must reject unknown field '{unknown}' (legacy raw authority), but decode succeeded"
-            ),
-            Err(err) => assert_eq!(
-                err.kind().as_str(),
-                "wire-unknown-field",
-                "{kind} rejected unknown field '{unknown}' but with kind {} (expected wire-unknown-field); message: {}",
-                err.kind().as_str(),
-                err.message(),
-            ),
-        }
+    /// U12 retired the typed frames: the envelope carrier admits the
+    /// generic frame, so the fail-closed rejection now lives in the typed
+    /// payload parse - any legacy authority field must make the typed
+    /// request unparseable (`deny_unknown_fields`). The per-field test
+    /// loops use values matching each field's legacy wire type, so a
+    /// regression that reintroduces a numeric field like
+    /// `ownerUid`/`ownerGid`/`mtu` cannot pass via serde type-mismatch
+    /// on a string value.
+    fn require_wire_unknown_field_rejection<T: serde::de::DeserializeOwned>(
+        kind: &str,
+        base: serde_json::Value,
+        unknown: &str,
+    ) {
+        let frame = encode_frame(&envelope_invoke_json(kind, base)).expect("encodes");
+        let decoded =
+            decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("envelope decodes");
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert!(
+            serde_json::from_value::<T>(invoke.payload).is_err(),
+            "{kind} must reject unknown field '{unknown}' (legacy raw authority), but the typed payload parse succeeded"
+        );
     }
 
     /// Legacy authority field with its original wire type. Tightens the
@@ -3909,7 +3753,11 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .insert(field.to_string(), legacy_value(field));
-            require_wire_unknown_field_rejection("CreatePersistentTap", payload, field);
+            require_wire_unknown_field_rejection::<CreatePersistentTapRequest>(
+                "CreatePersistentTap",
+                payload,
+                field,
+            );
         }
     }
 
@@ -3929,7 +3777,11 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .insert(field.to_string(), legacy_value(field));
-            require_wire_unknown_field_rejection("CreateTapFd", payload, field);
+            require_wire_unknown_field_rejection::<CreateTapFdRequest>(
+                "CreateTapFd",
+                payload,
+                field,
+            );
         }
     }
 
@@ -3941,7 +3793,11 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .insert(field.to_string(), legacy_value(field));
-            require_wire_unknown_field_rejection("SetBridgePortFlags", payload, field);
+            require_wire_unknown_field_rejection::<SetBridgePortFlagsRequest>(
+                "SetBridgePortFlags",
+                payload,
+                field,
+            );
         }
     }
 
@@ -3953,7 +3809,11 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .insert(field.to_string(), legacy_value(field));
-            require_wire_unknown_field_rejection("UsbipBindFirewallRule", payload, field);
+            require_wire_unknown_field_rejection::<UsbipBindFirewallRuleRequest>(
+                "UsbipBindFirewallRule",
+                payload,
+                field,
+            );
         }
     }
 
@@ -3976,22 +3836,26 @@ mod tests {
 
     #[test]
     fn apply_nftables_request_is_opaque_only() {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "ApplyNftables",
-            "payload": {
+        // U12 retired the typed ApplyNftables frame: the envelope carrier
+        // names the committed family operation and the payload is the same
+        // opaque-only typed request.
+        let frame = encode_frame(&envelope_invoke_json(
+            "ApplyNftables",
+            serde_json::json!({
                 "bundleNftIntentRef": "nft-corp",
                 "scopeId": "scope-corp"
-            }
-        }))
+            }),
+        ))
         .expect("encodes");
         let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
-        match decoded {
-            BrokerRequest::ApplyNftables(req) => {
-                assert_eq!(req.bundle_nft_intent_ref.as_str(), "nft-corp");
-                assert_eq!(req.scope_id.as_str(), "scope-corp");
-            }
-            other => panic!("expected ApplyNftables, got {other:?}"),
-        }
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert_eq!(invoke.operation, "ApplyNftables");
+        let req: ApplyNftablesRequest =
+            serde_json::from_value(invoke.payload).expect("payload is the typed nft request");
+        assert_eq!(req.bundle_nft_intent_ref.as_str(), "nft-corp");
+        assert_eq!(req.scope_id.as_str(), "scope-corp");
     }
 
     #[test]
@@ -4107,28 +3971,28 @@ mod tests {
     /// was removed from `CreateTapFdRequest`. The payload-side
     /// validation it used to assert is now the broker's responsibility
     /// (it derives the ifname from the trusted bundle row keyed by
-    /// `role_id` + `vm_id`). What we still want to guarantee here is
-    /// that a frame carrying the dropped `ifnameDerived` field is
-    /// fail-closed-rejected by the wire layer with `wire-unknown-field`,
+    /// `role_id` + `vm_id`). U12 retired the typed frame, so what we
+    /// still want to guarantee here is that an envelope payload carrying
+    /// the dropped `ifnameDerived` field fails the typed payload parse,
     /// preventing a future caller from supplying it.
     #[test]
     fn create_tap_fd_rejects_invalid_ifname() {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "CreateTapFd",
-            "payload": {
+        let frame = encode_frame(&envelope_invoke_json(
+            "CreateTapFd",
+            serde_json::json!({
                 "ifnameDerived": "bad.name",
                 "roleId": "runner",
                 "vmId": "corp-vm"
-            }
-        }))
+            }),
+        ))
         .expect("encodes");
-        let error = decode_frame::<BrokerRequest>("BrokerRequest", &frame)
-            .expect_err("dropped ifnameDerived field must be refused");
-        assert_eq!(
-            error.kind().as_str(),
-            "wire-unknown-field",
-            "expected unknown-field rejection; got message: {}",
-            error.message()
+        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert!(
+            serde_json::from_value::<CreateTapFdRequest>(invoke.payload).is_err(),
+            "dropped ifnameDerived field must fail the typed payload parse"
         );
     }
 

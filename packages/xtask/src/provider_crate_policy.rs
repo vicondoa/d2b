@@ -2973,6 +2973,24 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 network-fds step",
     },
     SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-broker/src/kernel_ops.rs",
+        token: "nftables",
+        family: "network-local",
+        retires_with: "U12 network-fds census step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-broker/src/kernel_ops.rs",
+        token: "dnsmasq",
+        family: "network-local",
+        retires_with: "U12 network-fds census step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-broker/src/kernel_ops.rs",
+        token: "sysctl",
+        family: "activation-nixos",
+        retires_with: "U12 network-fds census step",
+    },
+    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "nftables",
         family: "network-local",
@@ -3029,12 +3047,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
         token: "network_local",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/runtime.rs",
-        token: "dnsmasq",
         family: "network-local",
         retires_with: "U12 network-fds step",
     },

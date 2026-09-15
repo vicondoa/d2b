@@ -30,8 +30,7 @@ use d2b_contracts::{
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, VmId},
 };
 use d2b_contracts_broker::broker_wire::{
-    ApplyNftablesRequest as BrokerApplyNftablesRequest,
-    ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest, BrokerCallerRole,
+    BrokerCallerRole,
     BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
     ChildExitKind, ChildExitStatus, ChildReapedNotification,
     ExportBrokerAuditRequest,
@@ -40,7 +39,9 @@ use d2b_contracts_broker::broker_wire::{
     QemuMediaRefreshRegistryRequest as BrokerQemuMediaRefreshRegistryRequest,
     RunnerRole, RunnerSignal,
 };
-use d2b_contracts_broker::kernel_client::{KernelInvocation, envelope_invoke_kernel};
+use d2b_contracts_broker::kernel_client::{
+    KernelInvocation, KernelInvokeError, envelope_invoke_kernel,
+};
 use d2b_resource_types::{KernelCaller, RunnerLookup};
 use d2b_contracts_control::public_wire::{
     self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability,
@@ -13788,66 +13789,79 @@ fn refresh_broker_reap_log(state: &ServerState, context: &str) {
     }
 }
 
-fn dispatch_broker_ack_request_as(
+/// Dispatch one broker-generic kernel invocation as a host-prep / host-wide
+/// leg (U12): the retired typed network-family arms now run as direct
+/// envelope kernel calls, so this helper maps the envelope refusal/error
+/// into the same launcher-side redaction vocabulary the typed dispatcher
+/// used.
+fn dispatch_broker_kernel_ack(
     state: &ServerState,
     verb: &str,
     op_name: &str,
-    request: BrokerRequest,
+    operation: &str,
+    zone: &str,
+    payload: serde_json::Value,
     caller_role: BrokerCallerRole,
 ) -> Result<(), Value> {
-    match dispatch_broker_request_as(state, request, caller_role) {
-        Ok(BrokerResponse::Ack(ack)) if ack.accepted && ack.operation == op_name => Ok(()),
-        Ok(BrokerResponse::Ack(ack)) => {
+    match envelope_invoke_kernel(
+        &broker_socket_path(state),
+        KERNEL_IO_TIMEOUT,
+        caller_role,
+        KernelInvocation {
+            operation,
+            zone,
+            payload,
+            fds: &[],
+            chain_root_invocation_id: None,
+            chain_identities: None,
+        },
+    ) {
+        Ok(_) => Ok(()),
+        Err(KernelInvokeError::Refused { code, detail }) => {
             tracing::warn!(
-                op_name = op_name,
-                broker_ack_operation = %ack.operation,
-                broker_ack_accepted = ack.accepted,
-                "broker returned unexpected ack payload"
+                broker_kind = %code,
+                broker_operation = operation,
+                broker_message = detail.as_deref().unwrap_or(""),
+                "broker kernel op failed"
             );
             let (summary, remediation) =
-                redact_broker_error_for_launcher(op_name, None, "Broker.Protocol");
-            Err(broker_failure_response(verb, summary, remediation, None))
-        }
-        Ok(BrokerResponse::Error(error)) => {
-            tracing::warn!(
-                broker_kind = %error.kind,
-                broker_operation = %error.operation,
-                broker_target_wave = error.target_wave.as_deref().unwrap_or("none"),
-                broker_message = %error.message,
-                broker_action = %error.action,
-                "broker live op failed"
-            );
-            let (summary, remediation) = redact_broker_error_for_launcher(
-                op_name,
-                error.target_wave.as_deref(),
-                &error.kind,
-            );
-            Err(broker_failure_response(
-                verb,
-                summary,
-                remediation,
-                error.target_wave,
-            ))
-        }
-        Ok(other) => {
-            tracing::warn!(
-                op_name = op_name,
-                broker_response_kind = %broker_response_kind(&other),
-                "broker returned unexpected response kind"
-            );
-            let (summary, remediation) =
-                redact_broker_error_for_launcher(op_name, None, "Broker.Protocol");
+                redact_broker_error_for_launcher(op_name, None, &code);
             Err(broker_failure_response(verb, summary, remediation, None))
         }
         Err(error) => {
-            tracing::warn!(op_name = op_name, error = ?error, "broker dispatch failed");
+            tracing::warn!(op_name = op_name, error = %error, "broker kernel dispatch failed");
             let (summary, remediation) = redact_broker_dispatch_failure_for_launcher(op_name);
             Err(broker_failure_response(verb, summary, remediation, None))
         }
     }
 }
 
-fn load_bundle_resolver(state: &ServerState) -> Result<BundleResolver, TypedError> {
+/// The resolved host-wide nft intent payload one apply-nftables kernel
+/// invocation carries (the host firewall slice of `host prepare` /
+/// `host destroy` / `host reconcile` and the host-prep DAG).
+fn host_nft_kernel_payload(
+    resolver: &BundleResolver,
+    intent_ref: &str,
+    destroy: bool,
+) -> Result<serde_json::Value, String> {
+    let intent = resolver
+        .find_nft_intent(intent_ref)
+        .ok_or_else(|| "host nft intent missing".to_owned())?;
+    Ok(serde_json::json!({
+        "family": resolver.host.nftables.family,
+        "table": resolver.host.nftables.table,
+        "scriptBody": intent.script_body,
+        "ownershipId": intent.ownership_id,
+        "destroy": destroy,
+        "desiredHash": serde_json::Value::Null,
+        "tableHashAfterApply": resolver.host.nftables.table_hash_after_apply,
+        "coexistencePolicy": serde_json::to_value(&resolver.host.firewall_coexistence_policy).ok(),
+    }))
+}
+
+
+
+pub(crate) fn load_bundle_resolver(state: &ServerState) -> Result<BundleResolver, TypedError> {
     #[cfg(test)]
     let loaded = BundleResolver::load_with_policy(
         &state.config.artifacts.bundle_path,
@@ -17842,7 +17856,11 @@ fn execute_host_prep_dag(
         .and_then(|resolver| network_tap_context_for_vm(state, &resolver, vm));
     for step in steps {
         let op_name = step.kind.broker_op_name();
-        let request = match step.kind {
+        // Every DAG arm either dispatches its kernel/typed leg inline and
+        // continues, or skips with a log; the match is a statement, not an
+        // expression (U12: the last typed-value arm retired with the
+        // network wire variants).
+        match step.kind {
             HostPrepStepKind::ApplyNftablesRules => {
                 let nft_ref = step
                     .bundle_ref
@@ -17863,13 +17881,67 @@ fn execute_host_prep_dag(
                     );
                     continue;
                 }
-                BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
-                    bundle_nft_intent_ref: nft_ref,
-                    scope_id,
-                    desired_hash: None,
-                    destroy: false,
-                    tracing_span_id: None,
-                })
+                // U12: the retired typed ApplyNftables arm's core is the
+                // apply-nftables kernel; the daemon resolves the trusted
+                // host nft intent and invokes the kernel directly.
+                let resolver = match load_bundle_resolver(state) {
+                    Ok(resolver) => resolver,
+                    Err(error) => {
+                        tracing::warn!(
+                            vm = %vm,
+                            step_id = %step.id,
+                            op_kind = op_name,
+                            error = ?error,
+                            "host-prep nft application refused: bundle resolver unavailable"
+                        );
+                        let (summary, remediation) =
+                            redact_broker_dispatch_failure_for_launcher(op_name);
+                        return Err(broker_failure_response(
+                            VERB,
+                            summary,
+                            remediation,
+                            None,
+                        ));
+                    }
+                };
+                let payload = match host_nft_kernel_payload(&resolver, nft_ref.as_str(), false) {
+                    Ok(payload) => payload,
+                    Err(reason) => {
+                        tracing::warn!(
+                            vm = %vm,
+                            step_id = %step.id,
+                            op_kind = op_name,
+                            reason,
+                            "host-prep nft application refused: intent resolution failed"
+                        );
+                        let (summary, remediation) =
+                            redact_broker_dispatch_failure_for_launcher(op_name);
+                        return Err(broker_failure_response(
+                            VERB,
+                            summary,
+                            remediation,
+                            None,
+                        ));
+                    }
+                };
+                if let Err(response) = dispatch_broker_kernel_ack(
+                    state,
+                    VERB,
+                    op_name,
+                    "apply-nftables",
+                    scope_id.as_str(),
+                    payload,
+                    caller_role.clone(),
+                ) {
+                    tracing::warn!(
+                        vm = %vm,
+                        step_id = %step.id,
+                        op_kind = op_name,
+                        "host-prep DAG step failed"
+                    );
+                    return Err(response);
+                }
+                continue;
             }
             HostPrepStepKind::SeedDnsmasqLease => {
                 tracing::warn!(
@@ -18025,24 +18097,31 @@ fn execute_host_prep_dag(
                         ));
                     }
                 };
-                let req = BrokerRequest::CreatePersistentTap(
-                    d2b_contracts_broker::broker_wire::CreatePersistentTapRequest {
-                        role_id: role_id.clone(),
-                        vm_id: step.bundle_ref.vm_id.clone(),
-                        bundle_tap_intent_ref: tap_identity.intent_ref,
-                        attachment_id: context.attachment_id.clone(),
-                        network_generation: context.network_generation,
-                        attachment_generation: context.attachment_generation,
-                        zone_uid: context.zone_uid.clone(),
-                        network_uid: context.network_uid.clone(),
-                        bundle_generation: context.bundle_generation.clone(),
-                        admitted_interface_names: context.admitted_interface_names.clone(),
-                        tracing_span_id: None,
-                    },
-                );
-                if let Err(response) =
-                    dispatch_broker_host_prep_step(state, VERB, op_name, req, caller_role.clone())
-                {
+                // U12: the retired typed CreatePersistentTap arm's core is
+                // the create-persistent-tap kernel; the typed request is
+                // the kernel's payload (the kernel re-derives the trusted
+                // tap intent from its own bundle copy).
+                let payload = serde_json::json!({
+                    "roleId": role_id.as_str(),
+                    "vmId": step.bundle_ref.vm_id.as_str(),
+                    "bundleTapIntentRef": tap_identity.intent_ref.as_str(),
+                    "attachmentId": context.attachment_id.as_str(),
+                    "networkGeneration": context.network_generation.get(),
+                    "attachmentGeneration": context.attachment_generation.get(),
+                    "zoneUid": context.zone_uid.as_str(),
+                    "networkUid": context.network_uid.as_str(),
+                    "bundleGeneration": context.bundle_generation.as_str(),
+                    "admittedInterfaceNames": context.admitted_interface_names.iter().map(|name| name.as_str()).collect::<Vec<_>>(),
+                });
+                if let Err(response) = dispatch_broker_kernel_ack(
+                    state,
+                    VERB,
+                    op_name,
+                    "create-persistent-tap",
+                    provenance.zone_uid().as_str(),
+                    payload,
+                    caller_role.clone(),
+                ) {
                     tracing::warn!(
                         vm = %vm,
                         step_id = %step.id,
@@ -18080,25 +18159,77 @@ fn execute_host_prep_dag(
                 continue;
             }
             HostPrepStepKind::ApplyNmUnmanaged => {
-                // Compose ApplyNmUnmanaged against the single host-wide
-                // intent row
-                // (`nm-unmanaged:host`). The scope_id falls back to
-                // the bundle_ref's env scope when the DAG carries
-                // one; otherwise "host".
+                // Compose the apply-nm-unmanaged kernel against the single
+                // host-wide intent row (`nm-unmanaged:host`). The scope_id
+                // falls back to the bundle_ref's env scope when the DAG
+                // carries one; otherwise "host".
                 let scope_id = step
                     .bundle_ref
                     .scope_id
                     .clone()
                     .unwrap_or_else(|| ScopeId::new("host"));
-                let req = BrokerRequest::ApplyNmUnmanaged(BrokerApplyNmUnmanagedRequest {
-                    bundle_nm_intent_ref: BundleOpId::new(intent_id_nm_unmanaged_host()),
-                    scope_id,
-                    destroy: false,
-                    tracing_span_id: None,
+                // U12: the daemon resolves the trusted nm intent and
+                // invokes the kernel directly.
+                let resolver = match load_bundle_resolver(state) {
+                    Ok(resolver) => resolver,
+                    Err(error) => {
+                        tracing::warn!(
+                            vm = %vm,
+                            step_id = %step.id,
+                            op_kind = op_name,
+                            error = ?error,
+                            "host-prep nm-unmanaged refused: bundle resolver unavailable"
+                        );
+                        let (summary, remediation) =
+                            redact_broker_dispatch_failure_for_launcher(op_name);
+                        return Err(broker_failure_response(
+                            VERB,
+                            summary,
+                            remediation,
+                            None,
+                        ));
+                    }
+                };
+                let intent = match resolver.find_nm_unmanaged_intent(
+                    &intent_id_nm_unmanaged_host(),
+                ) {
+                    Some(intent) => intent.clone(),
+                    None => {
+                        tracing::warn!(
+                            vm = %vm,
+                            step_id = %step.id,
+                            op_kind = op_name,
+                            "host-prep nm-unmanaged refused: intent missing"
+                        );
+                        let (summary, remediation) =
+                            redact_broker_dispatch_failure_for_launcher(op_name);
+                        return Err(broker_failure_response(
+                            VERB,
+                            summary,
+                            remediation,
+                            None,
+                        ));
+                    }
+                };
+                let payload = serde_json::json!({
+                    "intentId": intent.intent_id,
+                    "filePath": intent.file_path.display().to_string(),
+                    "contents": intent.contents,
+                    "mode": intent.mode,
+                    "owner": intent.owner,
+                    "group": intent.group,
+                    "reloadBehavior": intent.reload_behavior,
+                    "destroy": false,
                 });
-                if let Err(response) =
-                    dispatch_broker_ack_request_as(state, VERB, op_name, req, caller_role.clone())
-                {
+                if let Err(response) = dispatch_broker_kernel_ack(
+                    state,
+                    VERB,
+                    op_name,
+                    "apply-nm-unmanaged",
+                    scope_id.as_str(),
+                    payload,
+                    caller_role.clone(),
+                ) {
                     tracing::warn!(
                         vm = %vm,
                         step_id = %step.id,
@@ -18141,17 +18272,6 @@ fn execute_host_prep_dag(
                 );
                 continue;
             }
-        };
-        if let Err(response) =
-            dispatch_broker_ack_request_as(state, VERB, op_name, request, caller_role.clone())
-        {
-            tracing::warn!(
-                vm = %vm,
-                step_id = %step.id,
-                op_kind = op_name,
-                "host-prep DAG step failed"
-            );
-            return Err(response);
         }
     }
     Ok(())
@@ -19553,27 +19673,27 @@ fn dispatch_broker_host_prepare_as(
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
         return Ok(response);
     }
-    let dispatch_broker_ack_request =
-        |state: &ServerState, verb: &str, op_name: &str, request: BrokerRequest| {
-            dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
-        };
-
-    if let Err(response) = dispatch_broker_ack_request(
+    // U12: the retired typed ApplyNftables arm's core is the
+    // apply-nftables kernel; the daemon resolves the trusted host nft
+    // intent and invokes the kernel directly.
+    let resolver = load_bundle_resolver(state)?;
+    let payload = host_nft_kernel_payload(&resolver, &intent_id_nft_host(), false).map_err(|reason| {
+        TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: format!("host nft intent resolution failed: {reason}"),
+        }
+    })?;
+    if let Err(response) = dispatch_broker_kernel_ack(
         state,
         VERB,
         "ApplyNftables",
-        BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
-            bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
-            scope_id: ScopeId::new("host"),
-            desired_hash: None,
-            destroy: false,
-            tracing_span_id: None,
-        }),
+        "apply-nftables",
+        "host",
+        payload,
+        caller_role.clone(),
     ) {
         return Ok(response);
     }
-
-    let resolver = load_bundle_resolver(state)?;
     let generation =
         resolver
             .installed_generation_identity()
@@ -19620,35 +19740,52 @@ fn dispatch_broker_host_destroy_as(
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
         return Ok(response);
     }
-    let dispatch_broker_ack_request =
-        |state: &ServerState, verb: &str, op_name: &str, request: BrokerRequest| {
-            dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
-        };
-
-    if let Err(response) = dispatch_broker_ack_request(
+    // U12: the retired typed ApplyNmUnmanaged / ApplyNftables arms' cores
+    // are the apply-nm-unmanaged / apply-nftables kernels; the daemon
+    // resolves the trusted host intents and invokes the kernels directly.
+    let resolver = load_bundle_resolver(state)?;
+    let nm_intent = resolver
+        .find_nm_unmanaged_intent(&intent_id_nm_unmanaged_host())
+        .ok_or(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: "host nm-unmanaged intent missing".to_owned(),
+        })?
+        .clone();
+    let nm_payload = serde_json::json!({
+        "intentId": nm_intent.intent_id,
+        "filePath": nm_intent.file_path.display().to_string(),
+        "contents": nm_intent.contents,
+        "mode": nm_intent.mode,
+        "owner": nm_intent.owner,
+        "group": nm_intent.group,
+        "reloadBehavior": nm_intent.reload_behavior,
+        "destroy": true,
+    });
+    if let Err(response) = dispatch_broker_kernel_ack(
         state,
         VERB,
         "ApplyNmUnmanaged",
-        BrokerRequest::ApplyNmUnmanaged(BrokerApplyNmUnmanagedRequest {
-            bundle_nm_intent_ref: BundleOpId::new(intent_id_nm_unmanaged_host()),
-            scope_id: ScopeId::new("host"),
-            destroy: true,
-            tracing_span_id: None,
-        }),
+        "apply-nm-unmanaged",
+        "host",
+        nm_payload,
+        caller_role.clone(),
     ) {
         return Ok(response);
     }
-    if let Err(response) = dispatch_broker_ack_request(
+    let nft_payload = host_nft_kernel_payload(&resolver, &intent_id_nft_host(), true).map_err(|reason| {
+        TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: format!("host nft intent resolution failed: {reason}"),
+        }
+    })?;
+    if let Err(response) = dispatch_broker_kernel_ack(
         state,
         VERB,
         "ApplyNftables",
-        BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
-            bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
-            scope_id: ScopeId::new("host"),
-            desired_hash: None,
-            destroy: true,
-            tracing_span_id: None,
-        }),
+        "apply-nftables",
+        "host",
+        nft_payload,
+        caller_role.clone(),
     ) {
         return Ok(response);
     }
@@ -19676,28 +19813,30 @@ fn dispatch_broker_host_reconcile_as(
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
         return Ok(response);
     }
-    let dispatch_broker_ack_request =
-        |state: &ServerState, verb: &str, op_name: &str, request: BrokerRequest| {
-            dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
-        };
-
     if !request.network {
         return Err(TypedError::WireUnknownField {
             detail: "hostReconcile: at least one scope flag must be set; today only --network is supported".to_owned(),
         });
     }
 
-    if let Err(response) = dispatch_broker_ack_request(
+    // U12: the retired typed ApplyNftables arm's core is the
+    // apply-nftables kernel; the daemon resolves the trusted host nft
+    // intent and invokes the kernel directly.
+    let resolver = load_bundle_resolver(state)?;
+    let payload = host_nft_kernel_payload(&resolver, &intent_id_nft_host(), false).map_err(|reason| {
+        TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: format!("host nft intent resolution failed: {reason}"),
+        }
+    })?;
+    if let Err(response) = dispatch_broker_kernel_ack(
         state,
         VERB,
         "ApplyNftables",
-        BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
-            bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
-            scope_id: ScopeId::new("host"),
-            desired_hash: None,
-            destroy: false,
-            tracing_span_id: None,
-        }),
+        "apply-nftables",
+        "host",
+        payload,
+        caller_role.clone(),
     ) {
         return Ok(response);
     }
@@ -23736,11 +23875,19 @@ mod broker_dispatch_tests {
     fn test_state_with_broker_socket_and_host(path: PathBuf, host_path: PathBuf) -> ServerState {
         let daemon_state_dir = test_daemon_state_dir("broker-host");
         let broker_reap_log = BrokerReapLog::new();
+        // U12: the host-prep/destroy legs resolve trusted bundle intents
+        // before invoking the kernels, so the state must carry a real
+        // (test-policy) bundle - the default artifact paths point at the
+        // production /etc/d2b bundle and fail the test-policy owner check.
+        let fixture = write_minimal_vm_start_bundle_artifacts(&daemon_state_dir);
         ServerState {
             config: DaemonConfig {
                 broker_socket_path: path,
                 artifacts: ArtifactPaths {
                     host_path,
+                    bundle_path: fixture.bundle_path,
+                    public_manifest_path: fixture.public_manifest_path,
+                    processes_path: fixture.processes_path,
                     ..ArtifactPaths::default()
                 },
                 ..DaemonConfig::default()
@@ -27698,7 +27845,7 @@ mod broker_dispatch_tests {
     #[test]
     fn host_destroy_removes_only_host_owned_network_state() {
         use d2b_contracts_broker::broker_wire::{
-            AckResponse, BrokerRequestEnvelope, BrokerResponse,
+            BrokerRequest, BrokerRequestEnvelope, BrokerResponse, EnvelopeInvokeResponse,
         };
         use nix::sys::socket::{
             AddressFamily, Backlog, MsgFlags, SockFlag, SockType, UnixAddr, accept4, bind, listen,
@@ -27782,16 +27929,27 @@ mod broker_dispatch_tests {
                 let frame = read_test_frame(accepted_fd).expect("read broker request frame");
                 let envelope: BrokerRequestEnvelope =
                     serde_json::from_slice(&frame).expect("decode broker request frame");
-                let operation = envelope.request.op_name().to_owned();
+                // U12: the daemon's host-destroy legs invoke the
+                // apply-nm-unmanaged / apply-nftables kernels over the
+                // generic envelope carrier.
+                let BrokerRequest::EnvelopeInvoke(invoke) = envelope.request else {
+                    panic!("expected an envelope kernel invocation, got {:?}", envelope.request);
+                };
+                let operation = invoke.operation.clone();
                 operations.push(operation.clone());
                 write_test_json_frame(
                     accepted_fd,
-                    &BrokerResponse::Ack(AckResponse {
-                        accepted: true,
-                        operation,
+                    &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                        operation: operation.clone(),
+                        invocation_id: format!("fake-{operation}"),
+                        result: Some(serde_json::json!({ "applied": true })),
+                        refusal: None,
+                        detail: None,
+                        fd_indexes: vec![],
+                        fd_kinds: vec![],
                     }),
                 )
-                .expect("write broker ack frame");
+                .expect("write broker envelope frame");
                 close(accepted_fd).expect("close broker peer");
             }
             fs::remove_file(&server_socket_path).ok();
@@ -27814,7 +27972,7 @@ mod broker_dispatch_tests {
 
         assert_eq!(
             broker.join().expect("join broker thread"),
-            vec!["ApplyNmUnmanaged", "ApplyNftables",]
+            vec!["apply-nm-unmanaged", "apply-nftables"]
         );
         assert_eq!(
             response.get("type").and_then(serde_json::Value::as_str),

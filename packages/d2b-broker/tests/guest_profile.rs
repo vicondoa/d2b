@@ -12,10 +12,8 @@ use common::{D2BD_UID, TestBroker};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
 #[cfg(not(feature = "layer1-bootstrap"))]
-use d2b_contracts::types::{BundleOpId, ScopeId};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_contracts_broker::broker_wire::{
-    ApplyNftablesRequest, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
+    BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, EnvelopeInvokeRequest,
 };
 
 #[test]
@@ -57,6 +55,23 @@ fn guest_profile_admits_only_local_process_effects() {
         // rides the generic consume-cell/complete-cell kernels through
         // the envelope, so the typed variant is gone from every catalog.
         "ConsumeLifecycleLease",
+        // U12 retired the thirteen network-fds family wire variants the
+        // same way: their privileged cores are the broker-generic network
+        // kernels served through the envelope, so the typed variants are
+        // gone from every catalog.
+        "ApplyNftables",
+        "ApplyNftablesProjection",
+        "ApplyNmUnmanaged",
+        "ApplyRoute",
+        "ApplySysctl",
+        "CreateBridge",
+        "DeleteBridge",
+        "CreatePersistentTap",
+        "DeletePersistentTap",
+        "CreateTapFd",
+        "SetBridgePortFlags",
+        "UpdateHostsFile",
+        "SeedDnsmasqLease",
     ] {
         assert!(
             !BrokerProfile::Guest.allows_operation(operation),
@@ -67,11 +82,11 @@ fn guest_profile_admits_only_local_process_effects() {
 
 #[test]
 fn guest_profile_rejects_every_host_only_effect_class() {
+    // The retired network-family variants (ApplyNftables, ApplyRoute,
+    // ApplySysctl, CreateBridge among them) are covered by the retired
+    // negative list above; the host-only classes that remain are the
+    // device, storage, realm, and allocator operations.
     for operation in [
-        "ApplyNftables",
-        "ApplyRoute",
-        "ApplySysctl",
-        "CreateBridge",
         "OpenKvm",
         "OpenHidrawSecurityKey",
         "StoreSync",
@@ -90,15 +105,25 @@ fn guest_profile_rejects_every_host_only_effect_class() {
 #[test]
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn guest_binary_rejects_host_effects_before_bundle_mutation() {
+    // U12 retired the typed ApplyNftables arm: the host-only effect now
+    // rides the broker-generic apply-nftables kernel through the
+    // EnvelopeInvoke surface, and the guest profile refuses it inside the
+    // envelope response - the guest envelope commits only rows that admit
+    // the Guest profile, and the network kernels admit Host alone, so the
+    // call is refused as uncommitted before any payload validation or
+    // bundle mutation. The refusal is audited as the envelope's chain
+    // record under the kernel's own operation name.
     let broker = TestBroker::spawn_profile("guest-profile-", "guest-test", "guest", D2BD_UID);
     let client = connect_seqpacket(broker.socket_path()).expect("connect guest broker");
     let envelope = BrokerRequestEnvelope {
-        request: BrokerRequest::ApplyNftables(ApplyNftablesRequest {
-            bundle_nft_intent_ref: BundleOpId::new("nft:host-only"),
-            scope_id: ScopeId::new("env:work"),
-            desired_hash: None,
-            destroy: false,
-            tracing_span_id: None,
+        request: BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+            operation: "apply-nftables".to_owned(),
+            zone: "env:work".to_owned(),
+            payload: serde_json::json!({ "family": "inet", "table": "d2b" }),
+            chain_root_invocation_id: None,
+            chain_identities: None,
+            fd_indexes: Vec::new(),
+            fd_kinds: Vec::new(),
         }),
         caller_role: BrokerCallerRole::AdminUid { uid: D2BD_UID },
         test_peer_uid: Some(D2BD_UID),
@@ -109,12 +134,26 @@ fn guest_binary_rejects_host_effects_before_bundle_mutation() {
         .expect("receive guest profile response")
         .expect("guest broker response");
 
-    let BrokerResponse::Error(error) = response else {
-        panic!("guest profile must return a typed denial");
+    let BrokerResponse::EnvelopeInvoke(response) = response else {
+        panic!("guest profile must answer the envelope surface");
     };
-    assert_eq!(error.kind, "Broker.ProfileOperationDenied");
-    assert_eq!(error.operation, "ApplyNftables");
-    assert!(broker.audit_contents().contains("profile-operation-denied"));
+    assert_eq!(response.operation, "apply-nftables");
+    assert_eq!(
+        response.refusal.as_deref(),
+        Some(d2b_broker::envelope::UNCOMMITTED_OPERATION),
+        "the guest envelope must refuse the host-only kernel as uncommitted: {response:?}"
+    );
+    assert!(response.result.is_none());
+    let audit = broker.audit_contents();
+    assert!(
+        audit.contains(r#""operation":"apply-nftables""#),
+        "the refusal's chain record carries the kernel op name: {audit}"
+    );
+    assert!(audit.contains(r#""outcome":"refused""#), "{audit}");
+    assert!(
+        audit.contains(r#""code":"uncommitted-operation""#),
+        "{audit}"
+    );
 }
 
 #[test]

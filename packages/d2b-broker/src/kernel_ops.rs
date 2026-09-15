@@ -47,6 +47,26 @@ pub const OPEN_CGROUP_DIR: &str = "open-cgroup-dir";
 pub const OBSERVE_PROCESS: &str = "observe-process";
 pub const CONSUME_CELL: &str = "consume-cell";
 pub const COMPLETE_CELL: &str = "complete-cell";
+/// The U12 network-fds family kernels: the privileged, resource-agnostic
+/// cores of the thirteen retired network-family wire arms, served
+/// in-broker as broker-generic committed rows. The daemon-side family
+/// handler (or the daemon's legacy effect-port/host-prep legs) resolves
+/// the trusted bundle intents and carries the resolved values in the
+/// payload; each kernel runs the same ops-module helper the retired arm
+/// ran.
+pub const APPLY_NFTABLES: &str = "apply-nftables";
+pub const APPLY_NFTABLES_PROJECTION: &str = "apply-nftables-projection";
+pub const APPLY_NM_UNMANAGED: &str = "apply-nm-unmanaged";
+pub const APPLY_ROUTE: &str = "apply-route";
+pub const APPLY_SYSCTL: &str = "apply-sysctl";
+pub const CREATE_BRIDGE: &str = "create-bridge";
+pub const DELETE_BRIDGE: &str = "delete-bridge";
+pub const CREATE_PERSISTENT_TAP: &str = "create-persistent-tap";
+pub const DELETE_PERSISTENT_TAP: &str = "delete-persistent-tap";
+pub const CREATE_TAP_FD: &str = "create-tap-fd";
+pub const SET_BRIDGE_PORT_FLAGS: &str = "set-bridge-port-flags";
+pub const UPDATE_HOSTS_FILE: &str = "update-hosts-file";
+pub const SEED_DNSMASQ_LEASE: &str = "seed-dnsmasq-lease";
 
 /// The fixed process values one kernel closure captures at serve time.
 #[derive(Debug, Clone)]
@@ -119,6 +139,51 @@ pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
         })
         .with(COMPLETE_CELL, {
             move |invocation| complete_cell(invocation)
+        })
+        .with(APPLY_NFTABLES, {
+            let config = Arc::clone(&config);
+            move |invocation| apply_nftables(&config, invocation)
+        })
+        .with(APPLY_NFTABLES_PROJECTION, {
+            move |invocation| apply_nftables_projection(invocation)
+        })
+        .with(APPLY_NM_UNMANAGED, {
+            move |invocation| apply_nm_unmanaged(invocation)
+        })
+        .with(APPLY_ROUTE, {
+            let config = Arc::clone(&config);
+            move |invocation| apply_route(&config, invocation)
+        })
+        .with(APPLY_SYSCTL, {
+            move |invocation| apply_sysctl(invocation)
+        })
+        .with(CREATE_BRIDGE, {
+            move |invocation| create_bridge(invocation)
+        })
+        .with(DELETE_BRIDGE, {
+            move |invocation| delete_bridge(invocation)
+        })
+        .with(CREATE_PERSISTENT_TAP, {
+            let config = Arc::clone(&config);
+            move |invocation| create_persistent_tap(&config, invocation)
+        })
+        .with(DELETE_PERSISTENT_TAP, {
+            let config = Arc::clone(&config);
+            move |invocation| delete_persistent_tap(&config, invocation)
+        })
+        .with(CREATE_TAP_FD, {
+            let config = Arc::clone(&config);
+            move |invocation| create_tap_fd(&config, invocation)
+        })
+        .with(SET_BRIDGE_PORT_FLAGS, {
+            let config = Arc::clone(&config);
+            move |invocation| set_bridge_port_flags(&config, invocation)
+        })
+        .with(UPDATE_HOSTS_FILE, {
+            move |invocation| update_hosts_file(invocation)
+        })
+        .with(SEED_DNSMASQ_LEASE, {
+            move |invocation| seed_dnsmasq_lease(invocation)
         })
 }
 
@@ -673,13 +738,17 @@ fn spawn_process(
     // clone3 and the registry insertion is reaped here and its
     // notification recorded under the invocation id for the reap probe.
     crate::runtime::targeted_reap_runner(invocation_id, outcome.pidfd.as_fd());
+    // The retired arm delivered preopened response fds (console sockets,
+    // controller bootstrap) as extra descriptors; the kernel path mints
+    // none - live_spawn_runner starts with an empty extra set and the
+    // kernel never extends it - so the result advertises the pidfd alone
+    // rather than an always-empty extraFdIndexes range (the handler keeps
+    // only fd 0 and would silently close any advertised extra).
     let mut result = serde_json::json!({
         "pid": outcome.pid,
         "startTimeTicks": outcome.start_time_ticks,
         "usedForkFallback": outcome.used_fork_fallback,
         "pidfdIndex": 0,
-        "extraFdIndexes": (1..=outcome.extra_response_fds.len() as u32)
-            .collect::<Vec<u32>>(),
     });
     // The final plan's device binds (the USBIP backend extension the
     // retired arm applied to the mount policy): observable so the
@@ -692,13 +761,552 @@ fn spawn_process(
         result["swtpmDirAudit"] = serde_json::to_value(audit)
             .map_err(|error| errored(format!("spawn-process swtpm audit: {error}")))?;
     }
-    let mut fds = Vec::with_capacity(1 + outcome.extra_response_fds.len());
-    fds.push(outcome.pidfd);
-    fds.extend(outcome.extra_response_fds);
+    let fds = vec![outcome.pidfd];
     Ok(DispatchOutcome {
         result: canonical(result)?,
         fds,
     })
+}
+
+// ---------------------------------------------------------------------------
+// The U12 network-fds kernels
+// ---------------------------------------------------------------------------
+
+/// The broker-side bundle resolver for one kernel invocation, loaded from
+/// the captured bundle path exactly as the spawn kernel loads it (the same
+/// per-request reload authority the broker's answer path uses). The
+/// tap/bridge kernels need bundle knowledge to re-derive the trusted tap
+/// intent and the installed generation fence.
+fn kernel_resolver(
+    config: &KernelConfig,
+    operation: &str,
+) -> Result<Arc<d2b_core::bundle_resolver::BundleResolver>, DispatchFailure> {
+    match crate::runtime::load_kernel_resolver(&config.bundle_path) {
+        crate::runtime::BundleSlot::Loaded(resolver) => Ok(resolver),
+        crate::runtime::BundleSlot::Unavailable => {
+            Err(refused(format!("{operation}: bundle resolver unavailable")))
+        }
+        crate::runtime::BundleSlot::Tampered { .. } => {
+            Err(refused(format!("{operation}: bundle tampered")))
+        }
+    }
+}
+
+/// The apply-nftables kernel: install or flush the framework's own
+/// `inet d2b` table with the coexistence fence and the persisted-hash
+/// drift check, exactly as the retired `ApplyNftables` arm's live backend
+/// ran it. The daemon-side caller resolves the trusted nft intent and
+/// carries the resolved script body, ownership id, and coexistence policy
+/// in the payload.
+fn apply_nftables(
+    _config: &KernelConfig,
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    use crate::ops::nft::ApplyWithCoexistenceError;
+    let family = field_str(invocation.payload, "family")?.to_owned();
+    let table = field_str(invocation.payload, "table")?.to_owned();
+    let script_body = field_str(invocation.payload, "scriptBody")?.to_owned();
+    let ownership_id = field_str(invocation.payload, "ownershipId")?.to_owned();
+    let destroy = optional_field_bool(invocation.payload, "destroy")?.unwrap_or(false);
+    let desired_hash = optional_str(invocation.payload, "desiredHash")?;
+    let table_hash_after_apply = optional_str(invocation.payload, "tableHashAfterApply")?;
+    let coexistence_policy: Option<d2b_core::host_w3::FirewallCoexistencePolicy> =
+        optional_parse_field(invocation.payload, "coexistencePolicy")?;
+    let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+    let nft_binary = crate::runtime::nft_binary_path();
+    let script_body = if destroy {
+        crate::runtime::render_nft_destroy_script(&family, &table)
+    } else {
+        script_body
+    };
+    let persisted_hash = crate::runtime::persisted_nft_hash()
+        .map_err(|error| errored(format!("apply-nftables: {error}")))?;
+    let expected_hash = if destroy {
+        None
+    } else {
+        desired_hash
+            .or(persisted_hash)
+            .or_else(|| table_hash_after_apply.map(String::from))
+    };
+    crate::ops::nft::apply_with_coexistence(
+        &exec,
+        &nft_binary,
+        &script_body,
+        &ownership_id,
+        coexistence_policy.as_ref(),
+        expected_hash.as_deref(),
+    )
+    .map_err(|error| match error {
+        ApplyWithCoexistenceError::CoexistenceRefused { manager, rationale } => refused(
+            format!("coexistence-refused: {manager:?}: {rationale}"),
+        ),
+        ApplyWithCoexistenceError::ParseFailed(error) => {
+            errored(format!("nft-script-parse-failed: {error}"))
+        }
+        ApplyWithCoexistenceError::CarveoutOrderingViolation(error) => {
+            errored(format!("carveout-ordering-violation: {error}"))
+        }
+        ApplyWithCoexistenceError::DriftDetected { expected, observed } => errored(format!(
+            "nftables-drift-detected: expected {expected}, observed {observed}"
+        )),
+        ApplyWithCoexistenceError::ForeignOwnership => refused("foreign-nft-ownership"),
+        ApplyWithCoexistenceError::ReconcileExec(error) => errored(error.to_string()),
+    })?;
+    crate::ops::nft::persist_live_nft_hash(
+        &exec,
+        &nft_binary,
+        &family,
+        &table,
+        &crate::runtime::nft_hash_sidecar_path(),
+    )
+    .map_err(|error| errored(format!("apply-nftables: {error}")))?;
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({}))?,
+        fds: Vec::new(),
+    })
+}
+
+/// The apply-nftables-projection kernel: install or remove one
+/// Provider-owned nftables projection under its ownership marker with the
+/// installed-generation and desired-hash fences, exactly as the retired
+/// `ApplyNftablesProjection` arm ran it.
+fn apply_nftables_projection(
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    let script_body = field_str(invocation.payload, "scriptBody")?.to_owned();
+    let marker = field_str(invocation.payload, "marker")?.to_owned();
+    let trusted_hash = field_str(invocation.payload, "trustedHash")?.to_owned();
+    let caller_hash = optional_str(invocation.payload, "callerHash")?;
+    let expected_generation = field_str(invocation.payload, "expectedGenerationId")?.to_owned();
+    let installed_generation = field_str(invocation.payload, "installedGenerationId")?.to_owned();
+    let action: d2b_contracts_broker::broker_wire::NftablesProjectionAction =
+        match field_str(invocation.payload, "action")? {
+            "apply" => d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply,
+            "remove" => d2b_contracts_broker::broker_wire::NftablesProjectionAction::Remove,
+            other => {
+                return Err(refused(format!(
+                    "apply-nftables-projection: unknown action {other}"
+                )));
+            }
+        };
+    let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+    let projection_digest = crate::ops::nft::apply_nftables_projection(
+        &exec,
+        &crate::runtime::nft_binary_path(),
+        &script_body,
+        &marker,
+        &trusted_hash,
+        caller_hash.as_deref(),
+        &expected_generation,
+        &installed_generation,
+        action,
+    )
+    .map(|result| result.projection_digest)
+    .map_err(|error| {
+        errored(format!("apply-nftables-projection: {}", error.code()))
+    })?;
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({ "projectionDigest": projection_digest }))?,
+        fds: Vec::new(),
+    })
+}
+
+/// The apply-nm-unmanaged kernel: write or remove the NetworkManager
+/// unmanaged drop-in file with the reload behavior, exactly as the retired
+/// `ApplyNmUnmanaged` arm's live backend ran it.
+fn apply_nm_unmanaged(
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    let destroy = optional_field_bool(invocation.payload, "destroy")?.unwrap_or(false);
+    let intent = d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent {
+        intent_id: field_str(invocation.payload, "intentId")?.to_owned(),
+        file_path: PathBuf::from(field_str(invocation.payload, "filePath")?),
+        contents: field_str(invocation.payload, "contents")?.to_owned(),
+        mode: field_i64(invocation.payload, "mode")? as u32,
+        owner: field_str(invocation.payload, "owner")?.to_owned(),
+        group: field_str(invocation.payload, "group")?.to_owned(),
+        reload_behavior: field_str(invocation.payload, "reloadBehavior")?.to_owned(),
+    };
+    let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+    if destroy {
+        crate::ops::nm::remove_with_reload(&intent)
+            .map_err(|error| errored(format!("apply-nm-unmanaged: {error}")))?;
+    } else {
+        crate::ops::nm::apply_with_reload(&exec, &intent)
+            .map_err(|error| errored(format!("apply-nm-unmanaged: {error}")))?;
+    }
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({}))?,
+        fds: Vec::new(),
+    })
+}
+
+/// The apply-route kernel: apply or remove one ownership-marked route with
+/// the durable UID-bound marker-record preflight, exactly as the retired
+/// `ApplyRoute` arm's live backend ran it.
+fn apply_route(
+    config: &KernelConfig,
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    let destroy = optional_field_bool(invocation.payload, "destroy")?.unwrap_or(false);
+    let provenance: d2b_contracts_resource::v3::NetworkProvenance =
+        parse_field(invocation.payload, "provenance")?;
+    let intent = d2b_core::bundle_resolver::ResolvedRouteIntent {
+        intent_id: field_str(invocation.payload, "intentId")?.to_owned(),
+        route_spec: field_str(invocation.payload, "routeSpec")?.to_owned(),
+        destination: field_str(invocation.payload, "destination")?.to_owned(),
+        via: optional_str(invocation.payload, "via")?,
+        device: optional_str(invocation.payload, "device")?,
+        table: optional_str(invocation.payload, "table")?,
+        owned: optional_field_bool(invocation.payload, "owned")?.unwrap_or(false),
+        route_name: optional_str(invocation.payload, "routeName")?,
+        provenance: Some(provenance.clone()),
+        ownership_marker: optional_str(invocation.payload, "ownershipMarker")?,
+    };
+    let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+    crate::ops::route::apply_with_preflight_owned(
+        &exec,
+        &crate::runtime::ip_binary_path(),
+        &config.state_dir,
+        &intent,
+        &provenance,
+        destroy,
+    )
+    .map_err(|error| errored(format!("apply-route: {error}")))?;
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({}))?,
+        fds: Vec::new(),
+    })
+}
+
+/// The apply-sysctl kernel: write one key with readback verification, or
+/// restore the destroy default, exactly as the retired `ApplySysctl` arm's
+/// live backend ran it.
+fn apply_sysctl(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+    let key = field_str(invocation.payload, "key")?.to_owned();
+    let destroy = optional_field_bool(invocation.payload, "destroy")?.unwrap_or(false);
+    let value = if destroy {
+        crate::runtime::destroy_sysctl_value(&key)
+            .map_err(|error| {
+                errored(format!(
+                    "apply-sysctl: {}",
+                    crate::runtime::broker_error_kernel_detail(error)
+                ))
+            })?
+            .to_owned()
+    } else {
+        field_str(invocation.payload, "value")?.to_owned()
+    };
+    let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+    crate::ops::sysctl::apply_with_readback(&exec, &key, &value)
+        .map_err(|error| errored(format!("apply-sysctl: {error}")))?;
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({}))?,
+        fds: Vec::new(),
+    })
+}
+
+/// The create-bridge kernel: create the framework-owned bridge from the
+/// resolved intent with the ownership-marker fence, exactly as the retired
+/// `CreateBridge` arm ran it.
+fn create_bridge(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+    let intent = parse_resolved_bridge_intent(invocation)?;
+    let bridge_intent_digest = crate::ops::network::create_bridge(
+        &crate::ops::network::SystemBridgeBackend,
+        &intent,
+    )
+    .map_err(|error| errored(format!("create-bridge: {}", error.code())))?;
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({ "bridgeIntentDigest": bridge_intent_digest }))?,
+        fds: Vec::new(),
+    })
+}
+
+/// The delete-bridge kernel: remove the framework-owned bridge after its
+/// TAP removals, exactly as the retired `DeleteBridge` arm ran it.
+fn delete_bridge(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+    let intent = parse_resolved_bridge_intent(invocation)?;
+    let bridge_intent_digest = crate::ops::network::delete_bridge(
+        &crate::ops::network::SystemBridgeBackend,
+        &intent,
+    )
+    .map_err(|error| errored(format!("delete-bridge: {}", error.code())))?;
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({ "bridgeIntentDigest": bridge_intent_digest }))?,
+        fds: Vec::new(),
+    })
+}
+
+/// The resolved bridge intent one bridge kernel reconstructs from the
+/// payload the daemon-side caller resolved from the trusted bundle.
+fn parse_resolved_bridge_intent(
+    invocation: &DirectInvocation<'_>,
+) -> Result<d2b_core::bundle_resolver::ResolvedBridgeIntent, DispatchFailure> {
+    Ok(d2b_core::bundle_resolver::ResolvedBridgeIntent {
+        intent_id: field_str(invocation.payload, "intentId")?.to_owned(),
+        scope_label: field_str(invocation.payload, "scopeLabel")?.to_owned(),
+        bridge_ifname: d2b_contracts_resource::v3::IfName::parse(
+            field_str(invocation.payload, "bridgeIfname")?,
+        )
+        .map_err(|error| refused(format!("bridgeIfname: {error}")))?,
+        mtu: field_i64(invocation.payload, "mtu")? as u16,
+        stp_disabled: optional_field_bool(invocation.payload, "stpDisabled")?.unwrap_or(false),
+        multicast_snooping_disabled: optional_field_bool(
+            invocation.payload,
+            "multicastSnoopingDisabled",
+        )?
+        .unwrap_or(false),
+        ipv6_suppressed: optional_field_bool(invocation.payload, "ipv6Suppressed")?.unwrap_or(false),
+        provenance: optional_parse_field(invocation.payload, "provenance")?,
+        ownership_marker: optional_str(invocation.payload, "ownershipMarker")?,
+    })
+}
+
+/// The create-persistent-tap kernel: create the persistent TAP from the
+/// typed request, re-deriving the trusted tap intent from the broker's own
+/// bundle copy, and persist the realization record - exactly what the
+/// retired `CreatePersistentTap` arm ran.
+fn create_persistent_tap(
+    config: &KernelConfig,
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    let req: d2b_contracts_broker::broker_wire::CreatePersistentTapRequest =
+        typed_payload(invocation, "create-persistent-tap")?;
+    let resolver = kernel_resolver(config, "create-persistent-tap")?;
+    let exec = crate::ops::exec_reconcile::SystemLiveExec::new(
+        config.daemon_uid,
+        config.daemon_gid,
+    );
+    let outcome = crate::ops::tap::live_create_persistent_tap(&exec, &resolver, &req, None)
+        .map_err(|error| errored(format!("create-persistent-tap: {error}")))?;
+    crate::ops::network::persist_persistent_tap_realization(
+        &config.state_dir,
+        &req,
+        &outcome.tap_ifname,
+    )
+    .map_err(|error| {
+        let cleanup = crate::ops::network::PersistentTapBackend::delete_tap(
+            &crate::ops::network::SystemPersistentTapBackend,
+            outcome.tap_ifname.as_str(),
+        );
+        if let Err(cleanup) = cleanup {
+            return errored(format!(
+                "create-persistent-tap: {} (cleanup failed: {})",
+                error.code(),
+                cleanup.code()
+            ));
+        }
+        let _ = crate::ops::network::remove_persistent_tap_realization(
+            &config.state_dir,
+            &req.attachment_id,
+        );
+        errored(format!("create-persistent-tap: {}", error.code()))
+    })?;
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({
+            "bridge": outcome.bridge_ifname.as_ref().map(|ifname| ifname.as_str()),
+            "tap": outcome.tap_ifname.as_str(),
+        }))?,
+        fds: Vec::new(),
+    })
+}
+
+/// The delete-persistent-tap kernel: remove one trusted attachment
+/// realization under the exact generation fences, exactly what the retired
+/// `DeletePersistentTap` arm ran.
+fn delete_persistent_tap(
+    config: &KernelConfig,
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    let req: d2b_contracts_broker::broker_wire::DeletePersistentTapRequest =
+        typed_payload(invocation, "delete-persistent-tap")?;
+    let resolver = kernel_resolver(config, "delete-persistent-tap")?;
+    let installed = resolver
+        .installed_generation_identity()
+        .ok_or_else(|| refused("delete-persistent-tap: installed-generation-unavailable"))?;
+    if installed.as_str() != req.expected_bundle_generation.as_str() {
+        return Err(refused("delete-persistent-tap: stale-projection-generation"));
+    }
+    let realization = crate::ops::network::load_persistent_tap_realization(
+        &config.state_dir,
+        &req,
+    )
+    .map_err(|error| errored(format!("delete-persistent-tap: {}", error.code())))?;
+    let attachment_digest = crate::ops::network::delete_persistent_tap(
+        &crate::ops::network::SystemPersistentTapBackend,
+        &realization,
+        &req,
+    )
+    .map_err(|error| errored(format!("delete-persistent-tap: {}", error.code())))?;
+    crate::ops::network::mark_persistent_tap_realization_deleted(
+        &config.state_dir,
+        &req.attachment_id,
+    )
+    .map_err(|error| errored(format!("delete-persistent-tap: {}", error.code())))?;
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({ "attachmentDigest": attachment_digest }))?,
+        fds: Vec::new(),
+    })
+}
+
+/// The create-tap-fd kernel: create one VMM TAP and return its descriptor
+/// over the fd leg, exactly what the retired `CreateTapFd` arm ran. This is
+/// the ONLY fd-bearing network kernel; the row declares the `any` fd kind.
+fn create_tap_fd(
+    config: &KernelConfig,
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    let req: d2b_contracts_broker::broker_wire::CreateTapFdRequest =
+        typed_payload(invocation, "create-tap-fd")?;
+    let resolver = kernel_resolver(config, "create-tap-fd")?;
+    let exec = crate::ops::exec_reconcile::SystemLiveExec::new(
+        config.daemon_uid,
+        config.daemon_gid,
+    );
+    let outcome = crate::ops::tap::live_create_tap_fd(&exec, &resolver, &req, None)
+        .map_err(|error| errored(format!("create-tap-fd: {error}")))?;
+    let fd = outcome
+        .fd
+        .ok_or_else(|| errored("create-tap-fd: produced no tap fd".to_owned()))?;
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({
+            "bridge": outcome.bridge_ifname.as_ref().map(|ifname| ifname.as_str()),
+            "tap": outcome.tap_ifname.as_str(),
+            "fdIndex": 0,
+        }))?,
+        fds: vec![fd],
+    })
+}
+
+/// The set-bridge-port-flags kernel: apply the trusted per-role bridge
+/// port flag set under the installed-generation fence, exactly what the
+/// retired `SetBridgePortFlags` arm's live backend ran.
+fn set_bridge_port_flags(
+    config: &KernelConfig,
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    let req: d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest =
+        typed_payload(invocation, "set-bridge-port-flags")?;
+    let resolver = kernel_resolver(config, "set-bridge-port-flags")?;
+    let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+    let response = crate::runtime::dispatch_set_bridge_port_flags_inner(&req, &resolver, &exec)
+        .map_err(|error| {
+            errored(format!(
+                "set-bridge-port-flags: {}",
+                crate::runtime::broker_error_kernel_detail(error)
+            ))
+        })?;
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({
+            "bridge": response.bridge.as_str(),
+            "port": response.port.as_str(),
+            "isolated": response.isolated,
+            "neighSuppress": response.neigh_suppress,
+        }))?,
+        fds: Vec::new(),
+    })
+}
+
+/// The update-hosts-file kernel: write or remove the managed /etc/hosts
+/// marker block from the resolved intent, exactly what the retired
+/// `UpdateHostsFile` arm's live backend ran.
+fn update_hosts_file(
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    let destroy = optional_field_bool(invocation.payload, "destroy")?.unwrap_or(false);
+    let intent = d2b_core::bundle_resolver::ResolvedHostsIntent {
+        intent_id: field_str(invocation.payload, "intentId")?.to_owned(),
+        path: PathBuf::from(field_str(invocation.payload, "path")?),
+        managed_block: field_str(invocation.payload, "managedBlock")?.to_owned(),
+        start_marker: field_str(invocation.payload, "startMarker")?.to_owned(),
+        end_marker: field_str(invocation.payload, "endMarker")?.to_owned(),
+        mode: field_i64(invocation.payload, "mode")? as u32,
+        provenance: optional_parse_field(invocation.payload, "provenance")?,
+        ownership_marker: optional_str(invocation.payload, "ownershipMarker")?,
+    };
+    let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+    if destroy {
+        crate::ops::hosts::remove_marker_block(&exec, &intent)
+            .map_err(|error| errored(format!("update-hosts-file: {error}")))?;
+    } else {
+        crate::ops::hosts::write_marker_block(&exec, &intent)
+            .map_err(|error| errored(format!("update-hosts-file: {error}")))?;
+    }
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({}))?,
+        fds: Vec::new(),
+    })
+}
+
+/// The seed-dnsmasq-lease kernel: the retired `SeedDnsmasqLease` arm's
+/// live core was its admission check - the per-VM dnsmasq lease row is
+/// derived, never caller-supplied, so the kernel re-derives the expected
+/// child VM name from the admitted Network identity and refuses a
+/// mismatch. The lease file write itself remains a committed follow-up;
+/// the arm's observable contract (admission + ack) is preserved.
+fn seed_dnsmasq_lease(
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    let scope_id = field_str(invocation.payload, "scopeId")?;
+    let zone_uid: d2b_contracts_resource::v3::ResourceUid =
+        parse_field(invocation.payload, "zoneUid")?;
+    let network_uid: d2b_contracts_resource::v3::ResourceUid =
+        parse_field(invocation.payload, "networkUid")?;
+    let network_generation: d2b_contracts_resource::v3::ResourceGeneration =
+        parse_field(invocation.payload, "networkGeneration")?;
+    let attachment_generation: d2b_contracts_resource::v3::ResourceGeneration =
+        parse_field(invocation.payload, "attachmentGeneration")?;
+    let bundle_generation: d2b_contracts_resource::v3::ResourceBundleGenerationId =
+        parse_field(invocation.payload, "bundleGeneration")?;
+    let vm_id = field_str(invocation.payload, "vmId")?;
+    if scope_id.starts_with("network:") {
+        let expected_scope = format!("network:{}:{}", zone_uid.as_str(), network_uid.as_str());
+        if scope_id != expected_scope
+            || network_generation.get() == 0
+            || attachment_generation.get() == 0
+            || bundle_generation.as_str().is_empty()
+        {
+            return Err(refused("seed-dnsmasq-lease: network-admission-mismatch"));
+        }
+    }
+    let expected_vm = d2b_contracts_resource::v3::derive_network_child_name(
+        &network_uid,
+        "vm",
+    );
+    if vm_id != expected_vm.as_str() {
+        return Err(refused("seed-dnsmasq-lease: network-admission-mismatch"));
+    }
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({ "seeded": true }))?,
+        fds: Vec::new(),
+    })
+}
+
+/// Deserialize the whole payload as one typed wire request. The payload
+/// schema of the committed kernel row is the typed request's camelCase
+/// shape, so the typed parse is the kernel's payload validation.
+fn typed_payload<T: serde::de::DeserializeOwned>(
+    invocation: &DirectInvocation<'_>,
+    operation: &str,
+) -> Result<T, DispatchFailure> {
+    let json = serde_json::to_value(invocation.payload)
+        .map_err(|error| errored(format!("{operation}: payload value: {error}")))?;
+    serde_json::from_value(json).map_err(|error| refused(format!("{operation}: {error}")))
+}
+
+/// The optional string field of one payload.
+fn optional_str<'a>(
+    payload: &'a CanonicalJsonObject,
+    key: &str,
+) -> Result<Option<String>, DispatchFailure> {
+    let Some(value) = payload.get(key) else {
+        return Ok(None);
+    };
+    match value {
+        CanonicalJsonValue::String(value) => Ok(Some(value.clone())),
+        CanonicalJsonValue::Null => Ok(None),
+        _ => Err(refused(format!("{key}: expected a string"))),
+    }
 }
 
 // ---------------------------------------------------------------------------

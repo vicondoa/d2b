@@ -17,6 +17,7 @@ pub mod ifname;
 pub mod netlink;
 pub mod nftables;
 pub mod observe;
+pub mod operations;
 pub mod plan;
 pub mod routes;
 
@@ -32,6 +33,11 @@ pub use driver::{
     NETWORK_CONTROLLER_REF, NETWORK_CREATIONS, NETWORK_PROVIDER_REF, NETWORK_REGISTRATIONS,
     NETWORK_RESYNC, NETWORK_TYPE_NAME, NetworkComponent, NetworkDriverArgs, NetworkDriverEffects,
     declared_dependency_refs, network_descriptor,
+};
+pub use operations::{
+    APPLY_NFTABLES, APPLY_NFTABLES_PROJECTION, APPLY_NM_UNMANAGED, APPLY_ROUTE, APPLY_SYSCTL,
+    CREATE_BRIDGE, CREATE_PERSISTENT_TAP, CREATE_TAP_FD, DELETE_BRIDGE, DELETE_PERSISTENT_TAP,
+    SEED_DNSMASQ_LEASE, SET_BRIDGE_PORT_FLAGS, UPDATE_HOSTS_FILE, network_family_operations,
 };
 
 pub use d2b_contracts_resource::v3::network::{

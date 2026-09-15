@@ -14,21 +14,23 @@ use d2b_contracts_broker::PROTOCOL_VERSION;
 use d2b_contracts_broker::broker_wire::{
     ApplyNftablesProjectionRequest, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope,
     BrokerResponse, CreateBridgeRequest, DeleteBridgeRequest, DeletePersistentTapRequest,
-    NftablesProjectionAction,
+    EnvelopeInvokeRequest, NftablesProjectionAction,
 };
 use d2b_contracts_resource::v3::{ResourceBundleGenerationId, ResourceGeneration, ResourceUid};
 use serde::{Deserialize, Serialize};
 
 const PREVIOUS_PROTOCOL_VERSION: u32 = 3;
 
-/// The wire variants U10/U11 retired at wire v6 (KTD10). The matrix pins
-/// them exactly: each is still the *literal frame shape* an old binary at
-/// wire v<6 sent, none of them decodes as a current `RequestEnvelope`,
-/// and the retired-wire gate names every one of them with the v6
-/// boundary, the typed stale-wire-version refusal, and an audit record.
-/// U10 retired the ten process-family variants; U11 retired
+/// The wire variants U10/U11/U12 retired at wire v6 (KTD10). The matrix
+/// pins them exactly: each is still the *literal frame shape* an old
+/// binary at wire v<6 sent, none of them decodes as a current
+/// `RequestEnvelope`, and the retired-wire gate names every one of them
+/// with the v6 boundary, the typed stale-wire-version refusal, and an
+/// audit record. U10 retired the ten process-family variants; U11 retired
 /// `ConsumeLifecycleLease` with its row (the lease now rides the generic
-/// consume-cell/complete-cell kernels through the envelope).
+/// consume-cell/complete-cell kernels through the envelope); U12 retired
+/// the thirteen network-fds family variants (their cores ride the
+/// broker-generic network kernels through the envelope).
 const RETIRED_WIRE_VARIANTS_MATRIX: &[&str] = &[
     "OpenPidfd",
     "OpenPeerPidfdFromAcceptedSocket",
@@ -41,6 +43,19 @@ const RETIRED_WIRE_VARIANTS_MATRIX: &[&str] = &[
     "DeregisterRunnerPidfd",
     "SpawnRunner",
     "ConsumeLifecycleLease",
+    "ApplyNftables",
+    "ApplyNftablesProjection",
+    "ApplyNmUnmanaged",
+    "ApplyRoute",
+    "ApplySysctl",
+    "CreateBridge",
+    "DeleteBridge",
+    "CreatePersistentTap",
+    "DeletePersistentTap",
+    "CreateTapFd",
+    "SetBridgePortFlags",
+    "UpdateHostsFile",
+    "SeedDnsmasqLease",
 ];
 
 // The production envelope carries no protocol version and has no negotiation
@@ -74,66 +89,90 @@ fn current_envelope(request: BrokerRequest) -> BrokerRequestEnvelope {
 }
 
 fn current_only_requests() -> [BrokerRequest; 4] {
+    // U12 retired the typed network-fds variants: the four current-only
+    // operations ride the broker-generic network kernels through the
+    // EnvelopeInvoke surface, so the current-only frames are the envelope
+    // carriers the migrated daemon sends, each with the kernel's operation
+    // name and the typed wire request as its payload.
     let generation_id = ResourceBundleGenerationId::parse(format!("sha256:{}", "1".repeat(64)))
         .expect("valid generation identity");
+    let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+    let network_uid = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
+    let network_generation = ResourceGeneration::new(7).unwrap();
+    let attachment_generation = ResourceGeneration::new(11).unwrap();
+    let envelope = |operation: &str, payload: serde_json::Value| {
+        BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+            operation: operation.to_owned(),
+            zone: "scope:test".to_owned(),
+            payload,
+            chain_root_invocation_id: None,
+            chain_identities: None,
+            fd_indexes: Vec::new(),
+            fd_kinds: Vec::new(),
+        })
+    };
     [
-        BrokerRequest::ApplyNftablesProjection(ApplyNftablesProjectionRequest {
-            bundle_nft_projection_intent_ref: BundleOpId::new("nft-projection:test"),
-            scope_id: ScopeId::new("scope:test"),
-            action: NftablesProjectionAction::Apply,
-            zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-            network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
-            network_generation: ResourceGeneration::new(7).unwrap(),
-            attachment_generation: ResourceGeneration::new(11).unwrap(),
-            expected_generation_id: generation_id,
-            desired_hash: None,
-            tracing_span_id: None,
-        }),
-        BrokerRequest::CreateBridge(CreateBridgeRequest {
-            bundle_bridge_intent_ref: BundleOpId::new("bridge:test"),
-            scope_id: ScopeId::new("scope:test"),
-            zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-            network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
-            network_generation: ResourceGeneration::new(7).unwrap(),
-            attachment_generation: ResourceGeneration::new(11).unwrap(),
-            bundle_generation: ResourceBundleGenerationId::parse(format!(
-                "sha256:{}",
-                "1".repeat(64)
-            ))
-            .unwrap(),
-            tracing_span_id: None,
-        }),
-        BrokerRequest::DeleteBridge(DeleteBridgeRequest {
-            bundle_bridge_intent_ref: BundleOpId::new("bridge:test"),
-            scope_id: ScopeId::new("scope:test"),
-            zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-            network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
-            network_generation: ResourceGeneration::new(7).unwrap(),
-            attachment_generation: ResourceGeneration::new(11).unwrap(),
-            bundle_generation: ResourceBundleGenerationId::parse(format!(
-                "sha256:{}",
-                "1".repeat(64)
-            ))
-            .unwrap(),
-            tracing_span_id: None,
-        }),
-        BrokerRequest::DeletePersistentTap(DeletePersistentTapRequest {
-            attachment_id: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
-                .expect("valid attachment id"),
-            expected_zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
-                .expect("valid zone id"),
-            expected_network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002")
-                .expect("valid network id"),
-            expected_network_generation: ResourceGeneration::new(7)
-                .expect("valid network generation"),
-            expected_attachment_generation: ResourceGeneration::new(11)
-                .expect("valid attachment generation"),
-            expected_bundle_generation: ResourceBundleGenerationId::parse(
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            )
-            .expect("valid bundle generation"),
-            tracing_span_id: None,
-        }),
+        envelope(
+            "apply-nftables-projection",
+            serde_json::to_value(ApplyNftablesProjectionRequest {
+                bundle_nft_projection_intent_ref: BundleOpId::new("nft-projection:test"),
+                scope_id: ScopeId::new("scope:test"),
+                action: NftablesProjectionAction::Apply,
+                zone_uid: zone_uid.clone(),
+                network_uid: network_uid.clone(),
+                network_generation,
+                attachment_generation,
+                expected_generation_id: generation_id.clone(),
+                desired_hash: None,
+                tracing_span_id: None,
+            })
+            .expect("projection payload serializes"),
+        ),
+        envelope(
+            "create-bridge",
+            serde_json::to_value(CreateBridgeRequest {
+                bundle_bridge_intent_ref: BundleOpId::new("bridge:test"),
+                scope_id: ScopeId::new("scope:test"),
+                zone_uid: zone_uid.clone(),
+                network_uid: network_uid.clone(),
+                network_generation,
+                attachment_generation,
+                bundle_generation: generation_id.clone(),
+                tracing_span_id: None,
+            })
+            .expect("create-bridge payload serializes"),
+        ),
+        envelope(
+            "delete-bridge",
+            serde_json::to_value(DeleteBridgeRequest {
+                bundle_bridge_intent_ref: BundleOpId::new("bridge:test"),
+                scope_id: ScopeId::new("scope:test"),
+                zone_uid: zone_uid.clone(),
+                network_uid: network_uid.clone(),
+                network_generation,
+                attachment_generation,
+                bundle_generation: generation_id.clone(),
+                tracing_span_id: None,
+            })
+            .expect("delete-bridge payload serializes"),
+        ),
+        envelope(
+            "delete-persistent-tap",
+            serde_json::to_value(DeletePersistentTapRequest {
+                attachment_id: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                    .expect("valid attachment id"),
+                expected_zone_uid: zone_uid,
+                expected_network_uid: network_uid,
+                expected_network_generation: network_generation,
+                expected_attachment_generation: attachment_generation,
+                expected_bundle_generation: ResourceBundleGenerationId::parse(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .expect("valid bundle generation"),
+                tracing_span_id: None,
+            })
+            .expect("delete-persistent-tap payload serializes"),
+        ),
     ]
 }
 
@@ -205,9 +244,10 @@ fn the_retired_wire_gate_names_every_retired_variant_at_wire_v6() {
     use d2b_broker::runtime::{RETIRED_WIRE_VARIANTS, retired_wire_variant};
 
     assert_eq!(PROTOCOL_VERSION, 6);
-    // The production table names exactly the eleven retired variants (the
-    // ten U10 process-family variants plus U11's ConsumeLifecycleLease),
-    // all at the same wire boundary.
+    // The production table names exactly the twenty-four retired variants
+    // (the ten U10 process-family variants, U11's ConsumeLifecycleLease,
+    // and the thirteen U12 network-fds variants), all at the same wire
+    // boundary.
     let mut names: Vec<&str> = RETIRED_WIRE_VARIANTS.iter().map(|entry| entry.variant).collect();
     names.sort_unstable();
     let mut expected = RETIRED_WIRE_VARIANTS_MATRIX.to_vec();
