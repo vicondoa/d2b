@@ -34,6 +34,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "PublishTrustedContext",
@@ -65,6 +66,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ExportBrokerAudit",
@@ -96,6 +98,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "OpenPidfd",
@@ -127,6 +130,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: Some("runner-pidfd-registry"),
         cell_durability: Some(CellDurability::Ephemeral),
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "OpenPeerPidfdFromAcceptedSocket",
@@ -158,6 +162,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ObserveRunner",
@@ -189,6 +194,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "StartSystemdUnit",
@@ -220,6 +226,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "CheckSystemdUserManager",
@@ -251,6 +258,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ObserveSystemdUnit",
@@ -282,6 +290,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "OpenSystemdUnitPidfd",
@@ -313,6 +322,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "StopSystemdUnit",
@@ -344,6 +354,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "PollChildReaped",
@@ -375,6 +386,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "PrepareRuntimeDir",
@@ -406,6 +418,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "PrepareStateDir",
@@ -437,6 +450,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "CgroupKill",
@@ -468,6 +482,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "SignalRunner",
@@ -499,6 +514,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "DeregisterRunnerPidfd",
@@ -530,6 +546,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: Some("runner-pidfd-registry"),
         cell_durability: Some(CellDurability::Ephemeral),
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "SpawnRunner",
@@ -561,6 +578,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ApplyHostGenerationHandoff",
@@ -592,6 +610,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ApplyNftables",
@@ -623,6 +642,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ApplyNftablesProjection",
@@ -654,6 +674,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ApplyNmUnmanaged",
@@ -685,6 +706,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ApplyRoute",
@@ -716,6 +738,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ApplySysctl",
@@ -747,6 +770,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "CreateOrReconcileUsersGroups",
@@ -778,6 +802,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "CreateBridge",
@@ -809,6 +834,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "DeleteBridge",
@@ -840,6 +866,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "CreatePersistentTap",
@@ -871,6 +898,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "DeletePersistentTap",
@@ -902,6 +930,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "CreateTapFd",
@@ -933,6 +962,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "DelegateCgroupV2",
@@ -964,6 +994,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "InjectSecretById",
@@ -995,6 +1026,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "LaunchMinijailChild",
@@ -1026,6 +1058,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ModprobeIfAllowed",
@@ -1057,6 +1090,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "OpenCgroupDir",
@@ -1088,6 +1122,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "OpenDevice",
@@ -1119,6 +1154,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "OpenFuse",
@@ -1150,6 +1186,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "OpenHidrawSecurityKey",
@@ -1181,6 +1218,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "OpenKvm",
@@ -1212,6 +1250,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "QemuMediaEnroll",
@@ -1243,6 +1282,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "QemuMediaRefreshRegistry",
@@ -1274,6 +1314,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "QemuMediaBoot",
@@ -1305,6 +1346,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "QemuMediaSystemPowerdown",
@@ -1336,6 +1378,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "QemuMediaQueryStatus",
@@ -1367,6 +1410,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "QemuMediaQuit",
@@ -1398,6 +1442,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "QemuMediaAttach",
@@ -1429,6 +1474,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "QemuMediaDetach",
@@ -1460,6 +1506,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ConsumeLifecycleLease",
@@ -1491,6 +1538,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: Some("lifecycle-leases"),
         cell_durability: Some(CellDurability::OneTime),
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "inspect-process-family",
@@ -1522,6 +1570,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "PipeWireAudio",
@@ -1553,6 +1602,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "OpenVhostNet",
@@ -1584,6 +1634,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ReconcileStorageScope",
@@ -1615,6 +1666,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ValidateLockSpec",
@@ -1646,6 +1698,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "StoreSync",
@@ -1677,6 +1730,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "ReadSecretById",
@@ -1708,6 +1762,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "RotateSecretById",
@@ -1739,6 +1794,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "SetBridgePortFlags",
@@ -1770,6 +1826,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "UpdateHostsFile",
@@ -1801,6 +1858,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "UsbipBind",
@@ -1832,6 +1890,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "UsbipBindFirewallRule",
@@ -1863,6 +1922,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "UsbipProxyReconcile",
@@ -1894,6 +1954,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "UsbipUnbind",
@@ -1925,6 +1986,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "UsbipExplicitBind",
@@ -1956,6 +2018,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "UsbipExplicitFirewallRule",
@@ -1987,6 +2050,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "SeedDnsmasqLease",
@@ -2018,6 +2082,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "OwnershipMatrixCheck",
@@ -2049,6 +2114,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "SshHostKeyPreflight",
@@ -2080,6 +2146,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "DiskInit",
@@ -2111,6 +2178,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "SecurityKeyOpenDevice",
@@ -2142,6 +2210,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "SecurityKeyApplyUdevRules",
@@ -2173,6 +2242,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
         operation: "PrepareSwtpmDir",
@@ -2204,6 +2274,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: None,
         cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
     },
 ];
 

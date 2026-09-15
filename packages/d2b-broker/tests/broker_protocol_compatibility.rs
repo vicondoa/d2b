@@ -138,6 +138,38 @@ fn a_retired_previous_request_is_unknown_to_the_current_decoder() {
 }
 
 #[test]
+fn the_retired_wire_gate_machinery_names_a_retired_variant() {
+    use d2b_broker::runtime::{RETIRED_WIRE_VARIANTS, RetiredWireVariant, retired_wire_variant};
+    // No variant is retired on this tree yet (that starts with U10): the
+    // production table is empty, so every current wire variant passes the
+    // gate.
+    assert!(RETIRED_WIRE_VARIANTS.is_empty());
+    // The machinery U10's retirements inherit: a retired variant is
+    // recognized by name and carries the negotiated-wire boundary it was
+    // retired at. `ValidateBundle` is the previous protocol's request the
+    // current protocol retired (see
+    // `a_retired_previous_request_is_unknown_to_the_current_decoder` above),
+    // standing in as the fixture retired-variant of the old/new matrix.
+    const FIXTURE: &[RetiredWireVariant] = &[RetiredWireVariant {
+        variant: "ValidateBundle",
+        retired_in_version: 4,
+    }];
+    let retired = retired_wire_variant("ValidateBundle", FIXTURE)
+        .expect("the fixture table names the retired variant");
+    assert_eq!(retired.retired_in_version, 4);
+    // A variant the table does not carry - current or never-existing - is
+    // not gated.
+    assert!(retired_wire_variant("Hello", FIXTURE).is_none());
+    assert!(retired_wire_variant("Hello", RETIRED_WIRE_VARIANTS).is_none());
+    // The boundary sits between the previous protocol and the current one:
+    // a straggler negotiated before the boundary, and the gate - not the
+    // decoder - is what answers its call with the stale-wire-version
+    // refusal.
+    assert!(PREVIOUS_PROTOCOL_VERSION < retired.retired_in_version);
+    assert!(PROTOCOL_VERSION > retired.retired_in_version);
+}
+
+#[test]
 fn current_only_requests_are_rejected_by_previous_decoder() {
     assert_eq!(PREVIOUS_PROTOCOL_VERSION, 3);
     assert_eq!(PROTOCOL_VERSION, 6);

@@ -60,8 +60,9 @@ use crate::bootstrap::wire::{BrokerRequest, BrokerResponse, CallerRole, RequestE
 use d2b_contracts_broker::broker_wire::BrokerProfile;
 #[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_contracts_broker::broker_wire::{
-    AuditJoinContext, BrokerCallerRole as CallerRole, BrokerProfile, BrokerRequest,
-    BrokerRequestEnvelope as RequestEnvelope, BrokerResponse, CanonicalAuditDigest, RunnerRole,
+    AuditJoinContext, BrokerCallerRole as CallerRole, BrokerErrorResponse, BrokerProfile,
+    BrokerRequest, BrokerRequestEnvelope as RequestEnvelope, BrokerResponse, CanonicalAuditDigest,
+    RunnerRole,
 };
 #[cfg(feature = "layer1-bootstrap")]
 type AuditJoinContext = ();
@@ -109,6 +110,99 @@ const IPC_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 const DEFAULT_IPC_RATE_LIMIT_MAX_BUCKETS: usize = 4096;
 const MAX_MODULE_NAME_LEN: usize = 64;
 
+#[cfg(not(feature = "layer1-bootstrap"))]
+/// One wire variant every current broker must answer with the
+/// stale-wire-version refusal, never with a pre-dispatch
+/// wire-malformed-json drop (KTD10).
+///
+/// A retirement keeps the variant's name here as a closed entry so a
+/// straggler peer's call to it is recognized before dispatch: the gate
+/// walks the negotiated-wire table
+/// ([`ServerConfig::retired_wire_variants`]) and refuses the call with a
+/// typed code plus an audit record. The entry
+/// records the negotiated wire version the variant was retired in, so the
+/// refusal and its audit record tell the operator which version boundary
+/// the caller has not moved past.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetiredWireVariant {
+    /// The wire variant name, exactly as the frame's `request.kind` spells
+    /// it.
+    pub variant: &'static str,
+    /// The negotiated wire version the variant was retired in: a straggler
+    /// peer negotiated a version before this boundary, and the refusal names
+    /// it.
+    pub retired_in_version: u32,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+/// The production retirement table.
+///
+/// No variant is retired on this tree yet - that starts with U10 - so the
+/// production table is empty and the gate is exercised by the fixture table
+/// in `tests` (mixed-version matrix). A retirement (U10 onward) adds its
+/// entry here in the same change that removes the variant's dispatch arm.
+pub const RETIRED_WIRE_VARIANTS: &[RetiredWireVariant] = &[];
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+/// The variant one frame's `request.kind` names, when the envelope's request
+/// is shaped the way the closed wire spells it.
+///
+/// The frame is inspected before the typed decode precisely so a variant the
+/// current enum no longer carries can still be recognized: an internally
+/// tagged request serializes as `{"request": {"kind": ..., "payload": ...}}`
+/// (or the bare `"kind"` string for a unit variant), and the name alone is
+/// enough to gate.
+fn request_kind(envelope: &Value) -> Option<&str> {
+    match envelope.get("request")? {
+        Value::String(kind) => Some(kind.as_str()),
+        Value::Object(object) => object.get("kind").and_then(Value::as_str),
+        _ => None,
+    }
+}
+
+/// The retired-variant entry one wire variant name matches, when the table
+/// carries it.
+///
+#[cfg(not(feature = "layer1-bootstrap"))]
+/// The gate's lookup, public so a mixed-version fixture can exercise it the
+/// way the production accept loop does; the variant name is the frame's
+/// `request.kind` ([`request_kind`]).
+pub fn retired_wire_variant<'a>(
+    kind: &str,
+    retired: &'a [RetiredWireVariant],
+) -> Option<&'a RetiredWireVariant> {
+    retired.iter().find(|entry| entry.variant == kind)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+/// Whether one decoded-as-JSON request names a retired wire variant of
+/// `retired`, for the gate in [`handle_connection`].
+fn retired_variant_for<'a>(
+    envelope: &Value,
+    retired: &'a [RetiredWireVariant],
+) -> Option<&'a RetiredWireVariant> {
+    retired_wire_variant(request_kind(envelope)?, retired)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+/// The typed refusal one retired-variant call is answered with.
+///
+/// The `kind` is the envelope's stale-wire-version code (`STALE_WIRE_VERSION`,
+/// a member of the envelope's closed refusal set), so a daemon that reads the
+/// error response sees the same vocabulary the envelope's own refusals use.
+fn stale_wire_refusal(retired: &RetiredWireVariant) -> BrokerResponse {
+    BrokerResponse::Error(BrokerErrorResponse {
+        kind: crate::envelope::STALE_WIRE_VERSION.to_owned(),
+        operation: retired.variant.to_owned(),
+        target_wave: None,
+        message: format!(
+            "wire variant {} was retired in wire version {}; the negotiated wire version of this call does not serve it any longer",
+            retired.variant, retired.retired_in_version
+        ),
+        action: "upgrade the calling binary so its Hello-negotiated wire version no longer sends retired variants".to_owned(),
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     /// Fixed process-start authority profile. Requests cannot change it.
@@ -150,6 +244,14 @@ pub struct ServerConfig {
     /// `--forward-socket`, else `D2B_BROKER_FORWARD_SOCKET`.
     pub forward_socket_path: Option<PathBuf>,
     pub test_mode: bool,
+#[cfg(not(feature = "layer1-bootstrap"))]
+    /// The wire variants this broker refuses with the stale-wire-version
+    /// code, gated on the Hello-negotiated wire version (KTD10).
+    ///
+    /// Production serves [`RETIRED_WIRE_VARIANTS`]; a test injects a fixture
+    /// table so the gate is exercised while the production table stays
+    /// empty (no variant is retired until U10).
+    pub retired_wire_variants: &'static [RetiredWireVariant],
 }
 
 #[derive(Debug, Clone)]
@@ -566,6 +668,10 @@ where
                 .map(PathBuf::from)
         }),
         test_mode,
+#[cfg(not(feature = "layer1-bootstrap"))]
+        // No variant is retired on this tree yet; the gate ships with the
+        // production table empty and a fixture table exercising it.
+        retired_wire_variants: RETIRED_WIRE_VARIANTS,
     };
     Ok(match profile {
         BrokerProfile::Host => BrokerMode::Host(config),
@@ -1146,15 +1252,58 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
         return Ok(());
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
-    let frame = connection
-        .recv_json_frame_with_fds::<RequestEnvelope>()
-        .await?;
+    let (envelope, request_fds) = {
+        // The frame decodes as JSON first so the retired-wire gate can
+        // recognize a variant the current enum no longer carries: a retired
+        // variant's frame is well-formed JSON but not a current
+        // `RequestEnvelope`, and the gate refuses it with the typed
+        // stale-wire-version code plus an audit record before the typed
+        // decode can drop it as malformed wire (KTD10).
+        let Some((envelope_value, request_fds)) = connection
+            .recv_json_frame_with_fds::<Value>()
+            .await?
+        else {
+            return Ok(());
+        };
+        if let Some(retired) = retired_variant_for(&envelope_value, server.config.retired_wire_variants)
+        {
+            // The closing refusal of a straggler call: the frame's
+            // descriptors are closed with the frame, the audit record is
+            // appended on the dispatch pool like every other append with no
+            // async form, and the peer is answered with the typed refusal -
+            // never a pre-dispatch malformed-wire drop.
+            let audit_log = Arc::clone(&server.audit_log);
+            let variant = retired.variant;
+            let _ = server
+                .dispatches
+                .run(move || {
+                    write_refusal_audit_bounded(
+                        &audit_log,
+                        AuditWriteClass::Privileged,
+                        variant,
+                        peer_uid,
+                        peer_gid,
+                        "stale-wire-version",
+                        "broker-instance",
+                        "refused",
+                    )
+                })
+                .await;
+            connection
+                .send_json_frame(&stale_wire_refusal(retired))
+                .await?;
+            return Ok(());
+        }
+        let envelope: RequestEnvelope = serde_json::from_value(envelope_value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        (envelope, request_fds)
+    };
     #[cfg(feature = "layer1-bootstrap")]
-    let frame = connection
+    let Some((envelope, request_fds)) = connection
         .recv_json_frame::<RequestEnvelope>()
         .await
-        .map(|frame| frame.map(|envelope| (envelope, Vec::new())))?;
-    let Some((envelope, request_fds)) = frame else {
+        .map(|frame| frame.map(|envelope| (envelope, Vec::new())))?
+    else {
         return Ok(());
     };
 
@@ -14300,6 +14449,8 @@ mod tests {
             // every forwarded operation, which is the fail-closed default.
             forward_socket_path: None,
             test_mode: true,
+#[cfg(not(feature = "layer1-bootstrap"))]
+            retired_wire_variants: RETIRED_WIRE_VARIANTS,
         }
     }
 
@@ -17819,6 +17970,167 @@ mod tests {
         assert!(
             audit.contains(&format!("\"caller_gid\":{caller_gid}")),
             "{audit}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn a_retired_variant_call_from_an_old_binary_is_refused_with_the_stale_wire_code_and_audited() {
+        // Mixed-version matrix fixture (U4 item 4 / KTD10): `ValidateBundle`
+        // is the previous protocol's request the current protocol retired
+        // (see tests/broker_protocol_compatibility.rs), standing in for the
+        // variants U10 retires. A straggler's frame is well-formed JSON but
+        // not a current `RequestEnvelope`, so without the gate it would be a
+        // pre-dispatch wire-malformed-json drop; the gate must instead
+        // answer the typed stale-wire-version refusal and append an audit
+        // record.
+        const FIXTURE_RETIRED: &[RetiredWireVariant] = &[RetiredWireVariant {
+            variant: "ValidateBundle",
+            retired_in_version: 4,
+        }];
+
+        let root = test_audit_dir("stale-wire-version-gate");
+        fs::create_dir_all(&root).expect("create audit test dir");
+        let mut config = test_server_config(&root, &root.join("unused-bundle.json"));
+        config.retired_wire_variants = FIXTURE_RETIRED;
+        let log = Arc::new(
+            AuditLog::open(
+                &config.audit_dir,
+                Gid::current().as_raw(),
+                true,
+                config.audit_retention_days,
+            )
+            .expect("open audit log"),
+        );
+        let limiter = Arc::new(Mutex::new(IpcRateLimiter::new(64)));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let served = Server {
+            config: Arc::new(config.clone()),
+            audit_log: Arc::clone(&log),
+            dispatches: DispatchPool::new(2),
+            ipc_rate_limiter: Arc::clone(&limiter),
+        };
+
+        // The old binary's frame: the previous-protocol envelope spells the
+        // request as the internally tagged `{"kind": "ValidateBundle"}`, so
+        // the frame still parses as JSON while never decoding as a current
+        // `RequestEnvelope`.
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        crate::protocol::send_json_frame(
+            client.as_raw_fd(),
+            &serde_json::json!({ "request": { "kind": "ValidateBundle" } }),
+        )
+        .expect("send the straggler frame");
+        runtime
+            .block_on(async {
+                let connection =
+                    AsyncSeqpacket::from_owned(server).expect("register accepted socket");
+                handle_connection(connection, &served).await
+            })
+            .expect("the gate answers instead of dropping the connection");
+        let response = crate::protocol::recv_json_frame::<BrokerResponse>(client.as_raw_fd())
+            .expect("the gate wrote a reply frame")
+            .expect("the reply frame is present");
+        let BrokerResponse::Error(refusal) = response else {
+            panic!("expected a typed error response, got {response:?}");
+        };
+        assert_eq!(refusal.kind, crate::envelope::STALE_WIRE_VERSION);
+        assert_eq!(refusal.operation, "ValidateBundle");
+        assert!(
+            refusal.message.contains("ValidateBundle") && refusal.message.contains("4"),
+            "the refusal names the retired variant and the wire-version boundary it was retired at: {}",
+            refusal.message
+        );
+
+        let audit = fs::read_to_string(log.current_daily_path()).expect("read audit log");
+        assert!(audit.contains(r#""op":"ValidateBundle""#), "{audit}");
+        assert!(
+            audit.contains(r#""disposition":"stale-wire-version""#),
+            "{audit}"
+        );
+        assert!(audit.contains(r#""outcome":"refused""#), "{audit}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A current wire variant passes the gate: the Value-first decode with
+    /// an empty production retirement table serves the request exactly as
+    /// the typed decode did, so the gate is a tax only retired variants pay.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn a_current_wire_variant_passes_the_retired_wire_gate() {
+        assert!(
+            RETIRED_WIRE_VARIANTS.is_empty(),
+            "no variant is retired on this tree yet"
+        );
+        let root = test_audit_dir("stale-wire-gate-current");
+        fs::create_dir_all(&root).expect("create audit test dir");
+        let config = test_server_config(&root, &root.join("unused-bundle.json"));
+        let log = Arc::new(
+            AuditLog::open(
+                &config.audit_dir,
+                Gid::current().as_raw(),
+                true,
+                config.audit_retention_days,
+            )
+            .expect("open audit log"),
+        );
+        let limiter = Arc::new(Mutex::new(IpcRateLimiter::new(64)));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let served = Server {
+            config: Arc::new(config.clone()),
+            audit_log: Arc::clone(&log),
+            dispatches: DispatchPool::new(2),
+            ipc_rate_limiter: Arc::clone(&limiter),
+        };
+        use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequestEnvelope, HelloRequest};
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        crate::protocol::send_json_frame(
+            client.as_raw_fd(),
+            &BrokerRequestEnvelope {
+                request: BrokerRequest::Hello(HelloRequest {
+                    client_version: d2b_contracts_broker::PROTOCOL_VERSION.to_string(),
+                    supported_features: Vec::new(),
+                }),
+                caller_role: BrokerCallerRole::RootUid { uid: 0 },
+                test_peer_uid: None,
+                audit_join: None,
+            },
+        )
+        .expect("send a current Hello");
+        runtime
+            .block_on(async {
+                let connection =
+                    AsyncSeqpacket::from_owned(server).expect("register accepted socket");
+                handle_connection(connection, &served).await
+            })
+            .expect("the current request is served");
+        let response = crate::protocol::recv_json_frame::<BrokerResponse>(client.as_raw_fd())
+            .expect("read the reply frame")
+            .expect("the reply frame is present");
+        assert!(
+            matches!(response, BrokerResponse::Hello(_)),
+            "a current wire variant passes the gate: {response:?}"
         );
 
         let _ = fs::remove_dir_all(&root);

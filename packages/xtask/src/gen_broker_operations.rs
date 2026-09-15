@@ -73,6 +73,8 @@ struct Row {
     fds: Fds,
     #[serde(default)]
     state_cell: StateCell,
+    #[serde(default)]
+    deadline: Deadline,
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,6 +138,18 @@ struct StateCell {
     durability: Option<String>,
 }
 
+/// The deadline-tier facet of one committed operation row (U4/KTD4).
+///
+/// A row that declares no tier sits on the standard tier, and every row
+/// name outside the closed set fails generation instead of widening what a
+/// row may mean.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Deadline {
+    #[serde(default)]
+    tier: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Catalog {
@@ -149,6 +163,9 @@ const OWNERS: [&str; 3] = ["family", "broker-generic", "transport-excluded"];
 const PROFILES: [&str; 2] = ["host", "guest"];
 /// The payload provenances a row may declare.
 const PAYLOAD_PROVENANCE: [&str; 2] = ["wire", "request"];
+/// The deadline tiers a row may declare; a row that declares none sits on
+/// the standard tier.
+const DEADLINE_TIERS: [&str; 2] = ["standard", "extended"];
 
 fn render_error(message: impl Into<String>) -> Box<dyn std::error::Error> {
     message.into().into()
@@ -300,6 +317,14 @@ fn parse(repo_root: &Path) -> Result<Catalog, Box<dyn std::error::Error>> {
                     )));
                 }
                 None => unreachable!("validated pairing above"),
+            }
+        }
+        if let Some(tier) = row.deadline.tier.as_deref() {
+            if !DEADLINE_TIERS.contains(&tier) {
+                return Err(render_error(format!(
+                    "{POLICY_PATH}: {} declares unknown deadline tier {tier:?}",
+                    row.operation
+                )));
             }
         }
         if !["deny-only", "errors", "yes"].contains(&row.audit.mode.as_str()) {
@@ -600,6 +625,14 @@ fn generate_catalog(catalog: &Catalog) -> String {
                 Some("one-time") => "Some(CellDurability::OneTime)".to_owned(),
                 Some("ephemeral") => "Some(CellDurability::Ephemeral)".to_owned(),
                 _ => "None".to_owned(),
+            }
+        ));
+        rows.push_str(&format!(
+            "        deadline_tier: {},\n",
+            match row.deadline.tier.as_deref() {
+                Some("standard") | None => "DeadlineTier::Standard".to_owned(),
+                Some("extended") => "DeadlineTier::Extended".to_owned(),
+                Some(other) => unreachable!("validated tier {other:?}"),
             }
         ));
         rows.push_str("    },\n");

@@ -60,6 +60,7 @@ pub const PROCESS_PROVIDERS: &[&str] = &[
 /// retires leaves the domain with it.
 pub const BROKER_OPERATION_VALUES: &[&str] = &[
     "Hello",
+    "PublishTrustedContext",
     "ExportBrokerAudit",
     "OpenPidfd",
     "OpenPeerPidfdFromAcceptedSocket",

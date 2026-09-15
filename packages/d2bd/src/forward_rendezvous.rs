@@ -93,6 +93,14 @@ pub(crate) const INVALID_PAYLOAD: &str = "invalid-payload";
 /// handler inside it stalls past the daemon's own.
 pub(crate) const FORWARD_TIMEOUT: &str = "forward-timeout";
 
+/// The refusal code for a forwarded handler that panicked mid-dispatch.
+///
+/// The spelling is the envelope's closed peer-code entry (KTD7): a crash on
+/// this leg is a named refusal the broker's envelope surfaces under its own
+/// `handler-crashed` code, never a dropped socket the broker reads as a
+/// round-trip timeout.
+pub(crate) const HANDLER_CRASHED: &str = "handler-crashed";
+
 /// The read deadline for one forwarded request frame: a connected peer that
 /// sends nothing is closed rather than holding an in-flight slot.
 const FORWARD_REQUEST_DEADLINE: Duration = Duration::from_secs(30);
@@ -326,9 +334,11 @@ impl ForwardRendezvous {
     /// declared handler under the handler deadline, write one reply frame.
     ///
     /// Driven on the runtime: every wait here is awaited, so a call holds its
-    /// admission permit and no thread of its own.
+    /// admission permit and no thread of its own. The dispatch itself runs
+    /// on its own task (KTD7's crash guard): a handler that panics dies in
+    /// the task, not in the accept loop, and the call is refused by name.
     async fn serve_connection(
-        &self,
+        self: &Arc<Self>,
         connection: &AsyncSeqpacket,
         handler_deadline: Duration,
     ) -> Result<(), TypedError> {
@@ -384,20 +394,53 @@ impl ForwardRendezvous {
             }
             None => handler_deadline,
         };
-        let response = match tokio::time::timeout(
-            handler_deadline,
-            self.invoke(&request, fds.as_slice()),
-        )
-        .await
-        {
-            Ok(response) => response,
+        // The dispatch runs on its own task so a handler crash cannot
+        // unwind through the accept loop: the task boundary catches the
+        // panic (KTD7), and the call is refused by name with the envelope's
+        // handler-crashed code instead of a dropped socket the broker would
+        // read as a round-trip timeout. The call's artifacts move with it,
+        // exactly as a spawned forward leg owns its frame.
+        let operation = request.operation.clone();
+        let rendezvous = Arc::clone(self);
+        let dispatch = tokio::spawn(async move {
+            rendezvous.invoke(&request, fds.as_slice()).await
+        });
+        let abort = dispatch.abort_handle();
+        let response = match tokio::time::timeout(handler_deadline, dispatch).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(join)) if join.is_panic() => {
+                // The closing refusal of a crashed call: the panic is caught
+                // at the task boundary and the caller is answered by name,
+                // while the panic's message goes to the daemon's journal for
+                // the operator following the refusal record.
+                tracing::error!(
+                    operation = %operation,
+                    panic = %panic_message(join.into_panic()).unwrap_or_else(|| "(no message)".to_owned()),
+                    "forwarded handler panicked; refusing the call"
+                );
+                refused(HANDLER_CRASHED)
+            }
+            Ok(Err(join)) => {
+                // A task that ended without a panic was cancelled, and the
+                // only cancellation below fires after the deadline refusal
+                // was already chosen, so this arm cannot normally be
+                // reached; it refuses by name rather than unwinding.
+                tracing::error!(
+                    operation = %operation,
+                    join = %join,
+                    "forwarded dispatch task ended without a result; refusing the call"
+                );
+                refused(HANDLER_CRASHED)
+            }
             Err(_) => {
                 // A handler that never finished is the daemon's answer to
                 // give: the call is refused by name while the caller is still
                 // listening, and the slot it held is free the moment this
-                // call returns.
+                // call returns. The task is aborted so a non-yielding handler
+                // cannot linger past its deadline on a worker.
+                abort.abort();
                 tracing::warn!(
-                    operation = %request.operation,
+                    operation = %operation,
                     "forwarded handler exceeded its deadline; refusing the call"
                 );
                 refused(FORWARD_TIMEOUT)
@@ -485,6 +528,17 @@ fn refused(code: &str) -> ForwardOperationResponse {
         outcome: ForwardOperationOutcome::Refused {
             code: code.to_owned(),
         },
+    }
+}
+
+/// The message one dispatch panic carried, when it carried a message.
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> Option<String> {
+    if let Some(&message) = payload.downcast_ref::<&str>() {
+        Some(message.to_owned())
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        Some(message.clone())
+    } else {
+        None
     }
 }
 
@@ -1152,6 +1206,61 @@ mod tests {
     };
     static STALLED_HANDLER: StalledHandler = StalledHandler;
 
+    /// A handler that panics mid-dispatch: only the crash guard can answer a
+    /// call it is handed - the panic must die at the task boundary and the
+    /// call must be refused by name instead of dropped.
+    struct PanicHandler;
+
+    #[async_trait::async_trait]
+    impl OperationHandler for PanicHandler {
+        async fn execute(
+            &self,
+            _ctx: OperationCtx<'_>,
+            _payload: ValidatedPayload,
+        ) -> Result<OperationResult, OperationFailure> {
+            panic!("injected forward-leg handler crash")
+        }
+    }
+
+    static PANIC_HANDLER: PanicHandler = PanicHandler;
+
+    /// A handler whose work outruns the historical fixed 25 s deadline: the
+    /// context budget (the Extended row's) must let it finish rather than
+    /// aborting the call at the tier-less constant.
+    struct Slow30sHandler;
+
+    #[async_trait::async_trait]
+    impl OperationHandler for Slow30sHandler {
+        async fn execute(
+            &self,
+            _ctx: OperationCtx<'_>,
+            _payload: ValidatedPayload,
+        ) -> Result<OperationResult, OperationFailure> {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok(stall_result())
+        }
+    }
+
+    static SLOW_30S_HANDLER: Slow30sHandler = Slow30sHandler;
+
+    /// A handler that runs and fails: its failure code must cross back to the
+    /// caller under its own name, never flattened into the missing-handler
+    /// refusal.
+    struct ErroringHandler;
+
+    #[async_trait::async_trait]
+    impl OperationHandler for ErroringHandler {
+        async fn execute(
+            &self,
+            _ctx: OperationCtx<'_>,
+            _payload: ValidatedPayload,
+        ) -> Result<OperationResult, OperationFailure> {
+            Err(OperationFailure::new("handler-errored"))
+        }
+    }
+
+    static ERRORING_HANDLER: ErroringHandler = ErroringHandler;
+
     /// A handler that reads the descriptor the carrier attached to its call.
 
     /// The forwarded request leg carries the caller's descriptor over
@@ -1189,7 +1298,7 @@ mod tests {
     /// EphemeralProcess driver declares.
 
 
-    static STALL_OPERATIONS: LazyLock<[OperationDef; 4]> = LazyLock::new(|| {
+    static STALL_OPERATIONS: LazyLock<[OperationDef; 7]> = LazyLock::new(|| {
         [
             OperationDef {
                 operation_ref: operation_ref(STALL_THREADS),
@@ -1206,6 +1315,18 @@ mod tests {
             OperationDef {
                 operation_ref: operation_ref("fd-echo"),
                 handler: &FD_ECHO_HANDLER,
+            },
+            OperationDef {
+                operation_ref: operation_ref("panic-boom"),
+                handler: &PANIC_HANDLER,
+            },
+            OperationDef {
+                operation_ref: operation_ref("slow-30s"),
+                handler: &SLOW_30S_HANDLER,
+            },
+            OperationDef {
+                operation_ref: operation_ref("error-boom"),
+                handler: &ERRORING_HANDLER,
             },
         ]
     });
@@ -1643,6 +1764,141 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         }
     }
 
+    /// A crashing handler is refused by name: the panic dies at the dispatch
+    /// task boundary, the caller is answered with the handler-crashed code
+    /// while the broker is still listening - not a dropped socket the broker
+    /// would read as a round-trip timeout - and the accept loop (and its
+    /// capacity slot) survives to serve the next call.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_crashing_handler_is_refused_by_name_and_the_rendezvous_keeps_serving() {
+        const HANDLER_DEADLINE: Duration = Duration::from_secs(5);
+        let serving = ServingRendezvous::start_with(posture(1, HANDLER_DEADLINE)).await;
+
+        let started = Instant::now();
+        let refused = forward_async(
+            serving.socket_path.clone(),
+            "panic-boom",
+            "test",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(
+            refused.outcome,
+            ForwardOperationOutcome::Refused {
+                code: HANDLER_CRASHED.to_owned(),
+            },
+            "a crashed handler is refused by name, never as a timeout or a drop"
+        );
+        assert!(
+            started.elapsed() < HANDLER_DEADLINE,
+            "the crashed call is answered immediately, not at the deadline: {:?}",
+            started.elapsed()
+        );
+
+        // The crashed handler did not take down the accept loop or hold its
+        // slot: with a cap of one, the call that follows is served. The
+        // refusal is written before the crashed call's permit is released,
+        // so the follow-up retries briefly until the slot is free.
+        let after = Instant::now();
+        loop {
+            let served = forward_async(
+                serving.socket_path.clone(),
+                "inspect-process-family",
+                "test",
+                serde_json::json!({ "resourceType": "Process" }),
+            )
+            .await;
+            if matches!(served.outcome, ForwardOperationOutcome::Result { .. }) {
+                break;
+            }
+            assert!(
+                after.elapsed() < Duration::from_secs(5),
+                "the crashed call's slot was never released: {served:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// A handler that ran and failed crosses its own code back to the
+    /// caller: the rendezvous relays the provider's failure code, so
+    /// handler-errored is never flattened into the missing-handler refusal.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_erroring_handler_crosses_back_under_its_own_code() {
+        let serving = ServingRendezvous::start().await;
+        let response = forward(
+            &serving.socket_path,
+            "error-boom",
+            "test",
+            serde_json::json!({}),
+        );
+        assert_eq!(
+            response.outcome,
+            ForwardOperationOutcome::Refused {
+                code: "handler-errored".to_owned(),
+            },
+            "a handler error keeps its own code on the forwarded leg"
+        );
+    }
+
+    /// A row with a large deadline tier runs past the historical fixed 25 s
+    /// bound on the forwarded leg and completes: the context's budget is the
+    /// Extended tier's (`MAX_CONTEXT_DEADLINE_MS`, the shared ceiling the
+    /// broker mints for an extended row), and the rendezvous serves the
+    /// context's budget as the per-call handler deadline instead of the
+    /// tier-less constant.
+    ///
+    /// The run is a genuine 25 s+ completion (30 s of handler work under a
+    /// 60 s budget), so it is a real 30-second test. The local leg's half of
+    /// the same contract is the broker-side wiring test: the mint puts the
+    /// Extended tier's 60 s budget into the context block (which this
+    /// rendezvous then serves), and the local leg serves that same block's
+    /// budget - a sync 30 s local handler would monopolize the
+    /// process-wide two-worker handler set for the duration of the suite,
+    /// so the real 25 s+ run lives on this leg, where the handler is an
+    /// async task on its own runtime.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_row_with_a_large_deadline_tier_runs_past_twenty_five_seconds_on_the_forwarded_leg() {
+        let (rendezvous, socket_path, _scratch, _providers) = ServingRendezvous::fixture().await;
+        rendezvous.publish_generations("test", 1, 1);
+        rendezvous.set_broker_epoch(5);
+        let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
+        let listener = AsyncSeqpacket::register(listener).expect("register the listener");
+        // The posture's tier-less deadline is the historical 25 s constant;
+        // the context's Extended-tier budget (the shared 60 s ceiling) must
+        // own the call, so the 30 s run completes instead of being refused
+        // at the old fixed bound.
+        tokio::spawn(serve_accepted(
+            rendezvous,
+            listener,
+            posture(1, Duration::from_millis(DEFAULT_CONTEXT_DEADLINE_MS)),
+        ));
+        let mut extended = fresh_context();
+        extended.deadline_ms = MAX_CONTEXT_DEADLINE_MS;
+        let started = Instant::now();
+        let answered = forward_with_context_async(
+            socket_path,
+            "slow-30s",
+            "test",
+            serde_json::json!({}),
+            extended,
+            Duration::from_secs(60),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        assert!(
+            matches!(answered.outcome, ForwardOperationOutcome::Result { .. }),
+            "the Extended-tier budget let the 30 s handler finish: {answered:?}"
+        );
+        assert!(
+            elapsed >= Duration::from_secs(30),
+            "the handler ran its full 30 s: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(55),
+            "the completion is the handler's, not the budget's expiry: {elapsed:?}"
+        );
+    }
+
     /// A call the rendezvous is at its cap for is answered with the daemon's
     /// own capacity code - a named refusal, not a silent close - and the
     /// calls already in flight are undisturbed.
@@ -1849,12 +2105,18 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
     /// Forward one invocation with a context on the runtime, so a stalled
     /// handler test can exercise the budget the context declares.
+    ///
+    /// `reply_deadline` bounds the frame read: a test that proves a 25 s+
+    /// completion passes the budget the call's context declares (longer than
+    /// the default 10 s read bound), so the frame read cannot outrun the
+    /// completion it is watching.
     async fn forward_with_context_async(
         socket_path: PathBuf,
         operation: &str,
         zone: &str,
         payload: serde_json::Value,
         context: ForwardContext,
+        reply_deadline: Duration,
     ) -> ForwardOperationResponse {
         let request = ForwardOperationRequest {
             operation: operation.to_owned(),
@@ -1870,13 +2132,12 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         let socket = connect_seqpacket(&socket_path).expect("dial the rendezvous");
         let connection =
             AsyncSeqpacket::register(Socket::from(socket)).expect("register the forwarded call");
-        let deadline = Duration::from_secs(10);
         connection
-            .write_frame(&encoded, deadline)
+            .write_frame(&encoded, reply_deadline)
             .await
             .expect("write the request frame");
         let frame = connection
-            .read_frame(deadline)
+            .read_frame(reply_deadline)
             .await
             .expect("read the reply frame");
         serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
@@ -2101,6 +2362,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
             "test",
             serde_json::json!({}),
             stalled,
+            Duration::from_secs(10),
         )
         .await;
         assert_eq!(
@@ -2164,9 +2426,14 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         reply: BrokerResponse,
         seen: std::sync::mpsc::Sender<BrokerRequestEnvelope>,
     ) -> std::thread::JoinHandle<()> {
+        // The listener binds before the thread spawns, so the daemon's
+        // one-shot publication dial (started by the test after this returns)
+        // can never race the bind: a dial before the bind would error, the
+        // daemon would never retry, and the accept below would block the
+        // test's `broker.join()` forever.
+        let listener = bind_public_socket(&socket_path, &test_identity())
+            .expect("bind the test broker socket");
         std::thread::spawn(move || {
-            let listener = bind_public_socket(&socket_path, &test_identity())
-                .expect("bind the test broker socket");
             listener
                 .set_nonblocking(false)
                 .expect("the test broker accepts blockingly");

@@ -24,7 +24,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_broker::broker_wire::{BrokerRequest, FdKind};
+use d2b_contracts_broker::broker_wire::{
+    BrokerRequest, DEFAULT_CONTEXT_DEADLINE_MS, FdKind, MAX_CONTEXT_DEADLINE_MS,
+};
 use d2b_contracts_resource::v3::{CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes};
 
 use crate::ops::audit_op::OperationFields;
@@ -112,6 +114,40 @@ pub enum CellDurability {
     Ephemeral,
 }
 
+/// The closed deadline-tier set of one committed operation row (KTD4).
+///
+/// The tier is the row's declared per-call budget: the broker mints the
+/// tier's concrete budget into the attested context block, and both
+/// execution legs serve the context's budget as the handler deadline -
+/// never a flat per-leg constant. The budgets are the shared carrier's own
+/// constants (see [`DeadlineTier::budget_ms`]), so a tier cannot drift
+/// from the contract the receiving leg enforces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeadlineTier {
+    /// The default per-call budget: the carrier's historical fixed handler
+    /// deadline, which every context-free leg also serves.
+    Standard,
+    /// The largest per-call budget the carrier admits: a row whose work
+    /// legitimately outruns the standard tier runs under the shared
+    /// absolute ceiling.
+    Extended,
+}
+
+impl DeadlineTier {
+    /// The concrete budget one tier admits, in milliseconds.
+    ///
+    /// The values are the shared carrier's own constants (`broker_wire`
+    /// remains the source: `DEFAULT_CONTEXT_DEADLINE_MS` and
+    /// `MAX_CONTEXT_DEADLINE_MS`), so the envelope and the receiving leg
+    /// cannot disagree about what a tier means.
+    pub const fn budget_ms(self) -> u64 {
+        match self {
+            Self::Standard => DEFAULT_CONTEXT_DEADLINE_MS,
+            Self::Extended => MAX_CONTEXT_DEADLINE_MS,
+        }
+    }
+}
+
 /// One committed broker operation row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrokerOperationRow {
@@ -170,6 +206,11 @@ pub struct BrokerOperationRow {
     /// The cell's declared durability facet, present exactly when
     /// [`Self::state_cell`] is.
     pub cell_durability: Option<CellDurability>,
+    /// The row's declared deadline tier (KTD4): the concrete budget the
+    /// broker mints into the attested context block, which both execution
+    /// legs serve as the per-call handler deadline. Rows without a
+    /// declared tier sit on the standard tier.
+    pub deadline_tier: DeadlineTier,
 }
 
 include!("generated/broker_operation_catalog.rs");

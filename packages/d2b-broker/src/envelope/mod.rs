@@ -800,12 +800,14 @@ impl BrokerEnvelope {
         // as the broker classified it, and the operation's deadline budget.
         // A store that holds no values for the Zone refuses to mint, and the
         // call is refused with the stale-context code rather than attested
-        // blind. (The budget is the carrier default until the committed
-        // row's deadline tier arrives; U4 wires the row budget here.)
+        // blind. The budget is the row's declared deadline tier (KTD4): both
+        // execution legs serve the minted budget as the per-call handler
+        // deadline, so a row's tier binds here, on the forwarded leg, and on
+        // the local leg alike - never a flat per-leg constant.
         let context = match &self.context_store {
             Some(store) => Some(
                 store
-                    .mint(zone, caller.identity(), DEFAULT_CONTEXT_DEADLINE_MS)
+                    .mint(zone, caller.identity(), row.deadline_tier.budget_ms())
                     .map_err(|_| {
                         EnvelopeRefusal::new(invocation_id.clone(), operation, STALE_CONTEXT)
                     })?,
@@ -1175,8 +1177,9 @@ impl HandlerTable {
     ///
     /// The carrier's default is the table's own default; a broker-attested
     /// context block's deadline supersedes the table's value whenever the
-    /// call mints one, which is how the row's declared budget will bind the
-    /// local leg once the row deadline tier lands (U4b).
+    /// call mints one, which is how the row's declared deadline tier (KTD4)
+    /// binds the local leg: the mint puts the tier's budget into the block,
+    /// and the task serves the block's budget, not the table's.
     pub fn with_deadline(mut self, deadline: Duration) -> Self {
         self.deadline = deadline;
         self
@@ -1354,7 +1357,7 @@ impl OperationDispatcher for ForwardingDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{BrokerAuthzFacets, OperationOwner};
+    use crate::catalog::{BrokerAuthzFacets, DeadlineTier, OperationOwner};
     use crate::forwarding::SocketForwarder;
     use std::io;
     use std::os::fd::{AsRawFd, OwnedFd};
@@ -1534,6 +1537,7 @@ while let Ok(fd) = accept_peer(&listener) {
             fd_kind: None,
             state_cell: None,
             cell_durability: None,
+            deadline_tier: DeadlineTier::Standard,
         }
     }
 
@@ -2474,6 +2478,68 @@ while let Ok(fd) = accept_peer(&listener) {
         assert_eq!(context.guest_generation, 7);
         assert_eq!(context.initiating_identity, "daemon");
         assert_eq!(context.deadline_ms, DEFAULT_CONTEXT_DEADLINE_MS);
+    }
+
+    /// The row's declared deadline tier is the budget the mint attests: a
+    /// Standard row mints the carrier default, an Extended row mints the
+    /// shared ceiling - and both disagree with the flat per-leg constant a
+    /// tier-less broker would use, because KTD4 puts the budget on the
+    /// context block, where both execution legs read it.
+    #[test]
+    fn the_row_deadline_tier_is_the_budget_the_mint_attests() {
+        use d2b_contracts_broker::broker_wire::{
+            DEFAULT_CONTEXT_DEADLINE_MS, MAX_CONTEXT_DEADLINE_MS,
+        };
+        let observe = |tier: DeadlineTier| {
+            let observed: Arc<Mutex<Option<ForwardContext>>> = Arc::default();
+            let slot = Arc::clone(&observed);
+            let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", move |invocation| {
+                *Arc::clone(&slot).lock().expect("slot") = invocation.context.cloned();
+                Ok(DispatchOutcome {
+                    result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
+                        .expect("canonical"),
+                    fds: Vec::new(),
+                })
+            }));
+            let (_dir, store) = context_store();
+            store
+                .publish(&published("zone-a"))
+                .expect("the daemon published the Zone");
+            let mut row = declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]);
+            row.deadline_tier = tier;
+            let envelope = BrokerEnvelope::over(
+                BrokerProfileId::Host,
+                Box::new(ForwardingDispatcher::new(peer.forwarder())),
+            )
+            .with_trusted_context(store)
+            .declare(row)
+            .build();
+            runtime()
+                .block_on(envelope.call(
+                    CallerAuthority::Daemon,
+                    "ProbeOperation",
+                    "zone-a",
+                    &serde_json::json!({ "label": "x" }),
+                ))
+                .expect("the peer served the attested call");
+            observed
+                .lock()
+                .expect("slot")
+                .take()
+                .expect("the peer received the minted context")
+        };
+
+        let standard = observe(DeadlineTier::Standard);
+        assert_eq!(standard.deadline_ms, DEFAULT_CONTEXT_DEADLINE_MS);
+        assert_eq!(standard.deadline_ms, DeadlineTier::Standard.budget_ms());
+        let extended = observe(DeadlineTier::Extended);
+        assert_eq!(extended.deadline_ms, MAX_CONTEXT_DEADLINE_MS);
+        assert_eq!(extended.deadline_ms, DeadlineTier::Extended.budget_ms());
+        // The tier's budgets are the shared carrier's closed contract: the
+        // extended tier is the largest budget the carrier admits, so no
+        // tier can exceed the receiving leg's absolute ceiling.
+        assert!(DeadlineTier::Standard.budget_ms() < DeadlineTier::Extended.budget_ms());
+        assert!(DeadlineTier::Extended.budget_ms() <= MAX_CONTEXT_DEADLINE_MS);
     }
 
     #[test]
