@@ -9,8 +9,9 @@
   failure in the CI `rust-main` lane no longer reproduces.
 - The host-integration guest-store disk images are now reproducible: the
   `acceptance-guest-store.img` runCommand pins `SOURCE_DATE_EPOCH` plus a
-  fixed filesystem UUID and htree `hash_seed` (e2fsprogs rejects all-zero
-  seeds), replacing the randomized mkfs seed that made every build differ.
+  fixed filesystem UUID and htree `hash_seed` (e2fsprogs ignores an all-zero
+  seed and randomizes it), replacing the randomized mkfs seed that made every
+  build differ.
   With a stable image content hash, the nixos-install closure import matches
   the recorded spec and the `state-posture-contract` and
   `runtime-cloud-hypervisor-guest-preflight` vmChecks pass reliably.
