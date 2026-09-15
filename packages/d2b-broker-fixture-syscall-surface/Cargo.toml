@@ -1,0 +1,18 @@
+[package]
+name = "d2b-broker-fixture-syscall-surface"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+# The fixture deliberately carries the hostile dependency surface the
+# broker's dependency-surface audit must reject (U6): a syscall-surface
+# dependency and raw-syscall code. It is never linked into the broker
+# binary - the composition crate keeps it as a dev-dependency only, so the
+# audit has a real crate to scan without the production closure carrying
+# it.
+[lints.rust]
+unsafe_code = "allow"
+
+[dependencies]
+libc = "0.2"

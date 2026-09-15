@@ -1,0 +1,35 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+# The dependency-surface fixture: never linked into the broker binary (a
+# dev-dependency of the composition root only); the audit scans it.
+exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
+
+# The composition test's dependency-surface probes scan these sources.
+exports_files(glob(["src/**/*.rs"]), visibility = ["//visibility:public"])
+
+rust_library(
+    name = "d2b_broker_fixture_syscall_surface",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

@@ -842,6 +842,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-broker-composition"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-broker",
+ "d2b-broker-fixture-handlers",
+ "d2b-broker-fixture-syscall-surface",
+ "d2b-contracts-resource",
+ "regex",
+ "serde_json",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "d2b-broker-fixture-handlers"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-broker",
+]
+
+[[package]]
+name = "d2b-broker-fixture-syscall-surface"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "d2b-bus"
 version = "0.0.0-bootstrap"
 dependencies = [

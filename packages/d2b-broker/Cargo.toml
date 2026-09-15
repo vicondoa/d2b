@@ -5,6 +5,12 @@ edition = "2024"
 publish = false
 license = "Apache-2.0"
 
+# U6 (KTD1): this crate is LIB-ONLY and links no provider crate. The broker
+# binary is composed in `d2b-broker-composition` (binary name `d2b-broker`
+# preserved); the composition root is where provider handler crates are
+# linked and where the routing rule admits them to the in-broker handler
+# table.
+
 [lints.rust]
 unsafe_code = "deny"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }

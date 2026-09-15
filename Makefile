@@ -253,7 +253,7 @@ test-host-integration:
 	'$(BAZEL_BIN)' build --config=local \
 	//packages/d2b:d2b \
 	//packages/d2bd:d2bd \
-	//packages/d2b-broker:d2b-broker \
+	//packages/d2b-broker-composition:d2b-broker \
 	//packages/d2b-host:d2b-activation-helper \
 	//packages/d2b-host-activation-helper:d2b-host-activation-helper \
 	//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper \
@@ -269,7 +269,7 @@ test-host-integration:
 	stage_tool() { source="$$(realpath -e "$$bazel_bin/$$1")"; case "$$source" in "$$bazel_bin"/*) ;; *) echo "test-host-integration: Bazel output escaped bazel-bin" >&2; return 1;; esac; [ -f "$$source" ] && [ -x "$$source" ] || { echo "test-host-integration: invalid Bazel output $$1" >&2; return 1; }; install -m 755 "$$source" "$$stage/$$2"; }; \
 	stage_tool packages/d2b/d2b d2b; \
 	stage_tool packages/d2bd/d2bd d2bd; \
-	stage_tool packages/d2b-broker/d2b-broker d2b-broker; \
+	stage_tool packages/d2b-broker-composition/d2b-broker d2b-broker; \
 	stage_tool packages/d2b-host/d2b-activation-helper d2b-activation-helper; \
 	stage_tool packages/d2b-host-activation-helper/d2b-host-activation-helper d2b-host-activation-helper; \
 	stage_tool packages/d2b-unsafe-local-helper/d2b-unsafe-local-helper d2b-unsafe-local-helper; \

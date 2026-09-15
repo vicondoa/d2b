@@ -3,6 +3,9 @@ resolver = "2"
 members = [
   "d2b-audit",
   "d2b-broker",
+  "d2b-broker-composition",
+  "d2b-broker-fixture-handlers",
+  "d2b-broker-fixture-syscall-surface",
   "d2b-bus",
   "d2b-contracts",
   "d2b-contracts-broker",
