@@ -867,15 +867,25 @@ const SERVER_WORKER_THREADS: usize = 4;
 /// finish. The listen backlog holds the dials this process has not admitted.
 const MAX_INFLIGHT_CONNECTIONS: usize = 64;
 
-/// Jobs one dispatch worker queues before its callers wait.
-const DISPATCH_QUEUE_PER_WORKER: usize = 1;
-
 /// Worker threads behind the dispatch pool, at least one more than one so two
 /// requests never queue behind one another.
-const MIN_DISPATCH_WORKERS: usize = 2;
+///
+/// The floor must cover the worst concurrent nesting the seam produces:
+/// outer forwarded invocations (a supervisor's SpawnRunner family) park a
+/// worker on `block_on` for their whole forward round trip, and the nested
+/// EnvelopeInvoke calls their handlers present arrive as new requests on
+/// this same pool. A floor below (concurrent outer calls + their nested
+/// legs) starves the nested legs until the outer io budgets expire - the
+/// 10s all-wave spawn stall. Eight matches the envelope-call runtime's
+/// worker count, so a worker-parked outer call never starves its own
+/// nested leg's dispatch.
+const MIN_DISPATCH_WORKERS: usize = 8;
+
 /// Upper bound on the dispatch pool: a stalled peer or a slow subprocess must
 /// not grow the broker's thread count with its callers.
 const MAX_DISPATCH_WORKERS: usize = 16;
+/// Jobs one dispatch worker queues before its callers wait.
+const DISPATCH_QUEUE_PER_WORKER: usize = 1;
 
 /// One job on the dispatch pool.
 type DispatchJob = Box<dyn FnOnce() + Send + 'static>;
