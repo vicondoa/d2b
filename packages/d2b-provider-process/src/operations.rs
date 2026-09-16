@@ -1982,6 +1982,7 @@ impl OperationHandler for ObserveRunnerHandler {
                 pid,
                 cgroup_verified,
                 executable_verified,
+                actual = executable.unwrap_or("<unreadable>"),
                 expected_subtree = %cgroup_placement.subtree,
                 expected_binary = %intent.binary_path.display(),
                 "ObserveRunner registered-runner verification incomplete"
