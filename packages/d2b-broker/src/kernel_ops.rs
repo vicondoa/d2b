@@ -1538,6 +1538,12 @@ fn optional_parse_swtpm_identity(
     let Some(value) = payload.get("swtpmIdentity") else {
         return Ok(None);
     };
+    // The daemon's family handler always carries the derived field, so an
+    // absent resolver derivation serializes as JSON null - treat it as
+    // absent like the kernel's other optional parsers.
+    if matches!(value, CanonicalJsonValue::Null) {
+        return Ok(None);
+    }
     let CanonicalJsonValue::Object(fields) = value else {
         return Err(refused("swtpmIdentity: expected an object"));
     };
