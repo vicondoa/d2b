@@ -1,5 +1,10 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 # Provider crates link only from the daemon composition root and the
 # enumerated consumers; broker/shared crates cannot depend on them (U14).
@@ -7,7 +12,7 @@ package(default_visibility = ["//packages/d2b:__pkg__", "//packages/d2bd:__pkg__
 
 exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_config_nixos",
     srcs = glob(["src/**/*.rs"]),
     compile_data = ["Cargo.toml"],
@@ -16,7 +21,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "service_contract",
     srcs = ["tests/service_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -26,7 +31,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "config_lifecycle",
     srcs = ["tests/config_lifecycle.rs"],
     compile_data = ["Cargo.toml"],
@@ -36,7 +41,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "redaction",
     srcs = ["tests/redaction.rs"],
     compile_data = ["Cargo.toml"],
@@ -46,12 +51,12 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_config_nixos_doc_test",
     crate = ":d2b_provider_config_nixos",
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_config_nixos_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_config_nixos",
@@ -84,5 +89,10 @@ test_suite(
         ":config_lifecycle",
         ":redaction",
         ":d2b_provider_config_nixos_test",
+        ":d2b_provider_config_nixos_clippy",
+        ":service_contract_clippy",
+        ":config_lifecycle_clippy",
+        ":redaction_clippy",
+        ":d2b_provider_config_nixos_test_clippy",
     ],
 )

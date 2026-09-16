@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 # Provider crates link only from the daemon composition root and the
 # enumerated consumers; broker/shared crates cannot depend on them (U14).
@@ -11,7 +17,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_device_usbip",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
@@ -32,7 +38,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_device_usbip_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
@@ -56,7 +62,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_device_usbip_test",
     crate = ":d2b_provider_device_usbip",
     compile_data = [
@@ -74,7 +80,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "arbitration_conflict",
     srcs = ["tests/arbitration_conflict.rs"],
     compile_data = ["Cargo.toml"],
@@ -87,7 +93,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "conformance",
     srcs = ["tests/conformance.rs"],
     compile_data = ["Cargo.toml"],
@@ -100,7 +106,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "controller_state_machine",
     srcs = ["tests/controller_state_machine.rs"],
     compile_data = ["Cargo.toml"],
@@ -112,7 +118,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "explicit_attach_split",
     srcs = ["tests/explicit_attach_split.rs"],
     compile_data = ["Cargo.toml"],
@@ -121,7 +127,7 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "firewall_marker",
     srcs = ["tests/firewall_marker.rs"],
     compile_data = ["Cargo.toml"],
@@ -130,7 +136,7 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "wrong_zone_and_redaction",
     srcs = ["tests/wrong_zone_and_redaction.rs"],
     compile_data = ["Cargo.toml"],
@@ -143,7 +149,7 @@ rust_test(
 )
 
 
-rust_test(
+d2b_rust_test(
     name = "production_port",
     srcs = [
         "tests/production_port.rs",
@@ -157,7 +163,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "service_binding_lifecycle",
     srcs = [
         "tests/service_binding_lifecycle.rs",
@@ -193,7 +199,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_device_usbip_doc_test",
     crate = "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
 )

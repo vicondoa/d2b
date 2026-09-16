@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_doc_test", "rust_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 # Provider crates link only from the daemon composition root and the
 # enumerated consumers; broker/shared crates cannot depend on them (U14).
@@ -11,7 +17,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_process",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -28,7 +34,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_process_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -47,13 +53,13 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_process_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_process",
 )
 
-rust_test(
+d2b_rust_test(
     name = "process_family",
     srcs = ["tests/process_family.rs"],
     compile_data = ["Cargo.toml"],
@@ -86,7 +92,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_process_doc_test",
     crate = "//packages/d2b-provider-process:d2b_provider_process",
 )

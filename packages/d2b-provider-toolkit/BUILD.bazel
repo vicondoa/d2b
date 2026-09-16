@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 # Provider crates link only from the daemon composition root and the
 # enumerated consumers; broker/shared crates cannot depend on them (U14).
@@ -12,7 +18,7 @@ exports_files(
 
 d2b_provider_toolkit_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_toolkit",
     srcs = d2b_provider_toolkit_srcs,
     compile_data = ["Cargo.toml"],
@@ -31,7 +37,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_toolkit_test_support",
     srcs = d2b_provider_toolkit_srcs,
     compile_data = ["Cargo.toml"],
@@ -51,7 +57,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "d2b-provider-toolkit",
     srcs = ["src/bin/d2b-provider-toolkit.rs"],
     compile_data = ["Cargo.toml"],
@@ -63,7 +69,7 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "conformance",
     srcs = ["tests/conformance.rs"],
     compile_data = ["Cargo.toml"],
@@ -80,7 +86,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "fake_provider",
     srcs = ["tests/fake_provider.rs"],
     compile_data = ["Cargo.toml"],
@@ -96,7 +102,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "malicious_provider",
     srcs = ["tests/malicious_provider.rs"],
     compile_data = ["Cargo.toml"],
@@ -112,7 +118,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "supervised_runtime",
     srcs = ["tests/supervised_runtime.rs"],
     compile_data = ["Cargo.toml"],
@@ -146,7 +152,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "harness",
     srcs = ["tests/harness.rs"],
     compile_data = ["Cargo.toml"],
@@ -160,7 +166,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_toolkit_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_toolkit_test_support",
@@ -191,7 +197,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_toolkit_doc_test",
     crate = "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
 )

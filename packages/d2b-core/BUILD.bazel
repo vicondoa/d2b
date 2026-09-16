@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
@@ -13,7 +19,7 @@ filegroup(
 
 d2b_core_srcs = glob(["src/**/*.rs"])
 
-rust_library(
+d2b_rust_library(
     name = "d2b_core",
     srcs = d2b_core_srcs,
     compile_data = [
@@ -30,8 +36,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-
-rust_library(
+d2b_rust_library(
     name = "d2b_core_test_support",
     srcs = d2b_core_srcs,
     compile_data = [
@@ -50,7 +55,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "allocator_config",
     srcs = ["tests/allocator_config.rs"],
     compile_data = ["Cargo.toml"],
@@ -63,7 +68,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "bundle-resolver-tamper",
     srcs = ["tests/bundle_resolver_tamper.rs"],
     compile_data = ["Cargo.toml"],
@@ -75,7 +80,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "broker_network_prep",
     srcs = ["tests/broker_network_prep.rs"],
     compile_data = [
@@ -91,7 +96,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "bundle_resolver_runner_intent_parity",
     srcs = ["tests/bundle_resolver_runner_intent_parity.rs"],
     compile_data = ["Cargo.toml"],
@@ -104,7 +109,7 @@ rust_test(
 )
 
 
-rust_test(
+d2b_rust_test(
     name = "d2b-core-fuzz-host",
     srcs = [
         "//packages/d2b-core/fuzz:src/bin/host.rs",  # keep
@@ -126,7 +131,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b-core-fuzz-manifest",
     srcs = [
         "//packages/d2b-core/fuzz:src/bin/manifest.rs",  # keep
@@ -148,7 +153,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b-core-fuzz-privileges",
     srcs = [
         "//packages/d2b-core/fuzz:src/bin/privileges.rs",  # keep
@@ -170,7 +175,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b-core-smoke",
     srcs = [
         "//packages/d2b-core/fuzz:src/bin/core.rs",  # keep
@@ -194,7 +199,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "manifest_bounded_property",
     srcs = ["tests/manifest_bounded_property.rs"],
     compile_data = ["Cargo.toml"],
@@ -207,7 +212,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "manifest_v04_roundtrip",
     srcs = ["tests/manifest_v04_roundtrip.rs"],
     compile_data = ["Cargo.toml"],
@@ -220,7 +225,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "runtime_dtos",
     srcs = ["tests/runtime_dtos.rs"],
     compile_data = ["Cargo.toml"],
@@ -232,14 +237,14 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_core_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_core",
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "loader_worker",
     srcs = ["tests/loader_worker.rs"],
     compile_data = ["Cargo.toml"],
@@ -251,7 +256,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "loader_worker_panic",
     srcs = ["tests/loader_worker_panic.rs"],
     compile_data = ["Cargo.toml"],
@@ -263,7 +268,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "device_usbip_adapter",
     srcs = [
         "tests/device_usbip_adapter.rs",

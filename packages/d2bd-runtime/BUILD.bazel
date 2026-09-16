@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 exports_files(
     ["BUILD.bazel", "src/daemon_audit.rs"],
@@ -47,7 +53,7 @@ d2bd_runtime_test_deps = [
     "//packages/d2b-session-unix:d2b_session_unix_test_support",
 ]
 
-rust_library(
+d2b_rust_library(
     name = "d2bd_runtime",
     srcs = d2bd_runtime_srcs,
     compile_data = d2bd_runtime_compile_data,
@@ -56,7 +62,7 @@ rust_library(
     deps = d2bd_runtime_deps + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2bd_runtime_test_support",
     srcs = d2bd_runtime_srcs,
     compile_data = d2bd_runtime_compile_data,
@@ -68,7 +74,7 @@ rust_library(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2bd_runtime_test",
     crate = ":d2bd_runtime_test_support",
     compile_data = d2bd_runtime_compile_data,
@@ -76,7 +82,7 @@ rust_test(
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "runtime_boundary",
     srcs = ["tests/runtime_boundary.rs"],
     compile_data = d2bd_runtime_srcs + ["BUILD.bazel", "Cargo.toml"],
@@ -84,7 +90,7 @@ rust_test(
     deps = [":d2bd_runtime"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2bd_runtime_doc_test",
     crate = "//packages/d2bd-runtime:d2bd_runtime",
 )

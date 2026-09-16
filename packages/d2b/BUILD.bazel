@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 
 exports_files(
@@ -26,7 +32,7 @@ _daemon_data = [
     "//packages/d2bd:d2bd",
 ]
 
-rust_library(
+d2b_rust_library(
     name = "d2b_lib",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
@@ -50,7 +56,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "d2b",
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
@@ -61,7 +67,7 @@ rust_binary(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "audit_contract",
     srcs = [
         "tests/audit_contract.rs",
@@ -85,7 +91,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "auth_status_contract",
     srcs = ["tests/auth_status_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -102,7 +108,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "cli_contract",
     srcs = ["tests/cli_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -119,7 +125,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "cli_contract_coverage",
     srcs = ["tests/cli_contract_coverage.rs"],
     compile_data = ["Cargo.toml"],
@@ -137,7 +143,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "cli_json_contract",
     srcs = ["tests/cli_json_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -154,7 +160,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "cli_json_output_contract",
     srcs = ["tests/cli_json_output_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -174,7 +180,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "host_doctor_contract",
     srcs = ["tests/host_doctor_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -189,7 +195,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "host_validate_verb",
     srcs = [
         "src/host_validate.rs",  # keep
@@ -209,7 +215,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "launch_contract",
     srcs = ["tests/launch_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -221,7 +227,7 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "status_contract",
     srcs = ["tests/status_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -238,7 +244,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "stub_no_socket",
     srcs = ["tests/stub_no_socket.rs"],
     compile_data = ["Cargo.toml"],
@@ -252,7 +258,7 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "usb_contract",
     srcs = ["tests/usb_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -269,7 +275,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "usb_sk_contract",
     srcs = ["tests/usb_sk_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -286,7 +292,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "vm_verbs_contract",
     srcs = ["tests/vm_verbs_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -300,7 +306,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "zone_audit_contract",
     srcs = ["tests/zone_audit_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -314,7 +320,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "debug_contract",
     srcs = ["tests/debug_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -326,7 +332,7 @@ rust_test(
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "zone_doctor_contract",
     srcs = ["tests/zone_doctor_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -341,7 +347,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "zone_support_bundle_contract",
     srcs = ["tests/zone_support_bundle_contract.rs"],
     compile_data = ["Cargo.toml"],
@@ -355,7 +361,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_lib_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_lib",
@@ -384,7 +390,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_doc_test",
     crate = "//packages/d2b:d2b_lib",
 )

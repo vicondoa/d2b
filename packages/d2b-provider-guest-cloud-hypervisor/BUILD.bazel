@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 # Provider crates link only from the daemon composition root and the
 # enumerated consumers; broker/shared crates cannot depend on them (U14).
@@ -18,7 +24,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_guest_cloud_hypervisor",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
@@ -41,7 +47,7 @@ rust_library(
     ],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_guest_cloud_hypervisor_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
@@ -65,7 +71,7 @@ rust_library(
     ],
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "d2b-cloud-hypervisor-controller",
     srcs = ["controller/main.rs"],
     compile_data = ["Cargo.toml"],
@@ -74,7 +80,7 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_guest_cloud_hypervisor_test",
     crate = ":d2b_provider_guest_cloud_hypervisor",
     compile_data = ["Cargo.toml"],
@@ -88,7 +94,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "finalize_ordering_test",
     srcs = [
         "tests/finalize_ordering_test.rs",
@@ -100,7 +106,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "controller",
     srcs = [
         "tests/controller.rs",
@@ -115,7 +121,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "reconcile_state_machine_test",
     srcs = [
         "tests/reconcile_state_machine_test.rs",
@@ -130,7 +136,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "state_status_test",
     srcs = [
         "tests/state_status_test.rs",
@@ -144,7 +150,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "guest_spec_validation_test",
     srcs = [
         "tests/guest_spec_validation_test.rs",
@@ -158,7 +164,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "redaction_test",
     srcs = [
         "tests/redaction_test.rs",
@@ -196,7 +202,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_guest_cloud_hypervisor_doc_test",
     crate = "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
 )

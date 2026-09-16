@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 # Provider crates link only from the daemon composition root and the
 # enumerated consumers; broker/shared crates cannot depend on them (U14).
@@ -9,7 +15,7 @@ exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_credential_managed_identity",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -21,7 +27,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_credential_managed_identity_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -34,7 +40,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "d2b-managed-identity-agent",
     srcs = ["agent/main.rs"],
     compile_data = ["Cargo.toml"],
@@ -45,7 +51,7 @@ rust_binary(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "d2b-managed-identity-controller",
     srcs = ["controller/main.rs"],
     compile_data = ["Cargo.toml"],
@@ -56,7 +62,7 @@ rust_binary(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "entrypoint",
     srcs = ["tests/entrypoint.rs"],
     compile_data = ["Cargo.toml"],
@@ -76,7 +82,7 @@ rust_test(
     deps = [":d2b_provider_credential_managed_identity"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "canary",
     srcs = [
         "tests/canary.rs",
@@ -92,7 +98,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "conformance",
     srcs = [
         "tests/common/mod.rs",
@@ -109,7 +115,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "delivery",
     srcs = [
         "tests/common/mod.rs",
@@ -125,7 +131,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "faults",
     srcs = [
         "tests/common/mod.rs",
@@ -141,7 +147,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "lifecycle",
     srcs = [
         "tests/common/mod.rs",
@@ -157,7 +163,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "placement",
     srcs = ["tests/placement.rs"],
     compile_data = ["Cargo.toml"],
@@ -169,7 +175,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "topology",
     srcs = ["tests/topology.rs"],
     compile_data = ["Cargo.toml"],
@@ -181,13 +187,13 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_credential_managed_identity_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_credential_managed_identity",
 )
 
-rust_test(
+d2b_rust_test(
     name = "binding",
     srcs = [
         "tests/binding.rs",
@@ -223,7 +229,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_credential_managed_identity_doc_test",
     crate = "//packages/d2b-provider-credential-managed-identity:d2b_provider_credential_managed_identity",
 )

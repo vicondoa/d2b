@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 exports_files(
     ["BUILD.bazel", "Cargo.toml"],
@@ -14,7 +20,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_contracts_control",
     srcs = d2b_contracts_control_srcs,
     compile_data = ["Cargo.toml"],
@@ -25,7 +31,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "public_wire",
     srcs = ["tests/public_wire.rs"],
     compile_data = ["Cargo.toml"],
@@ -33,14 +39,14 @@ rust_test(
     deps = [":d2b_contracts_control"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_contracts_control_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_contracts_control",
     deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_contracts_control_doc_test",
     crate = "//packages/d2b-contracts-control:d2b_contracts_control",
 )

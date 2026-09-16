@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 # Provider crates link only from the daemon composition root and the
 # enumerated consumers; broker/shared crates cannot depend on them (U14).
@@ -15,7 +21,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_activation_nixos",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -28,7 +34,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_activation_nixos_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -43,7 +49,7 @@ rust_library(
     crate_features = ["test-support"],
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_activation_nixos_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_activation_nixos_test_support",
@@ -57,7 +63,7 @@ rust_test(
 )
 
 
-rust_test(
+d2b_rust_test(
     name = "reconcile",
     srcs = [
         "tests/reconcile.rs",
@@ -70,7 +76,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "registration",
     srcs = [
         "tests/registration.rs",
@@ -106,7 +112,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_activation_nixos_doc_test",
     crate = "//packages/d2b-provider-activation-nixos:d2b_provider_activation_nixos",
 )

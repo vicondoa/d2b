@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 # Provider crates link only from the daemon composition root and the
 # enumerated consumers; broker/shared crates cannot depend on them (U14).
@@ -10,7 +16,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_transport_vsock",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
@@ -29,7 +35,7 @@ rust_library(
     ],
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_transport_vsock_test",
     crate = ":d2b_provider_transport_vsock",
     compile_data = [
@@ -44,7 +50,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "authentication",
     srcs = [
         "tests/authentication.rs",
@@ -57,7 +63,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "effect_port_mock",
     srcs = [
         "tests/effect_port_mock.rs",
@@ -70,7 +76,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "framing",
     srcs = [
         "tests/framing.rs",
@@ -84,7 +90,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "host_guest",
     srcs = [
         "integration/host_guest.rs",
@@ -97,7 +103,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "no_fd_transfer",
     srcs = [
         "integration/no_fd_transfer.rs",
@@ -110,7 +116,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "observe",
     srcs = [
         "tests/observe.rs",
@@ -123,7 +129,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "open_close",
     srcs = [
         "tests/open_close.rs",
@@ -136,7 +142,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "redaction",
     srcs = [
         "tests/redaction.rs",
@@ -149,7 +155,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "relay_lifecycle",
     srcs = [
         "tests/relay_lifecycle.rs",
@@ -162,7 +168,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "schema",
     srcs = [
         "tests/schema.rs",
@@ -175,7 +181,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "service",
     srcs = [
         "tests/service.rs",
@@ -188,7 +194,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "state_volume",
     srcs = [
         "tests/state_volume.rs",
@@ -201,7 +207,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "topology",
     srcs = [
         "tests/topology.rs",
@@ -235,7 +241,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_transport_vsock_doc_test",
     crate = "//packages/d2b-provider-transport-vsock:d2b_provider_transport_vsock",
 )

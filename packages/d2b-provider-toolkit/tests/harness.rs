@@ -922,6 +922,15 @@ impl GuestAgent for FakeGuestAgent {
             .lock()
             .expect("served frames")
             .push(frame.as_bytes().to_vec());
+        // The agent raises its own event only after serving the session's
+        // frame, so the allocator observes the deterministic wire order
+        // relay -> "served" -> "uhid-report" regardless of how the two
+        // runtimes interleave; a pre-queued event would race the first
+        // `serve_enrolled` select branch and reorder the frames.
+        self.events
+            .lock()
+            .expect("events")
+            .push_back(b"uhid-report".to_vec());
         Ok(vec![
             GuestFrame::new(b"served".to_vec()).expect("bounded frame"),
         ])
@@ -1076,9 +1085,7 @@ fn a_guest_agent_enrolls_serves_and_drains_over_a_faked_vsock_transport() {
     let served = Arc::new(Mutex::new(Vec::new()));
     let agent = FakeGuestAgent {
         served: Arc::clone(&served),
-        events: Mutex::new(std::collections::VecDeque::from(vec![
-            b"uhid-report".to_vec(),
-        ])),
+        events: Mutex::new(std::collections::VecDeque::new()),
     };
     let code = run_guest(
         agent,
