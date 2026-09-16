@@ -1373,7 +1373,25 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             read_proc_start_time(response.pid)?,
             response.start_time_ticks,
         ) {
-            return Err(error);
+            match error {
+                // A one-shot row's whole purpose is to run and exit; the
+                // spawn's reply is the launch's authority even when the
+                // child has already exited by the time this read runs. The
+                // exit outcome itself decides the row (the ephemeral driver
+                // publishes succeeded/failed off the reaper log), so a
+                // vanished one-shot reports the launch instead of failing
+                // it - the pidfd and identity still stand.
+                ProcessEffectError::Vanished
+                    if intent.resource_ref.resource_type().as_str() == "EphemeralProcess" =>
+                {
+                    warn!(
+                        provider = "supervisor",
+                        pid = response.pid,
+                        "one-shot spawn exited before adoption; reporting the launch for its exit outcome"
+                    );
+                }
+                other => return Err(other),
+            }
         }
         let observed = BrokerObservedProcess {
             intent,
