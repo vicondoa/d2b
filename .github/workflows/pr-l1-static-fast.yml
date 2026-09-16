@@ -91,6 +91,8 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Broker suite
+        env:
+          D2B_BAZEL_TEST_OUTPUT: all
         run: make test-rust-broker
 
   nix-eval:
