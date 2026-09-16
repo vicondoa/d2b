@@ -220,7 +220,14 @@ impl DeclaredTpmRows<'_> {
         self.children
             .ensure(child)
             .await
-            .map_err(|_| TpmResourceEffectError::Transient)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    device = %self.device_ref.to_canonical_string(),
+                    error = ?error,
+                    "tpm state volume child ensure failed"
+                );
+                TpmResourceEffectError::Transient
+            })?;
         self.wait_ready(&reference).await?;
         Ok(reference)
     }
