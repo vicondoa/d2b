@@ -1417,10 +1417,19 @@ type SharedOperationHandler =
 /// bounded multi-threaded runtime for the process, built the same way the
 /// broker's other runtimes are (`enable_all`, named workers); the existing
 /// blocking dispatch pool remains for non-async adapters.
+///
+/// The pool is shared by the forwarded-call legs (which park a worker while
+/// awaiting the peer's answer) and the nested kernel legs (the daemon-side
+/// family handlers invoke kernels through the forward carrier). Two workers
+/// serialized a concentrated wave of concurrent spawns: every worker parked
+/// on a forward leg, the kernel spawns queued, and the 10s io budget expired
+/// as reply-timeout refusals (host-integration lane). The set is sized for
+/// the seam's observed concurrency - a handful of forwarded family legs plus
+/// their nested kernel spawns at once.
 static HANDLER_WORKER_SET: std::sync::LazyLock<tokio::runtime::Runtime> =
     std::sync::LazyLock::new(|| {
         tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(16)
             .thread_name("d2b-broker-handler")
             .enable_all()
             .build()
