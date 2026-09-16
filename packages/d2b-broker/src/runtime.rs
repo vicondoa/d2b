@@ -5581,6 +5581,25 @@ fn discover_runner_candidate(
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
     cgroup_subtree: &str,
 ) -> Result<d2b_contracts_broker::broker_wire::ObserveRunnerResponse, BrokerError> {
+    // The spawn-process kernel registered the ACTUAL binary it exec'd
+    // (the daemon's resolved plan path). The broker's re-derived intent
+    // below can disagree with that path across the two bundle views, so
+    // the executable check prefers the registered spawn metadata when it
+    // exists (U10 seam: the observation verifies what actually ran).
+    let registered_binary = runner_metadata_registry()
+        .lock()
+        .map_err(|_| {
+            BrokerError::LiveHandler("runner metadata registry mutex poisoned".to_owned())
+        })?
+        .get(&runner_registry_key(
+            request.vm_id.as_str(),
+            request.role_id.as_str(),
+            request.resource_ref.as_ref(),
+            request.resource_uid.as_ref(),
+            request.zone_uid.as_ref(),
+            request.runtime_scope.as_ref().copied(),
+        ))
+        .map(|registration| registration.binary_path.clone());
     let mut candidates = Vec::new();
     let entries =
         fs::read_dir("/proc").map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
@@ -5602,12 +5621,13 @@ fn discover_runner_candidate(
         }
         let observed_exe = read_runner_executable(pid);
         let observed_exe_ref = observed_exe.as_deref().ok().map(Path::to_path_buf);
+        let expected_binary = registered_binary.as_deref().unwrap_or(&intent.binary_path);
         let executable_observation =
-            observe_runner_executable(observed_exe, &intent.binary_path)?;
+            observe_runner_executable(observed_exe, expected_binary)?;
         if matches!(executable_observation, RunnerExecutableObservation::Mismatch) {
             tracing::warn!(
                 observed = ?observed_exe_ref,
-                expected = ?intent.binary_path,
+                expected = ?expected_binary,
                 "runner executable mismatch observed",
             );
         }
