@@ -396,25 +396,6 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         }
     }
 
-    /// The broker-retained launch snapshot of one handle: the runner's
-    /// `(vm, role)` keys, live `(pid, start_time_ticks)` and a duplicate of
-    /// the retained pidfd, so the daemon can register the kernel-spawned
-    /// runner in its authoritative pidfd table.
-    pub async fn launched_runner_snapshot(
-        &self,
-        identity: &ProcessIdentityDigest,
-    ) -> Result<
-        Option<(String, String, i32, u64, std::os::fd::OwnedFd)>,
-        ProcessConformanceError,
-    > {
-        let handle = self.handle(identity).map_err(map_error)?;
-        self.blocking(self.inner.default_timeout, move |backend| {
-            backend.launched_runner_snapshot(handle.as_ref())
-        })
-        .await
-        .map_err(map_error)
-    }
-
     /// Take the Provider-controller bootstrap endpoint retained with one handle.
     pub async fn take_controller_bootstrap(
         &self,

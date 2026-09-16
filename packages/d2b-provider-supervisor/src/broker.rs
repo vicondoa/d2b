@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{IoSlice, IoSliceMut};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
@@ -947,6 +947,17 @@ impl std::fmt::Debug for BrokerPidfdHandle {
     }
 }
 
+/// A daemon-wired observer notified with the launch snapshot of every
+/// successfully spawned runner, before the launch's readiness probe runs.
+/// The daemon registers the kernel-spawned runner in its pidfd table there
+/// so the family handlers' runner lookup (ObserveRunner/SignalRunner) sees
+/// it; registration failure never fails the launch.
+pub trait LaunchedObserver: Send + Sync {
+    /// One launched runner's snapshot: `(vm, role, pid, start_time_ticks,
+    /// pidfd duplicate)`.
+    fn launched(&self, vm: &str, role: &str, pid: i32, start_time_ticks: u64, pidfd: OwnedFd);
+}
+
 /// Production process backend for existing broker-managed runner roles.
 ///
 /// It sends the repository's production `SpawnRunner`, `OpenPidfd`, and
@@ -959,6 +970,7 @@ pub struct BrokerProcessBackend<R: BrokerLaunchResolver> {
     io_timeout: Duration,
     caller_role: BrokerCallerRole,
     observations: Mutex<BTreeMap<ProcessIdentityDigest, BrokerObservedProcess>>,
+    launched_observer: Option<Arc<dyn LaunchedObserver>>,
 }
 
 impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
@@ -980,7 +992,14 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
             io_timeout,
             caller_role,
             observations: Mutex::new(BTreeMap::new()),
+            launched_observer: None,
         }
+    }
+
+    /// Wire the daemon's launched-runner observer (the pidfd-table
+    /// registration) onto this backend.
+    pub fn set_launched_observer(&mut self, observer: Arc<dyn LaunchedObserver>) {
+        self.launched_observer = Some(observer);
     }
 
     /// Build a backend with an authenticated broker caller role.
@@ -1370,18 +1389,27 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         observed.validate_launch()?;
         self.resolver.record_launched(&request, &observed);
         let observation = observed.observation();
-        Ok(BackendLaunch::new(
-            observation,
-            BrokerPidfdHandle {
-                pidfd,
-                observed,
-                controller_bootstrap: Mutex::new(controller_bootstrap),
-                // The deregister leg of this handle presents the spawn's
-                // invocation id as its chain root, so the close correlates
-                // to the launch (KTD6).
-                spawn_invocation_id: Some(spawn_invocation_id),
-            },
-        ))
+        let handle = BrokerPidfdHandle {
+            pidfd,
+            observed,
+            controller_bootstrap: Mutex::new(controller_bootstrap),
+            // The deregister leg of this handle presents the spawn's
+            // invocation id as its chain root, so the close correlates
+            // to the launch (KTD6).
+            spawn_invocation_id: Some(spawn_invocation_id),
+        };
+        // Notify the daemon's launched-runner observer (the pidfd-table
+        // registration) before the readiness probe runs, so the family
+        // handlers' runner lookup sees the kernel-spawned runner. A
+        // snapshot failure never fails the launch.
+        if let Some(observer) = &self.launched_observer {
+            if let Some((vm, role, pid, start_time_ticks, pidfd_dup)) =
+                self.launched_runner_snapshot(&handle)?
+            {
+                observer.launched(&vm, &role, pid, start_time_ticks, pidfd_dup);
+            }
+        }
+        Ok(BackendLaunch::new(observation, handle))
     }
 
     fn observe(

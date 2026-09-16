@@ -846,6 +846,57 @@ impl d2bd_runtime::supervisor::readiness_liveness::LivenessProbe for ProviderLiv
 
 /// Production process Provider controllers.
 ///
+/// The daemon-side launched-runner observer: registers the kernel-spawned
+/// runner in the authoritative pidfd table (the family handlers' runner
+/// lookup) as soon as the broker backend confirms the spawn, before the
+/// launch's readiness probe. Registration failure never fails the launch:
+/// the stale-entry reap and the supervisor handle still cover signal and
+/// liveness.
+struct PidfdTableLaunchedObserver {
+    pidfd_table: Arc<d2bd_runtime::supervisor::pidfd_table::PidfdTable>,
+}
+
+impl d2b_provider_supervisor::LaunchedObserver for PidfdTableLaunchedObserver {
+    fn launched(
+        &self,
+        vm: &str,
+        role: &str,
+        pid: i32,
+        start_time_ticks: u64,
+        pidfd: std::os::fd::OwnedFd,
+    ) {
+        match self.pidfd_table.register(
+            vm.to_owned(),
+            role.to_owned(),
+            d2bd_runtime::supervisor::pidfd_table::PidfdEntry {
+                pidfd,
+                pid,
+                start_time_ticks,
+            },
+        ) {
+            Ok(()) => {
+                tracing::info!(
+                    vm,
+                    role,
+                    pid,
+                    "launched runner registered in pidfd table"
+                );
+            }
+            Err(d2bd_runtime::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }) => {
+                tracing::info!(vm, role, "launched runner already registered in pidfd table");
+            }
+            Err(error) => {
+                tracing::warn!(
+                    vm,
+                    role,
+                    error = %error,
+                    "pidfd table registration failed for launched runner"
+                );
+            }
+        }
+    }
+}
+
 /// The concrete supervisors are retained by the daemon for its whole
 /// lifetime. Their internal handles and broker effect owners never cross the
 /// Provider boundary; Provider code sees only the
@@ -854,10 +905,6 @@ pub struct ProductionProcessProviders {
     minijail: MinijailProcessProvider<BrokerProcessSupervisor>,
     systemd: SystemdProcessProvider<BrokerSystemdSupervisor>,
     bundle: BundleResolver,
-    /// The daemon's authoritative runner pidfd table: launched runners are
-    /// registered here so the family handlers' runner lookup
-    /// (ObserveRunner/SignalRunner) sees kernel-spawned runners.
-    pidfd_table: Arc<d2bd_runtime::supervisor::pidfd_table::PidfdTable>,
     /// Runtime root the private serving sockets of binding-owned workers live
     /// under (the broker socket's parent directory).
     socket_runtime_dir: PathBuf,
@@ -919,13 +966,21 @@ impl ProductionProcessProviders {
             Duration::from_secs(10),
             caller_role.clone(),
         );
-        let minijail_backend = BrokerProcessBackend::with_socket_profile_and_role(
+        let mut minijail_backend = BrokerProcessBackend::with_socket_profile_and_role(
             resolver.clone(),
             broker_socket.clone(),
             Duration::from_secs(10),
             mode.broker_profile(),
             caller_role.clone(),
         );
+        // The kernel-spawned runner must be visible to the family handlers'
+        // runner lookup (the daemon's pidfd table) before the launch's
+        // readiness probe runs, so the table registration rides the backend's
+        // launch-success notification - not the driver's post-launch path,
+        // which runs after the probe.
+        minijail_backend.set_launched_observer(std::sync::Arc::new(PidfdTableLaunchedObserver {
+            pidfd_table: pidfd_table.clone(),
+        }));
         let systemd_owner = BrokerSystemdEffectOwner::with_socket_profile_and_role(
             resolver,
             broker_socket,
@@ -944,7 +999,6 @@ impl ProductionProcessProviders {
                 SystemdProcessBackend::new(systemd_owner),
             )),
             bundle,
-            pidfd_table,
             socket_runtime_dir,
             mode,
             fixed_effect,
@@ -1195,10 +1249,6 @@ impl ProductionProcessProviders {
         spec: &ProcessSpec,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
-        tracing::info!(
-            process = %context.resource_ref.to_canonical_string(),
-            "launch_resource entered"
-        );
         let context = context
             .with_execution_ref(spec.execution().execution_ref())
             .with_user_ref(spec.execution().user_ref());
@@ -1345,14 +1395,6 @@ impl ProductionProcessProviders {
             target_ref: context.target_ref.clone(),
             runtime_scope: ticket.runtime_scope(),
         })?;
-        // The kernel spawns the runner and retains its pidfd broker-side;
-        // the daemon's authoritative pidfd table is the family handlers'
-        // runner lookup (ObserveRunner/SignalRunner), so every launched
-        // runner must be registered here - the same snapshot the startup
-        // adoption path registers. Registration failure never fails the
-        // launch: the stale-entry reap and the supervisor handle still
-        // cover signal and liveness.
-        self.register_launched_runner(provider, report.identity).await;
         if controller_bootstrap {
             let daemon_endpoint = match escrow_wait {
                 Some(endpoint) => endpoint,
@@ -1571,91 +1613,9 @@ impl ProductionProcessProviders {
             target_ref: Some(resource.target().clone()),
             runtime_scope: ticket.runtime_scope(),
         })?;
-        // The kernel spawns the runner and retains its pidfd broker-side;
-        // the daemon's authoritative pidfd table is the family handlers'
-        // runner lookup (ObserveRunner/SignalRunner), so every launched
-        // runner must be registered here - the same snapshot the startup
-        // adoption path registers. Registration failure never fails the
-        // launch: the stale-entry reap and the supervisor handle still
-        // cover signal and liveness.
-        self.register_launched_runner(provider, report.identity).await;
         Ok(ProviderLaunch {
             identity: report.identity,
         })
-    }
-
-    /// Register one successfully launched minijail runner in the daemon's
-    /// authoritative pidfd table (the family handlers' runner lookup).
-    async fn register_launched_runner(
-        &self,
-        provider: ManagedProvider,
-        identity: ProcessIdentityDigest,
-    ) {
-        tracing::info!(
-            provider = ?provider,
-            identity = identity.to_hex(),
-            "register_launched_runner invoked"
-        );
-        if provider != ManagedProvider::Minijail {
-            return;
-        }
-        match self
-            .minijail
-            .port()
-            .launched_runner_snapshot(&identity)
-            .await
-        {
-            Ok(Some((vm, role, pid, start_time_ticks, pidfd))) => {
-                match self.pidfd_table.register(
-                    vm.clone(),
-                    role.clone(),
-                    d2bd_runtime::supervisor::pidfd_table::PidfdEntry {
-                        pidfd,
-                        pid,
-                        start_time_ticks,
-                    },
-                ) {
-                    Ok(()) => {
-                        tracing::info!(
-                            vm = %vm,
-                            role = %role,
-                            pid,
-                            "launched runner registered in pidfd table"
-                        );
-                    }
-                    Err(d2bd_runtime::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }) => {
-                        tracing::info!(
-                            vm = %vm,
-                            role = %role,
-                            "launched runner already registered in pidfd table"
-                        );
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            vm = %vm,
-                            role = %role,
-                            error = %error,
-                            "pidfd table registration failed for launched runner"
-                        );
-                    }
-                }
-            }
-            Ok(None) => {
-                tracing::warn!(
-                    provider = ?provider,
-                    identity = identity.to_hex(),
-                    "launched runner snapshot unavailable for pidfd table registration"
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    provider = ?provider,
-                    identity = identity.to_hex(),
-                    error = ?error,
-                    "launched runner snapshot failed; pidfd table registration skipped"
-                );
-            }
-        }
     }
 
     /// Adopt a signed target-local controller Process after daemon restart.

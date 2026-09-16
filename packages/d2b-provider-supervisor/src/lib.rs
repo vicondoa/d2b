@@ -14,7 +14,8 @@ mod systemd;
 pub use adapter::{DEFAULT_BLOCKING_LIMIT, ProviderSupervisor};
 pub use broker::{
     BrokerLaunchIntent, BrokerLaunchResolver, BrokerObservedProcess, BrokerPidfdHandle,
-    BrokerProcessBackend, BundleBackedLaunchResolver, runner_role_for_process_role,
+    BrokerProcessBackend, BundleBackedLaunchResolver, LaunchedObserver,
+    runner_role_for_process_role,
 };
 pub use systemd::{
     BrokerSystemdEffectOwner, BrokerSystemdPidfdHandle, SystemdEffectLaunch, SystemdEffectOwner,
