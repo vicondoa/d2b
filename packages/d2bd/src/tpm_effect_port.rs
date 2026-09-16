@@ -382,7 +382,10 @@ impl LiveTpmResourceEffectPort<'_> {
         let resolver = d2bd_runtime::runtime_util::block_on_future(
             crate::load_bundle_resolver_on_worker(self.state),
         )
-        .map_err(|_| TpmResourceEffectError::Transient)?;
+        .map_err(|error| {
+            tracing::warn!(error = ?error, "tpm prepare: bundle resolver load failed");
+            TpmResourceEffectError::Transient
+        })?;
         let (base_dir, owner_uid, owner_gid, mode) = match resolver
             .resolve_prepare_dir_intent(self.vm_id.as_str(), false)
         {
@@ -416,7 +419,10 @@ impl LiveTpmResourceEffectPort<'_> {
             &self.state.zone_coordinator,
             self.vm_id.as_str(),
         )
-        .map_err(|_| TpmResourceEffectError::Transient)?;
+        .map_err(|error| {
+            tracing::warn!(vm = %self.vm_id.as_str(), error = %error, "tpm prepare: zone authority failed");
+            TpmResourceEffectError::Transient
+        })?;
         let invocation = d2b_contracts_broker::kernel_client::KernelInvocation {
             operation: "prepare-directory",
             zone: zone.as_str(),
