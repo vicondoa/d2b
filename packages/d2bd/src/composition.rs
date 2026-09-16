@@ -3583,6 +3583,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                             BrokerCallerRole::AdminUid {
                                 uid: state.daemon_uid,
                             },
+                            state.pidfd_table.clone(),
                         ));
                     let process_providers_ready = state
                         .provider_runtime
@@ -27736,6 +27737,9 @@ mod broker_dispatch_tests {
                 BrokerCallerRole::AdminUid {
                     uid: state.daemon_uid,
                 },
+                Arc::new(d2bd_runtime::supervisor::pidfd_table::PidfdTable::new(
+                    state.daemon_state_dir.join("pidfd-table-test.json"),
+                )),
             ),
         );
         state

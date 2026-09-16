@@ -311,6 +311,18 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
         Err(ProcessEffectError::PidfdUnavailable)
     }
 
+    /// The broker-retained launch snapshot of one handle: the runner's
+    /// `(vm, role)` keys, live `(pid, start_time_ticks)` and a duplicate of
+    /// the retained pidfd, so the daemon can register the kernel-spawned
+    /// runner in its authoritative pidfd table (the family handlers' runner
+    /// lookup). `None` for a backend that retains no pidfd.
+    fn launched_runner_snapshot(
+        &self,
+        _handle: &Self::Handle,
+    ) -> Result<Option<(String, String, i32, u64, OwnedFd)>, ProcessEffectError> {
+        Ok(None)
+    }
+
     /// Take a broker-retained Provider-controller bootstrap endpoint.
     fn take_controller_bootstrap(
         &self,

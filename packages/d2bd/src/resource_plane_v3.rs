@@ -1446,6 +1446,7 @@ impl ConstructionInputs {
                         BrokerCallerRole::AdminUid {
                             uid: state.daemon_uid,
                         },
+                        state.pidfd_table.clone(),
                     ),
                 );
                 let _ = state.provider_runtime.attach_process_providers(Arc::clone(&providers));

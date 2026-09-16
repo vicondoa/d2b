@@ -854,6 +854,10 @@ pub struct ProductionProcessProviders {
     minijail: MinijailProcessProvider<BrokerProcessSupervisor>,
     systemd: SystemdProcessProvider<BrokerSystemdSupervisor>,
     bundle: BundleResolver,
+    /// The daemon's authoritative runner pidfd table: launched runners are
+    /// registered here so the family handlers' runner lookup
+    /// (ObserveRunner/SignalRunner) sees kernel-spawned runners.
+    pidfd_table: Arc<d2bd_runtime::supervisor::pidfd_table::PidfdTable>,
     /// Runtime root the private serving sockets of binding-owned workers live
     /// under (the broker socket's parent directory).
     socket_runtime_dir: PathBuf,
@@ -881,8 +885,15 @@ impl ProductionProcessProviders {
         bundle: BundleResolver,
         broker_socket: impl Into<PathBuf>,
         caller_role: BrokerCallerRole,
+        pidfd_table: Arc<d2bd_runtime::supervisor::pidfd_table::PidfdTable>,
     ) -> Self {
-        Self::new_for_mode(bundle, broker_socket, caller_role, DaemonMode::Host)
+        Self::new_for_mode(
+            bundle,
+            broker_socket,
+            caller_role,
+            DaemonMode::Host,
+            pidfd_table,
+        )
     }
 
     /// Construct both fixed process Providers over a mode-bound broker.
@@ -894,6 +905,7 @@ impl ProductionProcessProviders {
         broker_socket: impl Into<PathBuf>,
         caller_role: BrokerCallerRole,
         mode: DaemonMode,
+        pidfd_table: Arc<d2bd_runtime::supervisor::pidfd_table::PidfdTable>,
     ) -> Self {
         let broker_socket = broker_socket.into();
         let socket_runtime_dir = broker_socket
@@ -932,6 +944,7 @@ impl ProductionProcessProviders {
                 SystemdProcessBackend::new(systemd_owner),
             )),
             bundle,
+            pidfd_table,
             socket_runtime_dir,
             mode,
             fixed_effect,
@@ -1328,6 +1341,72 @@ impl ProductionProcessProviders {
             target_ref: context.target_ref.clone(),
             runtime_scope: ticket.runtime_scope(),
         })?;
+        // The kernel spawns the runner and retains its pidfd broker-side;
+        // the daemon's authoritative pidfd table is the family handlers'
+        // runner lookup (ObserveRunner/SignalRunner), so every launched
+        // runner must be registered here - the same snapshot the startup
+        // adoption path registers. A missing or failed registration never
+        // fails the launch: the stale-entry reap and the supervisor handle
+        // still cover signal and liveness.
+        if provider == ManagedProvider::Minijail {
+            match self
+                .minijail
+                .port()
+                .launched_runner_snapshot(&report.identity)
+                .await
+            {
+                Ok(Some((vm, role, pid, start_time_ticks, pidfd))) => {
+                    match self.pidfd_table.register(
+                        vm.clone(),
+                        role.clone(),
+                        d2bd_runtime::supervisor::pidfd_table::PidfdEntry {
+                            pidfd,
+                            pid,
+                            start_time_ticks,
+                        },
+                    ) {
+                        Ok(()) => {
+                            tracing::info!(
+                                vm = %vm,
+                                role = %role,
+                                pid,
+                                "launched runner registered in pidfd table"
+                            );
+                        }
+                        Err(d2bd_runtime::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }) => {
+                            tracing::info!(
+                                vm = %vm,
+                                role = %role,
+                                "launched runner already registered in pidfd table"
+                            );
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                vm = %vm,
+                                role = %role,
+                                error = %error,
+                                "pidfd table registration failed for launched runner"
+                            );
+                        }
+                    }
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        provider = ?provider,
+                        identity = report.identity.to_hex(),
+                        "launched runner snapshot unavailable for pidfd table registration"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        provider = ?provider,
+                        identity = report.identity.to_hex(),
+                        error = ?error,
+                        "launched runner snapshot failed; pidfd table registration skipped"
+                    );
+                }
+            }
+        }
         if controller_bootstrap {
             let daemon_endpoint = match escrow_wait {
                 Some(endpoint) => endpoint,

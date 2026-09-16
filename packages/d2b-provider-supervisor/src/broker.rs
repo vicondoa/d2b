@@ -1495,6 +1495,26 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         wait_pidfd_observer(&handle.pidfd, timeout)
     }
 
+    fn launched_runner_snapshot(
+        &self,
+        handle: &Self::Handle,
+    ) -> Result<Option<(String, String, i32, u64, OwnedFd)>, ProcessEffectError> {
+        Ok(Some((
+            handle.observed.intent.vm_id.to_string(),
+            handle.observed.intent.role_id.to_string(),
+            handle.observed.pid,
+            handle.observed.start_time_ticks,
+            handle.pidfd.try_clone().map_err(|error| {
+                warn!(
+                    provider = "supervisor",
+                    error = %error,
+                    "launched pidfd duplicate failed"
+                );
+                ProcessEffectError::PidfdUnavailable
+            })?,
+        )))
+    }
+
     fn take_controller_bootstrap(
         &self,
         handle: &Self::Handle,
