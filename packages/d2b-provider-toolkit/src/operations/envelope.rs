@@ -477,6 +477,15 @@ impl OperationEnvelope {
             .handler
             .execute(ctx, ValidatedPayload::new(payload))
             .await;
+        if let Err(failure) = &result {
+            tracing::info!(
+                operation = operation,
+                zone = %self.zone.to_string(),
+                code = failure.code(),
+                detail = ?failure.detail(),
+                "family handler refused"
+            );
+        }
         let outcome = match &result {
             Ok(_) => ProviderAgentAuditOutcome::Accepted,
             Err(_) => ProviderAgentAuditOutcome::Failed,
