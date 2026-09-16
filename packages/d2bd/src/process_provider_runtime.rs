@@ -875,6 +875,19 @@ impl d2b_provider_supervisor::LaunchedObserver for PidfdTableLaunchedObserver {
             },
         ) {
             Ok(()) => {
+                // Persist the registration: the table is restored from disk
+                // on daemon restart, and the post-restart adoption of a
+                // still-running controller depends on the entry surviving
+                // (the old crash-consistent snapshot happened only on the
+                // startup-adoption paths).
+                if let Err(error) = self.pidfd_table.snapshot() {
+                    tracing::warn!(
+                        vm,
+                        role,
+                        error = %error,
+                        "pidfd table snapshot failed after launched-runner registration"
+                    );
+                }
                 tracing::info!(
                     vm,
                     role,
