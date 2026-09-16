@@ -263,6 +263,11 @@ enum TpmLifecycleAdmission {
 struct LiveTpmResourceEffectPort<'a> {
     state: &'a crate::ServerState,
     vm_id: VmId,
+    /// The Zone the Device row lives in: every manager/broker surface this
+    /// port touches (declared children, the prepare-directory kernel) is
+    /// anchored here, not on the Device's Guest target - a nested Guest VM
+    /// is never registered with the host daemon's zone coordinator.
+    zone: String,
     migration_intent_ref: BundleOpId,
     migration_decision: LegacyTpmMigrationDecision,
     caller_role: BrokerCallerRole,
@@ -415,14 +420,10 @@ impl LiveTpmResourceEffectPort<'_> {
                 (base_dir, owner_uid, owner_gid, mode)
             }
         };
-        let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
-            &self.state.zone_coordinator,
-            self.vm_id.as_str(),
-        )
-        .map_err(|error| {
-            tracing::warn!(vm = %self.vm_id.as_str(), error = %error, "tpm prepare: zone authority failed");
-            TpmResourceEffectError::Transient
-        })?;
+        // The Device row's own Zone - never a zone-authority lookup of the
+        // Guest target VM, which the host daemon's coordinator does not
+        // register (the guest's plane lives inside the nested VM).
+        let zone = self.zone.clone();
         let invocation = d2b_contracts_broker::kernel_client::KernelInvocation {
             operation: "prepare-directory",
             zone: zone.as_str(),
@@ -772,6 +773,7 @@ impl AdmittedTpmDevice {
         LiveTpmResourceEffectPort {
             state,
             vm_id,
+            zone: self.zone.clone(),
             migration_intent_ref,
             migration_decision,
             caller_role,
