@@ -3476,8 +3476,8 @@ mod tests {
         // audit consumers can count root records per invocation id and
         // correlate nested legs by (invocation id, depth).
         let root = target_scratch_root("audit-chain-record");
-        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
-            .expect("open chain audit log");
+        let log =
+            AuditLog::open(&root, Gid::current().as_raw(), true, 30).expect("open chain audit log");
         log.write_chain_record(&d2b_audit::evidence_chain::ChainRecord {
             ts_ms: 1234,
             record_class: d2b_audit::evidence_chain::ChainRecordClass::Correlation,

@@ -1213,7 +1213,6 @@ pub fn fake_backend() -> FakeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use d2b_contracts_resource::v3::IfName as BundleIfName;
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::host::{
@@ -1223,6 +1222,7 @@ mod tests {
     };
     use d2b_core::manifest_v04::ManifestV04;
     use d2b_core::processes::ProcessesJson;
+    use std::collections::BTreeMap;
 
     fn network_tap_context() -> d2b_contracts_broker::broker_wire::NetworkTapContext {
         let zone_uid =

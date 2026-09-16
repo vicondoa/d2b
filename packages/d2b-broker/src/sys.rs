@@ -2328,12 +2328,12 @@ pub mod pidfd_sys {
     /// `NotFound` / the original class.
     fn device_bind_error(path: &str, err: io::Error) -> io::Error {
         if err.kind() == io::ErrorKind::NotFound {
-            io::Error::new(io::ErrorKind::NotFound, format!("device-bind-missing: {path}"))
-        } else {
             io::Error::new(
-                err.kind(),
-                format!("device-bind-unusable: {path}: {err}"),
+                io::ErrorKind::NotFound,
+                format!("device-bind-missing: {path}"),
             )
+        } else {
+            io::Error::new(err.kind(), format!("device-bind-unusable: {path}: {err}"))
         }
     }
 
@@ -2359,7 +2359,8 @@ pub mod pidfd_sys {
             // `clone3/spawn failed: No such file or directory (os error 2)`
             // (no path, no kind), so the refusal was indistinguishable from
             // any other spawn failure.
-            let metadata = std::fs::metadata(path_ref).map_err(|err| device_bind_error(path, err))?;
+            let metadata =
+                std::fs::metadata(path_ref).map_err(|err| device_bind_error(path, err))?;
             let file_type = metadata.file_type();
             let kind = if file_type.is_dir() {
                 PreparedDeviceBindKind::Directory

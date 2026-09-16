@@ -14,7 +14,10 @@ use std::io::{IoSlice, IoSliceMut};
 pub enum FdPassingError {
     MissingPassedFd,
     DuplicateFdInSingleSend,
-    UnexpectedFdCount { expected: usize, actual: usize },
+    UnexpectedFdCount {
+        expected: usize,
+        actual: usize,
+    },
     MissingCloexec,
     MessageTruncated,
     ControlTruncated,

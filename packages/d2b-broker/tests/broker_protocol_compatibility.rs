@@ -248,7 +248,10 @@ fn the_retired_wire_gate_names_every_retired_variant_at_wire_v6() {
     // (the ten U10 process-family variants, U11's ConsumeLifecycleLease,
     // and the thirteen U12 network-fds variants), all at the same wire
     // boundary.
-    let mut names: Vec<&str> = RETIRED_WIRE_VARIANTS.iter().map(|entry| entry.variant).collect();
+    let mut names: Vec<&str> = RETIRED_WIRE_VARIANTS
+        .iter()
+        .map(|entry| entry.variant)
+        .collect();
     names.sort_unstable();
     let mut expected = RETIRED_WIRE_VARIANTS_MATRIX.to_vec();
     expected.sort_unstable();
@@ -338,7 +341,9 @@ fn an_old_binary_retired_variant_frame_is_refused_with_the_stale_wire_code_and_a
         );
     }
     assert_eq!(
-        audit.matches(r#""disposition":"stale-wire-version""#).count(),
+        audit
+            .matches(r#""disposition":"stale-wire-version""#)
+            .count(),
         RETIRED_WIRE_VARIANTS_MATRIX.len(),
         "every retired call is audited with the stale-wire-version disposition: {audit}"
     );

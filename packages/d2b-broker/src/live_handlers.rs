@@ -30,9 +30,7 @@ use std::process::{Command, Stdio};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
-use crate::ops::exec_reconcile::{
-    IpRouteVerb, ReconcileExecError, ReconcileExecutor,
-};
+use crate::ops::exec_reconcile::{IpRouteVerb, ReconcileExecError, ReconcileExecutor};
 use crate::ops::spawn_runner::{
     SpawnRunnerError, SpawnRunnerPlan, SpawnRunnerPlanInput, build_cstring_vectors, preflight,
 };
@@ -2285,7 +2283,9 @@ impl DeviceWorkerSocketGrant {
             .map_err(|reason| format!("device worker runtime directory: {reason}"))?;
         let directory = paths.runtime_dir;
         if !is_anchored_absolute(&directory) {
-            return Err("device worker runtime directory is not an absolute normalized path".to_owned());
+            return Err(
+                "device worker runtime directory is not an absolute normalized path".to_owned(),
+            );
         }
         if directory == runtime_root || !directory.starts_with(runtime_root) {
             return Err(format!(
@@ -2333,7 +2333,6 @@ fn device_worker_socket_grant(
     })?;
     Ok(Some(grant))
 }
-
 
 fn grant_daemon_api_socket_acl(api_socket: PathBuf) {
     std::thread::spawn(move || {
@@ -3704,10 +3703,7 @@ mod tests {
 
     /// A resource-backed (`private_cgroup_placement`) swtpm plan whose argv
     /// names `state_dir` and `runtime_dir`.
-    fn resource_backed_swtpm_plan(
-        state_dir: &Path,
-        runtime_dir: &Path,
-    ) -> SpawnRunnerPlan {
+    fn resource_backed_swtpm_plan(state_dir: &Path, runtime_dir: &Path) -> SpawnRunnerPlan {
         let mut plan = test_spawn_plan_with_argv(
             vec![
                 "swtpm".to_owned(),
@@ -3728,8 +3724,10 @@ mod tests {
             ],
             "w1-swtpm",
         );
-        plan.cgroup_placement.subtree =
-            format!("d2b.slice/{}/swtpm", "process-".to_owned() + &"b".repeat(64));
+        plan.cgroup_placement.subtree = format!(
+            "d2b.slice/{}/swtpm",
+            "process-".to_owned() + &"b".repeat(64)
+        );
         plan
     }
 
@@ -3739,9 +3737,7 @@ mod tests {
         let identity = ResourceBackedSwtpm {
             guest: "acceptance-guest".to_owned(),
             state_root: PathBuf::from("/var/lib/d2b/tpm-state"),
-            state_volume: Some(
-                "device-6f9619ff8b864d01b42d00cf4fc964ff-tpm-state".to_owned(),
-            ),
+            state_volume: Some("device-6f9619ff8b864d01b42d00cf4fc964ff-tpm-state".to_owned()),
         };
         let state_dir = identity
             .state_root
@@ -4382,7 +4378,11 @@ mod tests {
 
         for socket in [
             root.join("elsewhere").join("vol.vfd.sock"),
-            runtime_root.clone().join("..").join("elsewhere").join("vol.vfd.sock"),
+            runtime_root
+                .clone()
+                .join("..")
+                .join("elsewhere")
+                .join("vol.vfd.sock"),
         ] {
             let argv = vec![
                 "virtiofsd".to_owned(),
@@ -4411,7 +4411,10 @@ mod tests {
         // The runtime root itself is not a worker-writable tree either.
         let argv = vec![
             "virtiofsd".to_owned(),
-            format!("--socket-path={}", runtime_root.join("vol.vfd.sock").display()),
+            format!(
+                "--socket-path={}",
+                runtime_root.join("vol.vfd.sock").display()
+            ),
             format!("--shared-dir={}", shared.display()),
         ];
         let error = grant_serving_worker_launch_acls(&argv, 4242, &runtime_root)
@@ -4439,7 +4442,10 @@ mod tests {
         let argv = |shared: &Path| {
             vec![
                 "virtiofsd".to_owned(),
-                format!("--socket-path={}", socket_dir.join("vol.vfd.sock").display()),
+                format!(
+                    "--socket-path={}",
+                    socket_dir.join("vol.vfd.sock").display()
+                ),
                 format!("--shared-dir={}", shared.display()),
             ]
         };
@@ -4528,9 +4534,13 @@ mod tests {
     fn serving_worker_launch_acls_open_the_ticket_paths_to_the_principal() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        if !["/run/current-system/sw/bin/setfacl", "/usr/bin/setfacl", "/bin/setfacl"]
-            .iter()
-            .any(|candidate| Path::new(candidate).exists())
+        if ![
+            "/run/current-system/sw/bin/setfacl",
+            "/usr/bin/setfacl",
+            "/bin/setfacl",
+        ]
+        .iter()
+        .any(|candidate| Path::new(candidate).exists())
         {
             eprintln!("skipping serving-worker ACL application test: no setfacl binary");
             return;
@@ -4551,7 +4561,10 @@ mod tests {
 
         let argv = vec![
             "virtiofsd".to_owned(),
-            format!("--socket-path={}", socket_dir.join("vol-abcd.vfd.sock").display()),
+            format!(
+                "--socket-path={}",
+                socket_dir.join("vol-abcd.vfd.sock").display()
+            ),
             format!("--shared-dir={}", shared.display()),
         ];
         // The principal the resolver mints for the binding template.
@@ -4561,8 +4574,7 @@ mod tests {
         for (path, label) in [(&socket_dir, "socket dir"), (&shared, "view root")] {
             let fd = crate::sys::path_safe::open_dir_path_safe(path).expect("open dir");
             assert_eq!(
-                crate::sys::path_safe::fd_extended_acl_present(fd.as_fd())
-                    .expect("inspect ACL"),
+                crate::sys::path_safe::fd_extended_acl_present(fd.as_fd()).expect("inspect ACL"),
                 (true, false),
                 "{label} must carry an access ACL entry for the runner principal"
             );
@@ -4629,9 +4641,13 @@ mod tests {
     fn device_worker_socket_grant_opens_the_socket_directory_to_the_principal() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        if !["/run/current-system/sw/bin/setfacl", "/usr/bin/setfacl", "/bin/setfacl"]
-            .iter()
-            .any(|candidate| Path::new(candidate).exists())
+        if ![
+            "/run/current-system/sw/bin/setfacl",
+            "/usr/bin/setfacl",
+            "/bin/setfacl",
+        ]
+        .iter()
+        .any(|candidate| Path::new(candidate).exists())
         {
             eprintln!("skipping device-worker ACL application test: no setfacl binary");
             return;
@@ -4718,7 +4734,8 @@ mod tests {
         // writable paths and cgroup placement name the Guest's own.
         let mut plan = legacy_swtpm_plan(&runtime_root.join("vms"), "acceptance-guest");
         plan.argv.push("--server".to_owned());
-        plan.argv.push("type=unixio,path=/run/foreign/tpm.sock,mode=0660,uid=0,gid=0".to_owned());
+        plan.argv
+            .push("type=unixio,path=/run/foreign/tpm.sock,mode=0660,uid=0,gid=0".to_owned());
         let grant = DeviceWorkerSocketGrant::for_legacy_plan(&plan, &runtime_root)
             .expect("the trusted runtime directory grants");
         assert_eq!(grant.directory, trusted);
@@ -4740,8 +4757,10 @@ mod tests {
         // placement carries no VM name the derivation may read, so the grant is
         // refused rather than invented.
         let mut backed = plan.clone();
-        backed.cgroup_placement.subtree =
-            format!("d2b.slice/{}/swtpm", "process-".to_owned() + &"c".repeat(64));
+        backed.cgroup_placement.subtree = format!(
+            "d2b.slice/{}/swtpm",
+            "process-".to_owned() + &"c".repeat(64)
+        );
         assert!(
             DeviceWorkerSocketGrant::for_legacy_plan(&backed, &runtime_root).is_err(),
             "a typed placement must not resolve a legacy runtime directory"
@@ -5087,5 +5106,4 @@ mod tests {
         );
         drop(PendingObsVsockAclRetry { uid, socket });
     }
-
 }

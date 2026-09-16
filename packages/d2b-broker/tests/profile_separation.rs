@@ -143,9 +143,11 @@ fn host_and_guest_instances_keep_separate_runtime_bindings() {
     // network-fds family variants: the guest advertises the remaining
     // local-process effects (e.g. StartSystemdUnit) and never a retired
     // process or network operation.
-    assert!(guest_hello
-        .capabilities
-        .contains(&"StartSystemdUnit".to_owned()));
+    assert!(
+        guest_hello
+            .capabilities
+            .contains(&"StartSystemdUnit".to_owned())
+    );
     for retired in [
         "SpawnRunner",
         "OpenPidfd",
@@ -178,10 +180,7 @@ fn host_executor_consumes_lifecycle_lease_once_through_the_cell_kernels() {
     let broker = TestBroker::spawn_profile("lifecycle-lease-", "host-instance", "host", D2BD_UID);
     let uid = |value: &str| ResourceUid::parse(value).expect("valid UID");
     let zone_uid = uid("11111111-1111-4111-8111-111111111111");
-    let lease_payload = |operation_id: &str,
-                         guest_uid: &str,
-                         operation: &str,
-                         stop_only: bool| {
+    let lease_payload = |operation_id: &str, guest_uid: &str, operation: &str, stop_only: bool| {
         serde_json::json!({
             "zoneUid": zone_uid.as_str(),
             "guestUid": uid(guest_uid).as_str(),

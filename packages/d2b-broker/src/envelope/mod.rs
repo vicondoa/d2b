@@ -27,8 +27,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use d2b_audit::evidence_chain::{
@@ -37,7 +37,7 @@ use d2b_audit::evidence_chain::{
 };
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, DEFAULT_CONTEXT_DEADLINE_MS, FdKind, ForwardContext, MAX_FRAME_FDS,
-    PublishTrustedContextValues, PublishTrustedContextResponse,
+    PublishTrustedContextResponse, PublishTrustedContextValues,
 };
 use d2b_contracts_resource::v3::CanonicalJsonObject;
 use serde_json::Value;
@@ -69,7 +69,7 @@ pub const ERRORED: &str = "errored";
 /// The refusal code for a request or response whose forward-carrier fd
 /// attachments disagree with their declarations, or exceed the bounded
 /// ceiling.
- ///
+///
 /// The code is the shared carrier code (`d2b_contracts_broker::broker_wire::
 /// FD_LEG`), declared once beside the wire shapes both legs carry.
 pub const FD_LEG: &str = d2b_contracts_broker::broker_wire::FD_LEG;
@@ -445,7 +445,10 @@ impl TrustedContextStore {
         &self,
         values: &PublishTrustedContextValues,
     ) -> Result<u64, TrustedContextStoreError> {
-        let mut state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(existing) = state.zones.get(&values.zone)
             && (existing.provider_set_revision > values.provider_set_revision
                 || existing.controller_generation > values.controller_generation
@@ -479,7 +482,10 @@ impl TrustedContextStore {
         initiating_identity: &str,
         deadline_ms: u64,
     ) -> Result<ForwardContext, &'static str> {
-        let state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(attestation) = state.zones.get(zone) else {
             // Nothing published for this Zone: the broker cannot attest a
             // call it holds no values for, so the call is refused with the
@@ -503,14 +509,20 @@ impl TrustedContextStore {
     /// The wire shape is the acknowledgement the daemon reads its epoch
     /// from; production dispatch routes the publish variant through this
     /// same method, so the wire and the store never disagree.
-    pub fn publication_reply(&self, values: &PublishTrustedContextValues) -> Result<PublishTrustedContextResponse, TrustedContextStoreError> {
+    pub fn publication_reply(
+        &self,
+        values: &PublishTrustedContextValues,
+    ) -> Result<PublishTrustedContextResponse, TrustedContextStoreError> {
         let epoch = self.publish(values)?;
         Ok(PublishTrustedContextResponse {
             broker_epoch: epoch,
         })
     }
 
-    fn persist_locked(&self, state: &PersistedTrustedContext) -> Result<(), TrustedContextStoreError> {
+    fn persist_locked(
+        &self,
+        state: &PersistedTrustedContext,
+    ) -> Result<(), TrustedContextStoreError> {
         Self::persist(&self.root.join(Self::STATE_DIR).join("state.json"), state)
     }
 
@@ -568,9 +580,7 @@ static TRUSTED_CONTEXT_STORE: std::sync::OnceLock<TrustedContextStore> = std::sy
 /// Called once in `run_server` before the broker serves; a store that fails
 /// to open fails the broker closed at startup rather than attesting or
 /// caching under a half-open state.
-pub(crate) fn init_trusted_context_store(
-    state_dir: &Path,
-) -> Result<(), TrustedContextStoreError> {
+pub(crate) fn init_trusted_context_store(state_dir: &Path) -> Result<(), TrustedContextStoreError> {
     let store = TrustedContextStore::open(state_dir)?;
     let _ = TRUSTED_CONTEXT_STORE.set(store);
     Ok(())
@@ -622,8 +632,6 @@ pub struct DispatchOutcome {
     /// carrier only refuses a descriptor that is one of the call's own attached
     /// fds, never a fresh mint. The caller owns the returned descriptors;the
     /// forwarder closes them on any refusal.
-
-
     pub fds: Vec<OwnedFd>,
 }
 
@@ -827,7 +835,8 @@ impl BrokerEnvelope {
         zone: &str,
         payload: &Value,
     ) -> Result<Invocation, EnvelopeRefusal> {
-        self.call_with_fds(caller, operation, zone, payload, &[]).await
+        self.call_with_fds(caller, operation, zone, payload, &[])
+            .await
     }
 
     /// Invoke one operation through the envelope with descriptors attached to it.
@@ -1036,7 +1045,11 @@ impl BrokerEnvelope {
             let context = match &self.context_store {
                 Some(store) => Some(
                     store
-                        .mint(zone, chain.invoking_identity(), row.deadline_tier.budget_ms())
+                        .mint(
+                            zone,
+                            chain.invoking_identity(),
+                            row.deadline_tier.budget_ms(),
+                        )
                         .map_err(|_| {
                             EnvelopeRefusal::new(
                                 chain.root_invocation_id().to_owned(),
@@ -1249,9 +1262,7 @@ impl BrokerEnvelope {
             // fstat kind - the mixed or anon-inode legs (an fd-inheriting
             // spawn, pidfds) cannot be reduced to one named kernel kind
             // (U10).
-            if kind != FdKind::Any
-                && !fds.iter().all(|fd| Self::fd_kind_of(fd) == Some(kind))
-            {
+            if kind != FdKind::Any && !fds.iter().all(|fd| Self::fd_kind_of(fd) == Some(kind)) {
                 return false;
             }
         }
@@ -1616,7 +1627,7 @@ impl OperationDispatcher for HandlerTable {
                         ERRORED,
                         format!("duplicate invocation descriptors: {error}"),
                     ))
-                })
+                });
             }
         };
         Box::pin(async move {
@@ -1794,9 +1805,11 @@ impl OperationDispatcher for KernelDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_audit::evidence_chain::root_record_count;
     use crate::catalog::{BrokerAuthzFacets, DeadlineTier, OperationOwner};
-    use crate::forwarding::{ForwardFuture, ForwardedOperation, OperationForwarder, SocketForwarder};
+    use crate::forwarding::{
+        ForwardFuture, ForwardedOperation, OperationForwarder, SocketForwarder,
+    };
+    use d2b_audit::evidence_chain::root_record_count;
     use std::io;
     use std::os::fd::{AsRawFd, OwnedFd};
     use std::path::PathBuf;
@@ -1847,29 +1860,29 @@ mod tests {
         let observed = Arc::clone(&calls);
         let dispatcher: Box<dyn OperationDispatcher> = Box::new(dispatcher);
         std::thread::spawn(move || {
-while let Ok(fd) = accept_peer(&listener) {
-            let Some((request, request_fds)) = crate::protocol::recv_json_frame_with_fds::<
-                d2b_contracts_broker::broker_wire::ForwardOperationRequest,
-            >(fd.as_raw_fd())
-            .expect("read forwarded call") else {
-                continue;
-            };
-            observed.fetch_add(1, Ordering::AcqRel);
-            let (response, response_fds) = answer_from(
-                dispatcher.as_ref(),
-                &request.operation,
-                &request.zone,
-                &request.invocation_id,
-                request.payload,
-                &request_fds,
-                request.fd_kinds.first().copied(),
-                request.context.as_ref(),
-            );
-            let raw: Vec<std::os::fd::RawFd> =
-                response_fds.iter().map(|fd| fd.as_raw_fd()).collect();
-            crate::protocol::send_json_frame_with_fds(fd.as_raw_fd(), &response, &raw)
-                .expect("write forward reply");
-        }
+            while let Ok(fd) = accept_peer(&listener) {
+                let Some((request, request_fds)) = crate::protocol::recv_json_frame_with_fds::<
+                    d2b_contracts_broker::broker_wire::ForwardOperationRequest,
+                >(fd.as_raw_fd())
+                .expect("read forwarded call") else {
+                    continue;
+                };
+                observed.fetch_add(1, Ordering::AcqRel);
+                let (response, response_fds) = answer_from(
+                    dispatcher.as_ref(),
+                    &request.operation,
+                    &request.zone,
+                    &request.invocation_id,
+                    request.payload,
+                    &request_fds,
+                    request.fd_kinds.first().copied(),
+                    request.context.as_ref(),
+                );
+                let raw: Vec<std::os::fd::RawFd> =
+                    response_fds.iter().map(|fd| fd.as_raw_fd()).collect();
+                crate::protocol::send_json_frame_with_fds(fd.as_raw_fd(), &response, &raw)
+                    .expect("write forward reply");
+            }
         });
         LoopbackPeer {
             path,
@@ -1887,7 +1900,10 @@ while let Ok(fd) = accept_peer(&listener) {
         fds: &[OwnedFd],
         fd_kind: Option<FdKind>,
         context: Option<&d2b_contracts_broker::broker_wire::ForwardContext>,
-    ) -> (d2b_contracts_broker::broker_wire::ForwardOperationResponse, Vec<OwnedFd>) {
+    ) -> (
+        d2b_contracts_broker::broker_wire::ForwardOperationResponse,
+        Vec<OwnedFd>,
+    ) {
         use d2b_contracts_broker::broker_wire::{
             ForwardOperationOutcome, ForwardOperationResponse,
         };
@@ -1904,45 +1920,47 @@ while let Ok(fd) = accept_peer(&listener) {
                 .unwrap_or("daemon")
                 .to_owned(),
         );
-        let (outcome, response_fds) = match runtime().block_on(dispatcher.dispatch(DirectInvocation {
-            ctx: InvocationCtx {
-                operation,
-                zone,
-                invocation_id,
-                chain: &chain,
-                // The loopback peer re-roots the chain, so this leg is the
-                // root leg of its own invocation.
-                nested: false,
-            },
-            payload: &payload,
-            context,
-            fds,
-            fd_kind,
-        })) {
-            Ok(DispatchOutcome { result, fds: result_fds }) => {
-                let kinds = result_fds
-                    .iter()
-                    .map(|fd| {
-                        BrokerEnvelope::fd_kind_of(fd)
-                            .expect("a test peer returns a known-kernel-kind fd")
-                    })
-                    .collect::<Vec<_>>();
-                (
-                    ForwardOperationOutcome::Result {
-                        result: serde_json::to_value(&result).expect("render result"),
-                        fd_indexes: (0..result_fds.len() as u32).collect(),
-                        fd_kinds: kinds,
-                    },
-                    result_fds,
-                )
-            }
-            Err(failure) => (
-                ForwardOperationOutcome::Refused {
-                    code: failure.code,
+        let (outcome, response_fds) =
+            match runtime().block_on(dispatcher.dispatch(DirectInvocation {
+                ctx: InvocationCtx {
+                    operation,
+                    zone,
+                    invocation_id,
+                    chain: &chain,
+                    // The loopback peer re-roots the chain, so this leg is the
+                    // root leg of its own invocation.
+                    nested: false,
                 },
-                Vec::new(),
-            ),
-        };
+                payload: &payload,
+                context,
+                fds,
+                fd_kind,
+            })) {
+                Ok(DispatchOutcome {
+                    result,
+                    fds: result_fds,
+                }) => {
+                    let kinds = result_fds
+                        .iter()
+                        .map(|fd| {
+                            BrokerEnvelope::fd_kind_of(fd)
+                                .expect("a test peer returns a known-kernel-kind fd")
+                        })
+                        .collect::<Vec<_>>();
+                    (
+                        ForwardOperationOutcome::Result {
+                            result: serde_json::to_value(&result).expect("render result"),
+                            fd_indexes: (0..result_fds.len() as u32).collect(),
+                            fd_kinds: kinds,
+                        },
+                        result_fds,
+                    )
+                }
+                Err(failure) => (
+                    ForwardOperationOutcome::Refused { code: failure.code },
+                    Vec::new(),
+                ),
+            };
         (ForwardOperationResponse { outcome }, response_fds)
     }
 
@@ -2024,8 +2042,8 @@ while let Ok(fd) = accept_peer(&listener) {
     #[test]
     fn an_unknown_operation_is_refused() {
         let envelope = probe_envelope();
-        let refusal = runtime().block_on(envelope
-            .call(
+        let refusal = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Daemon,
                 "NoSuchOperation",
                 "zone-a",
@@ -2041,8 +2059,8 @@ while let Ok(fd) = accept_peer(&listener) {
         let envelope = probe_envelope();
         // The committed catalog declares the operation; this broker does not
         // serve it, and deny-by-default refuses it rather than guessing.
-        let refusal = runtime().block_on(envelope
-            .call(
+        let refusal = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Daemon,
                 "ApplySysctl",
                 "zone-a",
@@ -2056,8 +2074,8 @@ while let Ok(fd) = accept_peer(&listener) {
     #[test]
     fn an_ungranted_caller_is_refused() {
         let envelope = probe_envelope();
-        let refusal = runtime().block_on(envelope
-            .call(
+        let refusal = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Unauthorized,
                 "ProbeOperation",
                 "zone-a",
@@ -2078,8 +2096,8 @@ while let Ok(fd) = accept_peer(&listener) {
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(echo_table()))
             .commit_all()
             .build();
-        let refusal = runtime().block_on(envelope
-            .call(
+        let refusal = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Daemon,
                 "StartSystemdUnit",
                 "zone-a",
@@ -2092,8 +2110,8 @@ while let Ok(fd) = accept_peer(&listener) {
     #[test]
     fn a_payload_outside_the_row_schema_is_refused() {
         let envelope = probe_envelope();
-        let undeclared = runtime().block_on(envelope
-            .call(
+        let undeclared = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
@@ -2101,8 +2119,8 @@ while let Ok(fd) = accept_peer(&listener) {
             ))
             .expect_err("an undeclared field is refused");
         assert_eq!(undeclared.code, INVALID_PAYLOAD);
-        let missing = runtime().block_on(envelope
-            .call(
+        let missing = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
@@ -2122,8 +2140,8 @@ while let Ok(fd) = accept_peer(&listener) {
                 &["d2bd"],
             ))
             .build();
-        let refusal = runtime().block_on(envelope
-            .call(
+        let refusal = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
@@ -2159,35 +2177,53 @@ while let Ok(fd) = accept_peer(&listener) {
         // cases with two codes: the caller can tell a deliberate refusal
         // from a broken handler, and neither is a missing handler.
         let refused = HandlerTable::new().with("ProbeOperation", |_invocation| {
-            Err(DispatchFailure::with_detail(HANDLER_REFUSED, "grant exhausted"))
+            Err(DispatchFailure::with_detail(
+                HANDLER_REFUSED,
+                "grant exhausted",
+            ))
         });
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(refused))
-            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .declare(declared_row(
+                "ProbeOperation",
+                &["label"],
+                &["label"],
+                &["d2bd"],
+            ))
             .build();
-        let refusal = runtime().block_on(envelope.call(
-            CallerAuthority::Daemon,
-            "ProbeOperation",
-            "zone-a",
-            &serde_json::json!({ "label": "x" }),
-        ))
-        .expect_err("a handler that refuses keeps its own code");
+        let refusal = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect_err("a handler that refuses keeps its own code");
         assert_eq!(refusal.code, HANDLER_REFUSED);
         assert_eq!(refusal.detail.as_deref(), Some("grant exhausted"));
         assert_eq!(refusal.audit_fields()["reason"], HANDLER_REFUSED);
 
         let errored = HandlerTable::new().with("ProbeOperation", |_invocation| {
-            Err(DispatchFailure::with_detail(HANDLER_ERRORED, "backend failed"))
+            Err(DispatchFailure::with_detail(
+                HANDLER_ERRORED,
+                "backend failed",
+            ))
         });
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(errored))
-            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .declare(declared_row(
+                "ProbeOperation",
+                &["label"],
+                &["label"],
+                &["d2bd"],
+            ))
             .build();
-        let refusal = runtime().block_on(envelope.call(
-            CallerAuthority::Daemon,
-            "ProbeOperation",
-            "zone-a",
-            &serde_json::json!({ "label": "x" }),
-        ))
-        .expect_err("a handler that failed keeps its own code");
+        let refusal = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect_err("a handler that failed keeps its own code");
         assert_eq!(refusal.code, HANDLER_ERRORED);
         assert_eq!(refusal.detail.as_deref(), Some("backend failed"));
     }
@@ -2207,15 +2243,21 @@ while let Ok(fd) = accept_peer(&listener) {
             BrokerProfileId::Host,
             Box::new(ForwardingDispatcher::new(peer.forwarder())),
         )
-        .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
-        .build();
-        let refusal = runtime().block_on(envelope.call(
-            CallerAuthority::Daemon,
+        .declare(declared_row(
             "ProbeOperation",
-            "zone-a",
-            &serde_json::json!({ "label": "x" }),
+            &["label"],
+            &["label"],
+            &["d2bd"],
         ))
-        .expect_err("a peer refusal keeps its own code");
+        .build();
+        let refusal = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect_err("a peer refusal keeps its own code");
         assert_eq!(refusal.code, HANDLER_REFUSED);
         assert_eq!(peer.calls(), 1, "the call must have crossed the socket");
     }
@@ -2233,15 +2275,21 @@ while let Ok(fd) = accept_peer(&listener) {
             BrokerProfileId::Host,
             Box::new(ForwardingDispatcher::new(peer.forwarder())),
         )
-        .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
-        .build();
-        let refusal = runtime().block_on(envelope.call(
-            CallerAuthority::Daemon,
+        .declare(declared_row(
             "ProbeOperation",
-            "zone-a",
-            &serde_json::json!({ "label": "x" }),
+            &["label"],
+            &["label"],
+            &["d2bd"],
         ))
-        .expect_err("a code outside the closed set is refused");
+        .build();
+        let refusal = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect_err("a code outside the closed set is refused");
         assert_eq!(refusal.code, ERRORED);
         assert_eq!(refusal.detail.as_deref(), Some("family-own-code"));
         assert_eq!(peer.calls(), 1);
@@ -2256,15 +2304,21 @@ while let Ok(fd) = accept_peer(&listener) {
             panic!("probe blew up");
         });
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(table))
-            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .declare(declared_row(
+                "ProbeOperation",
+                &["label"],
+                &["label"],
+                &["d2bd"],
+            ))
             .build();
-        let refusal = runtime().block_on(envelope.call(
-            CallerAuthority::Daemon,
-            "ProbeOperation",
-            "zone-a",
-            &serde_json::json!({ "label": "x" }),
-        ))
-        .expect_err("a panicking handler is a typed refusal, never a dropped caller");
+        let refusal = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect_err("a panicking handler is a typed refusal, never a dropped caller");
         assert_eq!(refusal.code, HANDLER_CRASHED);
         assert_eq!(refusal.detail.as_deref(), Some("probe blew up"));
         assert!(refusal.invocation_id.starts_with("invocation-"));
@@ -2275,13 +2329,14 @@ while let Ok(fd) = accept_peer(&listener) {
         // The panic never left the handler task: the same envelope turns the
         // next crash into the same typed refusal instead of dropping the
         // caller.
-        let again = runtime().block_on(envelope.call(
-            CallerAuthority::Daemon,
-            "ProbeOperation",
-            "zone-a",
-            &serde_json::json!({ "label": "x" }),
-        ))
-        .expect_err("a second crash is the same typed refusal");
+        let again = runtime()
+            .block_on(envelope.call(
+                CallerAuthority::Daemon,
+                "ProbeOperation",
+                "zone-a",
+                &serde_json::json!({ "label": "x" }),
+            ))
+            .expect_err("a second crash is the same typed refusal");
         assert_eq!(again.code, HANDLER_CRASHED);
     }
 
@@ -2318,16 +2373,19 @@ while let Ok(fd) = accept_peer(&listener) {
                         })
                         .with("ProbeOperation", |_invocation| {
                             Ok(DispatchOutcome {
-                                result: serde_json::from_value(
-                                    serde_json::json!({ "echo": "ok" }),
-                                )
-                                .expect("canonical"),
+                                result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
+                                    .expect("canonical"),
                                 fds: Vec::new(),
                             })
                         }),
                 ),
             )
-            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .declare(declared_row(
+                "ProbeOperation",
+                &["label"],
+                &["label"],
+                &["d2bd"],
+            ))
             .declare(spin_row)
             .build(),
         );
@@ -2369,8 +2427,8 @@ while let Ok(fd) = accept_peer(&listener) {
     #[test]
     fn a_declared_operation_dispatches_with_an_invocation_id() {
         let envelope = probe_envelope();
-        let invocation = runtime().block_on(envelope
-            .call(
+        let invocation = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
@@ -2389,8 +2447,8 @@ while let Ok(fd) = accept_peer(&listener) {
     #[test]
     fn a_refusal_carries_the_invocation_identifier_it_denied() {
         let envelope = probe_envelope();
-        let refusal = runtime().block_on(envelope
-            .call(
+        let refusal = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Unauthorized,
                 "ProbeOperation",
                 "zone-a",
@@ -2403,8 +2461,8 @@ while let Ok(fd) = accept_peer(&listener) {
         assert_eq!(fields["operation"], "ProbeOperation");
         assert_eq!(fields["reason"], UNGRANTED_CALLER);
         // Two refusals are two named invocations, not one anonymous denial.
-        let other = runtime().block_on(envelope
-            .call(
+        let other = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Unauthorized,
                 "ProbeOperation",
                 "zone-a",
@@ -2416,14 +2474,19 @@ while let Ok(fd) = accept_peer(&listener) {
 
     #[test]
     fn a_row_join_keys_the_invocation_on_its_declared_fields() {
-        let mut row = declared_row("ProbeOperation", &["label", "kind"], &["label", "kind"], &["d2bd"]);
+        let mut row = declared_row(
+            "ProbeOperation",
+            &["label", "kind"],
+            &["label", "kind"],
+            &["d2bd"],
+        );
         row.audit_join = Some(&["kind", "label"]);
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(echo_table()))
             .declare(row)
             .build();
         let joined = |kind: &str| {
-            runtime().block_on(envelope
-                .call(
+            runtime()
+                .block_on(envelope.call(
                     CallerAuthority::Daemon,
                     "ProbeOperation",
                     "zone-a",
@@ -2434,15 +2497,23 @@ while let Ok(fd) = accept_peer(&listener) {
                 .expect("a row that declares a join carries one")
         };
         let first = joined("alpha");
-        assert_ne!(first, joined("beta"), "a different declared key is another identity");
-        assert_eq!(first, joined("alpha"), "the same declared key is one identity");
+        assert_ne!(
+            first,
+            joined("beta"),
+            "a different declared key is another identity"
+        );
+        assert_eq!(
+            first,
+            joined("alpha"),
+            "the same declared key is one identity"
+        );
         // The key is the digest of the declared fields, never the fields.
         assert!(first.starts_with("sha256:"));
         assert!(!first.contains("alpha"));
         // A row that declares no join carries none.
         let envelope = probe_envelope();
-        let plain = runtime().block_on(envelope
-            .call(
+        let plain = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
@@ -2455,13 +2526,19 @@ while let Ok(fd) = accept_peer(&listener) {
     #[test]
     fn a_launcher_does_not_carry_the_daemon_grant() {
         let daemon_only = declared_row("DaemonOperation", &[], &[], &["d2bd"]);
-        assert!(BrokerEnvelope::granted(&daemon_only, CallerAuthority::Daemon));
+        assert!(BrokerEnvelope::granted(
+            &daemon_only,
+            CallerAuthority::Daemon
+        ));
         assert!(
             !BrokerEnvelope::granted(&daemon_only, CallerAuthority::Launcher),
             "a row granted to the daemon alone must refuse a launcher"
         );
         let launcher = declared_row("LauncherOperation", &[], &[], &["d2b-launcher"]);
-        assert!(BrokerEnvelope::granted(&launcher, CallerAuthority::Launcher));
+        assert!(BrokerEnvelope::granted(
+            &launcher,
+            CallerAuthority::Launcher
+        ));
         assert!(!BrokerEnvelope::granted(&launcher, CallerAuthority::Daemon));
     }
 
@@ -2498,8 +2575,8 @@ while let Ok(fd) = accept_peer(&listener) {
             &["d2bd"],
         ))
         .build();
-        let invocation = runtime().block_on(envelope
-            .call(
+        let invocation = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
@@ -2509,7 +2586,10 @@ while let Ok(fd) = accept_peer(&listener) {
         assert_eq!(peer.calls(), 1, "the call must have crossed the socket");
         let rendered = String::from_utf8(invocation.outcome.result.to_canonical_bytes())
             .expect("canonical json is utf-8");
-        assert!(rendered.contains("\"operation\":\"ProbeOperation\""), "{rendered}");
+        assert!(
+            rendered.contains("\"operation\":\"ProbeOperation\""),
+            "{rendered}"
+        );
         assert!(rendered.contains("\"zone\":\"zone-a\""), "{rendered}");
         assert!(rendered.contains("\"fields\":1"), "{rendered}");
     }
@@ -2531,8 +2611,8 @@ while let Ok(fd) = accept_peer(&listener) {
             &["d2bd"],
         ))
         .build();
-        let refusal = runtime().block_on(envelope
-            .call(
+        let refusal = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
@@ -2558,8 +2638,8 @@ while let Ok(fd) = accept_peer(&listener) {
             &["d2bd"],
         ))
         .build();
-        let refusal = runtime().block_on(envelope
-            .call(
+        let refusal = runtime()
+            .block_on(envelope.call(
                 CallerAuthority::Daemon,
                 "ProbeOperation",
                 "zone-a",
@@ -2577,13 +2657,12 @@ while let Ok(fd) = accept_peer(&listener) {
         )
         .commit_forwarded()
         .build();
-        let committed: BTreeSet<&str> = envelope
-            .committed_rows()
-            .map(|row| row.operation)
-            .collect();
-        for row in BROKER_OPERATION_CATALOG.iter().filter(|row| {
-            row.owner == OperationOwner::Family && row.declaring_provider.is_some()
-        }) {
+        let committed: BTreeSet<&str> =
+            envelope.committed_rows().map(|row| row.operation).collect();
+        for row in BROKER_OPERATION_CATALOG
+            .iter()
+            .filter(|row| row.owner == OperationOwner::Family && row.declaring_provider.is_some())
+        {
             assert!(
                 committed.contains(row.operation),
                 "{} names a declaring process and must be committed",
@@ -2595,7 +2674,7 @@ while let Ok(fd) = accept_peer(&listener) {
         for row in BROKER_OPERATION_CATALOG
             .iter()
             .filter(|row| row.declaring_provider.is_none())
-       {
+        {
             assert!(
                 !committed.contains(row.operation) || row.owner == OperationOwner::BrokerGeneric,
                 "{} names no declaring process and must not be committed",
@@ -2632,21 +2711,23 @@ while let Ok(fd) = accept_peer(&listener) {
 
         let returned_write_end: Arc<std::sync::Mutex<Option<OwnedFd>>> = Arc::default();
         let write_slot = Arc::clone(&returned_write_end);
-        let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", move |invocation| {
-            // Request leg:the descriptor the caller attached crossed the socket
-            // and reads back what the caller wrote.to
-            let mut echoed = [0_u8; 4];
-            let n = read(invocation.fds[0].as_raw_fd(), &mut echoed).expect("read request fd");
-            assert_eq!(&echoed[..n], b"ping");
-            // Response leg:answer with a fresh descriptor the peer minted.to
-            let (answer_read, answer_write) = pipe().expect("answer pipe");
-            *Arc::clone(&returned_write_end).lock().expect("slot") = Some(answer_write);
-            Ok(DispatchOutcome {
-                result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
-                    .expect("canonical"),
-                fds: vec![answer_read],
-            })
-        }));
+        let peer = loopback_peer(
+            HandlerTable::new().with("ProbeOperation", move |invocation| {
+                // Request leg:the descriptor the caller attached crossed the socket
+                // and reads back what the caller wrote.to
+                let mut echoed = [0_u8; 4];
+                let n = read(invocation.fds[0].as_raw_fd(), &mut echoed).expect("read request fd");
+                assert_eq!(&echoed[..n], b"ping");
+                // Response leg:answer with a fresh descriptor the peer minted.to
+                let (answer_read, answer_write) = pipe().expect("answer pipe");
+                *Arc::clone(&returned_write_end).lock().expect("slot") = Some(answer_write);
+                Ok(DispatchOutcome {
+                    result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
+                        .expect("canonical"),
+                    fds: vec![answer_read],
+                })
+            }),
+        );
         let envelope = BrokerEnvelope::over(
             BrokerProfileId::Host,
             Box::new(ForwardingDispatcher::new(peer.forwarder())),
@@ -2663,16 +2744,24 @@ while let Ok(fd) = accept_peer(&listener) {
             ))
             .expect("the peer answered with the fd leg");
         assert_eq!(peer.calls(), 1, "the call must have crossed the socket");
-        assert_eq!(invocation.outcome.fds.len(), 1, "the peer's minted descriptor must cross back");
+        assert_eq!(
+            invocation.outcome.fds.len(),
+            1,
+            "the peer's minted descriptor must cross back"
+        );
 
         // Read back what the peer wrote through the returned descriptor:the
         // minted write end stays on the peer's side,and the returned read end
         // is a working duplicated handle, exactly as w12 asserts.to
-        let write_end = write_slot.lock().expect("slot").take().expect("peer minted write end");
+        let write_end = write_slot
+            .lock()
+            .expect("slot")
+            .take()
+            .expect("peer minted write end");
         write(&write_end, b"pong").expect("write answer bytes");
         let mut read_back = [0_u8; 4];
-        let n = read(invocation.outcome.fds[0].as_raw_fd(), &mut read_back)
-            .expect("read returned fd");
+        let n =
+            read(invocation.outcome.fds[0].as_raw_fd(), &mut read_back).expect("read returned fd");
         assert_eq!(&read_back[..n], b"pong");
     }
 
@@ -2790,16 +2879,18 @@ while let Ok(fd) = accept_peer(&listener) {
     fn a_peer_that_returns_an_fd_it_did_not_mint_this_call_is_refused_with_the_fd_leg_code() {
         use nix::unistd::pipe;
         let (request_read, _request_write) = pipe().expect("request pipe");
-        let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", move |invocation| {
-            Ok(DispatchOutcome {
-                result: serde_json::from_value(serde_json::json!({ "echo": "stolen" }))
-                    .expect("canonical"),
-                // Return the call's own descriptor - a descriptor the peer did
-                // not mint this call. The carrier spoils the theft at the wire
-                // boundary rather than at the handler.se
-                fds: vec![invocation.fds[0].try_clone().expect("dup request fd")],
-            })
-        }));
+        let peer = loopback_peer(
+            HandlerTable::new().with("ProbeOperation", move |invocation| {
+                Ok(DispatchOutcome {
+                    result: serde_json::from_value(serde_json::json!({ "echo": "stolen" }))
+                        .expect("canonical"),
+                    // Return the call's own descriptor - a descriptor the peer did
+                    // not mint this call. The carrier spoils the theft at the wire
+                    // boundary rather than at the handler.se
+                    fds: vec![invocation.fds[0].try_clone().expect("dup request fd")],
+                })
+            }),
+        );
         let envelope = BrokerEnvelope::over(
             BrokerProfileId::Host,
             Box::new(ForwardingDispatcher::new(peer.forwarder())),
@@ -2815,7 +2906,7 @@ while let Ok(fd) = accept_peer(&listener) {
                 &[request_read],
             ))
             .expect_err("returning the call's own descriptor is not minting");
-        assert_eq!(refusal.code, FD_LEG);  // (also = WIRE_FD_LEG)
+        assert_eq!(refusal.code, FD_LEG); // (also = WIRE_FD_LEG)
         assert_eq!(WIRE_FD_LEG, "fd-leg");
         assert_eq!(peer.calls(), 1);
     }
@@ -2852,7 +2943,12 @@ while let Ok(fd) = accept_peer(&listener) {
             Box::new(ForwardingDispatcher::new(peer.forwarder())),
         )
         .with_trusted_context(store)
-        .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+        .declare(declared_row(
+            "ProbeOperation",
+            &["label"],
+            &["label"],
+            &["d2bd"],
+        ))
         .build();
         let refusal = runtime()
             .block_on(envelope.call(
@@ -2875,7 +2971,12 @@ while let Ok(fd) = accept_peer(&listener) {
             Box::new(ForwardingDispatcher::new(peer.forwarder())),
         )
         .with_trusted_context(store)
-        .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+        .declare(declared_row(
+            "ProbeOperation",
+            &["label"],
+            &["label"],
+            &["d2bd"],
+        ))
         .build();
         runtime()
             .block_on(envelope.call(
@@ -2896,14 +2997,16 @@ while let Ok(fd) = accept_peer(&listener) {
         // a different block, or none, could not produce these values.
         let observed: Arc<Mutex<Option<ForwardContext>>> = Arc::default();
         let slot = Arc::clone(&observed);
-        let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", move |invocation| {
-            *Arc::clone(&slot).lock().expect("slot") = invocation.context.cloned();
-            Ok(DispatchOutcome {
-                result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
-                    .expect("canonical"),
-                fds: Vec::new(),
-            })
-        }));
+        let peer = loopback_peer(
+            HandlerTable::new().with("ProbeOperation", move |invocation| {
+                *Arc::clone(&slot).lock().expect("slot") = invocation.context.cloned();
+                Ok(DispatchOutcome {
+                    result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
+                        .expect("canonical"),
+                    fds: Vec::new(),
+                })
+            }),
+        );
         let (_dir, store) = context_store();
         store
             .publish(&published("zone-a"))
@@ -2913,7 +3016,12 @@ while let Ok(fd) = accept_peer(&listener) {
             Box::new(ForwardingDispatcher::new(peer.forwarder())),
         )
         .with_trusted_context(store)
-        .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+        .declare(declared_row(
+            "ProbeOperation",
+            &["label"],
+            &["label"],
+            &["d2bd"],
+        ))
         .build();
         runtime()
             .block_on(envelope.call(
@@ -2929,7 +3037,10 @@ while let Ok(fd) = accept_peer(&listener) {
             .expect("slot")
             .take()
             .expect("the peer received the minted context");
-        assert_eq!(context.broker_epoch, 1, "the first store instance mints under epoch one");
+        assert_eq!(
+            context.broker_epoch, 1,
+            "the first store instance mints under epoch one"
+        );
         assert_eq!(context.zone, "zone-a");
         assert_eq!(context.provider_set_revision, 2);
         assert_eq!(context.controller_generation, 4);
@@ -2951,14 +3062,17 @@ while let Ok(fd) = accept_peer(&listener) {
         let observe = |tier: DeadlineTier| {
             let observed: Arc<Mutex<Option<ForwardContext>>> = Arc::default();
             let slot = Arc::clone(&observed);
-            let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", move |invocation| {
-                *Arc::clone(&slot).lock().expect("slot") = invocation.context.cloned();
-                Ok(DispatchOutcome {
-                    result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
-                        .expect("canonical"),
-                    fds: Vec::new(),
-                })
-            }));
+            let peer = loopback_peer(HandlerTable::new().with(
+                "ProbeOperation",
+                move |invocation| {
+                    *Arc::clone(&slot).lock().expect("slot") = invocation.context.cloned();
+                    Ok(DispatchOutcome {
+                        result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
+                            .expect("canonical"),
+                        fds: Vec::new(),
+                    })
+                },
+            ));
             let (_dir, store) = context_store();
             store
                 .publish(&published("zone-a"))
@@ -3023,7 +3137,10 @@ while let Ok(fd) = accept_peer(&listener) {
         drop(store);
         let reopened = TrustedContextStore::open(dir.path()).expect("reopen the store");
         assert_eq!(reopened.epoch(), 2, "restart mints under a fresh epoch");
-        assert!(reopened.holds_zone("zone-a"), "published values survive restart");
+        assert!(
+            reopened.holds_zone("zone-a"),
+            "published values survive restart"
+        );
         let context = reopened
             .mint("zone-a", "daemon", DEFAULT_CONTEXT_DEADLINE_MS)
             .expect("the reopened store mints the Zone");
@@ -3089,11 +3206,14 @@ while let Ok(fd) = accept_peer(&listener) {
 
     impl OperationForwarder for CapturingForwarder {
         fn forward<'a>(&'a self, invocation: ForwardedOperation<'a>) -> ForwardFuture<'a> {
-            self.chains.lock().expect("chains").push(invocation.chain.clone());
+            self.chains
+                .lock()
+                .expect("chains")
+                .push(invocation.chain.clone());
             Box::pin(async move {
                 Ok(DispatchOutcome {
                     result: serde_json::from_value(serde_json::json!({ "forwarded": true }))
-                    .expect("canonical forwarded result"),
+                        .expect("canonical forwarded result"),
                     fds: Vec::new(),
                 })
             })
@@ -3111,27 +3231,41 @@ while let Ok(fd) = accept_peer(&listener) {
         let sink: Arc<dyn ChainAuditSink> = Arc::clone(&recorder) as Arc<dyn ChainAuditSink>;
         let captured: Arc<Mutex<Vec<EvidenceChain>>> = Arc::default();
         let captured_handle = Arc::clone(&captured);
-        let table = HandlerTable::new().with("AlphaService", move |invocation| {
-            captured_handle
-                .lock()
-                .expect("captured")
-                .push(invocation.ctx.chain.clone());
-            Ok(DispatchOutcome {
-                result: serde_json::from_value(serde_json::json!({ "label": "x" }))
-                    .expect("canonical result"),
-                fds: Vec::new(),
+        let table = HandlerTable::new()
+            .with("AlphaService", move |invocation| {
+                captured_handle
+                    .lock()
+                    .expect("captured")
+                    .push(invocation.ctx.chain.clone());
+                Ok(DispatchOutcome {
+                    result: serde_json::from_value(serde_json::json!({ "label": "x" }))
+                        .expect("canonical result"),
+                    fds: Vec::new(),
+                })
             })
-        }).with("BetaService", |invocation| {
-            Ok(DispatchOutcome {
-                result: serde_json::from_value(serde_json::json!({ "label": invocation.ctx.zone }))
+            .with("BetaService", |invocation| {
+                Ok(DispatchOutcome {
+                    result: serde_json::from_value(
+                        serde_json::json!({ "label": invocation.ctx.zone }),
+                    )
                     .expect("canonical result"),
-                fds: Vec::new(),
-            })
-        });
+                    fds: Vec::new(),
+                })
+            });
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(table))
             .with_chain_audit(Arc::clone(&sink))
-            .declare(declared_row("AlphaService", &["label"], &["label"], &["provider-alpha"]))
-            .declare(declared_row("BetaService", &["label"], &["label"], &["provider-alpha"]))
+            .declare(declared_row(
+                "AlphaService",
+                &["label"],
+                &["label"],
+                &["provider-alpha"],
+            ))
+            .declare(declared_row(
+                "BetaService",
+                &["label"],
+                &["label"],
+                &["provider-alpha"],
+            ))
             .build();
         let root = runtime()
             .block_on(envelope.call(
@@ -3208,7 +3342,12 @@ while let Ok(fd) = accept_peer(&listener) {
         let sink: Arc<dyn ChainAuditSink> = Arc::clone(&recorder) as Arc<dyn ChainAuditSink>;
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(echo_table()))
             .with_chain_audit(Arc::clone(&sink))
-            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .declare(declared_row(
+                "ProbeOperation",
+                &["label"],
+                &["label"],
+                &["d2bd"],
+            ))
             .declare(declared_row("GraftService", &[], &[], &["provider-alpha"]))
             .build();
         let root = runtime()
@@ -3222,15 +3361,10 @@ while let Ok(fd) = accept_peer(&listener) {
         // The handler (provider-alpha) re-enters its own service: the chain
         // is [daemon, provider-alpha], and the daemon's grants do not cover
         // a row granted to the provider alone.
-        let chain = EvidenceChain::root(root.invocation_id.clone(), "daemon")
-            .nested("provider-alpha");
+        let chain =
+            EvidenceChain::root(root.invocation_id.clone(), "daemon").nested("provider-alpha");
         let refusal = runtime()
-            .block_on(envelope.call_nested(
-                chain,
-                "GraftService",
-                "zone-a",
-                &serde_json::json!({}),
-            ))
+            .block_on(envelope.call_nested(chain, "GraftService", "zone-a", &serde_json::json!({})))
             .expect_err("a self-re-entrant call without a granting row refuses");
         assert_eq!(refusal.code, UNGRANTED_CALLER);
         let records = recorder.snapshot();
@@ -3257,7 +3391,12 @@ while let Ok(fd) = accept_peer(&listener) {
         let sink: Arc<dyn ChainAuditSink> = Arc::clone(&recorder) as Arc<dyn ChainAuditSink>;
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(echo_table()))
             .with_chain_audit(Arc::clone(&sink))
-            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .declare(declared_row(
+                "ProbeOperation",
+                &["label"],
+                &["label"],
+                &["d2bd"],
+            ))
             .build();
         let root = runtime()
             .block_on(envelope.call(
@@ -3294,10 +3433,10 @@ while let Ok(fd) = accept_peer(&listener) {
         );
         for depth in 0..=max {
             assert!(
-                records
-                    .iter()
-                    .any(|record| record.correlation_key() == (root_id.as_str(), depth)
-                        || (depth == 0 && record.is_root())),
+                records.iter().any(
+                    |record| record.correlation_key() == (root_id.as_str(), depth)
+                        || (depth == 0 && record.is_root())
+                ),
                 "depth {depth} recorded"
             );
         }
@@ -3345,8 +3484,7 @@ while let Ok(fd) = accept_peer(&listener) {
             ))
             .expect("the in-broker root dispatches");
         let root_id = root.invocation_id.clone();
-        let nested_chain = EvidenceChain::root(root_id.clone(), "daemon")
-            .nested("provider-alpha");
+        let nested_chain = EvidenceChain::root(root_id.clone(), "daemon").nested("provider-alpha");
         let forwarded_envelope = BrokerEnvelope::over(
             BrokerProfileId::Host,
             Box::new(ForwardingDispatcher::new(CapturingForwarder {
@@ -3395,7 +3533,12 @@ while let Ok(fd) = accept_peer(&listener) {
         let sink: Arc<dyn ChainAuditSink> = Arc::clone(&recorder) as Arc<dyn ChainAuditSink>;
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(echo_table()))
             .with_chain_audit(Arc::clone(&sink))
-            .declare(declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]))
+            .declare(declared_row(
+                "ProbeOperation",
+                &["label"],
+                &["label"],
+                &["d2bd"],
+            ))
             .build();
         let ok = runtime()
             .block_on(envelope.call(

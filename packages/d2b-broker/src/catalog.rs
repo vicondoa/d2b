@@ -194,11 +194,9 @@ pub struct BrokerOperationRow {
     pub audit_join: Option<&'static [&'static str]>,
     /// The most descriptors one invocation of this operation may carry in
     /// the forward frame. 0 when the operation declares no fd carriage.
-
-
     pub max_fds: u8,
     /// The kernel kind every descriptor this operation carries must present,
-    /// required when [`Self::max_fds`] is nonzero. 
+    /// required when [`Self::max_fds`] is nonzero.
     pub fd_kind: Option<FdKind>,
     /// The declared state cell the operation's broker-owned state lives on,
     /// when it has one (U3/KTD3).
@@ -500,10 +498,16 @@ fn sequence_matches<T, U>(
     let expected_set: std::collections::BTreeSet<&str> =
         expected.iter().map(AsRef::as_ref).collect();
     for name in expected_set.difference(&declared_set) {
-        mismatches.push(missing(view, format!("{name}: declared by the rows, absent")));
+        mismatches.push(missing(
+            view,
+            format!("{name}: declared by the rows, absent"),
+        ));
     }
     for name in declared_set.difference(&expected_set) {
-        mismatches.push(missing(view, format!("{name}: present, no row declares it")));
+        mismatches.push(missing(
+            view,
+            format!("{name}: present, no row declares it"),
+        ));
     }
     if declared_set == expected_set {
         mismatches.push(missing(
@@ -527,7 +531,10 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
     let mut wire_variants = std::collections::BTreeSet::new();
     for row in rows {
         if !operations.insert(row.operation) {
-            mismatches.push(missing("rows", format!("{}: declared twice", row.operation)));
+            mismatches.push(missing(
+                "rows",
+                format!("{}: declared twice", row.operation),
+            ));
         }
         if let Some(variant) = row.wire_variant {
             if !wire_variants.insert(variant) {
@@ -542,14 +549,20 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
             if !row.admits_profile(BrokerProfileId::Host) {
                 mismatches.push(missing(
                     "rows",
-                    format!("{}: a wire operation no fixed profile admits", row.operation),
+                    format!(
+                        "{}: a wire operation no fixed profile admits",
+                        row.operation
+                    ),
                 ));
             }
         }
         if row.owner == OperationOwner::Family && row.declaring_provider.is_none() {
             mismatches.push(missing(
                 "rows",
-                format!("{}: family-owned without a declaring provider", row.operation),
+                format!(
+                    "{}: family-owned without a declaring provider",
+                    row.operation
+                ),
             ));
         }
         if row.owner != OperationOwner::Family && row.family.is_some() {
@@ -570,7 +583,10 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
         if row.owner == OperationOwner::Family && row.justification.is_some() {
             mismatches.push(missing(
                 "rows",
-                format!("{}: family-owned but records a justification", row.operation),
+                format!(
+                    "{}: family-owned but records a justification",
+                    row.operation
+                ),
             ));
         }
         if row.disposition == "stubbed-unimplemented" && row.stub_target.is_none() {
@@ -585,7 +601,10 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
         if row.authz.allowed_groups.is_empty() {
             mismatches.push(missing(
                 "authz",
-                format!("{}: no allowed group, so every caller is denied", row.operation),
+                format!(
+                    "{}: no allowed group, so every caller is denied",
+                    row.operation
+                ),
             ));
         }
         for field in row.audit_fields {
@@ -699,10 +718,7 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
         ));
     }
     for field in &views.audit {
-        if !rows
-            .iter()
-            .any(|row| row.audit_fields.contains(field))
-        {
+        if !rows.iter().any(|row| row.audit_fields.contains(field)) {
             mismatches.push(missing(
                 "audit",
                 format!("{field}: an audit field no committed row uses"),
@@ -717,9 +733,7 @@ mod tests {
     use super::*;
     use d2b_contracts::privileges_w3::W3BrokerOperation;
     use d2b_contracts_broker::BrokerCapabilities;
-    use d2b_contracts_broker::broker_wire::{
-        GUEST_OPERATION_CATALOG, HOST_OPERATION_CATALOG,
-    };
+    use d2b_contracts_broker::broker_wire::{GUEST_OPERATION_CATALOG, HOST_OPERATION_CATALOG};
 
     /// Every view as the running binary carries it.
     fn live_views() -> CatalogViews {
@@ -747,7 +761,11 @@ mod tests {
     #[test]
     fn committed_rows_cover_every_view() {
         let mismatches = audit(BROKER_OPERATION_CATALOG, &live_views());
-        assert_eq!(mismatches, Vec::new(), "catalog views drifted from the rows");
+        assert_eq!(
+            mismatches,
+            Vec::new(),
+            "catalog views drifted from the rows"
+        );
     }
 
     #[test]
@@ -902,11 +920,9 @@ mod tests {
         views.wire.push("NoSuchVariant");
         let mismatches = audit(BROKER_OPERATION_CATALOG, &views);
         assert!(
-            mismatches
-                .iter()
-                .any(|mismatch| mismatch.view == "wire"
-                    && mismatch.detail.contains("NoSuchVariant")
-                    && mismatch.detail.contains("no committed row")),
+            mismatches.iter().any(|mismatch| mismatch.view == "wire"
+                && mismatch.detail.contains("NoSuchVariant")
+                && mismatch.detail.contains("no committed row")),
             "a wire variant with no committed row must fail: {mismatches:?}"
         );
 
@@ -917,11 +933,9 @@ mod tests {
             .collect();
         let mismatches = audit(&rows, &live_views());
         assert!(
-            mismatches
-                .iter()
-                .any(|mismatch| mismatch.view == "wire"
-                    && mismatch.detail.contains("Hello")
-                    && mismatch.detail.contains("no committed row")),
+            mismatches.iter().any(|mismatch| mismatch.view == "wire"
+                && mismatch.detail.contains("Hello")
+                && mismatch.detail.contains("no committed row")),
             "a wire variant with no committed row must fail: {mismatches:?}"
         );
     }
@@ -961,7 +975,9 @@ mod tests {
         assert!(
             mismatches.iter().any(|mismatch| mismatch.view == "wire"
                 && mismatch.detail.contains("NoSuchVariant")
-                && mismatch.detail.contains("the wire enum does not declare it")),
+                && mismatch
+                    .detail
+                    .contains("the wire enum does not declare it")),
             "a row inheriting an undeclared variant must fail: {mismatches:?}"
         );
     }

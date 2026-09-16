@@ -294,12 +294,9 @@ pub fn resource_backed_identity(
     if device_ref.resource_type().as_str() != "Device" {
         return None;
     }
-    let (_zone, bundle_bytes) =
-        crate::ops::device_worker::zone_bundle_for_uid(resolver, zone_uid)?;
-    let guest = crate::ops::device_worker::device_guest_owner(
-        bundle_bytes,
-        device_ref.name().as_str(),
-    )?;
+    let (_zone, bundle_bytes) = crate::ops::device_worker::zone_bundle_for_uid(resolver, zone_uid)?;
+    let guest =
+        crate::ops::device_worker::device_guest_owner(bundle_bytes, device_ref.name().as_str())?;
     let state_root = storage_root(resolver, &format!("path:swtpm-state:{guest}"))?;
     // The Provider's opaque `sourcePolicyId: "tpm-state"` resolves through the
     // storage contract's `path:tpm-state` row. If the two rows disagree, the
@@ -314,7 +311,6 @@ pub fn resource_backed_identity(
         state_volume: device_uid.map(state_volume_name),
     })
 }
-
 
 /// The trusted TPM state row of one zone-native Guest, when the verified
 /// storage contract carries that Guest's `path:swtpm-state:<guest>` row: the
@@ -506,9 +502,11 @@ fn flag_value<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
 
 /// One `key=value` field of a comma-separated swtpm option value.
 fn key_value<'a>(value: &'a str, key: &str) -> Option<&'a str> {
-    value
-        .split(',')
-        .find_map(|field| field.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')))
+    value.split(',').find_map(|field| {
+        field
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('='))
+    })
 }
 
 /// Derive + validate the path set from a resolved spawn plan. Refuses
@@ -1596,9 +1594,7 @@ mod tests {
         ResourceBackedSwtpm {
             guest: "acceptance-guest".to_owned(),
             state_root: PathBuf::from("/var/lib/d2b/tpm-state"),
-            state_volume: Some(
-                "device-6f9619ff8b864d01b42d00cf4fc964ff-tpm-state".to_owned(),
-            ),
+            state_volume: Some("device-6f9619ff8b864d01b42d00cf4fc964ff-tpm-state".to_owned()),
         }
     }
 
@@ -1608,10 +1604,7 @@ mod tests {
             .join(identity.state_volume.as_deref().expect("volume name"))
     }
 
-    fn resource_backed_plan(
-        argv: Vec<String>,
-        writable_paths: Vec<PathBuf>,
-    ) -> SpawnRunnerPlan {
+    fn resource_backed_plan(argv: Vec<String>, writable_paths: Vec<PathBuf>) -> SpawnRunnerPlan {
         use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, WritablePath};
         SpawnRunnerPlan {
             binary_path: PathBuf::from("/run/current-system/sw/bin/swtpm"),
@@ -1647,7 +1640,10 @@ mod tests {
             cgroup_placement: CgroupPlacement {
                 // What `private_cgroup_placement` writes for a typed launch:
                 // `d2b.slice/process-<64hex>/<role>`.
-                subtree: format!("d2b.slice/{}/swtpm", "process-".to_owned() + &"a".repeat(64)),
+                subtree: format!(
+                    "d2b.slice/{}/swtpm",
+                    "process-".to_owned() + &"a".repeat(64)
+                ),
                 controllers: vec![],
                 delegated: true,
             },
@@ -1702,7 +1698,10 @@ mod tests {
         let paths = derive_resource_backed_paths(&plan, &identity).expect("trusted launch");
         assert_eq!(paths.vm_id, "acceptance-guest");
         assert_eq!(paths.swtpm_dir, identity.state_root);
-        assert_eq!(paths.runtime_dir, PathBuf::from("/run/d2b/vms/acceptance-guest"));
+        assert_eq!(
+            paths.runtime_dir,
+            PathBuf::from("/run/d2b/vms/acceptance-guest")
+        );
         assert_eq!(paths.marker_name, "acceptance-guest");
     }
 
@@ -1754,10 +1753,7 @@ mod tests {
         let identity = resource_backed_identity();
         let state_dir = resource_backed_state_dir(&identity);
         let argv = resource_backed_worker_argv(&identity, &state_dir);
-        let plan = resource_backed_plan(
-            argv,
-            vec![PathBuf::from("/var/lib/d2b/vms/other/swtpm")],
-        );
+        let plan = resource_backed_plan(argv, vec![PathBuf::from("/var/lib/d2b/vms/other/swtpm")]);
         assert_eq!(
             derive_resource_backed_paths(&plan, &identity),
             Err(reasons::IDENTITY_MISMATCH)

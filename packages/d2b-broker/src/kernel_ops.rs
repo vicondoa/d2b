@@ -112,12 +112,8 @@ pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
         .with(PREPARE_DIRECTORY, {
             move |invocation| prepare_directory(invocation)
         })
-        .with(KILL_CGROUP, {
-            move |invocation| kill_cgroup(invocation)
-        })
-        .with(SIGNAL_PIDFD, {
-            move |invocation| signal_pidfd(invocation)
-        })
+        .with(KILL_CGROUP, { move |invocation| kill_cgroup(invocation) })
+        .with(SIGNAL_PIDFD, { move |invocation| signal_pidfd(invocation) })
         .with(DEREGISTER_PIDFD, {
             move |invocation| deregister_pidfd(invocation)
         })
@@ -138,9 +134,7 @@ pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
         .with(TAKE_CONTROLLER_BOOTSTRAP, {
             move |invocation| take_controller_bootstrap(invocation)
         })
-        .with(CONSUME_CELL, {
-            move |invocation| consume_cell(invocation)
-        })
+        .with(CONSUME_CELL, { move |invocation| consume_cell(invocation) })
         .with(COMPLETE_CELL, {
             move |invocation| complete_cell(invocation)
         })
@@ -158,9 +152,7 @@ pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
             let config = Arc::clone(&config);
             move |invocation| apply_route(&config, invocation)
         })
-        .with(APPLY_SYSCTL, {
-            move |invocation| apply_sysctl(invocation)
-        })
+        .with(APPLY_SYSCTL, { move |invocation| apply_sysctl(invocation) })
         .with(CREATE_BRIDGE, {
             move |invocation| create_bridge(invocation)
         })
@@ -244,9 +236,7 @@ fn signal_pidfd(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, Di
 /// record (the pidfd cell remove path). The record is keyed by the
 /// invocation id the spawn-process kernel registered under, so the
 /// resource-agnostic kernel never learns a runner id.
-fn deregister_pidfd(
-    invocation: &DirectInvocation<'_>,
-) -> Result<DispatchOutcome, DispatchFailure> {
+fn deregister_pidfd(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let removed = crate::runtime::runner_pidfds().remove(invocation.ctx.invocation_id);
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({ "removed": removed }))?,
@@ -263,7 +253,9 @@ fn deregister_pidfd(
 fn poll_child_reaped(
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
-    use d2b_contracts_broker::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+    use d2b_contracts_broker::broker_wire::{
+        ChildExitKind, ChildExitStatus, ChildReapedNotification,
+    };
     use nix::errno::Errno;
     use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
 
@@ -376,8 +368,12 @@ fn kill_cgroup(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, Dis
         ));
     }
     let backend = d2b_host::cgroup::RealCgroupBackend::new();
-    d2b_host::cgroup::cgroup_kill_leaf_only(&backend, &cgroup_path, std::slice::from_ref(&cgroup_path))
-        .map_err(|error| errored(format!("kill-cgroup: {}", error.code())))?;
+    d2b_host::cgroup::cgroup_kill_leaf_only(
+        &backend,
+        &cgroup_path,
+        std::slice::from_ref(&cgroup_path),
+    )
+    .map_err(|error| errored(format!("kill-cgroup: {}", error.code())))?;
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({}))?,
         fds: Vec::new(),
@@ -392,7 +388,9 @@ fn delegate_cgroup_v2(
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
     let path = PathBuf::from(field_str(invocation.payload, "path")?);
-    if !path.starts_with(Path::new(crate::ops::cgroup::DEFAULT_DELEGATED_PARENT_SLICE)) {
+    if !path.starts_with(Path::new(
+        crate::ops::cgroup::DEFAULT_DELEGATED_PARENT_SLICE,
+    )) {
         return Err(refused(
             "path: outside the delegated d2b.slice subtree".to_owned(),
         ));
@@ -418,7 +416,9 @@ fn delegate_cgroup_v2(
 /// `OpenCgroupDir` arm.
 fn open_cgroup_dir(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let path = PathBuf::from(field_str(invocation.payload, "path")?);
-    if !path.starts_with(Path::new(crate::ops::cgroup::DEFAULT_DELEGATED_PARENT_SLICE)) {
+    if !path.starts_with(Path::new(
+        crate::ops::cgroup::DEFAULT_DELEGATED_PARENT_SLICE,
+    )) {
         return Err(refused(
             "path: outside the delegated d2b.slice subtree".to_owned(),
         ));
@@ -435,9 +435,7 @@ fn open_cgroup_dir(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome,
 /// start time, executable) plus the registry-cell check that the
 /// invocation's registered pidfd names the observed pid. Expectation
 /// comparison stays on the family side.
-fn observe_process(
-    invocation: &DirectInvocation<'_>,
-) -> Result<DispatchOutcome, DispatchFailure> {
+fn observe_process(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let pid = field_i64(invocation.payload, "pid")? as i32;
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
     let (present, state, start_time_ticks) = match &stat {
@@ -457,8 +455,8 @@ fn observe_process(
     let executable = std::fs::read_link(format!("/proc/{pid}/exe"))
         .ok()
         .map(|path| path.display().to_string());
-    let registered_binary = optional_parse_identity_fields(invocation.payload)
-        .and_then(|identity| {
+    let registered_binary =
+        optional_parse_identity_fields(invocation.payload).and_then(|identity| {
             crate::runtime::runner_metadata_registry()
                 .lock()
                 .ok()
@@ -548,9 +546,7 @@ struct ObserveIdentityFields {
     runtime_scope: Option<[u8; 32]>,
 }
 
-fn optional_parse_identity_fields(
-    payload: &CanonicalJsonObject,
-) -> Option<ObserveIdentityFields> {
+fn optional_parse_identity_fields(payload: &CanonicalJsonObject) -> Option<ObserveIdentityFields> {
     let vm_id = field_str(payload, "vmId").ok()?.to_owned();
     let role_id = field_str(payload, "roleId").ok()?.to_owned();
     let resource_ref = match optional_field_str(payload, "resourceRef")? {
@@ -618,12 +614,12 @@ fn optional_field_bytes32(payload: &CanonicalJsonObject, key: &str) -> Option<Op
 /// the commit and the completion leaves an `unknown` record the retried
 /// invocation reconciles under its id; a completed record refuses
 /// re-consume across broker restarts (AE2).
-fn consume_cell(
-    invocation: &DirectInvocation<'_>,
-) -> Result<DispatchOutcome, DispatchFailure> {
+fn consume_cell(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let row = crate::catalog::BrokerOperationRow::find(CONSUME_CELL)
         .expect("consume-cell is a committed row");
-    let cell = row.state_cell.expect("consume-cell declares its state cell");
+    let cell = row
+        .state_cell
+        .expect("consume-cell declares its state cell");
     let durability = row
         .cell_durability
         .expect("consume-cell declares its cell durability");
@@ -642,9 +638,7 @@ fn consume_cell(
         crate::state_cells::ConsumeDecision::Replayed => Err(refused("cell-replayed")),
         // Replay under a different principal refuses: the invocation id
         // alone never gates a one-time grant (KTD3).
-        crate::state_cells::ConsumeDecision::ForeignPrincipal => {
-            Err(refused("cell-caller-denied"))
-        }
+        crate::state_cells::ConsumeDecision::ForeignPrincipal => Err(refused("cell-caller-denied")),
     }
 }
 
@@ -652,12 +646,12 @@ fn consume_cell(
 /// state cell under the same canonical identity and initiating principal
 /// the consume leg used. The durable completed marker is what refuses a
 /// replayed consume across broker restarts (AE2).
-fn complete_cell(
-    invocation: &DirectInvocation<'_>,
-) -> Result<DispatchOutcome, DispatchFailure> {
+fn complete_cell(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let row = crate::catalog::BrokerOperationRow::find(COMPLETE_CELL)
         .expect("complete-cell is a committed row");
-    let cell = row.state_cell.expect("complete-cell declares its state cell");
+    let cell = row
+        .state_cell
+        .expect("complete-cell declares its state cell");
     let identity = cell_identity(invocation.payload)?;
     let principal = initiating_principal(invocation);
     crate::state_cells::broker_store()
@@ -702,8 +696,7 @@ fn spawn_process(
 ) -> Result<DispatchOutcome, DispatchFailure> {
     let mut plan_input = parse_plan(invocation.payload)?;
     let role = parse_role(invocation.payload)?;
-    let serving_worker = optional_field_bool(invocation.payload, "servingWorker")?
-        .unwrap_or(false);
+    let serving_worker = optional_field_bool(invocation.payload, "servingWorker")?.unwrap_or(false);
     let identity = parse_runner_identity(invocation.payload)?;
     let activation_input: Option<d2b_contracts_resource::v3::ActivationRunnerInput> =
         optional_parse_field(invocation.payload, "activationInput")?;
@@ -755,7 +748,9 @@ fn spawn_process(
         let resolver = match crate::runtime::load_kernel_resolver(&config.bundle_path) {
             crate::runtime::BundleSlot::Loaded(resolver) => resolver,
             crate::runtime::BundleSlot::Unavailable => {
-                return Err(refused("spawn-process: usbip backend bundle resolver unavailable"));
+                return Err(refused(
+                    "spawn-process: usbip backend bundle resolver unavailable",
+                ));
             }
             crate::runtime::BundleSlot::Tampered { .. } => {
                 return Err(refused("spawn-process: usbip backend bundle tampered"));
@@ -917,7 +912,9 @@ fn spawn_process(
     if let Some(bootstrap) = retained_controller_bootstrap {
         crate::runtime::controller_bootstrap_registry()
             .lock()
-            .map_err(|_| errored("spawn-process: controller bootstrap registry mutex poisoned".to_owned()))?
+            .map_err(|_| {
+                errored("spawn-process: controller bootstrap registry mutex poisoned".to_owned())
+            })?
             .insert(runner_id.clone(), bootstrap);
     }
     let mut result = serde_json::json!({
@@ -1001,9 +998,7 @@ fn apply_nftables(
     let expected_hash = if destroy {
         None
     } else {
-        desired_hash
-            .or(persisted_hash)
-            .or(table_hash_after_apply)
+        desired_hash.or(persisted_hash).or(table_hash_after_apply)
     };
     crate::ops::nft::apply_with_coexistence(
         &exec,
@@ -1014,9 +1009,9 @@ fn apply_nftables(
         expected_hash.as_deref(),
     )
     .map_err(|error| match error {
-        ApplyWithCoexistenceError::CoexistenceRefused { manager, rationale } => refused(
-            format!("coexistence-refused: {manager:?}: {rationale}"),
-        ),
+        ApplyWithCoexistenceError::CoexistenceRefused { manager, rationale } => {
+            refused(format!("coexistence-refused: {manager:?}: {rationale}"))
+        }
         ApplyWithCoexistenceError::ParseFailed(error) => {
             errored(format!("nft-script-parse-failed: {error}"))
         }
@@ -1079,9 +1074,7 @@ fn apply_nftables_projection(
         action,
     )
     .map(|result| result.projection_digest)
-    .map_err(|error| {
-        errored(format!("apply-nftables-projection: {}", error.code()))
-    })?;
+    .map_err(|error| errored(format!("apply-nftables-projection: {}", error.code())))?;
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({ "projectionDigest": projection_digest }))?,
         fds: Vec::new(),
@@ -1188,11 +1181,9 @@ fn apply_sysctl(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, Di
 /// `CreateBridge` arm ran it.
 fn create_bridge(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let intent = parse_resolved_bridge_intent(invocation)?;
-    let bridge_intent_digest = crate::ops::network::create_bridge(
-        &crate::ops::network::SystemBridgeBackend,
-        &intent,
-    )
-    .map_err(|error| errored(format!("create-bridge: {}", error.code())))?;
+    let bridge_intent_digest =
+        crate::ops::network::create_bridge(&crate::ops::network::SystemBridgeBackend, &intent)
+            .map_err(|error| errored(format!("create-bridge: {}", error.code())))?;
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({ "bridgeIntentDigest": bridge_intent_digest }))?,
         fds: Vec::new(),
@@ -1203,11 +1194,9 @@ fn create_bridge(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, D
 /// TAP removals, exactly as the retired `DeleteBridge` arm ran it.
 fn delete_bridge(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let intent = parse_resolved_bridge_intent(invocation)?;
-    let bridge_intent_digest = crate::ops::network::delete_bridge(
-        &crate::ops::network::SystemBridgeBackend,
-        &intent,
-    )
-    .map_err(|error| errored(format!("delete-bridge: {}", error.code())))?;
+    let bridge_intent_digest =
+        crate::ops::network::delete_bridge(&crate::ops::network::SystemBridgeBackend, &intent)
+            .map_err(|error| errored(format!("delete-bridge: {}", error.code())))?;
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({ "bridgeIntentDigest": bridge_intent_digest }))?,
         fds: Vec::new(),
@@ -1222,9 +1211,10 @@ fn parse_resolved_bridge_intent(
     Ok(d2b_core::bundle_resolver::ResolvedBridgeIntent {
         intent_id: field_str(invocation.payload, "intentId")?.to_owned(),
         scope_label: field_str(invocation.payload, "scopeLabel")?.to_owned(),
-        bridge_ifname: d2b_contracts_resource::v3::IfName::parse(
-            field_str(invocation.payload, "bridgeIfname")?,
-        )
+        bridge_ifname: d2b_contracts_resource::v3::IfName::parse(field_str(
+            invocation.payload,
+            "bridgeIfname",
+        )?)
         .map_err(|error| refused(format!("bridgeIfname: {error}")))?,
         mtu: field_i64(invocation.payload, "mtu")? as u16,
         stp_disabled: optional_field_bool(invocation.payload, "stpDisabled")?.unwrap_or(false),
@@ -1233,7 +1223,8 @@ fn parse_resolved_bridge_intent(
             "multicastSnoopingDisabled",
         )?
         .unwrap_or(false),
-        ipv6_suppressed: optional_field_bool(invocation.payload, "ipv6Suppressed")?.unwrap_or(false),
+        ipv6_suppressed: optional_field_bool(invocation.payload, "ipv6Suppressed")?
+            .unwrap_or(false),
         provenance: optional_parse_field(invocation.payload, "provenance")?,
         ownership_marker: optional_str(invocation.payload, "ownershipMarker")?,
     })
@@ -1250,10 +1241,8 @@ fn create_persistent_tap(
     let req: d2b_contracts_broker::broker_wire::CreatePersistentTapRequest =
         typed_payload(invocation, "create-persistent-tap")?;
     let resolver = kernel_resolver(config, "create-persistent-tap")?;
-    let exec = crate::ops::exec_reconcile::SystemLiveExec::new(
-        config.daemon_uid,
-        config.daemon_gid,
-    );
+    let exec =
+        crate::ops::exec_reconcile::SystemLiveExec::new(config.daemon_uid, config.daemon_gid);
     let outcome = crate::ops::tap::live_create_persistent_tap(&exec, &resolver, &req, None)
         .map_err(|error| errored(format!("create-persistent-tap: {error}")))?;
     crate::ops::network::persist_persistent_tap_realization(
@@ -1302,13 +1291,12 @@ fn delete_persistent_tap(
         .installed_generation_identity()
         .ok_or_else(|| refused("delete-persistent-tap: installed-generation-unavailable"))?;
     if installed.as_str() != req.expected_bundle_generation.as_str() {
-        return Err(refused("delete-persistent-tap: stale-projection-generation"));
+        return Err(refused(
+            "delete-persistent-tap: stale-projection-generation",
+        ));
     }
-    let realization = crate::ops::network::load_persistent_tap_realization(
-        &config.state_dir,
-        &req,
-    )
-    .map_err(|error| errored(format!("delete-persistent-tap: {}", error.code())))?;
+    let realization = crate::ops::network::load_persistent_tap_realization(&config.state_dir, &req)
+        .map_err(|error| errored(format!("delete-persistent-tap: {}", error.code())))?;
     let attachment_digest = crate::ops::network::delete_persistent_tap(
         &crate::ops::network::SystemPersistentTapBackend,
         &realization,
@@ -1336,10 +1324,8 @@ fn create_tap_fd(
     let req: d2b_contracts_broker::broker_wire::CreateTapFdRequest =
         typed_payload(invocation, "create-tap-fd")?;
     let resolver = kernel_resolver(config, "create-tap-fd")?;
-    let exec = crate::ops::exec_reconcile::SystemLiveExec::new(
-        config.daemon_uid,
-        config.daemon_gid,
-    );
+    let exec =
+        crate::ops::exec_reconcile::SystemLiveExec::new(config.daemon_uid, config.daemon_gid);
     let outcome = crate::ops::tap::live_create_tap_fd(&exec, &resolver, &req, None)
         .map_err(|error| errored(format!("create-tap-fd: {error}")))?;
     let fd = outcome
@@ -1446,10 +1432,7 @@ fn seed_dnsmasq_lease(
             return Err(refused("seed-dnsmasq-lease: network-admission-mismatch"));
         }
     }
-    let expected_vm = d2b_contracts_resource::v3::derive_network_child_name(
-        &network_uid,
-        "vm",
-    );
+    let expected_vm = d2b_contracts_resource::v3::derive_network_child_name(&network_uid, "vm");
     if vm_id != expected_vm.as_str() {
         return Err(refused("seed-dnsmasq-lease: network-admission-mismatch"));
     }
@@ -1506,10 +1489,7 @@ fn field_i64(payload: &CanonicalJsonObject, key: &str) -> Result<i64, DispatchFa
     }
 }
 
-fn field_str<'a>(
-    payload: &'a CanonicalJsonObject,
-    key: &str,
-) -> Result<&'a str, DispatchFailure> {
+fn field_str<'a>(payload: &'a CanonicalJsonObject, key: &str) -> Result<&'a str, DispatchFailure> {
     match field(payload, key)? {
         CanonicalJsonValue::String(value) => Ok(value.as_str()),
         _ => Err(refused(format!("{key}: expected a string"))),
@@ -1529,7 +1509,10 @@ fn optional_field_bool(
     }
 }
 
-fn field_str_array(payload: &CanonicalJsonObject, key: &str) -> Result<Vec<String>, DispatchFailure> {
+fn field_str_array(
+    payload: &CanonicalJsonObject,
+    key: &str,
+) -> Result<Vec<String>, DispatchFailure> {
     match field(payload, key)? {
         CanonicalJsonValue::Array(values) => values
             .iter()
@@ -1604,9 +1587,7 @@ fn optional_parse_field<T: serde::de::DeserializeOwned>(
 
 /// The optional seccomp policy reference: a plain string or a `{"ref":
 /// string}` object, absent meaning no policy.
-fn optional_seccomp_ref(
-    payload: &CanonicalJsonObject,
-) -> Result<Option<String>, DispatchFailure> {
+fn optional_seccomp_ref(payload: &CanonicalJsonObject) -> Result<Option<String>, DispatchFailure> {
     let Some(value) = payload.get("seccompPolicyRef") else {
         return Ok(None);
     };
@@ -1616,7 +1597,9 @@ fn optional_seccomp_ref(
             Some(CanonicalJsonValue::String(value)) => Ok(Some(value.clone())),
             _ => Err(refused("seccompPolicyRef: expected {ref: string}")),
         },
-        _ => Err(refused("seccompPolicyRef: expected a string or {ref: string}")),
+        _ => Err(refused(
+            "seccompPolicyRef: expected a string or {ref: string}",
+        )),
     }
 }
 
@@ -1697,7 +1680,11 @@ fn optional_parse_swtpm_identity(
     let state_volume = match fields.get("stateVolume") {
         Some(CanonicalJsonValue::String(volume)) => Some(volume.clone()),
         Some(CanonicalJsonValue::Null) | None => None,
-        _ => return Err(refused("swtpmIdentity.stateVolume: expected a string or null")),
+        _ => {
+            return Err(refused(
+                "swtpmIdentity.stateVolume: expected a string or null",
+            ));
+        }
     };
     Ok(Some(crate::ops::swtpm_dir::ResourceBackedSwtpm {
         guest,
@@ -1730,15 +1717,17 @@ fn parse_device_worker(
             };
             let device_ref = match scope.get("deviceRef") {
                 Some(CanonicalJsonValue::String(reference)) => {
-                    d2b_contracts::identity::ResourceRef::parse(reference)
-                        .map_err(|error| refused(format!("deviceWorker.scope.deviceRef: {error}")))?
+                    d2b_contracts::identity::ResourceRef::parse(reference).map_err(|error| {
+                        refused(format!("deviceWorker.scope.deviceRef: {error}"))
+                    })?
                 }
                 _ => return Err(refused("deviceWorker.scope.deviceRef: expected a string")),
             };
             let device_uid = match scope.get("deviceUid") {
                 Some(CanonicalJsonValue::String(uid)) => {
-                    d2b_contracts::identity::ResourceUid::parse(uid.clone())
-                        .map_err(|error| refused(format!("deviceWorker.scope.deviceUid: {error}")))?
+                    d2b_contracts::identity::ResourceUid::parse(uid.clone()).map_err(|error| {
+                        refused(format!("deviceWorker.scope.deviceUid: {error}"))
+                    })?
                 }
                 _ => return Err(refused("deviceWorker.scope.deviceUid: expected a string")),
             };
@@ -1758,7 +1747,11 @@ fn parse_device_worker(
     let binds_runtime_socket = match fields.get("bindsRuntimeSocket") {
         Some(CanonicalJsonValue::Bool(binds)) => *binds,
         None => false,
-        _ => return Err(refused("deviceWorker.bindsRuntimeSocket: expected a boolean")),
+        _ => {
+            return Err(refused(
+                "deviceWorker.bindsRuntimeSocket: expected a boolean",
+            ));
+        }
     };
     Ok(crate::ops::device_worker::DeviceWorkerLaunch {
         scope,
@@ -1794,7 +1787,9 @@ fn parse_plan(payload: &CanonicalJsonObject) -> Result<SpawnRunnerPlanInput, Dis
 
 /// The runner role one spawn-process payload carries, in the wire
 /// vocabulary's kebab-case spelling.
-fn parse_role(payload: &CanonicalJsonObject) -> Result<d2b_contracts_broker::broker_wire::RunnerRole, DispatchFailure> {
+fn parse_role(
+    payload: &CanonicalJsonObject,
+) -> Result<d2b_contracts_broker::broker_wire::RunnerRole, DispatchFailure> {
     parse_field(payload, "role")
 }
 
@@ -1853,7 +1848,9 @@ fn optional_u64_field(
     match value {
         CanonicalJsonValue::Integer(value) if *value >= 0 => Ok(Some(*value as u64)),
         CanonicalJsonValue::Null => Ok(None),
-        _ => Err(refused(format!("{key}: expected a non-negative integer or null"))),
+        _ => Err(refused(format!(
+            "{key}: expected a non-negative integer or null"
+        ))),
     }
 }
 
@@ -1870,7 +1867,9 @@ fn optional_byte_array(
         return Ok(None);
     }
     let CanonicalJsonValue::Array(values) = value else {
-        return Err(refused(format!("{key}: expected an array of 32 integers or null")));
+        return Err(refused(format!(
+            "{key}: expected an array of 32 integers or null"
+        )));
     };
     if values.len() != 32 {
         return Err(refused(format!("{key}: expected 32 integers")));
@@ -1893,9 +1892,8 @@ fn optional_resource_ref(
 ) -> Result<Option<d2b_contracts_resource::v3::ResourceRef>, DispatchFailure> {
     optional_string_field(fields, key)?
         .map(|value| {
-            d2b_contracts::identity::ResourceRef::parse(value.as_str()).map_err(|error| {
-                refused(format!("{key}: {error}"))
-            })
+            d2b_contracts::identity::ResourceRef::parse(value.as_str())
+                .map_err(|error| refused(format!("{key}: {error}")))
         })
         .transpose()
 }
@@ -1906,9 +1904,8 @@ fn optional_resource_uid(
 ) -> Result<Option<d2b_contracts_resource::v3::ResourceUid>, DispatchFailure> {
     optional_string_field(fields, key)?
         .map(|value| {
-            d2b_contracts::identity::ResourceUid::parse(value).map_err(|error| {
-                refused(format!("{key}: {error}"))
-            })
+            d2b_contracts::identity::ResourceUid::parse(value)
+                .map_err(|error| refused(format!("{key}: {error}")))
         })
         .transpose()
 }
@@ -2006,7 +2003,8 @@ fn exit_kind_str(kind: &d2b_contracts_broker::broker_wire::ChildExitKind) -> &'s
 fn pidfd_pid(pidfd: std::os::fd::BorrowedFd<'_>) -> Option<i32> {
     let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd())).ok()?;
     info.lines().find_map(|line| {
-        line.strip_prefix("Pid:").and_then(|value| value.trim().parse::<i32>().ok())
+        line.strip_prefix("Pid:")
+            .and_then(|value| value.trim().parse::<i32>().ok())
     })
 }
 
@@ -2022,11 +2020,13 @@ fn parse_proc_state(stat: &str) -> Option<String> {
 
 /// The reap notification recorded under one invocation id, drained from
 /// the broker's reap cell.
-fn drain_notification(invocation_id: &str) -> Option<d2b_contracts_broker::broker_wire::ChildReapedNotification> {
-    let mut buffer = crate::runtime::child_reap_buffer()
-        .lock()
-        .ok()?;
-    let index = buffer.iter().position(|notification| notification.runner_id == invocation_id)?;
+fn drain_notification(
+    invocation_id: &str,
+) -> Option<d2b_contracts_broker::broker_wire::ChildReapedNotification> {
+    let mut buffer = crate::runtime::child_reap_buffer().lock().ok()?;
+    let index = buffer
+        .iter()
+        .position(|notification| notification.runner_id == invocation_id)?;
     buffer.remove(index)
 }
 
@@ -2082,13 +2082,15 @@ mod tests {
     use d2b_contracts_resource::v3::CanonicalJsonValue;
 
     fn object(entries: &[(&str, CanonicalJsonValue)]) -> CanonicalJsonObject {
-        let body = serde_json::to_string(
-            &std::collections::BTreeMap::from_iter(
-                entries
-                    .iter()
-                    .map(|(key, value)| ((*key).to_owned(), serde_json::to_value(value).expect("value")))
-            )
-        ).expect("object serializes");
+        let body = serde_json::to_string(&std::collections::BTreeMap::from_iter(
+            entries.iter().map(|(key, value)| {
+                (
+                    (*key).to_owned(),
+                    serde_json::to_value(value).expect("value"),
+                )
+            }),
+        ))
+        .expect("object serializes");
         CanonicalJsonObject::parse(body.as_bytes()).expect("canonical object parses")
     }
 
@@ -2104,12 +2106,24 @@ mod tests {
     fn parse_plan_reads_every_committed_field() {
         let payload = object(&[
             ("binaryPath", string("/nix/store/x/bin/runner")),
-            ("argv", CanonicalJsonValue::Array(vec![string("/nix/store/x/bin/runner"), string("--flag")])),
+            (
+                "argv",
+                CanonicalJsonValue::Array(vec![
+                    string("/nix/store/x/bin/runner"),
+                    string("--flag"),
+                ]),
+            ),
             ("uid", integer(1000)),
             ("gid", integer(1000)),
-            ("supplementaryGroups", CanonicalJsonValue::Array(vec![integer(100), integer(200)])),
+            (
+                "supplementaryGroups",
+                CanonicalJsonValue::Array(vec![integer(100), integer(200)]),
+            ),
             ("env", CanonicalJsonValue::Array(vec![string("A=B")])),
-            ("capabilities", CanonicalJsonValue::Array(vec![string("CAP_NET_ADMIN")])),
+            (
+                "capabilities",
+                CanonicalJsonValue::Array(vec![string("CAP_NET_ADMIN")]),
+            ),
             (
                 "namespaces",
                 CanonicalJsonValue::Object(
@@ -2146,7 +2160,10 @@ mod tests {
                 CanonicalJsonValue::Object(
                     [
                         ("subtree", string("d2b.slice/zone-a/guest-1/role")),
-                        ("controllers", CanonicalJsonValue::Array(vec![string("cpu")])),
+                        (
+                            "controllers",
+                            CanonicalJsonValue::Array(vec![string("cpu")]),
+                        ),
                         ("delegated", CanonicalJsonValue::Bool(true)),
                     ]
                     .into_iter()
@@ -2181,7 +2198,10 @@ mod tests {
         assert!(plan.namespaces.mount && plan.namespaces.pid && !plan.namespaces.user);
         assert_eq!(plan.seccomp_policy_ref.as_deref(), Some("w1-wayland-proxy"));
         assert!(plan.mount_policy.nix_store_read_only);
-        assert_eq!(plan.cgroup_placement.subtree, "d2b.slice/zone-a/guest-1/role");
+        assert_eq!(
+            plan.cgroup_placement.subtree,
+            "d2b.slice/zone-a/guest-1/role"
+        );
         assert!(plan.root_carve_out);
         assert!(!plan.skip_binary_exists_check);
         assert_eq!(
@@ -2269,7 +2289,10 @@ mod tests {
                         ("vmId", string("vm-a")),
                         ("roleId", string("ch-runner")),
                         ("resourceRef", string("Process/vol-abcd")),
-                        ("resourceUid", string("00000000-0000-4000-8000-000000000001")),
+                        (
+                            "resourceUid",
+                            string("00000000-0000-4000-8000-000000000001"),
+                        ),
                         ("zoneUid", string("00000000-0000-4000-8000-000000000002")),
                         ("generation", integer(7)),
                         (
@@ -2329,7 +2352,10 @@ mod tests {
         assert_eq!(identity.vm_id, "vm-a");
         assert_eq!(identity.role_id, "ch-runner");
         assert_eq!(
-            identity.resource_ref.as_ref().map(|reference| reference.to_canonical_string()),
+            identity
+                .resource_ref
+                .as_ref()
+                .map(|reference| reference.to_canonical_string()),
             Some("Process/vol-abcd".to_owned())
         );
         assert_eq!(
@@ -2346,11 +2372,17 @@ mod tests {
             Some(std::array::from_fn(|index| index as u8))
         );
         assert_eq!(
-            identity.owner_ref.as_ref().map(|reference| reference.to_canonical_string()),
+            identity
+                .owner_ref
+                .as_ref()
+                .map(|reference| reference.to_canonical_string()),
             Some("Volume/vol-abcd".to_owned())
         );
         assert_eq!(
-            identity.provider_ref.as_ref().map(|reference| reference.to_canonical_string()),
+            identity
+                .provider_ref
+                .as_ref()
+                .map(|reference| reference.to_canonical_string()),
             Some("Provider/volume-virtiofs".to_owned())
         );
         assert_eq!(
@@ -2398,7 +2430,10 @@ mod tests {
                         ("providerRef", CanonicalJsonValue::Null),
                         ("providerIdentity", CanonicalJsonValue::Null),
                         ("templateIdentity", CanonicalJsonValue::Null),
-                        ("bundleRunnerIntentRef", string("runner:sys-work-usbipd:backend")),
+                        (
+                            "bundleRunnerIntentRef",
+                            string("runner:sys-work-usbipd:backend"),
+                        ),
                         ("guestExecution", CanonicalJsonValue::Null),
                     ]
                     .into_iter()
@@ -2453,7 +2488,9 @@ mod tests {
         assert!(!strictly_inside_delegated_slice(Path::new(
             "/sys/fs/cgroup/d2b.slice"
         )));
-        assert!(!strictly_inside_delegated_slice(Path::new("/sys/fs/cgroup/other.slice")));
+        assert!(!strictly_inside_delegated_slice(Path::new(
+            "/sys/fs/cgroup/other.slice"
+        )));
         assert!(!strictly_inside_delegated_slice(Path::new("/etc/passwd")));
         assert!(strictly_inside_delegated_slice(Path::new(
             "/sys/fs/cgroup/d2b.slice/zone-a/guest-1/role"

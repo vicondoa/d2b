@@ -182,7 +182,10 @@ fn guest_binary_refuses_an_old_runner_frame_at_the_wire_gate() {
             .expect("receive the gate reply")
             .expect("the guest broker wrote a reply");
         let BrokerResponse::Error(error) = response else {
-            panic!("guest broker must refuse {} at the wire gate", retired.variant);
+            panic!(
+                "guest broker must refuse {} at the wire gate",
+                retired.variant
+            );
         };
         assert_eq!(error.kind, d2b_broker::envelope::STALE_WIRE_VERSION);
         assert_eq!(error.operation, retired.variant);

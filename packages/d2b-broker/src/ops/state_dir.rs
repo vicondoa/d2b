@@ -308,9 +308,10 @@ fn fixture_content_hash(resources: &[serde_json::Value]) -> String {
         CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest,
     };
     let array = serde_json::Value::Array(resources.to_vec());
-    let canonical =
-        CanonicalJsonValue::parse(&serde_json::to_vec(&array).expect("fixture resources serialize"))
-            .expect("fixture resources are canonical JSON");
+    let canonical = CanonicalJsonValue::parse(
+        &serde_json::to_vec(&array).expect("fixture resources serialize"),
+    )
+    .expect("fixture resources are canonical JSON");
     framed_canonical_digest(
         "d2b:v3:resource-bundle",
         &canonical_json_bytes(&canonical).expect("fixture resources encode"),
@@ -325,10 +326,9 @@ pub(crate) fn resolver_with_swtpm_state_row(guest: &str) -> BundleResolver {
     use d2b_core::manifest_v04::ManifestV04;
     use d2b_core::processes::ProcessesJson;
     use d2b_core::storage::{
-        ActorKind, ActorRef, CleanupPolicy, LeaseClass, PrincipalKind, PrincipalRef,
-        RepairPolicy, SensitivityClass, StorageAdoptionPolicy, StorageInvariant, StorageJson,
-        StorageLifecycle, StoragePathKind, StoragePathSpec, StoragePersistence,
-        StorageRestartPolicy,
+        ActorKind, ActorRef, CleanupPolicy, LeaseClass, PrincipalKind, PrincipalRef, RepairPolicy,
+        SensitivityClass, StorageAdoptionPolicy, StorageInvariant, StorageJson, StorageLifecycle,
+        StoragePathKind, StoragePathSpec, StoragePersistence, StorageRestartPolicy,
     };
 
     let principal = |kind, value: &str| PrincipalRef {
@@ -631,16 +631,12 @@ mod tests {
             &audit_log,
         )
         .expect("the zone-native TPM subject prepares as a no-op");
-        let device_uid = crate::ops::device_worker::deterministic_resource_uid(
-            "work",
-            "Device",
-            "tpm0",
-        );
+        let device_uid =
+            crate::ops::device_worker::deterministic_resource_uid("work", "Device", "tpm0");
         assert_eq!(
             prepared.base_dir,
-            PathBuf::from("/var/lib/d2b/tpm-state").join(crate::ops::swtpm_dir::state_volume_name(
-                &device_uid
-            ))
+            PathBuf::from("/var/lib/d2b/tpm-state")
+                .join(crate::ops::swtpm_dir::state_volume_name(&device_uid))
         );
         assert_ne!(
             prepared.base_dir,

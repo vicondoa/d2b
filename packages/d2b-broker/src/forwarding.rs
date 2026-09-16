@@ -28,8 +28,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use d2b_contracts_broker::broker_wire::{
-    FD_LEG, FdKind, MAX_FRAME_FDS, ForwardOperationOutcome, ForwardOperationRequest,
-    ForwardOperationResponse,
+    FD_LEG, FdKind, ForwardOperationOutcome, ForwardOperationRequest, ForwardOperationResponse,
+    MAX_FRAME_FDS,
 };
 use d2b_contracts_resource::v3::{CanonicalJsonObject, canonical_json_bytes};
 
@@ -85,7 +85,6 @@ pub struct ForwardedOperation<'a> {
     /// when it declares one;the envelope validated every attached descriptor
     /// against it before dispatch, so the forwarder can declare it back to
     /// the peer verbatim.
-
     pub fd_kind: Option<FdKind>,
     /// The broker-attested context block the envelope minted for this
     /// invocation, when the broker holds a context store. The forwarder
@@ -245,12 +244,9 @@ impl SocketForwarder {
             // invocation id plus these identities, records the leg as a
             // correlation record rather than a second root record, and
             // hands the chain to the declaring handler's context.
-            chain_identities: invocation.nested.then(|| {
-                invocation
-                    .chain
-                    .identities()
-                    .to_vec()
-            }),
+            chain_identities: invocation
+                .nested
+                .then(|| invocation.chain.identities().to_vec()),
             fd_indexes,
             fd_kinds,
         };
@@ -260,8 +256,17 @@ impl SocketForwarder {
             .await
             .map_err(|error| DispatchFailure::unregistered_handler(error.to_string()))?;
         match response.outcome {
-            ForwardOperationOutcome::Result { result, fd_indexes, fd_kinds } => {
-                if !Self::response_fds_admitted(&fd_indexes, &fd_kinds, &response_fds, invocation.fds) {
+            ForwardOperationOutcome::Result {
+                result,
+                fd_indexes,
+                fd_kinds,
+            } => {
+                if !Self::response_fds_admitted(
+                    &fd_indexes,
+                    &fd_kinds,
+                    &response_fds,
+                    invocation.fds,
+                ) {
                     // The peer declared a leg that did not arrive with it - or
                     // returned one of the caller's own descriptors - so the
                     // answer leg is invalid closed,count-validated rather than
@@ -277,7 +282,10 @@ impl SocketForwarder {
                             format!("decode forwarded result: {error}"),
                         )
                     })?;
-                Ok(DispatchOutcome { result, fds: response_fds })
+                Ok(DispatchOutcome {
+                    result,
+                    fds: response_fds,
+                })
             }
             ForwardOperationOutcome::Refused { code } => {
                 drop(response_fds);
@@ -297,7 +305,9 @@ impl SocketForwarder {
         received: &[OwnedFd],
         request_fds: &[OwnedFd],
     ) -> bool {
-        if received.len() != declared_indexes.len() || declared_indexes.len() != declared_kinds.len() {
+        if received.len() != declared_indexes.len()
+            || declared_indexes.len() != declared_kinds.len()
+        {
             return false;
         }
         if received.len() > MAX_FRAME_FDS {
@@ -310,21 +320,15 @@ impl SocketForwarder {
         {
             return false;
         }
-        if !declared_kinds
-            .iter()
-            .zip(received)
-            .all(|(declared, fd)| {
-                // An `Any` declaration admits every descriptor regardless
-                // of fstat kind (the mixed or anon-inode legs, U10).
-                *declared == FdKind::Any || Self::fd_kind_of(fd) == Some(*declared)
-            })
-        {
+        if !declared_kinds.iter().zip(received).all(|(declared, fd)| {
+            // An `Any` declaration admits every descriptor regardless
+            // of fstat kind (the mixed or anon-inode legs, U10).
+            *declared == FdKind::Any || Self::fd_kind_of(fd) == Some(*declared)
+        }) {
             return false;
         }
-        let ours: Vec<(u64, u64, u64)> = request_fds
-            .iter()
-            .filter_map(Self::fstat_triple)
-            .collect();
+        let ours: Vec<(u64, u64, u64)> =
+            request_fds.iter().filter_map(Self::fstat_triple).collect();
         if received
             .iter()
             .filter_map(Self::fstat_triple)
@@ -366,7 +370,7 @@ impl SocketForwarder {
     /// one async deadline: the connection is nonblocking, so a peer that
     /// accepts and then stalls is waited out by this deadline rather than by
     /// the kernel, and no socket timeout has to be armed for it.
-async fn exchange(
+    async fn exchange(
         &self,
         request: &ForwardOperationRequest,
         request_fds: &[RawFd],
@@ -383,7 +387,9 @@ async fn exchange(
         let timeout = self.timeout;
         tokio::time::timeout(timeout, async move {
             let connection = crate::protocol::connect_seqpacket_bounded(path, timeout).await?;
-            connection.send_json_frame_with_fds(request, request_fds).await?;
+            connection
+                .send_json_frame_with_fds(request, request_fds)
+                .await?;
             let response = connection
                 .recv_json_frame_with_fds::<ForwardOperationResponse>()
                 .await?;
@@ -408,7 +414,9 @@ async fn exchange(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{bind_seqpacket, recv_json_frame, send_json_frame, send_json_frame_with_fds};
+    use crate::protocol::{
+        bind_seqpacket, recv_json_frame, send_json_frame, send_json_frame_with_fds,
+    };
     use std::os::fd::AsRawFd;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -465,7 +473,11 @@ mod tests {
         /// A raw peer that answers with descriptor attachments, so a test
         /// can drive a response whose declarations disagree with its frame.
         fn spawn_raw(
-            answer: impl FnMut(ForwardOperationRequest) -> (ForwardOperationResponse, std::os::fd::OwnedFd) + Send + 'static,
+            answer: impl FnMut(
+                ForwardOperationRequest,
+            ) -> (ForwardOperationResponse, std::os::fd::OwnedFd)
+            + Send
+            + 'static,
         ) -> Self {
             let dir = tempfile::tempdir().expect("peer socket dir");
             let path = dir.path().join("forward.sock");
@@ -483,12 +495,8 @@ mod tests {
                     };
                     observed.fetch_add(1, Ordering::AcqRel);
                     let (response, response_fd) = answer(request);
-                    send_json_frame_with_fds(
-                        fd.as_raw_fd(),
-                        &response,
-                        &[response_fd.as_raw_fd()],
-                    )
-                    .expect("write forward reply with fd attachment");
+                    send_json_frame_with_fds(fd.as_raw_fd(), &response, &[response_fd.as_raw_fd()])
+                        .expect("write forward reply with fd attachment");
                 }
             });
             Self {
@@ -681,7 +689,6 @@ mod tests {
 
     #[test]
     fn a_response_whose_fd_count_mismatches_its_declared_indexes_is_refused_not_truncated() {
-
         // The peer declares two descriptors but attaches only one:the
         // carrier must refuse with the fd-leg code rather than succeed with a
         // truncated answer.where
@@ -778,18 +785,19 @@ mod tests {
             deadline_ms: 25_000,
         };
         let chain = d2b_audit::evidence_chain::EvidenceChain::root("invocation-16", "daemon");
-        let outcome = runtime().block_on(peer.forwarder().forward(ForwardedOperation {
-            operation: "UsbipBind",
-            zone: "work",
-            invocation_id: "invocation-16",
-            chain: &chain,
-            nested: false,
-            payload: &payload(),
-            fds: &[],
-            fd_kind: None,
-            context: Some(&context),
-        }))
-        .expect("the peer answered");
+        let outcome = runtime()
+            .block_on(peer.forwarder().forward(ForwardedOperation {
+                operation: "UsbipBind",
+                zone: "work",
+                invocation_id: "invocation-16",
+                chain: &chain,
+                nested: false,
+                payload: &payload(),
+                fds: &[],
+                fd_kind: None,
+                context: Some(&context),
+            }))
+            .expect("the peer answered");
         let rendered = String::from_utf8(outcome.result.to_canonical_bytes()).expect("utf-8");
         assert!(rendered.contains("\"epoch\":1"), "{rendered}");
         assert!(rendered.contains("\"zone\":\"work\""), "{rendered}");

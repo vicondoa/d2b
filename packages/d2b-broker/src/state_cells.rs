@@ -239,8 +239,7 @@ impl CellStore {
     pub fn open(root: &Path) -> Result<Self, CellStoreError> {
         let root = root.to_path_buf();
         let records = Self::load(&root)?;
-        Ok(Self::with_root(Some(root), RetentionPolicy::default())
-            .loaded(records))
+        Ok(Self::with_root(Some(root), RetentionPolicy::default()).loaded(records))
     }
 
     /// Test/embedding knob: the root plus an explicit retention policy.
@@ -269,7 +268,9 @@ impl CellStore {
         let path = Self::durable_path_for(root);
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(BTreeMap::new());
+            }
             Err(error) => return Err(CellStoreError::Io(error)),
         };
         let file: DurableFile = serde_json::from_slice(&bytes).map_err(|error| {
@@ -318,21 +319,18 @@ impl CellStore {
             if record.durability != CellDurability::OneTime || record.payload.is_some() {
                 continue;
             }
-            by_cell
-                .entry(key.cell.clone())
-                .or_default()
-                .insert(
-                    key.invocation_id.clone(),
-                    DurableRecord {
-                        principal: key.principal.clone(),
-                        outcome: match record.outcome {
-                            CellOutcome::Unknown => "unknown".to_owned(),
-                            CellOutcome::Completed => "completed".to_owned(),
-                        },
-                        consumed_at_ms: record.consumed_ms,
-                        completed_at_ms: record.completed_ms,
+            by_cell.entry(key.cell.clone()).or_default().insert(
+                key.invocation_id.clone(),
+                DurableRecord {
+                    principal: key.principal.clone(),
+                    outcome: match record.outcome {
+                        CellOutcome::Unknown => "unknown".to_owned(),
+                        CellOutcome::Completed => "completed".to_owned(),
                     },
-                );
+                    consumed_at_ms: record.consumed_ms,
+                    completed_at_ms: record.completed_ms,
+                },
+            );
         }
         DurableFile {
             version: DURABLE_VERSION,
@@ -346,7 +344,10 @@ impl CellStore {
     /// (`ops/network.rs::persist_persistent_tap_realization`): strict
     /// directory posture, temp file with `create_new`, `sync_data`, rename,
     /// and a directory fsync - so a crash never leaves a half-written file.
-    fn persist_locked(&self, records: &BTreeMap<CellKey, CellRecord>) -> Result<(), CellStoreError> {
+    fn persist_locked(
+        &self,
+        records: &BTreeMap<CellKey, CellRecord>,
+    ) -> Result<(), CellStoreError> {
         let Some(root) = self.root.as_deref() else {
             return Ok(());
         };
@@ -439,7 +440,9 @@ impl CellStore {
             }
         }
         for keys in per_cell.into_values() {
-            let evict = keys.len().saturating_sub(retention.max_ephemeral_outcome_records);
+            let evict = keys
+                .len()
+                .saturating_sub(retention.max_ephemeral_outcome_records);
             if evict == 0 {
                 continue;
             }
@@ -599,17 +602,13 @@ impl CellStore {
             Ok(records) => records,
             Err(_) => return false,
         };
-        records.keys().any(|key| {
-            key.cell == cell && key.invocation_id == invocation_id
-        })
+        records
+            .keys()
+            .any(|key| key.cell == cell && key.invocation_id == invocation_id)
     }
 
     /// The payload of one ephemeral cell record, when present.
-    pub fn payload(
-        &self,
-        cell: &str,
-        invocation_id: &str,
-    ) -> Option<Arc<dyn Any + Send + Sync>> {
+    pub fn payload(&self, cell: &str, invocation_id: &str) -> Option<Arc<dyn Any + Send + Sync>> {
         let records = self.records.lock().ok()?;
         records
             .range(..)
@@ -679,9 +678,7 @@ impl CellStore {
 
     /// The durable file path, when the store is file-backed.
     pub fn durable_path(&self) -> Option<PathBuf> {
-        self.root
-            .as_deref()
-            .map(Self::durable_path_for)
+        self.root.as_deref().map(Self::durable_path_for)
     }
 }
 
@@ -718,11 +715,7 @@ mod tests {
 
     const LEASES: &str = "lifecycle-leases";
 
-    fn consume_ok(
-        store: &CellStore,
-        id: &str,
-        principal: &str,
-    ) -> ConsumeDecision {
+    fn consume_ok(store: &CellStore, id: &str, principal: &str) -> ConsumeDecision {
         store
             .consume(LEASES, id, principal, CellDurability::OneTime)
             .expect("consume succeeds")
@@ -731,35 +724,69 @@ mod tests {
     #[test]
     fn grants_once_replays_refusal_and_completes_were_recorded() {
         let store = CellStore::in_memory();
-        assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Granted);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "alice"),
+            ConsumeDecision::Granted
+        );
         // In-process duplicate: the live claim refuses.
-        assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::InProgress);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "alice"),
+            ConsumeDecision::InProgress
+        );
         store.complete(LEASES, "inv-1", "alice").expect("complete");
         // Same invocation id replays the recorded outcome: refusal.
-        assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Replayed);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "alice"),
+            ConsumeDecision::Replayed
+        );
         // A new consume attempt on the consumed one-time cell refuses: it is
         // a re-invocation of the same one-time grant, not a fresh grant.
-        assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Replayed);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "alice"),
+            ConsumeDecision::Replayed
+        );
         // Replay under a different principal refuses (KTD3).
-        assert_eq!(consume_ok(&store, "inv-1", "bob"), ConsumeDecision::ForeignPrincipal);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "bob"),
+            ConsumeDecision::ForeignPrincipal
+        );
         // Completion is idempotent.
-        store.complete(LEASES, "inv-1", "alice").expect("recomplete");
-        assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Replayed);
+        store
+            .complete(LEASES, "inv-1", "alice")
+            .expect("recomplete");
+        assert_eq!(
+            consume_ok(&store, "inv-1", "alice"),
+            ConsumeDecision::Replayed
+        );
     }
 
     #[test]
     fn cross_principal_consume_never_grants_a_second_time() {
         let store = CellStore::in_memory();
         // Alice claims the key.
-        assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Granted);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "alice"),
+            ConsumeDecision::Granted
+        );
         // Bob consumes the same cell + invocation id: the principal is part
         // of the key, so this is a replay attempt, not a fresh grant - it
         // must refuse whether or not Alice completed.
-        assert_eq!(consume_ok(&store, "inv-1", "bob"), ConsumeDecision::ForeignPrincipal);
-        store.complete(LEASES, "inv-1", "alice").expect("alice completes");
-        assert_eq!(consume_ok(&store, "inv-1", "bob"), ConsumeDecision::ForeignPrincipal);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "bob"),
+            ConsumeDecision::ForeignPrincipal
+        );
+        store
+            .complete(LEASES, "inv-1", "alice")
+            .expect("alice completes");
+        assert_eq!(
+            consume_ok(&store, "inv-1", "bob"),
+            ConsumeDecision::ForeignPrincipal
+        );
         // Grace completes her own grant exactly once.
-        assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Replayed);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "alice"),
+            ConsumeDecision::Replayed
+        );
     }
 
     #[test]
@@ -782,17 +809,26 @@ mod tests {
         let root_path = root.path().to_path_buf();
         {
             let store = CellStore::open(&root_path).expect("open first owner");
-            assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Granted);
+            assert_eq!(
+                consume_ok(&store, "inv-1", "alice"),
+                ConsumeDecision::Granted
+            );
             store.complete(LEASES, "inv-1", "alice").expect("complete");
             // The completed marker is durable before the store is dropped.
             assert!(store.durable_path().expect("root").exists());
         }
         // Restart: a fresh owner recovers the durable file.
         let store = CellStore::open(&root_path).expect("reopen after restart");
-        assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Replayed);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "alice"),
+            ConsumeDecision::Replayed
+        );
         // Restart-replay resistance holds per principal: a different
         // principal still refuses (the invocation is not replayable to it).
-        assert_eq!(consume_ok(&store, "inv-1", "bob"), ConsumeDecision::ForeignPrincipal);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "bob"),
+            ConsumeDecision::ForeignPrincipal
+        );
     }
 
     #[test]
@@ -803,19 +839,31 @@ mod tests {
         // before the effect records completion.
         {
             let store = CellStore::open(&root_path).expect("owner A");
-            assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Granted);
+            assert_eq!(
+                consume_ok(&store, "inv-1", "alice"),
+                ConsumeDecision::Granted
+            );
             // No complete: the crash lands between commit and effect.
         }
         // Owner B restarts with the durable file.
         let store = CellStore::open(&root_path).expect("owner B");
         // The retried invocation reconciles under the same invocation id: the
         // idempotent effect re-runs - no silent leak.
-        assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Reconciled);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "alice"),
+            ConsumeDecision::Reconciled
+        );
         store.complete(LEASES, "inv-1", "alice").expect("complete");
         // The grant is exercised exactly once: later consumes replay the
         // refusal - no double grant.
-        assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Replayed);
-        assert_eq!(consume_ok(&store, "inv-1", "bob"), ConsumeDecision::ForeignPrincipal);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "alice"),
+            ConsumeDecision::Replayed
+        );
+        assert_eq!(
+            consume_ok(&store, "inv-1", "bob"),
+            ConsumeDecision::ForeignPrincipal
+        );
     }
 
     #[test]
@@ -854,9 +902,17 @@ mod tests {
         // The survivors' claims died with the process: the record is an
         // unclaimed durable unknown, reconciled on retry - and the winner of
         // the whole population is still exactly one grant lineage.
-        assert_eq!(consume_ok(&reopened, "inv-1", "alice"), ConsumeDecision::Reconciled);
-        reopened.complete(LEASES, "inv-1", "alice").expect("complete");
-        assert_eq!(consume_ok(&reopened, "inv-1", "alice"), ConsumeDecision::Replayed);
+        assert_eq!(
+            consume_ok(&reopened, "inv-1", "alice"),
+            ConsumeDecision::Reconciled
+        );
+        reopened
+            .complete(LEASES, "inv-1", "alice")
+            .expect("complete");
+        assert_eq!(
+            consume_ok(&reopened, "inv-1", "alice"),
+            ConsumeDecision::Replayed
+        );
     }
 
     #[test]
@@ -865,17 +921,34 @@ mod tests {
         let root_path = root.path().to_path_buf();
         let store = CellStore::open(&root_path).expect("open");
         assert_eq!(
-            store.consume("runner-registry", "runner-1", "broker", CellDurability::Ephemeral),
+            store.consume(
+                "runner-registry",
+                "runner-1",
+                "broker",
+                CellDurability::Ephemeral
+            ),
             Ok(ConsumeDecision::Granted)
         );
         // Ephemeral in-process replay: same rules until completed.
         assert_eq!(
-            store.consume("runner-registry", "runner-1", "broker", CellDurability::Ephemeral),
+            store.consume(
+                "runner-registry",
+                "runner-1",
+                "broker",
+                CellDurability::Ephemeral
+            ),
             Ok(ConsumeDecision::InProgress)
         );
-        store.complete("runner-registry", "runner-1", "broker").expect("complete");
+        store
+            .complete("runner-registry", "runner-1", "broker")
+            .expect("complete");
         assert_eq!(
-            store.consume("runner-registry", "runner-1", "broker", CellDurability::Ephemeral),
+            store.consume(
+                "runner-registry",
+                "runner-1",
+                "broker",
+                CellDurability::Ephemeral
+            ),
             Ok(ConsumeDecision::Replayed)
         );
         // Ephemeral records never reach the durable file: a restarted owner
@@ -888,17 +961,32 @@ mod tests {
     fn payload_cells_round_trip_and_scope_by_cell() {
         let store = CellStore::in_memory();
         store
-            .insert_payload("runner-pidfd-registry", "runner-1", BROKER_PRINCIPAL, Arc::new(42u32))
+            .insert_payload(
+                "runner-pidfd-registry",
+                "runner-1",
+                BROKER_PRINCIPAL,
+                Arc::new(42u32),
+            )
             .expect("insert");
         store
-            .insert_payload("runner-pidfd-registry", "runner-2", BROKER_PRINCIPAL, Arc::new(7u32))
+            .insert_payload(
+                "runner-pidfd-registry",
+                "runner-2",
+                BROKER_PRINCIPAL,
+                Arc::new(7u32),
+            )
             .expect("insert");
         assert!(store.contains("runner-pidfd-registry", "runner-1"));
         assert!(!store.contains("runner-pidfd-registry", "missing"));
         assert!(!store.contains("other-cell", "runner-1"));
-        let payload = store.payload("runner-pidfd-registry", "runner-1").expect("payload");
+        let payload = store
+            .payload("runner-pidfd-registry", "runner-1")
+            .expect("payload");
         assert_eq!(*payload.downcast::<u32>().expect("downcast"), 42u32);
-        assert_eq!(store.keys("runner-pidfd-registry"), vec!["runner-1".to_owned(), "runner-2".to_owned()]);
+        assert_eq!(
+            store.keys("runner-pidfd-registry"),
+            vec!["runner-1".to_owned(), "runner-2".to_owned()]
+        );
         assert!(store.remove("runner-pidfd-registry", "runner-2"));
         assert!(!store.remove("runner-pidfd-registry", "runner-2"));
         assert_eq!(store.clear("runner-pidfd-registry"), 1);
@@ -921,7 +1009,9 @@ mod tests {
             store.consume("grant-g", "grant-1", "alice", CellDurability::OneTime),
             Ok(ConsumeDecision::Granted)
         );
-        store.complete("grant-g", "grant-1", "alice").expect("complete");
+        store
+            .complete("grant-g", "grant-1", "alice")
+            .expect("complete");
         // Comparable non-one-time outcome records: three consumable cells.
         for id in ["r-1", "r-2", "r-3"] {
             assert_eq!(
@@ -938,14 +1028,18 @@ mod tests {
             store.consume("replayable-r", "r-4", "bob", CellDurability::Ephemeral),
             Ok(ConsumeDecision::Granted)
         );
-        store.complete("replayable-r", "r-4", "bob").expect("complete r-4");
+        store
+            .complete("replayable-r", "r-4", "bob")
+            .expect("complete r-4");
         // One more completed replayable record pushes the capped cell past
         // its bound; the next mutation enforces the cap.
         assert_eq!(
             store.consume("replayable-r", "r-5", "bob", CellDurability::Ephemeral),
             Ok(ConsumeDecision::Granted)
         );
-        store.complete("replayable-r", "r-5", "bob").expect("complete r-5");
+        store
+            .complete("replayable-r", "r-5", "bob")
+            .expect("complete r-5");
         // The replayable cell stays bounded at cap+1 between mutations (the
         // completion that pushes it past the cap is the next mutation's
         // evictable tail), while the one-time marker is immune in both
@@ -977,7 +1071,10 @@ mod tests {
     fn corrupt_durable_file_fails_closed() {
         let root = scratch("corrupt");
         let store = CellStore::open(root.path()).expect("empty open");
-        assert_eq!(consume_ok(&store, "inv-1", "alice"), ConsumeDecision::Granted);
+        assert_eq!(
+            consume_ok(&store, "inv-1", "alice"),
+            ConsumeDecision::Granted
+        );
         store.complete(LEASES, "inv-1", "alice").expect("complete");
         let path = store.durable_path().expect("path");
         fs::write(&path, b"not json").expect("corrupt the file");

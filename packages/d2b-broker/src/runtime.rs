@@ -99,11 +99,7 @@ const DEFAULT_GUEST_BUNDLE_PATH: &str = "/etc/d2b/guest-bundle.json";
 const DEFAULT_STATE_DIR: &str = "/var/lib/d2b";
 const DEFAULT_GUEST_STATE_DIR: &str = "/var/lib/d2b/guest-broker";
 const DEFAULT_ACTIVATION_HELPER_PATH: &str = "/run/current-system/sw/bin/d2b-activation-helper";
-const CAPABILITIES: &[&str] = &[
-    "Hello",
-    "ExportBrokerAudit",
-    "ApplyHostGenerationHandoff",
-];
+const CAPABILITIES: &[&str] = &["Hello", "ExportBrokerAudit", "ApplyHostGenerationHandoff"];
 const DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND: u32 = 512;
 const IPC_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 const DEFAULT_IPC_RATE_LIMIT_MAX_BUCKETS: usize = 4096;
@@ -143,38 +139,110 @@ pub struct RetiredWireVariant {
 /// (KTD10). The mixed-version fixture table in the runtime tests keeps the
 /// gate machinery exercised independently of the production entries.
 pub const RETIRED_WIRE_VARIANTS: &[RetiredWireVariant] = &[
-    RetiredWireVariant { variant: "OpenPidfd", retired_in_version: 6 },
-    RetiredWireVariant { variant: "OpenPeerPidfdFromAcceptedSocket", retired_in_version: 6 },
-    RetiredWireVariant { variant: "ObserveRunner", retired_in_version: 6 },
-    RetiredWireVariant { variant: "PollChildReaped", retired_in_version: 6 },
-    RetiredWireVariant { variant: "PrepareRuntimeDir", retired_in_version: 6 },
-    RetiredWireVariant { variant: "PrepareStateDir", retired_in_version: 6 },
-    RetiredWireVariant { variant: "CgroupKill", retired_in_version: 6 },
-    RetiredWireVariant { variant: "SignalRunner", retired_in_version: 6 },
-    RetiredWireVariant { variant: "DeregisterRunnerPidfd", retired_in_version: 6 },
-    RetiredWireVariant { variant: "SpawnRunner", retired_in_version: 6 },
+    RetiredWireVariant {
+        variant: "OpenPidfd",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "OpenPeerPidfdFromAcceptedSocket",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "ObserveRunner",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "PollChildReaped",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "PrepareRuntimeDir",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "PrepareStateDir",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "CgroupKill",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "SignalRunner",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "DeregisterRunnerPidfd",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "SpawnRunner",
+        retired_in_version: 6,
+    },
     // U11 retired the guest lifecycle lease arm with its row: the lease
     // rides the generic consume-cell/complete-cell kernels through the
     // EnvelopeInvoke surface, and a straggler's typed lease frame is
     // refused by this gate.
-    RetiredWireVariant { variant: "ConsumeLifecycleLease", retired_in_version: 6 },
+    RetiredWireVariant {
+        variant: "ConsumeLifecycleLease",
+        retired_in_version: 6,
+    },
     // U12 retired the network-fds family wire variants: the thirteen
     // network operations ride the broker-generic kernels through the
     // EnvelopeInvoke surface, and a straggler's typed frame is refused by
     // this gate.
-    RetiredWireVariant { variant: "ApplyNftables", retired_in_version: 6 },
-    RetiredWireVariant { variant: "ApplyNftablesProjection", retired_in_version: 6 },
-    RetiredWireVariant { variant: "ApplyNmUnmanaged", retired_in_version: 6 },
-    RetiredWireVariant { variant: "ApplyRoute", retired_in_version: 6 },
-    RetiredWireVariant { variant: "ApplySysctl", retired_in_version: 6 },
-    RetiredWireVariant { variant: "CreateBridge", retired_in_version: 6 },
-    RetiredWireVariant { variant: "DeleteBridge", retired_in_version: 6 },
-    RetiredWireVariant { variant: "CreatePersistentTap", retired_in_version: 6 },
-    RetiredWireVariant { variant: "DeletePersistentTap", retired_in_version: 6 },
-    RetiredWireVariant { variant: "CreateTapFd", retired_in_version: 6 },
-    RetiredWireVariant { variant: "SetBridgePortFlags", retired_in_version: 6 },
-    RetiredWireVariant { variant: "UpdateHostsFile", retired_in_version: 6 },
-    RetiredWireVariant { variant: "SeedDnsmasqLease", retired_in_version: 6 },
+    RetiredWireVariant {
+        variant: "ApplyNftables",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "ApplyNftablesProjection",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "ApplyNmUnmanaged",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "ApplyRoute",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "ApplySysctl",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "CreateBridge",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "DeleteBridge",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "CreatePersistentTap",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "DeletePersistentTap",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "CreateTapFd",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "SetBridgePortFlags",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "UpdateHostsFile",
+        retired_in_version: 6,
+    },
+    RetiredWireVariant {
+        variant: "SeedDnsmasqLease",
+        retired_in_version: 6,
+    },
 ];
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -278,7 +346,7 @@ pub struct ServerConfig {
     /// `--forward-socket`, else `D2B_BROKER_FORWARD_SOCKET`.
     pub forward_socket_path: Option<PathBuf>,
     pub test_mode: bool,
-#[cfg(not(feature = "layer1-bootstrap"))]
+    #[cfg(not(feature = "layer1-bootstrap"))]
     /// The wire variants this broker refuses with the stale-wire-version
     /// code, gated on the Hello-negotiated wire version (KTD10).
     ///
@@ -886,6 +954,16 @@ const MIN_DISPATCH_WORKERS: usize = 8;
 const MAX_DISPATCH_WORKERS: usize = 16;
 /// Jobs one dispatch worker queues before its callers wait.
 const DISPATCH_QUEUE_PER_WORKER: usize = 1;
+/// Worker threads behind the nested-invocation dispatch pool.
+///
+/// A handler's nested (sandwich) EnvelopeInvoke presents its evidence chain
+/// and must never wait on a worker parked by an outer forwarded call: the
+/// outer call blocks its worker on `block_on` until the nested leg's reply
+/// crosses back, so one shared round-robin pool can land the nested leg on
+/// a pinned worker's queue and deadlock both until the io budgets expire.
+/// A separate pool makes that starvation impossible by construction; the
+/// checks' deepest nesting is one level (family handler -> kernel row).
+const NESTED_DISPATCH_WORKERS: usize = 4;
 
 /// One job on the dispatch pool.
 type DispatchJob = Box<dyn FnOnce() + Send + 'static>;
@@ -984,9 +1062,12 @@ struct Server {
     config: Arc<ServerConfig>,
     audit_log: Arc<AuditLog>,
     dispatches: Arc<DispatchPool>,
+    /// Nested (sandwich) EnvelopeInvoke legs get their own pool: an outer
+    /// forwarded call parks its worker until the nested leg's reply returns,
+    /// so a shared pool can deadlock the pair (see NESTED_DISPATCH_WORKERS).
+    nested_dispatches: Arc<DispatchPool>,
     ipc_rate_limiter: Arc<Mutex<IpcRateLimiter>>,
 }
-
 /// The process-lifetime handles background work reaches the broker's runtime
 /// through.
 ///
@@ -1107,10 +1188,12 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     #[cfg(not(feature = "layer1-bootstrap"))]
     start_sigchld_reaper(&runtime, Arc::clone(&audit_log));
 
+    let nested_dispatches = DispatchPool::new(NESTED_DISPATCH_WORKERS);
     let server = Arc::new(Server {
         config: Arc::new(config),
         audit_log,
         dispatches,
+        nested_dispatches,
         ipc_rate_limiter: Arc::new(Mutex::new(IpcRateLimiter::new(
             DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND,
         ))),
@@ -1341,13 +1424,13 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
         // `RequestEnvelope`, and the gate refuses it with the typed
         // stale-wire-version code plus an audit record before the typed
         // decode can drop it as malformed wire (KTD10).
-        let Some((envelope_value, request_fds)) = connection
-            .recv_json_frame_with_fds::<Value>()
-            .await?
+        let Some((envelope_value, request_fds)) =
+            connection.recv_json_frame_with_fds::<Value>().await?
         else {
             return Ok(());
         };
-        if let Some(retired) = retired_variant_for(&envelope_value, server.config.retired_wire_variants)
+        if let Some(retired) =
+            retired_variant_for(&envelope_value, server.config.retired_wire_variants)
         {
             // The closing refusal of a straggler call: the frame's
             // descriptors are closed with the frame, the audit record is
@@ -1392,8 +1475,22 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
     let config = Arc::clone(&server.config);
     let audit_log = Arc::clone(&server.audit_log);
     let ipc_rate_limiter = Arc::clone(&server.ipc_rate_limiter);
-    let outcome = server
-        .dispatches
+    // A nested (sandwich) EnvelopeInvoke - one that presents an evidence
+    // chain - is served by its own pool. Its invoking handler is blocked on
+    // this leg's reply inside an outer forwarded call, so routing it onto
+    // the outer pool can park it behind the very call that waits on it
+    // (NESTED_DISPATCH_WORKERS).
+    let nested_leg = matches!(
+        &envelope.request,
+        d2b_contracts_broker::broker_wire::BrokerRequest::EnvelopeInvoke(req)
+            if req.chain_root_invocation_id.is_some()
+    );
+    let pool = if nested_leg {
+        Arc::clone(&server.nested_dispatches)
+    } else {
+        Arc::clone(&server.dispatches)
+    };
+    let outcome = pool
         .run(move || {
             answer_request(
                 envelope,
@@ -1989,10 +2086,7 @@ fn validate_tap_create_provenance(
         zone_uid,
         network_uid,
         attachment_id,
-        (
-            network_generation,
-            attachment_generation,
-        ),
+        (network_generation, attachment_generation),
         bundle_generation,
         canonical_role_id,
         vm_id.as_str(),
@@ -2573,10 +2667,7 @@ fn dispatch_request(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn request_accepts_fd(request: &BrokerRequest) -> bool {
-    matches!(
-        request,
-        BrokerRequest::EnvelopeInvoke(_)
-    )
+    matches!(request, BrokerRequest::EnvelopeInvoke(_))
 }
 
 /// Whether the trusted intent is the signed binding-owned serving-worker
@@ -2932,7 +3023,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
     resolver: Option<&Arc<BundleResolver>>,
     backend: &B,
     request_fds: Vec<OwnedFd>,
-
 ) -> Result<DispatchResult, BrokerError> {
     use d2b_contracts_broker::broker_wire::BrokerRequest as RealBrokerRequest;
     let bundle_metadata = audit_bundle_metadata(resolver.map(std::sync::Arc::as_ref));
@@ -3003,12 +3093,13 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             // invalidation still holds: a fresh broker process bumps the
             // persisted epoch before it can serve a publication.
             if crate::envelope::trusted_context_store().is_none() {
-                crate::envelope::init_trusted_context_store(&config.state_dir)
-                    .map_err(|error| {
+                crate::envelope::init_trusted_context_store(&config.state_dir).map_err(
+                    |error| {
                         BrokerError::LiveHandler(format!(
                             "trusted-context store unavailable: {error}"
                         ))
-                    })?;
+                    },
+                )?;
             }
             let reply = crate::envelope::trusted_context_store()
                 .expect("the lazy init above just opened the store")
@@ -3037,9 +3128,9 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     guest_generation: req.guest_generation,
                 },
             )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::PublishTrustedContext(
-                reply,
-            )))
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::PublishTrustedContext(reply),
+            ))
         }
         RealBrokerRequest::OwnershipMatrixCheck(req) => {
             // U5: the first production envelope caller. The daemon's
@@ -3059,14 +3150,12 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             // carries the same identity the audit join derives.
             let zone = req.vm_id.as_str();
             let payload = serde_json::json!({ "vm": req.vm_id.as_str() });
-            let invocation = envelope_call_runtime().block_on(
-                backend.operation_envelope().call(
-                    crate::envelope::CallerAuthority::Daemon,
-                    "OwnershipMatrixCheck",
-                    zone,
-                    &payload,
-                ),
-            );
+            let invocation = envelope_call_runtime().block_on(backend.operation_envelope().call(
+                crate::envelope::CallerAuthority::Daemon,
+                "OwnershipMatrixCheck",
+                zone,
+                &payload,
+            ));
             if let Err(refusal) = invocation {
                 tracing::warn!(
                     broker_operation = "OwnershipMatrixCheck",
@@ -3132,16 +3221,24 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                         chain = chain.nested(identity.clone());
                     }
                     envelope_call_runtime().block_on(
-                        backend
-                            .operation_envelope()
-                            .call_nested_with_fds(chain, operation, zone, &req.payload, &request_fds),
+                        backend.operation_envelope().call_nested_with_fds(
+                            chain,
+                            operation,
+                            zone,
+                            &req.payload,
+                            &request_fds,
+                        ),
                     )
                 }
-                (None, None) => envelope_call_runtime().block_on(
-                    backend
-                        .operation_envelope()
-                        .call_with_fds(caller, operation, zone, &req.payload, &request_fds),
-                ),
+                (None, None) => {
+                    envelope_call_runtime().block_on(backend.operation_envelope().call_with_fds(
+                        caller,
+                        operation,
+                        zone,
+                        &req.payload,
+                        &request_fds,
+                    ))
+                }
                 _ => {
                     return Err(BrokerError::RequestValidation {
                         operation: "EnvelopeInvoke",
@@ -3680,9 +3777,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             )))
         }
 
-
-
-
         RealBrokerRequest::DelegateCgroupV2(req) => {
             let resolver = require_resolver(resolver)?;
             let exec = live_exec(config);
@@ -4101,8 +4195,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 outcome.fd,
             ))
         }
-
-
 
         RealBrokerRequest::StoreSync(req) => {
             let resolver = require_resolver(resolver)?;
@@ -5115,13 +5207,15 @@ impl RunnerPidfdCell {
 
     /// Duplicate the registered pidfd.
     pub(crate) fn duplicate(self, runner_id: &str) -> Option<OwnedFd> {
-        self.get(runner_id).and_then(|pidfd| match dup(pidfd.as_raw_fd()).map(owned_fd_from_raw) {
-            Ok(pidfd) => Some(pidfd),
-            Err(error) => {
-                warn!(runner_id = %runner_id, error = %error, "duplicate runner pidfd failed");
-                None
-            }
-        })
+        self.get(runner_id).and_then(
+            |pidfd| match dup(pidfd.as_raw_fd()).map(owned_fd_from_raw) {
+                Ok(pidfd) => Some(pidfd),
+                Err(error) => {
+                    warn!(runner_id = %runner_id, error = %error, "duplicate runner pidfd failed");
+                    None
+                }
+            },
+        )
     }
 
     pub(crate) fn insert(self, runner_id: &str, pidfd: OwnedFd) -> Result<(), BrokerError> {
@@ -5655,9 +5749,11 @@ fn discover_runner_candidate(
         let observed_exe = read_runner_executable(pid);
         let observed_exe_ref = observed_exe.as_deref().ok().map(Path::to_path_buf);
         let expected_binary = registered_binary.as_deref().unwrap_or(&intent.binary_path);
-        let executable_observation =
-            observe_runner_executable(observed_exe, expected_binary)?;
-        if matches!(executable_observation, RunnerExecutableObservation::Mismatch) {
+        let executable_observation = observe_runner_executable(observed_exe, expected_binary)?;
+        if matches!(
+            executable_observation,
+            RunnerExecutableObservation::Mismatch
+        ) {
             tracing::warn!(
                 observed = ?observed_exe_ref,
                 expected = ?expected_binary,
@@ -5782,13 +5878,21 @@ fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecutableO
     };
     let canon_expected = fs::canonicalize(expected);
     let Some(expected) = canon_expected.as_deref().ok().map(Path::to_path_buf) else {
-        tracing::warn!(?actual, ?expected, "runner executable mismatch: expected path unresolved");
+        tracing::warn!(
+            ?actual,
+            ?expected,
+            "runner executable mismatch: expected path unresolved"
+        );
         return RunnerExecutableObservation::Mismatch;
     };
     if actual == expected {
         return RunnerExecutableObservation::Matching;
     }
-    tracing::warn!(?actual, ?expected, "runner executable mismatch: paths differ");
+    tracing::warn!(
+        ?actual,
+        ?expected,
+        "runner executable mismatch: paths differ"
+    );
 
     let Ok(script) = fs::read_to_string(&expected) else {
         return RunnerExecutableObservation::Mismatch;
@@ -5972,7 +6076,9 @@ const CHILD_REAP_BUFFER_CAP: usize = 256;
 /// Push one notification to the ring buffer.
 /// If the buffer is full, drops the oldest entry and logs a warning.
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn push_child_reap_notification(notif: d2b_contracts_broker::broker_wire::ChildReapedNotification) {
+pub(crate) fn push_child_reap_notification(
+    notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
+) {
     let mut buf = match child_reap_buffer().lock() {
         Ok(g) => g,
         Err(_) => {
@@ -5995,7 +6101,8 @@ pub(crate) fn push_child_reap_notification(notif: d2b_contracts_broker::broker_w
 
 /// Drain the ring buffer (used by PollChildReaped handler).
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn drain_child_reap_buffer() -> Vec<d2b_contracts_broker::broker_wire::ChildReapedNotification> {
+pub(crate) fn drain_child_reap_buffer()
+-> Vec<d2b_contracts_broker::broker_wire::ChildReapedNotification> {
     match child_reap_buffer().lock() {
         Ok(mut buf) => buf.drain(..).collect(),
         Err(_) => {
@@ -6144,13 +6251,11 @@ trait DispatchBackend {
         destroy: bool,
     ) -> Result<(), BrokerError>;
 
-
     fn set_bridge_port_flags(
         &self,
         req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
         resolver: &BundleResolver,
     ) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, BrokerError>;
-
 
     fn open_pidfd(
         &self,
@@ -6223,19 +6328,12 @@ trait DispatchBackend {
         audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError>;
 
-
-
-
     fn apply_host_generation_handoff(
         &self,
         state_dir: &std::path::Path,
         helper_path: &std::path::Path,
         request: &d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
     ) -> Result<d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError>;
-
-
-
-
 
     fn usbip_bind(
         &self,
@@ -6577,7 +6675,6 @@ impl DispatchBackend for LiveDispatchBackend {
         }
     }
 
-
     fn set_bridge_port_flags(
         &self,
         req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
@@ -6586,7 +6683,6 @@ impl DispatchBackend for LiveDispatchBackend {
         let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
         dispatch_set_bridge_port_flags_inner(req, resolver, &exec)
     }
-
 
     fn open_pidfd(
         &self,
@@ -6769,9 +6865,6 @@ impl DispatchBackend for LiveDispatchBackend {
         Ok(outcome)
     }
 
-
-
-
     fn apply_host_generation_handoff(
         &self,
         state_dir: &std::path::Path,
@@ -6782,10 +6875,6 @@ impl DispatchBackend for LiveDispatchBackend {
         crate::ops::host_generation_handoff::apply_with_helper(state_dir, helper_path, request)
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))
     }
-
-
-
-
 
     fn usbip_bind(
         &self,
@@ -7086,7 +7175,8 @@ pub(crate) fn nft_hash_sidecar_path() -> PathBuf {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn persisted_nft_hash() -> Result<Option<String>, crate::ops::exec_reconcile::ReconcileExecError> {
+pub(crate) fn persisted_nft_hash()
+-> Result<Option<String>, crate::ops::exec_reconcile::ReconcileExecError> {
     crate::ops::nft::read_persisted_nft_hash(&nft_hash_sidecar_path())
 }
 
@@ -7194,7 +7284,9 @@ fn usb_device_sysfs_root() -> &'static Path {
 /// kernel's device-bind extension is testable without touching the
 /// daemon-owned lock tree.
 #[cfg(test)]
-fn usbip_lock_path_for_intent(intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent) -> PathBuf {
+fn usbip_lock_path_for_intent(
+    intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
+) -> PathBuf {
     match TEST_USBIP_LOCK_ROOT.get() {
         Some(root) => root.join(&intent.bus_id),
         None => intent.lock_path.clone(),
@@ -7202,7 +7294,9 @@ fn usbip_lock_path_for_intent(intent: &d2b_core::bundle_resolver::ResolvedUsbipB
 }
 
 #[cfg(not(test))]
-fn usbip_lock_path_for_intent(intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent) -> PathBuf {
+fn usbip_lock_path_for_intent(
+    intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
+) -> PathBuf {
     intent.lock_path.clone()
 }
 
@@ -7212,8 +7306,7 @@ static TEST_USBIP_LOCK_ROOT: OnceLock<PathBuf> = OnceLock::new();
 /// Unit-test injection for the kernel's USBIP bundle resolver (see
 /// [`load_kernel_resolver`]).
 #[cfg(test)]
-static TEST_KERNEL_BUNDLE_RESOLVER: OnceLock<std::sync::Arc<BundleResolver>> =
-    OnceLock::new();
+static TEST_KERNEL_BUNDLE_RESOLVER: OnceLock<std::sync::Arc<BundleResolver>> = OnceLock::new();
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u16, u16), BrokerError> {
@@ -11645,7 +11738,10 @@ fn remove_and_notify(
 /// runner identity behind: the caller will retry the lifecycle operation and
 /// the next attempt must be able to reserve the same runner id.
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn cleanup_spawned_runner_after_failure(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
+pub(crate) fn cleanup_spawned_runner_after_failure(
+    runner_id: &str,
+    pidfd: std::os::fd::BorrowedFd<'_>,
+) {
     remove_runner_metadata(runner_id);
     if let Err(err) = crate::sys::pidfd_sys::pidfd_send_signal(pidfd, libc::SIGKILL) {
         tracing::debug!(
@@ -11803,11 +11899,7 @@ mod tests {
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         )
         .unwrap();
-        let scope_id = format!(
-            "network:{}:{}",
-            zone_uid.as_str(),
-            network_uid.as_str()
-        );
+        let scope_id = format!("network:{}:{}", zone_uid.as_str(), network_uid.as_str());
         let other_token = d2b_core::bundle_resolver::network_name_token("other");
 
         // A projection intent naming a DIFFERENT network than the scope's
@@ -12385,8 +12477,7 @@ mod tests {
                 "EnvelopeInvoke",
             ];
             for name in crate::catalog::WIRE_VARIANTS {
-                if crate::catalog::stub_target(name).is_some() || UNAUDITED.contains(name)
-                {
+                if crate::catalog::stub_target(name).is_some() || UNAUDITED.contains(name) {
                     continue;
                 }
                 let row = crate::catalog::BrokerOperationRow::find(name)
@@ -12837,7 +12928,7 @@ mod tests {
             // every forwarded operation, which is the fail-closed default.
             forward_socket_path: None,
             test_mode: true,
-#[cfg(not(feature = "layer1-bootstrap"))]
+            #[cfg(not(feature = "layer1-bootstrap"))]
             retired_wire_variants: RETIRED_WIRE_VARIANTS,
         }
     }
@@ -13194,7 +13285,8 @@ mod tests {
 
         for mutation in mutations {
             assert!(
-                validate_spawn_runner_request_matches_intent(&mutation, &intent, posture, None).is_err(),
+                validate_spawn_runner_request_matches_intent(&mutation, &intent, posture, None)
+                    .is_err(),
                 "mutated SpawnRunner request must fail before clone"
             );
         }
@@ -13435,7 +13527,9 @@ mod tests {
         )
         .expect_err("untyped ProviderController launch must be refused");
         match error {
-            BrokerError::SpawnRunnerIntentMismatch { field, requested, .. } => {
+            BrokerError::SpawnRunnerIntentMismatch {
+                field, requested, ..
+            } => {
                 assert_eq!(field, "process_identity");
                 assert_eq!(requested, "untyped");
             }
@@ -13588,7 +13682,10 @@ mod tests {
             .expect("chmod served root");
         let argv = vec![
             "virtiofsd".to_owned(),
-            format!("--socket-path={}", socket_dir.join("vol-abcd.vfd.sock").display()),
+            format!(
+                "--socket-path={}",
+                socket_dir.join("vol-abcd.vfd.sock").display()
+            ),
             format!("--shared-dir={}", served.display()),
         ];
 
@@ -13693,7 +13790,8 @@ mod tests {
         foreign_owner.owner_ref =
             Some(ResourceRef::parse("VolumeBinding/forged").expect("owner ref"));
         assert!(
-            validate_spawn_runner_request_matches_intent(&foreign_owner, &intent, posture, None).is_err()
+            validate_spawn_runner_request_matches_intent(&foreign_owner, &intent, posture, None)
+                .is_err()
         );
     }
 
@@ -13782,7 +13880,8 @@ mod tests {
             let mut forged = request.clone();
             forged.owner_ref = owner.map(|owner| ResourceRef::parse(owner).expect("owner ref"));
             assert!(
-                validate_spawn_runner_request_matches_intent(&forged, &intent, posture, None).is_err(),
+                validate_spawn_runner_request_matches_intent(&forged, &intent, posture, None)
+                    .is_err(),
                 "a Device worker must carry its Device owner, got {owner:?}"
             );
         }
@@ -13820,10 +13919,10 @@ mod tests {
         // The template identity is the declared template; the per-row role id
         // is not admitted.
         let mut wrong_template = request;
-        wrong_template.template_identity =
-            Some(provider_controller_template_identity("swtpm-tpm"));
+        wrong_template.template_identity = Some(provider_controller_template_identity("swtpm-tpm"));
         assert!(
-            validate_spawn_runner_request_matches_intent(&wrong_template, &intent, posture, None).is_err()
+            validate_spawn_runner_request_matches_intent(&wrong_template, &intent, posture, None)
+                .is_err()
         );
     }
 
@@ -14098,9 +14197,6 @@ mod tests {
             })
         }
 
-
-
-
         fn apply_host_generation_handoff(
             &self,
             state_dir: &std::path::Path,
@@ -14113,10 +14209,6 @@ mod tests {
             crate::ops::host_generation_handoff::apply_with_helper(state_dir, helper_path, request)
                 .map_err(|error| BrokerError::LiveHandler(error.to_string()))
         }
-
-
-
-
 
         fn usbip_bind(
             &self,
@@ -14310,11 +14402,11 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn retired_process_family_kernels_dispatch_through_the_envelope() {
+        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher, KernelDispatcher};
+        use crate::kernel_ops::{KernelConfig, kernel_table};
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, EnvelopeInvokeRequest, FdKind,
         };
-        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher, KernelDispatcher};
-        use crate::kernel_ops::{KernelConfig, kernel_table};
         use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
         use std::os::unix::fs::PermissionsExt;
 
@@ -14385,10 +14477,7 @@ mod tests {
             other => panic!("expected an EnvelopeInvoke response, got {other:?}"),
         };
         let result_of = |response: &d2b_contracts_broker::broker_wire::EnvelopeInvokeResponse| {
-            response
-                .result
-                .clone()
-                .expect("a dispatched kernel result")
+            response.result.clone().expect("a dispatched kernel result")
         };
 
         // open-pidfd: the pidfd_open + start-time verification kernel; the
@@ -14412,7 +14501,9 @@ mod tests {
         );
         assert_eq!(response.refusal, None);
         assert_eq!(
-            result_of(&response).get("pid").and_then(serde_json::Value::as_i64),
+            result_of(&response)
+                .get("pid")
+                .and_then(serde_json::Value::as_i64),
             Some(pid as i64)
         );
         assert_eq!(
@@ -14436,7 +14527,9 @@ mod tests {
         );
         assert_eq!(response.refusal, None);
         assert_eq!(
-            result_of(&response).get("signaled").and_then(serde_json::Value::as_bool),
+            result_of(&response)
+                .get("signaled")
+                .and_then(serde_json::Value::as_bool),
             Some(true)
         );
         let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
@@ -14476,7 +14569,9 @@ mod tests {
         );
         assert_eq!(response.refusal, None);
         assert_eq!(
-            result_of(&response).get("kind").and_then(serde_json::Value::as_str),
+            result_of(&response)
+                .get("kind")
+                .and_then(serde_json::Value::as_str),
             Some("state-dir")
         );
         assert_eq!(
@@ -14492,7 +14587,11 @@ mod tests {
             Some("created")
         );
         assert_eq!(
-            fs::metadata(&prepared).expect("prepared dir").permissions().mode() & 0o777,
+            fs::metadata(&prepared)
+                .expect("prepared dir")
+                .permissions()
+                .mode()
+                & 0o777,
             0o700
         );
 
@@ -14542,7 +14641,11 @@ mod tests {
             result_of(&response).as_object().map(|object| object.len()),
             Some(0)
         );
-        assert_eq!(response.fd_indexes.len(), 1, "the peer pidfd returns over the fd leg");
+        assert_eq!(
+            response.fd_indexes.len(),
+            1,
+            "the peer pidfd returns over the fd leg"
+        );
         drop(right);
 
         // The accepted-socket fd facet stays exact after the cut: a missing
@@ -14613,11 +14716,11 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn retired_network_family_kernels_dispatch_through_the_envelope() {
+        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher, KernelDispatcher};
+        use crate::kernel_ops::{KernelConfig, kernel_table};
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, EnvelopeInvokeRequest, FdKind,
         };
-        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher, KernelDispatcher};
-        use crate::kernel_ops::{KernelConfig, kernel_table};
 
         let root = test_audit_dir("network-kernels-envelope");
         fs::create_dir_all(&root).expect("create test root");
@@ -14686,20 +14789,15 @@ mod tests {
             other => panic!("expected an EnvelopeInvoke response, got {other:?}"),
         };
         let result_of = |response: &d2b_contracts_broker::broker_wire::EnvelopeInvokeResponse| {
-            response
-                .result
-                .clone()
-                .expect("a dispatched kernel result")
+            response.result.clone().expect("a dispatched kernel result")
         };
 
-        let zone_uid = d2b_contracts_resource::v3::ResourceUid::parse(
-            "223e4567-e89b-42d3-a456-426614174001",
-        )
-        .expect("valid zone uid");
-        let network_uid = d2b_contracts_resource::v3::ResourceUid::parse(
-            "323e4567-e89b-42d3-a456-426614174002",
-        )
-        .expect("valid network uid");
+        let zone_uid =
+            d2b_contracts_resource::v3::ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
+                .expect("valid zone uid");
+        let network_uid =
+            d2b_contracts_resource::v3::ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002")
+                .expect("valid network uid");
         let bundle_generation =
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -14708,10 +14806,7 @@ mod tests {
         // expected child VM name from the admitted Network identity and
         // refuses a mismatch, so the full admit/refuse surface runs with no
         // host effect.
-        let expected_vm = d2b_contracts_resource::v3::derive_network_child_name(
-            &network_uid,
-            "vm",
-        );
+        let expected_vm = d2b_contracts_resource::v3::derive_network_child_name(&network_uid, "vm");
         let response = envelope_response(
             invoke(
                 "seed-dnsmasq-lease",
@@ -14731,7 +14826,9 @@ mod tests {
         );
         assert_eq!(response.refusal, None);
         assert_eq!(
-            result_of(&response).get("seeded").and_then(serde_json::Value::as_bool),
+            result_of(&response)
+                .get("seeded")
+                .and_then(serde_json::Value::as_bool),
             Some(true)
         );
 
@@ -15019,7 +15116,10 @@ mod tests {
     }
 
     impl CellKernelHarness {
-        fn new(root: &Path, caller_role: d2b_contracts_broker::broker_wire::BrokerCallerRole) -> Self {
+        fn new(
+            root: &Path,
+            caller_role: d2b_contracts_broker::broker_wire::BrokerCallerRole,
+        ) -> Self {
             use crate::envelope::{BrokerEnvelope, ForwardingDispatcher, KernelDispatcher};
             use crate::kernel_ops::{KernelConfig, kernel_table};
 
@@ -15075,8 +15175,9 @@ mod tests {
                 fd_indexes: Vec::new(),
                 fd_kinds: Vec::new(),
             });
-            let audit_context = DispatchAuditContext::from_request(&request, 4242, &self.caller_role)
-                .expect("audit context");
+            let audit_context =
+                DispatchAuditContext::from_request(&request, 4242, &self.caller_role)
+                    .expect("audit context");
             dispatch_request_with_backend_and_request_fds(
                 request,
                 1000,
@@ -15101,11 +15202,10 @@ mod tests {
             &root,
             d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid { uid: 1000 },
         );
-        let envelope_response =
-            |result: DispatchResult| match result.response {
-                BrokerResponse::EnvelopeInvoke(response) => response,
-                other => panic!("expected an EnvelopeInvoke response, got {other:?}"),
-            };
+        let envelope_response = |result: DispatchResult| match result.response {
+            BrokerResponse::EnvelopeInvoke(response) => response,
+            other => panic!("expected an EnvelopeInvoke response, got {other:?}"),
+        };
         let operation_id = format!("cell-kernel-lease-{}", std::process::id());
 
         // consume-cell: the one-time claim wins exactly once (AE2).
@@ -15130,7 +15230,10 @@ mod tests {
                 .invoke("consume-cell", cell_kernel_payload(&operation_id))
                 .expect("in-progress consume-cell dispatches"),
         );
-        assert_eq!(response.refusal.as_deref(), Some(crate::envelope::HANDLER_REFUSED));
+        assert_eq!(
+            response.refusal.as_deref(),
+            Some(crate::envelope::HANDLER_REFUSED)
+        );
         assert_eq!(
             response.detail.as_deref(),
             Some("cell-in-progress"),
@@ -15160,7 +15263,10 @@ mod tests {
                 .invoke("consume-cell", cell_kernel_payload(&operation_id))
                 .expect("replayed consume-cell dispatches"),
         );
-        assert_eq!(response.refusal.as_deref(), Some(crate::envelope::HANDLER_REFUSED));
+        assert_eq!(
+            response.refusal.as_deref(),
+            Some(crate::envelope::HANDLER_REFUSED)
+        );
         assert_eq!(
             response.detail.as_deref(),
             Some("cell-replayed"),
@@ -15266,7 +15372,12 @@ mod tests {
         let principal = "admin";
         assert_eq!(
             store
-                .consume("lifecycle-leases-v2", &identity, principal, crate::catalog::CellDurability::OneTime)
+                .consume(
+                    "lifecycle-leases-v2",
+                    &identity,
+                    principal,
+                    crate::catalog::CellDurability::OneTime
+                )
                 .expect("consume"),
             crate::state_cells::ConsumeDecision::Granted
         );
@@ -15279,7 +15390,12 @@ mod tests {
         let reopened = crate::state_cells::CellStore::open(root.path()).expect("reopen store");
         assert_eq!(
             reopened
-                .consume("lifecycle-leases-v2", &identity, principal, crate::catalog::CellDurability::OneTime)
+                .consume(
+                    "lifecycle-leases-v2",
+                    &identity,
+                    principal,
+                    crate::catalog::CellDurability::OneTime
+                )
                 .expect("replayed consume"),
             crate::state_cells::ConsumeDecision::Replayed,
             "the completed marker survives the restart and refuses the replay"
@@ -15288,7 +15404,12 @@ mod tests {
         // (KTD3): invocation ids alone never gate a one-time grant.
         assert_eq!(
             reopened
-                .consume("lifecycle-leases-v2", &identity, "daemon", crate::catalog::CellDurability::OneTime)
+                .consume(
+                    "lifecycle-leases-v2",
+                    &identity,
+                    "daemon",
+                    crate::catalog::CellDurability::OneTime
+                )
                 .expect("foreign replay"),
             crate::state_cells::ConsumeDecision::ForeignPrincipal
         );
@@ -15362,9 +15483,7 @@ mod tests {
             payload: serde_json::Value,
             request_fds: Vec<OwnedFd>,
         ) -> Result<DispatchResult, BrokerError> {
-            use d2b_contracts_broker::broker_wire::{
-                BrokerRequest, EnvelopeInvokeRequest, FdKind,
-            };
+            use d2b_contracts_broker::broker_wire::{BrokerRequest, EnvelopeInvokeRequest, FdKind};
 
             let request = BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
                 operation: operation.to_owned(),
@@ -15375,8 +15494,9 @@ mod tests {
                 fd_indexes: (0..request_fds.len() as u32).collect(),
                 fd_kinds: vec![FdKind::Any; request_fds.len()],
             });
-            let audit_context = DispatchAuditContext::from_request(&request, 4242, &self.caller_role)
-                .expect("audit context");
+            let audit_context =
+                DispatchAuditContext::from_request(&request, 4242, &self.caller_role)
+                    .expect("audit context");
             dispatch_request_with_backend_and_request_fds(
                 request,
                 1000,
@@ -15485,10 +15605,12 @@ mod tests {
         let bundle = build_test_bundle(&root);
         TEST_KERNEL_BUNDLE_RESOLVER
             .set(bundle.resolver.clone())
-            .unwrap_or_else(|_| assert!(Arc::ptr_eq(
-                TEST_KERNEL_BUNDLE_RESOLVER.get().expect("set once"),
-                &bundle.resolver
-            )));
+            .unwrap_or_else(|_| {
+                assert!(Arc::ptr_eq(
+                    TEST_KERNEL_BUNDLE_RESOLVER.get().expect("set once"),
+                    &bundle.resolver
+                ))
+            });
         // The fake USB sysfs device the bundle's locked busid names
         // (vendor 1050, product 0407, bus 1, dev 7): the derived device
         // node is /dev/bus/usb/001/007.
@@ -15525,7 +15647,11 @@ mod tests {
                 )
                 .expect("usbip backend spawn dispatches"),
         );
-        assert_eq!(response.refusal, None, "spawn refused: {:?}", response.detail);
+        assert_eq!(
+            response.refusal, None,
+            "spawn refused: {:?}",
+            response.detail
+        );
         let result = response.result.clone().expect("a dispatched kernel result");
         assert_eq!(
             result
@@ -15561,9 +15687,13 @@ mod tests {
     fn spawn_process_serving_worker_grants_ticket_tree_acls() {
         use std::os::unix::fs::PermissionsExt;
 
-        if !["/run/current-system/sw/bin/setfacl", "/usr/bin/setfacl", "/bin/setfacl"]
-            .iter()
-            .any(|candidate| Path::new(candidate).exists())
+        if ![
+            "/run/current-system/sw/bin/setfacl",
+            "/usr/bin/setfacl",
+            "/bin/setfacl",
+        ]
+        .iter()
+        .any(|candidate| Path::new(candidate).exists())
         {
             eprintln!("skipping serving-worker ACL kernel test: no setfacl binary");
             return;
@@ -15579,10 +15709,10 @@ mod tests {
             .expect("chmod socket dir");
         let shared = root.join("view");
         fs::create_dir_all(&shared).expect("create view root");
-        fs::set_permissions(&shared, fs::Permissions::from_mode(0o750))
-            .expect("chmod view root");
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o750)).expect("chmod view root");
 
-        let harness = SpawnKernelHarness::new(&root, &root.join("unused-bundle.json"), &runtime_root);
+        let harness =
+            SpawnKernelHarness::new(&root, &root.join("unused-bundle.json"), &runtime_root);
         let response = envelope_response(
             harness
                 .invoke(
@@ -15606,8 +15736,13 @@ mod tests {
                 )
                 .expect("serving worker spawn dispatches"),
         );
-        assert_eq!(response.refusal, None, "spawn refused: {:?}", response.detail);
-        let socket_fd = crate::sys::path_safe::open_dir_path_safe(&socket_dir).expect("open socket dir");
+        assert_eq!(
+            response.refusal, None,
+            "spawn refused: {:?}",
+            response.detail
+        );
+        let socket_fd =
+            crate::sys::path_safe::open_dir_path_safe(&socket_dir).expect("open socket dir");
         assert_eq!(
             crate::sys::path_safe::fd_extended_acl_present(socket_fd.as_fd())
                 .expect("inspect socket dir ACL"),
@@ -15636,12 +15771,18 @@ mod tests {
         let mut stale = std::env::temp_dir();
         stale.push(format!("d2b-stale-{}.sock", std::process::id()));
         let _ = fs::remove_file(&stale);
-        let listener =
-            std::os::unix::net::UnixListener::bind(&stale).expect("bind stale socket");
+        let listener = std::os::unix::net::UnixListener::bind(&stale).expect("bind stale socket");
         drop(listener);
-        assert!(stale.exists(), "the dropped listener leaves a stale socket file");
+        assert!(
+            stale.exists(),
+            "the dropped listener leaves a stale socket file"
+        );
 
-        let harness = SpawnKernelHarness::new(&root, &root.join("unused-bundle.json"), &root.join("runtime"));
+        let harness = SpawnKernelHarness::new(
+            &root,
+            &root.join("unused-bundle.json"),
+            &root.join("runtime"),
+        );
         let response = envelope_response(
             harness
                 .invoke(
@@ -15662,14 +15803,21 @@ mod tests {
                 )
                 .expect("cloud-hypervisor spawn dispatches"),
         );
-        assert_eq!(response.refusal, None, "spawn refused: {:?}", response.detail);
+        assert_eq!(
+            response.refusal, None,
+            "spawn refused: {:?}",
+            response.detail
+        );
         assert!(
             !stale.exists(),
             "the stale socket must be unlinked before the spawn proceeds"
         );
         let result = response.result.clone().expect("a dispatched kernel result");
         assert!(
-            result.get("pid").and_then(serde_json::Value::as_i64).is_some(),
+            result
+                .get("pid")
+                .and_then(serde_json::Value::as_i64)
+                .is_some(),
             "the spawn must proceed after the stale socket cleanup"
         );
         cleanup_spawn_test_runner("vm-stale:ch-runner");
@@ -15681,7 +15829,11 @@ mod tests {
     fn spawn_process_refuses_a_second_live_spawn_for_the_same_runner() {
         let root = test_audit_dir("spawn-kernel-duplicate-guard");
         fs::create_dir_all(&root).expect("create test root");
-        let harness = SpawnKernelHarness::new(&root, &root.join("unused-bundle.json"), &root.join("runtime"));
+        let harness = SpawnKernelHarness::new(
+            &root,
+            &root.join("unused-bundle.json"),
+            &root.join("runtime"),
+        );
         let first = envelope_response(
             harness
                 .invoke(
@@ -15698,7 +15850,11 @@ mod tests {
                 )
                 .expect("first spawn dispatches"),
         );
-        assert_eq!(first.refusal, None, "first spawn refused: {:?}", first.detail);
+        assert_eq!(
+            first.refusal, None,
+            "first spawn refused: {:?}",
+            first.detail
+        );
         let pid = first
             .result
             .clone()
@@ -15764,8 +15920,7 @@ mod tests {
         };
 
         let root = test_audit_dir("publish-trusted-context");
-        crate::envelope::init_trusted_context_store(&root)
-            .expect("init the trusted context store");
+        crate::envelope::init_trusted_context_store(&root).expect("init the trusted context store");
         let bundle = build_test_bundle(&root);
         let config = test_server_config(&root, &bundle.manifest_path);
         let (log, capture) = AuditLog::open_capturing(
@@ -15802,7 +15957,10 @@ mod tests {
             &backend,
         )
         .expect("the publication dispatches");
-        assert!(result.fds.is_empty(), "the publication carries no descriptors");
+        assert!(
+            result.fds.is_empty(),
+            "the publication carries no descriptors"
+        );
         match result.response {
             BrokerResponse::PublishTrustedContext(PublishTrustedContextResponse {
                 broker_epoch,
@@ -15874,15 +16032,14 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn the_ownership_matrix_preflight_caller_answers_through_the_envelope_end_to_end() {
-        use d2b_contracts::types::VmId;
-        use d2b_contracts_broker::broker_wire::{
-            BrokerCallerRole, BrokerRequest, ForwardOperationOutcome,
-            ForwardOperationRequest, ForwardOperationResponse,
-            OwnershipMatrixCheckRequest,
-        };
         use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
         use crate::forwarding::SocketForwarder;
         use crate::protocol::{bind_seqpacket, recv_json_frame, send_json_frame};
+        use d2b_contracts::types::VmId;
+        use d2b_contracts_broker::broker_wire::{
+            BrokerCallerRole, BrokerRequest, ForwardOperationOutcome, ForwardOperationRequest,
+            ForwardOperationResponse, OwnershipMatrixCheckRequest,
+        };
         use nix::sys::socket::{SockFlag, accept4};
         use std::os::fd::AsRawFd;
 
@@ -15946,7 +16103,9 @@ mod tests {
         // order.
         let envelope = BrokerEnvelope::over(
             crate::catalog::BrokerProfileId::Host,
-            Box::new(ForwardingDispatcher::new(SocketForwarder::new(forward_path))),
+            Box::new(ForwardingDispatcher::new(SocketForwarder::new(
+                forward_path,
+            ))),
         )
         .commit_forwarded()
         .build();
@@ -15959,8 +16118,8 @@ mod tests {
             vm_id: VmId::new("vm-1"),
             tracing_span_id: None,
         });
-        let audit_context =
-            DispatchAuditContext::from_request(&request, 4242, &caller_role).expect("audit context");
+        let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("audit context");
         let result = dispatch_request_with_backend(
             request,
             1000,
@@ -15987,11 +16146,11 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn an_absent_forwarding_peer_refuses_the_preflight_with_the_unregistered_handler_code() {
+        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
         use d2b_contracts::types::VmId;
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, OwnershipMatrixCheckRequest,
         };
-        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
 
         // U5 error path (the prebind gap): before the daemon binds its
         // forwarding leg, the envelope holds no serving peer and refuses the
@@ -16022,8 +16181,8 @@ mod tests {
             vm_id: VmId::new("vm-1"),
             tracing_span_id: None,
         });
-        let audit_context =
-            DispatchAuditContext::from_request(&request, 4242, &caller_role).expect("audit context");
+        let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("audit context");
         let error = dispatch_request_with_backend(
             request,
             1000,
@@ -16058,13 +16217,13 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn an_envelope_invoke_root_call_crosses_the_carrier_and_returns_the_result() {
-        use d2b_contracts_broker::broker_wire::{
-            BrokerCallerRole, BrokerRequest, EnvelopeInvokeRequest,
-            ForwardOperationOutcome, ForwardOperationRequest, ForwardOperationResponse,
-        };
         use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
         use crate::forwarding::SocketForwarder;
         use crate::protocol::{bind_seqpacket, recv_json_frame, send_json_frame};
+        use d2b_contracts_broker::broker_wire::{
+            BrokerCallerRole, BrokerRequest, EnvelopeInvokeRequest, ForwardOperationOutcome,
+            ForwardOperationRequest, ForwardOperationResponse,
+        };
         use nix::sys::socket::{SockFlag, accept4};
 
         let root = test_audit_dir("envelope-invoke-happy");
@@ -16112,7 +16271,9 @@ mod tests {
 
         let envelope = BrokerEnvelope::over(
             crate::catalog::BrokerProfileId::Host,
-            Box::new(ForwardingDispatcher::new(SocketForwarder::new(forward_path))),
+            Box::new(ForwardingDispatcher::new(SocketForwarder::new(
+                forward_path,
+            ))),
         )
         .commit_forwarded()
         .build();
@@ -16130,8 +16291,8 @@ mod tests {
             fd_indexes: vec![],
             fd_kinds: vec![],
         });
-        let audit_context =
-            DispatchAuditContext::from_request(&request, 4242, &caller_role).expect("audit context");
+        let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("audit context");
         let result = dispatch_request_with_backend(
             request,
             1000,
@@ -16152,7 +16313,10 @@ mod tests {
                 let result = response
                     .result
                     .expect("the happy path carries the canonical result");
-                assert_eq!(result.get("family").and_then(serde_json::Value::as_str), Some("process"));
+                assert_eq!(
+                    result.get("family").and_then(serde_json::Value::as_str),
+                    Some("process")
+                );
                 assert_eq!(
                     result.get("zone").and_then(serde_json::Value::as_str),
                     Some("test")
@@ -16171,10 +16335,10 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn an_envelope_invoke_call_without_a_serving_peer_refuses_with_the_closed_code() {
+        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, EnvelopeInvokeRequest,
         };
-        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
 
         let root = test_audit_dir("envelope-invoke-prebind");
         fs::create_dir_all(&root).expect("create audit test dir");
@@ -16206,8 +16370,8 @@ mod tests {
             fd_indexes: vec![],
             fd_kinds: vec![],
         });
-        let audit_context =
-            DispatchAuditContext::from_request(&request, 4242, &caller_role).expect("audit context");
+        let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("audit context");
         let result = dispatch_request_with_backend(
             request,
             1000,
@@ -16236,8 +16400,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
-    fn an_unwritable_state_dir_refuses_publications_fail_closed_without_taking_the_broker_down()
-    {
+    fn an_unwritable_state_dir_refuses_publications_fail_closed_without_taking_the_broker_down() {
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, PublishTrustedContextValues,
         };
@@ -16319,10 +16482,7 @@ mod tests {
             // a startup failure.
             Ok(result) => {
                 assert!(
-                    matches!(
-                        result.response,
-                        BrokerResponse::PublishTrustedContext(_)
-                    ),
+                    matches!(result.response, BrokerResponse::PublishTrustedContext(_)),
                     "an already-open process store keeps serving publications, got {:?}",
                     result.response
                 );
@@ -16482,12 +16642,6 @@ mod tests {
             }
             other => panic!("expected ExportBrokerAudit response, got {other:?}"),
         }
-
-
-
-
-
-
 
         // U10 retired the typed process-family wire arms (OpenPidfd,
         // SignalRunner, SpawnRunner) at wire v6. Their privileged cores
@@ -16669,7 +16823,6 @@ mod tests {
             }
             other => panic!("expected QemuMediaQuit response, got {other:?}"),
         }
-
 
         assert_eq!(
             capture.lock().expect("capture final lock").len(),
@@ -17204,11 +17357,11 @@ mod tests {
     // envelope response.
     #[test]
     fn signal_pidfd_refuses_a_stale_pidfd() {
+        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher, KernelDispatcher};
+        use crate::kernel_ops::{KernelConfig, kernel_table};
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, EnvelopeInvokeRequest, FdKind,
         };
-        use crate::envelope::{BrokerEnvelope, ForwardingDispatcher, KernelDispatcher};
-        use crate::kernel_ops::{KernelConfig, kernel_table};
 
         let root = test_audit_dir("signal-pidfd-stale");
         fs::create_dir_all(&root).expect("create test root");
@@ -17251,8 +17404,11 @@ mod tests {
             .expect("spawn sleep child");
         let pid = child.id() as i32;
         let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
-        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::Signal::SIGKILL)
-            .expect("kill child");
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .expect("kill child");
         child.wait().expect("child reaped");
 
         let request = BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
@@ -17280,7 +17436,10 @@ mod tests {
         )
         .expect("the refusal travels inside the EnvelopeInvoke response");
         let BrokerResponse::EnvelopeInvoke(response) = result.response else {
-            panic!("expected an EnvelopeInvoke response, got {:?}", result.response);
+            panic!(
+                "expected an EnvelopeInvoke response, got {:?}",
+                result.response
+            );
         };
         assert_eq!(
             response.refusal.as_deref(),
@@ -17671,7 +17830,9 @@ mod tests {
             dispatches: DispatchPool::new(2),
             ipc_rate_limiter: Arc::clone(&limiter),
         };
-        use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequestEnvelope, HelloRequest};
+        use d2b_contracts_broker::broker_wire::{
+            BrokerCallerRole, BrokerRequestEnvelope, HelloRequest,
+        };
         let (client, server) = socketpair(
             AddressFamily::Unix,
             SockType::SeqPacket,
@@ -18024,10 +18185,7 @@ mod tests {
                     &zone_uid,
                     &network_uid,
                     &attachment_id,
-                    (
-                        network_generation,
-                        attachment_generation,
-                    ),
+                    (network_generation, attachment_generation),
                     &bundle_generation,
                     role_id.as_str(),
                     "corp-vm",
@@ -19494,7 +19652,9 @@ mod tests {
             let start_time_ticks = read_proc_start_time_ticks(pid)
                 .expect("read start time")
                 .expect("live child");
-runner_pidfds().insert(runner_id, pidfd.try_clone().expect("clone pidfd"),).expect("register runner pidfd");
+            runner_pidfds()
+                .insert(runner_id, pidfd.try_clone().expect("clone pidfd"))
+                .expect("register runner pidfd");
             runner_metadata_registry()
                 .lock()
                 .expect("metadata lock")
@@ -19538,7 +19698,9 @@ runner_pidfds().insert(runner_id, pidfd.try_clone().expect("clone pidfd"),).expe
             let pid = child.id() as i32;
             let runner_id = "reap-vm:ch-runner";
             let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
-runner_pidfds().insert(runner_id, pidfd.try_clone().expect("clone pidfd"),).expect("register runner pidfd");
+            runner_pidfds()
+                .insert(runner_id, pidfd.try_clone().expect("clone pidfd"))
+                .expect("register runner pidfd");
             runner_metadata_registry()
                 .lock()
                 .expect("metadata lock")
@@ -19589,7 +19751,9 @@ runner_pidfds().insert(runner_id, pidfd.try_clone().expect("clone pidfd"),).expe
             let runner_id = format!("test-vm:test-role-{pid}");
             {
                 let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
-                runner_pidfds().insert(&runner_id, pidfd).expect("register runner pidfd");
+                runner_pidfds()
+                    .insert(&runner_id, pidfd)
+                    .expect("register runner pidfd");
             }
             std::mem::forget(child);
 
@@ -19612,7 +19776,9 @@ runner_pidfds().insert(runner_id, pidfd.try_clone().expect("clone pidfd"),).expe
             let runner_id = format!("test-vm:sigterm-{pid}");
             {
                 let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
-                runner_pidfds().insert(&runner_id, pidfd).expect("register runner pidfd");
+                runner_pidfds()
+                    .insert(&runner_id, pidfd)
+                    .expect("register runner pidfd");
             }
             kill(Pid::from_raw(pid), Signal::SIGTERM).expect("kill SIGTERM");
             std::mem::forget(child);
@@ -19636,7 +19802,9 @@ runner_pidfds().insert(runner_id, pidfd.try_clone().expect("clone pidfd"),).expe
             let runner_id = format!("test-vm:sigkill-{pid}");
             {
                 let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
-                runner_pidfds().insert(&runner_id, pidfd).expect("register runner pidfd");
+                runner_pidfds()
+                    .insert(&runner_id, pidfd)
+                    .expect("register runner pidfd");
             }
             kill(Pid::from_raw(pid), Signal::SIGKILL).expect("kill SIGKILL");
             std::mem::forget(child);
@@ -19661,7 +19829,9 @@ runner_pidfds().insert(runner_id, pidfd.try_clone().expect("clone pidfd"),).expe
                 let pid = child.id() as i32;
                 let runner_id = format!("test-vm:stress-{i}-{pid}");
                 let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
-                runner_pidfds().insert(&runner_id, pidfd).expect("register runner pidfd");
+                runner_pidfds()
+                    .insert(&runner_id, pidfd)
+                    .expect("register runner pidfd");
                 runner_ids.push(runner_id);
                 std::mem::forget(child);
             }
@@ -19699,7 +19869,9 @@ runner_pidfds().insert(runner_id, pidfd.try_clone().expect("clone pidfd"),).expe
             let runner_id = format!("test-vm:targeted-exited-{pid}");
             let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
             let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
-runner_pidfds().insert(&runner_id, registry_dup).expect("register runner pidfd");
+            runner_pidfds()
+                .insert(&runner_id, registry_dup)
+                .expect("register runner pidfd");
             std::mem::forget(child);
 
             // The child exits ~immediately; loop the targeted reap until
@@ -19748,7 +19920,9 @@ runner_pidfds().insert(&runner_id, registry_dup).expect("register runner pidfd")
             let runner_id = format!("test-vm:targeted-alive-{pid}");
             let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
             let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
-runner_pidfds().insert(&runner_id, registry_dup).expect("register runner pidfd");
+            runner_pidfds()
+                .insert(&runner_id, registry_dup)
+                .expect("register runner pidfd");
 
             let outcome = targeted_reap_runner(&runner_id, pidfd.as_fd());
             assert_eq!(outcome, TargetedReapOutcome::StillAlive);
@@ -19784,7 +19958,9 @@ runner_pidfds().insert(&runner_id, registry_dup).expect("register runner pidfd")
             let runner_id = format!("test-vm:targeted-signaled-{pid}");
             let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
             let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
-runner_pidfds().insert(&runner_id, registry_dup).expect("register runner pidfd");
+            runner_pidfds()
+                .insert(&runner_id, registry_dup)
+                .expect("register runner pidfd");
             std::mem::forget(child);
 
             kill(Pid::from_raw(pid), Signal::SIGKILL).expect("kill SIGKILL");
@@ -19825,7 +20001,9 @@ runner_pidfds().insert(&runner_id, registry_dup).expect("register runner pidfd")
             let runner_id = format!("test-vm:targeted-echild-{pid}");
             let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
             let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
-runner_pidfds().insert(&runner_id, registry_dup).expect("register runner pidfd");
+            runner_pidfds()
+                .insert(&runner_id, registry_dup)
+                .expect("register runner pidfd");
             runner_metadata_registry()
                 .lock()
                 .expect("metadata lock")
