@@ -257,6 +257,7 @@ impl SocketForwarder {
             .map_err(|error| DispatchFailure::unregistered_handler(error.to_string()))?;
         tracing::info!(
             operation = %request.operation,
+            invocation = %request.invocation_id,
             request_fds = raw.len(),
             received_fds = response_fds.len(),
             "forward exchange fd probe"

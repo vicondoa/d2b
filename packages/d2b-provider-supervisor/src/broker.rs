@@ -1824,6 +1824,8 @@ fn reply_take_fd(reply: &mut KernelReply, index: u32) -> Result<OwnedFd, Process
         warn!(
             provider = "supervisor",
             index = index,
+            reply_fds = reply.fds.len(),
+            reply_invocation = %reply.response.invocation_id,
             "broker reply descriptor index out of range"
         );
         return Err(ProcessEffectError::PidfdUnavailable);

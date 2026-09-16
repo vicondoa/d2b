@@ -2864,6 +2864,7 @@ impl OperationHandler for SpawnRunnerHandler {
             );
         }
         tracing::info!(
+            invocation_id = ctx.invocation_id,
             vm = %request.vm_id.as_str(),
             role = %request.role_id.as_str(),
             reply_fd_count = fds.len(),
