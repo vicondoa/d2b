@@ -6,8 +6,7 @@ pub mod kernel_client;
 
 pub use broker_wire::BrokerRequest;
 pub use broker_wire::{
-    FORWARD_SOCKET_ENV, ForwardOperationOutcome, ForwardOperationRequest,
-    ForwardOperationResponse,
+    FORWARD_SOCKET_ENV, ForwardOperationOutcome, ForwardOperationRequest, ForwardOperationResponse,
 };
 pub use d2b_contracts::privileges_w3::W3BrokerOperation;
 

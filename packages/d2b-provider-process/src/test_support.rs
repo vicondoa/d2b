@@ -190,12 +190,9 @@ impl ProcessDriverEffects for FakeEffects {
         _timeout: Duration,
     ) -> Result<ProcessIdentityDigest, String> {
         self.calls.lock().push("launch");
-        self.launches.lock().push(recorded_launch(
-            "Process",
-            identity,
-            spec.execution(),
-            None,
-        ));
+        self.launches
+            .lock()
+            .push(recorded_launch("Process", identity, spec.execution(), None));
         self.config.lock().launch.clone()
     }
 
@@ -227,7 +224,10 @@ impl ProcessDriverEffects for FakeEffects {
     ) -> Result<ProviderAdoption, String> {
         self.calls.lock().push("adopt");
         let mut config = self.config.lock();
-        Ok(config.adoption.pop_front().unwrap_or(ProviderAdoption::Absent))
+        Ok(config
+            .adoption
+            .pop_front()
+            .unwrap_or(ProviderAdoption::Absent))
     }
 
     async fn probe(
@@ -237,7 +237,10 @@ impl ProcessDriverEffects for FakeEffects {
     ) -> Result<ProviderLiveness, String> {
         self.calls.lock().push("probe");
         let mut config = self.config.lock();
-        Ok(config.liveness.pop_front().unwrap_or(ProviderLiveness::Alive))
+        Ok(config
+            .liveness
+            .pop_front()
+            .unwrap_or(ProviderLiveness::Alive))
     }
 
     async fn adopt_ephemeral(
@@ -250,7 +253,10 @@ impl ProcessDriverEffects for FakeEffects {
         if let Some(error) = config.adopt_error.clone() {
             return Err(error);
         }
-        Ok(config.adoption.pop_front().unwrap_or(ProviderAdoption::Absent))
+        Ok(config
+            .adoption
+            .pop_front()
+            .unwrap_or(ProviderAdoption::Absent))
     }
 
     async fn probe_ephemeral(
@@ -260,7 +266,10 @@ impl ProcessDriverEffects for FakeEffects {
     ) -> Result<ProviderLiveness, String> {
         self.calls.lock().push("probe-ephemeral");
         let mut config = self.config.lock();
-        Ok(config.liveness.pop_front().unwrap_or(ProviderLiveness::Alive))
+        Ok(config
+            .liveness
+            .pop_front()
+            .unwrap_or(ProviderLiveness::Alive))
     }
 
     async fn stop(

@@ -47,7 +47,10 @@ pub enum KernelInvokeError {
     /// The broker answered a non-envelope response.
     Protocol(String),
     /// The broker refused the invocation with the envelope's closed code.
-    Refused { code: String, detail: Option<String> },
+    Refused {
+        code: String,
+        detail: Option<String>,
+    },
 }
 
 impl std::fmt::Display for KernelInvokeError {
@@ -180,8 +183,14 @@ pub fn envelope_invoke_kernel(
     }
     // The reply must arrive within the io timeout: poll for readability so
     // a silent peer cannot hold the caller past its budget.
-    let mut fds = [PollFd::new(&socket, PollFlags::IN | PollFlags::ERR | PollFlags::HUP)];
-    match poll(&mut fds, io_timeout.as_millis().min(i32::MAX as u128) as i32) {
+    let mut fds = [PollFd::new(
+        &socket,
+        PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
+    )];
+    match poll(
+        &mut fds,
+        io_timeout.as_millis().min(i32::MAX as u128) as i32,
+    ) {
         Ok(0) => {
             return Err(KernelInvokeError::Transport("reply timeout".to_owned()));
         }

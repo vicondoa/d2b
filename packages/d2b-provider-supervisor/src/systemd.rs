@@ -51,8 +51,8 @@ impl SystemdInvocationIdentity {
     /// A zero main pid, zero generation, or an empty bundle content identity
     /// is a drifted runtime tuple, not a launchable identity.
     pub fn new(identity: &SystemdUnitIdentity) -> Result<Self, ProcessEffectError> {
-        let main_pid = NonZeroU32::new(identity.main_pid)
-            .ok_or(ProcessEffectError::IdentityChanged)?;
+        let main_pid =
+            NonZeroU32::new(identity.main_pid).ok_or(ProcessEffectError::IdentityChanged)?;
         if identity.invocation_id == [0; 16]
             || identity.cgroup_identity == [0; 32]
             || identity.start_time_ticks == 0
@@ -256,13 +256,15 @@ impl<O: SystemdEffectOwner> SystemdProcessBackend<O> {
         &self,
         identity: &ProcessIdentityDigest,
     ) -> Result<SystemdInvocationIdentity, ProcessEffectError> {
-        self.observations.lock().map_err(|_| {
-            error!(
-                provider = "supervisor",
-                "systemd observation ledger lock poisoned; observation lookup failed"
-            );
-            ProcessEffectError::ObserveFailed
-        })?
+        self.observations
+            .lock()
+            .map_err(|_| {
+                error!(
+                    provider = "supervisor",
+                    "systemd observation ledger lock poisoned; observation lookup failed"
+                );
+                ProcessEffectError::ObserveFailed
+            })?
             .remove(identity)
             .ok_or(ProcessEffectError::IdentityChanged)
     }
@@ -520,13 +522,15 @@ impl BrokerSystemdEffectOwner {
         identity: &SystemdInvocationIdentity,
         request: SystemdUnitRequest,
     ) -> Result<(), ProcessEffectError> {
-        self.requests.lock().map_err(|_| {
-            error!(
-                provider = "supervisor",
-                "systemd unit request ledger lock poisoned; lookup failed"
-            );
-            ProcessEffectError::ObserveFailed
-        })?
+        self.requests
+            .lock()
+            .map_err(|_| {
+                error!(
+                    provider = "supervisor",
+                    "systemd unit request ledger lock poisoned; lookup failed"
+                );
+                ProcessEffectError::ObserveFailed
+            })?
             .insert(identity.digest(), request);
         Ok(())
     }
@@ -535,13 +539,15 @@ impl BrokerSystemdEffectOwner {
         &self,
         identity: &SystemdInvocationIdentity,
     ) -> Result<SystemdUnitRequest, ProcessEffectError> {
-        self.requests.lock().map_err(|_| {
-            error!(
-                provider = "supervisor",
-                "systemd unit request ledger lock poisoned; lookup failed"
-            );
-            ProcessEffectError::ObserveFailed
-        })?
+        self.requests
+            .lock()
+            .map_err(|_| {
+                error!(
+                    provider = "supervisor",
+                    "systemd unit request ledger lock poisoned; lookup failed"
+                );
+                ProcessEffectError::ObserveFailed
+            })?
             .get(&identity.digest())
             .cloned()
             .ok_or(ProcessEffectError::IdentityChanged)
@@ -551,13 +557,15 @@ impl BrokerSystemdEffectOwner {
         &self,
         identity: &SystemdInvocationIdentity,
     ) -> Result<SystemdUnitRequest, ProcessEffectError> {
-        self.requests.lock().map_err(|_| {
-            error!(
-                provider = "supervisor",
-                "systemd unit request ledger lock poisoned; take failed"
-            );
-            ProcessEffectError::StopFailed
-        })?
+        self.requests
+            .lock()
+            .map_err(|_| {
+                error!(
+                    provider = "supervisor",
+                    "systemd unit request ledger lock poisoned; take failed"
+                );
+                ProcessEffectError::StopFailed
+            })?
             .remove(&identity.digest())
             .ok_or(ProcessEffectError::IdentityChanged)
     }

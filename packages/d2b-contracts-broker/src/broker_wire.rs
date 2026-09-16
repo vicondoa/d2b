@@ -266,28 +266,12 @@ pub const MAX_FRAME_FDS: usize = 8;
 #[serde(rename_all = "kebab-case")]
 pub enum FdKind {
     /// A FIFO (pipe) end。
-
-
-
     Fifo,
     /// A socket。
-
-
-
     Socket,
     /// A character device。
-
-
-
-
-
     CharDevice,
     /// A block device。
-
-
-
-
-
     BlockDevice,
     /// Any descriptor kind.
     ///
@@ -297,26 +281,10 @@ pub enum FdKind {
     /// `Any` as accepting every attached descriptor regardless of
     /// fstat kind - including anon-inodes such as pidfds, whose
     /// fstat mode carries no file type (U10 fd leg).
-
-
-
     Any,
     /// A regular file。
-
-
-
-
-
-
-
     Regular,
     /// A directory。
-
-
-
-
-
-
     Directory,
 }
 
@@ -467,7 +435,6 @@ pub struct ForwardOperationRequest {
     /// The positions,in the frame's SCM_RIGHTS attachment list,of the
     /// descriptors this request carries. Empty when the request carries none.
 
-
     #[serde(default)]
     pub fd_indexes: Vec<u32>,
     /// The kernel kind each declared descriptor must present,index-aligned
@@ -495,12 +462,10 @@ pub enum ForwardOperationOutcome {
         /// descriptors the answering peer returned. Empty when the response
         /// carries none.
 
-
         #[serde(default)]
         fd_indexes: Vec<u32>,
         /// The kernel kind each declared descriptor must present,index-aligned
         /// with the fd-index declarations.
-
 
         #[serde(default)]
         fd_kinds: Vec<FdKind>,
@@ -913,13 +878,9 @@ impl BrokerRequest {
     ///
     /// This is the allocation-free companion of [`Self::authoritative_audit_join`].
     pub fn requires_authoritative_audit_join(&self) -> bool {
-        !matches!(
-            self,
-                | Self::ExportBrokerAudit(_)
-                | Self::Hello(_)
-                | Self::PublishTrustedContext(_)
-                | Self::EnvelopeInvoke(_)
-        )
+        !matches!(self, |Self::ExportBrokerAudit(_)| Self::Hello(_)
+            | Self::PublishTrustedContext(_)
+            | Self::EnvelopeInvoke(_))
     }
 }
 
@@ -2422,6 +2383,10 @@ pub enum RunnerSignal {
 pub struct SignalRunnerRequest {
     pub vm_id: VmId,
     pub role_id: RoleId,
+    /// The closed runner role the signal targets; the pidfd-table role the
+    /// lookup keys on is derived from it (see `RunnerRole::pidfd_table_role`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<RunnerRole>,
     pub signal: RunnerSignal,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
@@ -2585,6 +2550,29 @@ pub enum RunnerRole {
     /// with the real host compositor socket bound read/write at a
     /// fixed in-jail upstream path.
     WaylandProxy,
+}
+
+impl RunnerRole {
+    /// The daemon pidfd-table role one runner registers and is looked up
+    /// under.
+    ///
+    /// Roles that admit several runners per VM - the virtiofsd sidecar is
+    /// one per `microvm.shares` row - share the template-scoped role id, so
+    /// their table role carries the row's resource uid; a bare role id
+    /// would make the second runner's registration collide with the first
+    /// and every observation would resolve to the wrong pid. Single-runner
+    /// roles (the VM runners, the controllers) keep the bare role id the
+    /// vm-stop signal paths key on.
+    pub fn pidfd_table_role(
+        role: Option<&RunnerRole>,
+        role_id: &str,
+        resource_uid: Option<&ResourceUid>,
+    ) -> String {
+        match (role, resource_uid) {
+            (Some(RunnerRole::Virtiofsd), Some(uid)) => format!("{role_id}@{}", uid.as_str()),
+            _ => role_id.to_owned(),
+        }
+    }
 }
 
 /// Typed semantic sandbox plan compiled by the daemon and re-validated by
@@ -3528,8 +3516,7 @@ mod tests {
             ] {
                 let mut payload = opaque_create_tap_payload();
                 payload.as_object_mut().unwrap().remove(field);
-                let frame = encode_frame(&envelope_invoke_json(kind, payload))
-                    .expect("encodes");
+                let frame = encode_frame(&envelope_invoke_json(kind, payload)).expect("encodes");
                 let decoded =
                     decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
                 let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
@@ -3561,8 +3548,7 @@ mod tests {
                     .as_object_mut()
                     .unwrap()
                     .insert(field.to_owned(), serde_json::Value::Null);
-                let frame = encode_frame(&envelope_invoke_json(kind, payload))
-                    .expect("encodes");
+                let frame = encode_frame(&envelope_invoke_json(kind, payload)).expect("encodes");
                 let decoded =
                     decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
                 let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
@@ -4255,7 +4241,6 @@ mod tests {
         );
     }
 
-
     fn envelope_invoke_json(operation: &str, payload: serde_json::Value) -> serde_json::Value {
         serde_json::json!({
             "kind": "EnvelopeInvoke",
@@ -4310,7 +4295,10 @@ mod tests {
         };
         assert_eq!(invoke.operation, "signal-pidfd");
         assert_eq!(
-            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+            invoke
+                .payload
+                .get("signal")
+                .and_then(serde_json::Value::as_i64),
             Some(15)
         );
     }
@@ -4330,7 +4318,10 @@ mod tests {
         };
         assert_eq!(invoke.operation, "kill-cgroup");
         assert_eq!(
-            invoke.payload.get("cgroupPath").and_then(serde_json::Value::as_str),
+            invoke
+                .payload
+                .get("cgroupPath")
+                .and_then(serde_json::Value::as_str),
             Some("/sys/fs/cgroup/d2b.slice/vm-a.runner")
         );
     }
@@ -4366,12 +4357,14 @@ mod tests {
         let response = BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
             operation: "signal-pidfd".to_owned(),
             invocation_id: "invocation-1".to_owned(),
-            result: Some(serde_json::to_value(SignalRunnerResponse {
-                signaled: false,
-                vm_id: VmId::new("corp-vm"),
-                role_id: RoleId::new("ch-runner"),
-            })
-            .expect("response serializes")),
+            result: Some(
+                serde_json::to_value(SignalRunnerResponse {
+                    signaled: false,
+                    vm_id: VmId::new("corp-vm"),
+                    role_id: RoleId::new("ch-runner"),
+                })
+                .expect("response serializes"),
+            ),
             refusal: None,
             detail: None,
             fd_indexes: vec![],
@@ -4400,30 +4393,32 @@ mod tests {
         let response = BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
             operation: "SpawnRunner".to_owned(),
             invocation_id: "invocation-1".to_owned(),
-            result: Some(serde_json::to_value(SpawnRunnerResponse {
-                vm_id: VmId::new("corp-vm"),
-                role_id: RoleId::new("ch"),
-                role: RunnerRole::CloudHypervisor,
-                resource_ref: None,
-                resource_uid: None,
-                zone_uid: None,
-                owner_ref: None,
-                runtime_scope: None,
-                pid: 4242,
-                start_time_ticks: 987_654_321,
-                pidfd_index: 0,
-                controller_bootstrap_fd_index: None,
-                console_fd_index: None,
-                execution_ref: None,
-                execution_domain: None,
-                user_ref: None,
-                guest_execution: None,
-                provider_identity: None,
-                template_identity: None,
-                generation: None,
-                bundle_content_identity: None,
-            })
-            .expect("response serializes")),
+            result: Some(
+                serde_json::to_value(SpawnRunnerResponse {
+                    vm_id: VmId::new("corp-vm"),
+                    role_id: RoleId::new("ch"),
+                    role: RunnerRole::CloudHypervisor,
+                    resource_ref: None,
+                    resource_uid: None,
+                    zone_uid: None,
+                    owner_ref: None,
+                    runtime_scope: None,
+                    pid: 4242,
+                    start_time_ticks: 987_654_321,
+                    pidfd_index: 0,
+                    controller_bootstrap_fd_index: None,
+                    console_fd_index: None,
+                    execution_ref: None,
+                    execution_domain: None,
+                    user_ref: None,
+                    guest_execution: None,
+                    provider_identity: None,
+                    template_identity: None,
+                    generation: None,
+                    bundle_content_identity: None,
+                })
+                .expect("response serializes"),
+            ),
             refusal: None,
             detail: None,
             fd_indexes: vec![0],
@@ -4478,8 +4473,7 @@ mod tests {
             fd_kinds: vec![],
         });
         let frame = encode_frame(&nested).expect("encodes");
-        let parsed: BrokerRequest =
-            decode_frame("BrokerRequest", &frame).expect("decodes");
+        let parsed: BrokerRequest = decode_frame("BrokerRequest", &frame).expect("decodes");
         assert_eq!(parsed, nested);
         let reply = BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
             operation: "signal-pidfd".to_owned(),
@@ -4520,7 +4514,8 @@ mod tests {
             fd_kinds: vec![FdKind::Fifo, FdKind::Fifo],
         };
         let frame = encode_frame(&request).expect("encodes");
-        let decoded = decode_frame::<ForwardOperationRequest>("ForwardOperationRequest", &frame).expect("decodes");
+        let decoded = decode_frame::<ForwardOperationRequest>("ForwardOperationRequest", &frame)
+            .expect("decodes");
         assert_eq!(decoded, request);
 
         let outcome = ForwardOperationOutcome::Result {
@@ -4528,11 +4523,10 @@ mod tests {
             fd_indexes: vec![0],
             fd_kinds: vec![FdKind::CharDevice],
         };
-        let response = ForwardOperationResponse {
-            outcome,
-        };
+        let response = ForwardOperationResponse { outcome };
         let frame = encode_frame(&response).expect("encodes");
-        let decoded = decode_frame::<ForwardOperationResponse>("ForwardOperationResponse", &frame).expect("decodes");
+        let decoded = decode_frame::<ForwardOperationResponse>("ForwardOperationResponse", &frame)
+            .expect("decodes");
         assert_eq!(
             decoded.outcome,
             ForwardOperationOutcome::Result {
@@ -4555,7 +4549,8 @@ mod tests {
             "payload": { "label": "x" },
         }))
         .expect("encodes");
-        let decoded = decode_frame::<ForwardOperationRequest>("ForwardOperationRequest", &frame).expect("decodes");
+        let decoded = decode_frame::<ForwardOperationRequest>("ForwardOperationRequest", &frame)
+            .expect("decodes");
         assert!(decoded.fd_indexes.is_empty());
         assert!(decoded.fd_kinds.is_empty());
     }
@@ -4597,8 +4592,7 @@ mod tests {
         // silently dropped comparison value.
         let context = minted_context();
         let frame = encode_frame(&context).expect("encodes");
-        let decoded =
-            decode_frame::<ForwardContext>("ForwardContext", &frame).expect("decodes");
+        let decoded = decode_frame::<ForwardContext>("ForwardContext", &frame).expect("decodes");
         assert_eq!(decoded, context);
 
         let json = serde_json::to_value(&context).expect("serializes");
@@ -4630,9 +4624,8 @@ mod tests {
             fd_kinds: vec![],
         };
         let frame = encode_frame(&request).expect("encodes");
-        let decoded =
-            decode_frame::<ForwardOperationRequest>("ForwardOperationRequest", &frame)
-                .expect("decodes");
+        let decoded = decode_frame::<ForwardOperationRequest>("ForwardOperationRequest", &frame)
+            .expect("decodes");
         assert_eq!(decoded, request);
         assert_eq!(decoded.context, Some(context));
     }

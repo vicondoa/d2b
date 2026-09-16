@@ -8,23 +8,23 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use d2b_contracts_broker::broker_wire::SystemdUnitIdentity;
-use d2b_provider_process::{
-    AdoptionCandidate, BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity,
-    ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest, ProcessRequest,
-    ProcessStopClass, StopClass, WaitReapOwner,
-};
 use d2b_process_conformance::suite;
 use d2b_process_conformance::testing::{ScriptedEffectPort, block_on, fixtures};
 use d2b_process_conformance::{
     AdoptionOutcome, ProcessConformanceError, ProcessLaunchEffectPort, ProcessProvider,
 };
+use d2b_provider_process::{
+    AdoptionCandidate, BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity,
+    ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest, ProcessRequest,
+    ProcessStopClass, StopClass, WaitReapOwner,
+};
+use d2b_provider_process_minijail::{MinijailProcessProvider, PROVIDER_NAME as MINIJAIL};
+use d2b_provider_process_systemd::{PROVIDER_NAME as SYSTEMD, SystemdProcessProvider};
 use d2b_provider_supervisor::{
     BrokerLaunchIntent, BrokerLaunchResolver, BrokerObservedProcess, BrokerProcessBackend,
     ProviderSupervisor, SystemdEffectLaunch, SystemdEffectOwner, SystemdInvocationIdentity,
     SystemdProcessBackend,
 };
-use d2b_provider_process_minijail::{MinijailProcessProvider, PROVIDER_NAME as MINIJAIL};
-use d2b_provider_process_systemd::{PROVIDER_NAME as SYSTEMD, SystemdProcessProvider};
 
 fn minijail_bindings() -> Vec<IdentityBinding> {
     vec![

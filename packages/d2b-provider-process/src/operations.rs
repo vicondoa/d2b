@@ -28,8 +28,8 @@ use d2b_contracts_broker::broker_wire::{
     CgroupKillRequest, DeregisterRunnerPidfdRequest, DeregisterRunnerPidfdResponse,
     GuestExecutionBinding, ObserveRunnerRequest, ObserveRunnerResponse,
     OpenPeerPidfdFromAcceptedSocketRequest, OpenPeerPidfdFromAcceptedSocketResponse,
-    OpenPidfdRequest, OpenPidfdResponse, PollChildReapedResponse, PrepareDirRequest,
-    RunnerRole, RunnerSignal, SignalRunnerRequest, SignalRunnerResponse, SpawnRunnerRequest,
+    OpenPidfdRequest, OpenPidfdResponse, PollChildReapedResponse, PrepareDirRequest, RunnerRole,
+    RunnerSignal, SignalRunnerRequest, SignalRunnerResponse, SpawnRunnerRequest,
     SpawnRunnerResponse,
 };
 use d2b_contracts_broker::kernel_client::{
@@ -39,14 +39,12 @@ use d2b_contracts_resource::v3::{
     CanonicalJsonObject, CanonicalJsonValue, ResourceRef, ResourceUid, canonical_json_bytes,
     execution_policy::ExecutionDomain,
 };
-use d2b_core::bundle_resolver::{
-    BundleResolver, ResolvedRunnerIntent, is_device_worker_role,
-};
+use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent, is_device_worker_role};
 use d2b_core::minijail_profile::CgroupPlacement;
 use d2b_core::processes::ProcessRole;
 use d2b_resource_types::{
-    KernelCaller, OperationCtx, OperationDef, OperationFailure, OperationHandler,
-    OperationResult, ValidatedPayload, WellKnownType,
+    KernelCaller, OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult,
+    ValidatedPayload, WellKnownType,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -366,7 +364,10 @@ fn kernel_result(reply: &KernelReply) -> Result<&serde_json::Value, OperationFai
     reply.response.result.as_ref().ok_or_else(|| {
         OperationFailure::with_detail(
             KERNEL_REFUSED,
-            format!("{}: kernel reply carries no result", reply.response.operation),
+            format!(
+                "{}: kernel reply carries no result",
+                reply.response.operation
+            ),
         )
     })
 }
@@ -379,13 +380,10 @@ fn kernel_result(reply: &KernelReply) -> Result<&serde_json::Value, OperationFai
 /// by its original holder.
 fn duplicate_fd(fd: i32, context: &str) -> Result<OwnedFd, OperationFailure> {
     let pid = rustix::process::Pid::from_raw(std::process::id() as i32).ok_or_else(|| {
-        OperationFailure::with_detail(
-            KERNEL_REFUSED,
-            format!("{context}: current pid is invalid"),
-        )
+        OperationFailure::with_detail(KERNEL_REFUSED, format!("{context}: current pid is invalid"))
     })?;
-    let self_pidfd =
-        rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).map_err(|error| {
+    let self_pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
+        .map_err(|error| {
             OperationFailure::with_detail(
                 KERNEL_REFUSED,
                 format!("{context}: pidfd_open failed: {error}"),
@@ -433,7 +431,10 @@ fn typed_request<T: serde::de::DeserializeOwned>(
 }
 
 /// Serialize one typed response into the canonical result payload.
-fn typed_result<T: Serialize>(operation: &str, response: &T) -> Result<CanonicalJsonObject, OperationFailure> {
+fn typed_result<T: Serialize>(
+    operation: &str,
+    response: &T,
+) -> Result<CanonicalJsonObject, OperationFailure> {
     let value = serde_json::to_value(response).map_err(|error| {
         OperationFailure::with_detail(
             KERNEL_REFUSED,
@@ -455,11 +456,7 @@ fn typed_result<T: Serialize>(operation: &str, response: &T) -> Result<Canonical
 }
 
 /// The daemon-side runner lookup of one `(vm, role)`.
-fn runner_lookup(
-    kernel: &KernelCaller,
-    vm: &str,
-    role: &str,
-) -> Option<(i32, u64)> {
+fn runner_lookup(kernel: &KernelCaller, vm: &str, role: &str) -> Option<(i32, u64)> {
     kernel
         .runner_lookup
         .as_ref()
@@ -812,13 +809,12 @@ fn validate_typed_process_metadata(
             "provider_identity: signed-process-provider".to_owned(),
         ));
     }
-    let expected_template = if intent.role == ProcessRole::ProviderController
-        || is_device_worker_role(&intent.role)
-    {
-        intent.profile_id.as_str()
-    } else {
-        intent.role_id.as_str()
-    };
+    let expected_template =
+        if intent.role == ProcessRole::ProviderController || is_device_worker_role(&intent.role) {
+            intent.profile_id.as_str()
+        } else {
+            intent.role_id.as_str()
+        };
     let mut digest = Sha256::new();
     digest.update(b"d2b-process-template-v1");
     digest.update(expected_template.as_bytes());
@@ -962,7 +958,10 @@ fn private_cgroup_placement(
     if role_path.is_empty() {
         return Err(OperationFailure::with_detail(
             INTENT_MISMATCH,
-            format!("cgroup_commitment: {} has an empty role path", placement.subtree),
+            format!(
+                "cgroup_commitment: {} has an empty role path",
+                placement.subtree
+            ),
         ));
     }
     let mut private = placement.clone();
@@ -992,12 +991,12 @@ fn validate_sandbox_launch_plan(
             format!("sandbox_plan.{field}: {requested} vs {resolved}"),
         )
     };
-    if plan.domain
-        != req
-            .execution_domain
-            .unwrap_or(ExecutionDomain::System)
-    {
-        return Err(mismatch("domain", format!("{:?}", plan.domain), "request-domain"));
+    if plan.domain != req.execution_domain.unwrap_or(ExecutionDomain::System) {
+        return Err(mismatch(
+            "domain",
+            format!("{:?}", plan.domain),
+            "request-domain",
+        ));
     }
     if !plan.no_new_privileges {
         return Err(mismatch("no_new_privileges", "false".to_owned(), "true"));
@@ -1006,11 +1005,19 @@ fn validate_sandbox_launch_plan(
         return Err(mismatch(
             "start_root",
             plan.start_root.to_string(),
-            if intent.root_carve_out { "true" } else { "false" },
+            if intent.root_carve_out {
+                "true"
+            } else {
+                "false"
+            },
         ));
     }
     if !plan.read_only_root {
-        return Err(mismatch("read_only_root", "false".to_owned(), "unsupported"));
+        return Err(mismatch(
+            "read_only_root",
+            "false".to_owned(),
+            "unsupported",
+        ));
     }
     if plan.oom_score_adj != 0 {
         return Err(mismatch(
@@ -1045,11 +1052,17 @@ fn validate_sandbox_launch_plan(
             ));
         }
     }
-    if plan.namespace_classes.iter().any(|class| {
-        matches!(class, NamespaceClass::User)
-    }) != expected_namespaces.user
+    if plan
+        .namespace_classes
+        .iter()
+        .any(|class| matches!(class, NamespaceClass::User))
+        != expected_namespaces.user
     {
-        return Err(mismatch("namespace_classes", "user".to_owned(), "bundle-profile"));
+        return Err(mismatch(
+            "namespace_classes",
+            "user".to_owned(),
+            "bundle-profile",
+        ));
     }
     if plan.user_namespace.is_some() != intent.user_namespace.is_some()
         || plan.user_namespace.is_some_and(|spec| {
@@ -1064,9 +1077,8 @@ fn validate_sandbox_launch_plan(
         ));
     }
     if let Some(umask) = &plan.umask {
-        let parsed = u32::from_str_radix(umask, 8).map_err(|_| {
-            mismatch("umask", umask.clone(), "valid-octal")
-        })?;
+        let parsed = u32::from_str_radix(umask, 8)
+            .map_err(|_| mismatch("umask", umask.clone(), "valid-octal"))?;
         if intent.umask != Some(parsed) {
             return Err(mismatch(
                 "umask",
@@ -1208,7 +1220,11 @@ fn validate_spawn_runner_request_matches_intent(
     }
     if let Some(execution_ref) = &req.execution_ref {
         let expected = ResourceRef::parse(&intent.execution_ref).map_err(|_| {
-            mismatch("execution_ref", execution_ref.to_canonical_string(), "invalid-bundle-reference")
+            mismatch(
+                "execution_ref",
+                execution_ref.to_canonical_string(),
+                "invalid-bundle-reference",
+            )
         })?;
         if execution_ref != &expected {
             return Err(mismatch(
@@ -1237,7 +1253,13 @@ fn validate_spawn_runner_request_matches_intent(
         .as_deref()
         .map(ResourceRef::parse)
         .transpose()
-        .map_err(|_| mismatch("user_ref", "invalid-bundle-reference".to_owned(), "invalid-bundle-reference"))?;
+        .map_err(|_| {
+            mismatch(
+                "user_ref",
+                "invalid-bundle-reference".to_owned(),
+                "invalid-bundle-reference",
+            )
+        })?;
     if req.user_ref != expected_user {
         return Err(mismatch(
             "user_ref",
@@ -1433,12 +1455,15 @@ fn audio_state_value<'a>(
     vm_id: &str,
     role_id: &str,
 ) -> Result<&'a str, OperationFailure> {
-    let state = value.get(key).and_then(serde_json::Value::as_str).ok_or_else(|| {
-        OperationFailure::with_detail(
-            KERNEL_REFUSED,
-            format!("audio runner {vm_id}:{role_id} state missing string key {key:?}"),
-        )
-    })?;
+    let state = value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            OperationFailure::with_detail(
+                KERNEL_REFUSED,
+                format!("audio runner {vm_id}:{role_id} state missing string key {key:?}"),
+            )
+        })?;
     match state {
         "on" | "off" => Ok(state),
         other => Err(OperationFailure::with_detail(
@@ -1528,8 +1553,22 @@ fn deterministic_resource_uid(zone: &str, resource_type: &str, name: &str) -> Re
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let text = format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
     );
     ResourceUid::parse(text).expect("the deterministic uid renders canonically")
 }
@@ -1617,7 +1656,10 @@ fn resolve_launch_scope(
     owner_uid: Option<&ResourceUid>,
 ) -> Result<DeviceWorkerScope, OperationFailure> {
     let (zone, bundle_bytes) = zone_bundle_for_uid(resolver, zone_uid).ok_or_else(|| {
-        OperationFailure::with_detail(INTENT_MISMATCH, "resource_ref: verified-bundle-row".to_owned())
+        OperationFailure::with_detail(
+            INTENT_MISMATCH,
+            "resource_ref: verified-bundle-row".to_owned(),
+        )
     })?;
     let owning = row_owner_ref(
         bundle_bytes,
@@ -1675,7 +1717,10 @@ fn resolve_launch_scope(
     let guest = device_guest_owner(bundle_bytes, owning.name().as_str()).ok_or_else(|| {
         OperationFailure::with_detail(
             INTENT_MISMATCH,
-            format!("resource_ref: device-guest-owner ({})", owning.to_canonical_string()),
+            format!(
+                "resource_ref: device-guest-owner ({})",
+                owning.to_canonical_string()
+            ),
         )
     })?;
     Ok(DeviceWorkerScope {
@@ -1837,9 +1882,15 @@ impl OperationHandler for OpenPidfdHandler {
         )
         .await?;
         let result = kernel_result(&reply)?;
-        let pid = result.get("pid").and_then(serde_json::Value::as_i64).ok_or_else(|| {
-            OperationFailure::with_detail(KERNEL_REFUSED, "open-pidfd: result pid missing".to_owned())
-        })? as i32;
+        let pid = result
+            .get("pid")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| {
+                OperationFailure::with_detail(
+                    KERNEL_REFUSED,
+                    "open-pidfd: result pid missing".to_owned(),
+                )
+            })? as i32;
         let verified = result
             .get("verifiedStartTimeTicks")
             .and_then(serde_json::Value::as_i64)
@@ -1925,11 +1976,18 @@ impl OperationHandler for ObserveRunnerHandler {
         let kernel = ctx
             .kernel
             .ok_or_else(|| OperationFailure::new(KERNEL_SEAM_UNWIRED))?;
-        let intent = resolve_intent(kernel, OBSERVE_RUNNER, request.bundle_runner_intent_ref.as_str())?;
+        let intent = resolve_intent(
+            kernel,
+            OBSERVE_RUNNER,
+            request.bundle_runner_intent_ref.as_str(),
+        )?;
         let expected_role = runner_role_for_process_role(&intent.role).ok_or_else(|| {
             OperationFailure::with_detail(
                 INTENT_MISMATCH,
-                format!("ObserveRunner: role {:?} is not a wire runner role", intent.role),
+                format!(
+                    "ObserveRunner: role {:?} is not a wire runner role",
+                    intent.role
+                ),
             )
         })?;
         if request.vm_id.as_str() != intent.vm_name
@@ -1945,8 +2003,15 @@ impl OperationHandler for ObserveRunnerHandler {
         // The daemon's pidfd table is the authoritative presence source: a
         // runner the daemon does not track is not present, exactly as the
         // retired arm answered a registry miss with an absent observation.
-        let Some((pid, start_time_ticks)) = runner_lookup(kernel, request.vm_id.as_str(), request.role_id.as_str())
-        else {
+        let Some((pid, start_time_ticks)) = runner_lookup(
+            kernel,
+            request.vm_id.as_str(),
+            &RunnerRole::pidfd_table_role(
+                Some(&request.role),
+                request.role_id.as_str(),
+                request.resource_uid.as_ref(),
+            ),
+        ) else {
             let response = ObserveRunnerResponse {
                 vm_id: request.vm_id.clone(),
                 role_id: request.role_id.clone(),
@@ -1956,7 +2021,10 @@ impl OperationHandler for ObserveRunnerHandler {
                 cgroup_verified: false,
                 executable_verified: false,
             };
-            return Ok(OperationResult::new(typed_result(OBSERVE_RUNNER, &response)?));
+            return Ok(OperationResult::new(typed_result(
+                OBSERVE_RUNNER,
+                &response,
+            )?));
         };
         let typed = request.resource_ref.is_some();
         let cgroup_placement = private_cgroup_placement(
@@ -1993,9 +2061,7 @@ impl OperationHandler for ObserveRunnerHandler {
             .get("startTimeTicks")
             .and_then(serde_json::Value::as_i64)
             .map(|value| value as u64);
-        let executable = result
-            .get("executable")
-            .and_then(serde_json::Value::as_str);
+        let executable = result.get("executable").and_then(serde_json::Value::as_str);
         let registered_binary = result
             .get("registeredBinary")
             .and_then(serde_json::Value::as_str);
@@ -2027,7 +2093,10 @@ impl OperationHandler for ObserveRunnerHandler {
             cgroup_verified,
             executable_verified,
         };
-        Ok(OperationResult::new(typed_result(OBSERVE_RUNNER, &response)?))
+        Ok(OperationResult::new(typed_result(
+            OBSERVE_RUNNER,
+            &response,
+        )?))
     }
 }
 
@@ -2217,7 +2286,8 @@ fn resolve_runner_cgroup_leaf(
             _ => None,
         })
     };
-    let Some(role_index) = runner_cgroup_shape(&intent.cgroup_placement.subtree, req.vm_id.as_str())
+    let Some(role_index) =
+        runner_cgroup_shape(&intent.cgroup_placement.subtree, req.vm_id.as_str())
     else {
         return Err(OperationFailure::with_detail(
             KERNEL_REFUSED,
@@ -2303,11 +2373,14 @@ impl OperationHandler for SignalRunnerHandler {
         // kernel signals through a pidfd, so the handler derives one from the
         // tracked `(pid, start_time_ticks)` via the open-pidfd kernel - the
         // retired arm's open-then-signal fallback - and signals through it.
-        let Some((pid, start_time_ticks)) = runner_lookup(
-            kernel,
-            request.vm_id.as_str(),
+        let table_role = RunnerRole::pidfd_table_role(
+            request.role.as_ref(),
             request.role_id.as_str(),
-        ) else {
+            request.resource_uid.as_ref(),
+        );
+        let Some((pid, start_time_ticks)) =
+            runner_lookup(kernel, request.vm_id.as_str(), &table_role)
+        else {
             return Err(OperationFailure::with_detail(
                 RUNNER_UNKNOWN,
                 format!(
@@ -2353,7 +2426,10 @@ impl OperationHandler for SignalRunnerHandler {
             vm_id: request.vm_id.clone(),
             role_id: request.role_id.clone(),
         };
-        Ok(OperationResult::new(typed_result(SIGNAL_RUNNER, &response)?))
+        Ok(OperationResult::new(typed_result(
+            SIGNAL_RUNNER,
+            &response,
+        )?))
     }
 }
 
@@ -2371,14 +2447,11 @@ impl OperationHandler for DeregisterRunnerPidfdHandler {
         ctx: OperationCtx<'_>,
         payload: ValidatedPayload,
     ) -> Result<OperationResult, OperationFailure> {
-        let request: DeregisterRunnerPidfdRequest = typed_request(DEREGISTER_RUNNER_PIDFD, &payload)?;
-        let reply = invoke_kernel_nested(
-            &ctx,
-            "deregister-pidfd",
-            serde_json::json!({}),
-            Vec::new(),
-        )
-        .await?;
+        let request: DeregisterRunnerPidfdRequest =
+            typed_request(DEREGISTER_RUNNER_PIDFD, &payload)?;
+        let reply =
+            invoke_kernel_nested(&ctx, "deregister-pidfd", serde_json::json!({}), Vec::new())
+                .await?;
         let result = kernel_result(&reply)?;
         let removed = result
             .get("removed")
@@ -2414,7 +2487,11 @@ impl OperationHandler for SpawnRunnerHandler {
         let kernel = ctx
             .kernel
             .ok_or_else(|| OperationFailure::new(KERNEL_SEAM_UNWIRED))?;
-        let intent = resolve_intent(kernel, SPAWN_RUNNER, request.bundle_runner_intent_ref.as_str())?;
+        let intent = resolve_intent(
+            kernel,
+            SPAWN_RUNNER,
+            request.bundle_runner_intent_ref.as_str(),
+        )?;
         let posture = LaunchPosture::resolve(request.role, &intent);
         posture.validate_request_fds(request.inherited_fd_count, ctx.fds.len())?;
         // Device-owned worker launches derive every runtime path from the
@@ -2438,9 +2515,7 @@ impl OperationHandler for SpawnRunnerHandler {
             if bundle_content_identity != resolved {
                 return Err(OperationFailure::with_detail(
                     INTENT_MISMATCH,
-                    format!(
-                        "bundle_content_identity: {bundle_content_identity} vs {resolved}"
-                    ),
+                    format!("bundle_content_identity: {bundle_content_identity} vs {resolved}"),
                 ));
             }
         }
@@ -2470,9 +2545,7 @@ impl OperationHandler for SpawnRunnerHandler {
                         "activation_input: unserializable".to_owned(),
                     )
                 })?;
-                if encoded.len()
-                    > d2b_contracts_resource::v3::MAX_ACTIVATION_RUNNER_INPUT_BYTES
-                {
+                if encoded.len() > d2b_contracts_resource::v3::MAX_ACTIVATION_RUNNER_INPUT_BYTES {
                     return Err(OperationFailure::with_detail(
                         INTENT_MISMATCH,
                         format!(
@@ -2596,7 +2669,11 @@ impl OperationHandler for SpawnRunnerHandler {
             }
             None => intent.argv.clone(),
         };
-        let argv = bind_cloud_hypervisor_guest_uid(request.role, request.owner_uid.as_ref(), &launch_argv)?;
+        let argv = bind_cloud_hypervisor_guest_uid(
+            request.role,
+            request.owner_uid.as_ref(),
+            &launch_argv,
+        )?;
         // The launch identity is the trusted intent's principal for every
         // posture (the retired arm's `prepare_runner_launch_identity`).
         let runner_uid = intent.uid;
@@ -2607,7 +2684,8 @@ impl OperationHandler for SpawnRunnerHandler {
                 "hostGidForZero": spec.host_gid_for_zero,
             })
         });
-        let swtpm_identity = resource_backed_swtpm_identity(&kernel.bundle, &request, &device_worker);
+        let swtpm_identity =
+            resource_backed_swtpm_identity(&kernel.bundle, &request, &device_worker);
         let reply = invoke_kernel_nested(
             &ctx,
             "spawn-process",
@@ -2680,9 +2758,15 @@ impl OperationHandler for SpawnRunnerHandler {
         )
         .await?;
         let result = kernel_result(&reply)?;
-        let pid = result.get("pid").and_then(serde_json::Value::as_i64).ok_or_else(|| {
-            OperationFailure::with_detail(KERNEL_REFUSED, "spawn-process: result pid missing".to_owned())
-        })? as i32;
+        let pid = result
+            .get("pid")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| {
+                OperationFailure::with_detail(
+                    KERNEL_REFUSED,
+                    "spawn-process: result pid missing".to_owned(),
+                )
+            })? as i32;
         let start_time_ticks = result
             .get("startTimeTicks")
             .and_then(serde_json::Value::as_i64)

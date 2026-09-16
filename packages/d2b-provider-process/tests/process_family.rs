@@ -171,7 +171,10 @@ fn the_family_registers_both_member_types_from_its_declarations() {
             "{} is required before the plane opens",
             descriptor.resource_type.to_resource_type_name().as_str()
         );
-        assert!(!descriptor.exportable, "a process is never an export subject");
+        assert!(
+            !descriptor.exportable,
+            "a process is never an export subject"
+        );
     }
 
     providers.mark_plane_open();

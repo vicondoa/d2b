@@ -11,11 +11,11 @@ use std::time::Duration;
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
 use d2b_contracts_broker::broker_wire::{
     AuditJoinContext, BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerRequestEnvelope,
-    BrokerResponse, CanonicalAuditDigest, DeregisterRunnerPidfdRequest, DeregisterRunnerPidfdResponse,
-    GuestExecutionBinding as BrokerGuestExecutionBinding, ObserveRunnerRequest,
-    ObserveRunnerResponse, OpenPidfdRequest, OpenPidfdResponse, RunnerLaunchArgs, RunnerRole,
-    RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest, SignalRunnerResponse, SpawnRunnerRequest,
-    SpawnRunnerResponse,
+    BrokerResponse, CanonicalAuditDigest, DeregisterRunnerPidfdRequest,
+    DeregisterRunnerPidfdResponse, GuestExecutionBinding as BrokerGuestExecutionBinding,
+    ObserveRunnerRequest, ObserveRunnerResponse, OpenPidfdRequest, OpenPidfdResponse,
+    RunnerLaunchArgs, RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest,
+    SignalRunnerResponse, SpawnRunnerRequest, SpawnRunnerResponse,
 };
 use d2b_contracts_broker::kernel_client::{
     KernelInvocation, KernelInvokeError, KernelReply, envelope_invoke_kernel,
@@ -25,12 +25,12 @@ use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
 use d2b_core::bundle_resolver::{BundleResolver, intent_id_legacy_runner};
 use d2b_core::processes::ProcessRole;
+use d2b_process_conformance::runtime_scope_commitment;
 use d2b_provider_process::{
     BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity, ProcessEffectBackend,
     ProcessEffectError, ProcessIdentityDigest, ProcessLaunchRequest, ProcessRequest,
     ProcessStopClass, WaitReapOwner,
 };
-use d2b_process_conformance::runtime_scope_commitment;
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::net::{
     AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
@@ -563,8 +563,10 @@ impl BundleBackedLaunchResolver {
             .owner_ref()
             .filter(|owner| owner.resource_type().as_str() == "Credential")
             .filter(|_| process_role_id.starts_with("mi-agent-"))
-            .filter(|_| ticket.template().as_str() == "d2b-managed-identity-agent"
-                || ticket.template().as_str().starts_with("mi-agent-"))
+            .filter(|_| {
+                ticket.template().as_str() == "d2b-managed-identity-agent"
+                    || ticket.template().as_str().starts_with("mi-agent-")
+            })
             .and_then(|_| {
                 self.bundle.find_provider_component_intent_for_template(
                     &expected_execution_ref,
@@ -618,7 +620,8 @@ impl BundleBackedLaunchResolver {
             .filter(|owner| owner.resource_type().as_str() == "Guest")
             .filter(|owner| {
                 ticket.process_ref().name().as_str() == format!("{}-vmm", owner.name().as_str())
-            }) {
+            })
+        {
             let Some(zone_uid) = ticket.zone_uid() else {
                 warn!(
                     provider = "supervisor",
@@ -868,19 +871,14 @@ impl BundleBackedLaunchResolver {
             generation: ticket.resource_generation().get(),
             resource_ref: ticket.process_ref().clone(),
             resource_uid: ticket.process_uid().clone(),
-            bundle_content_identity: self
-                .bundle
-                .bundle
-                .bundle_hash
-                .clone()
-                .ok_or_else(|| {
-                    warn!(
+            bundle_content_identity: self.bundle.bundle.bundle_hash.clone().ok_or_else(|| {
+                warn!(
                         provider = "supervisor",
                         resource = %ticket.process_ref().to_canonical_string(),
                     "identity-rejection: trusted bundle content identity missing"
                 );
-                    ProcessEffectError::ResolutionFailed
-                })?,
+                ProcessEffectError::ResolutionFailed
+            })?,
             activation_input: ticket.activation_input().cloned(),
             guest_execution,
             accepts_launch_args: intent.accepts_launch_args,
@@ -1100,10 +1098,7 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
             BrokerCallerRole::HostShutdownUid { .. } => "daemon",
             BrokerCallerRole::NotAuthorized => "unauthorized",
         };
-        (
-            Some(root_invocation_id),
-            Some(vec![identity.to_owned()]),
-        )
+        (Some(root_invocation_id), Some(vec![identity.to_owned()]))
     }
 
     /// Deregister one handle's runner pidfd through the envelope family
@@ -1451,13 +1446,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         ))
         .map_err(|_| ProcessEffectError::PidfdUnavailable)?;
         let mut reply = self
-            .envelope_call(
-                "OpenPidfd",
-                &observed.intent.zone,
-                payload,
-                None,
-                None,
-            )
+            .envelope_call("OpenPidfd", &observed.intent.zone, payload, None, None)
             .map_err(|error| response_error(&error, BrokerOperation::OpenPidfd(&observed)))?;
         let response: OpenPidfdResponse =
             serde_json::from_value(reply.response.result.clone().ok_or_else(|| {
@@ -1504,11 +1493,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         })
     }
 
-    fn wait(
-        &self,
-        handle: &Self::Handle,
-        timeout: Duration,
-    ) -> Result<(), ProcessEffectError> {
+    fn wait(&self, handle: &Self::Handle, timeout: Duration) -> Result<(), ProcessEffectError> {
         wait_pidfd_observer(&handle.pidfd, timeout)
     }
 
@@ -1518,7 +1503,11 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
     ) -> Result<Option<(String, String, i32, u64, OwnedFd)>, ProcessEffectError> {
         Ok(Some((
             handle.observed.intent.vm_id.to_string(),
-            handle.observed.intent.role_id.to_string(),
+            RunnerRole::pidfd_table_role(
+                Some(&handle.observed.intent.role),
+                handle.observed.intent.role_id.as_str(),
+                Some(&handle.observed.intent.resource_uid),
+            ),
             handle.observed.pid,
             handle.observed.start_time_ticks,
             handle.pidfd.try_clone().map_err(|error| {
@@ -1577,16 +1566,14 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         if !taken {
             return Ok(None);
         }
-        reply_take_fd(&mut reply, 0)
-            .map(Some)
-            .map_err(|error| {
-                warn!(
-                    provider = "supervisor",
-                    error = %error,
-                    "take-controller-bootstrap reply carried no escrow fd"
-                );
-                error
-            })
+        reply_take_fd(&mut reply, 0).map(Some).map_err(|error| {
+            warn!(
+                provider = "supervisor",
+                error = %error,
+                "take-controller-bootstrap reply carried no escrow fd"
+            );
+            error
+        })
     }
 
     fn stop(
@@ -1602,8 +1589,9 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             SignalRunnerRequest {
                 vm_id: handle.observed.intent.vm_id.clone(),
                 role_id: handle.observed.intent.role_id.clone(),
-                guest_execution: handle.observed.intent.guest_execution.clone(),
+                role: Some(handle.observed.intent.role),
                 signal,
+                guest_execution: handle.observed.intent.guest_execution.clone(),
                 pid: Some(handle.observed.pid),
                 expected_start_time_ticks: Some(handle.observed.start_time_ticks),
                 tracing_span_id: None,
@@ -1725,13 +1713,15 @@ pub(crate) struct BrokerFrame {
 
 impl BrokerFrame {
     pub(crate) fn take_fd(&self, index: u32) -> Result<OwnedFd, ProcessEffectError> {
-        self.fds.lock().map_err(|_| {
-            warn!(
-                provider = "supervisor",
-                "broker frame descriptor table lock poisoned"
-            );
-            ProcessEffectError::PidfdUnavailable
-        })?
+        self.fds
+            .lock()
+            .map_err(|_| {
+                warn!(
+                    provider = "supervisor",
+                    "broker frame descriptor table lock poisoned"
+                );
+                ProcessEffectError::PidfdUnavailable
+            })?
             .get_mut(usize::try_from(index).map_err(|_| {
                 warn!(
                     provider = "supervisor",
@@ -1803,11 +1793,7 @@ fn launch_adoption_error(
 fn is_dispatch_failure_refusal(code: &str) -> bool {
     matches!(
         code,
-        "errored"
-            | "handler-errored"
-            | "handler-refused"
-            | "handler-crashed"
-            | "handler-timed-out"
+        "errored" | "handler-errored" | "handler-refused" | "handler-crashed" | "handler-timed-out"
     )
 }
 
@@ -2138,8 +2124,7 @@ mod tests {
 
         let zone_name = "dev";
         let zone = ZoneId::parse(zone_name).expect("zone");
-        let provider_ref =
-            ResourceRef::parse("Provider/device-tpm").expect("provider ref");
+        let provider_ref = ResourceRef::parse("Provider/device-tpm").expect("provider ref");
         let device_ref = ResourceRef::parse("Device/tpm").expect("device ref");
         // A second Device declaring the same worker template: the declared
         // row, never the shared template name, is the launch identity.
@@ -2290,7 +2275,9 @@ mod tests {
         // hand-rolled v2 Bundle literal.
         let root = tempfile::tempdir().expect("tempdir for zone-native bundle fixture");
         write_fixture_artifact(
-            &root.path().join(format!("zones/{zone_name}/resource-bundle.json")),
+            &root
+                .path()
+                .join(format!("zones/{zone_name}/resource-bundle.json")),
             &bytes,
         );
         let index_bytes = zone_topology_index_bytes(zone_name);
@@ -2339,7 +2326,10 @@ mod tests {
         let parent_map = BTreeMap::from([(zone_name.to_owned(), None::<String>)]);
         let parent_map_value = serde_json::to_value(&parent_map).expect("parent map value");
         let mut zones = serde_json::Map::new();
-        zones.insert(zone_name.to_owned(), serde_json::Value::Object(Default::default()));
+        zones.insert(
+            zone_name.to_owned(),
+            serde_json::Value::Object(Default::default()),
+        );
         let mut generation_by_zone = serde_json::Map::new();
         generation_by_zone.insert(
             zone_name.to_owned(),
@@ -2427,10 +2417,9 @@ mod tests {
         let process_ref = ResourceRef::parse(process_ref).expect("process ref");
         let execution_ref = ResourceRef::parse("Host/host-system").expect("execution ref");
         let device_ref = ResourceRef::parse(device_ref).expect("device ref");
-        let zone_uid = d2b_contracts_resource::v3::ResourceUid::parse(
-            "223e4567-e89b-42d3-a456-426614174001",
-        )
-        .expect("zone uid");
+        let zone_uid =
+            d2b_contracts_resource::v3::ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
+                .expect("zone uid");
         let process_uid = operation_uid();
         let ticket = LaunchTicket::new(
             process_ref.clone(),
@@ -2464,14 +2453,7 @@ mod tests {
         .with_runtime_identity(
             zone_uid.clone(),
             Some(device_ref),
-            runtime_scope_commitment(
-                &zone_uid,
-                None,
-                &process_ref,
-                &process_uid,
-                scope_role,
-                1,
-            ),
+            runtime_scope_commitment(&zone_uid, None, &process_ref, &process_uid, scope_role, 1),
         )
         .expect("runtime identity");
         ProcessRequest::new(ticket)
@@ -2497,10 +2479,7 @@ mod tests {
         assert!(intent.accepts_launch_args);
         assert_eq!(
             intent.template_identity,
-            BundleBackedLaunchResolver::identity_digest(
-                "swtpm-socket",
-                b"d2b-process-template-v1"
-            )
+            BundleBackedLaunchResolver::identity_digest("swtpm-socket", b"d2b-process-template-v1")
         );
         // A second Device declares the same worker template under its own
         // row: the resolution is the exact declared row, so this row never
@@ -2669,23 +2648,22 @@ pub(crate) fn broker_round_trip_with_fds(
         None,
     )
     .map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?;
+        warn!(
+            provider = "supervisor",
+            transport_error = ?error,
+            "broker transport step failed"
+        );
+        ProcessEffectError::LaunchFailed
+    })?;
     let socket = Socket::from(fd);
-    let address =
-        socket2::SockAddr::unix(socket_path).map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?;
+    let address = socket2::SockAddr::unix(socket_path).map_err(|error| {
+        warn!(
+            provider = "supervisor",
+            transport_error = ?error,
+            "broker transport step failed"
+        );
+        ProcessEffectError::LaunchFailed
+    })?;
     socket
         .connect_timeout(&address, io_timeout)
         .map_err(|error| {
@@ -2696,16 +2674,14 @@ pub(crate) fn broker_round_trip_with_fds(
             );
             ProcessEffectError::LaunchFailed
         })?;
-    socket
-        .set_read_timeout(Some(io_timeout))
-        .map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?;
+    socket.set_read_timeout(Some(io_timeout)).map_err(|error| {
+        warn!(
+            provider = "supervisor",
+            transport_error = ?error,
+            "broker transport step failed"
+        );
+        ProcessEffectError::LaunchFailed
+    })?;
     socket
         .set_write_timeout(Some(io_timeout))
         .map_err(|error| {
@@ -2724,8 +2700,7 @@ pub(crate) fn broker_round_trip_with_fds(
         ProcessEffectError::LaunchFailed
     })?;
     let audit_join = AuditJoinContext {
-        zone_id: CanonicalAuditDigest::parse(zone_id)
-            .map_err(|error| {
+        zone_id: CanonicalAuditDigest::parse(zone_id).map_err(|error| {
             warn!(
                 provider = "supervisor",
                 transport_error = ?error,
@@ -2733,8 +2708,7 @@ pub(crate) fn broker_round_trip_with_fds(
             );
             ProcessEffectError::LaunchFailed
         })?,
-        operation_identity: CanonicalAuditDigest::parse(operation_identity)
-            .map_err(|error| {
+        operation_identity: CanonicalAuditDigest::parse(operation_identity).map_err(|error| {
             warn!(
                 provider = "supervisor",
                 transport_error = ?error,
@@ -2749,15 +2723,14 @@ pub(crate) fn broker_round_trip_with_fds(
         test_peer_uid: None,
         audit_join: Some(audit_join),
     };
-    let frame =
-        d2b_contracts::encode_frame(&envelope).map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?;
+    let frame = d2b_contracts::encode_frame(&envelope).map_err(|error| {
+        warn!(
+            provider = "supervisor",
+            transport_error = ?error,
+            "broker transport step failed"
+        );
+        ProcessEffectError::LaunchFailed
+    })?;
     let written = if inherited_fds.is_empty() {
         send(&socket, &frame, SendFlags::empty()).map_err(|error| {
             warn!(
@@ -2782,8 +2755,7 @@ pub(crate) fn broker_round_trip_with_fds(
             return Err(ProcessEffectError::LaunchFailed);
         }
         let iov = [IoSlice::new(&frame)];
-        sendmsg(&socket, &iov, &mut control, SendFlags::empty())
-            .map_err(|error| {
+        sendmsg(&socket, &iov, &mut control, SendFlags::empty()).map_err(|error| {
             warn!(
                 provider = "supervisor",
                 transport_error = ?error,
@@ -2793,10 +2765,7 @@ pub(crate) fn broker_round_trip_with_fds(
         })?
     };
     if written != frame.len() {
-        warn!(
-            provider = "supervisor",
-            "broker transport short write"
-        );
+        warn!(provider = "supervisor", "broker transport short write");
         return Err(ProcessEffectError::LaunchFailed);
     }
 
@@ -2804,8 +2773,8 @@ pub(crate) fn broker_round_trip_with_fds(
     let mut iov = [IoSliceMut::new(&mut payload)];
     let mut control_bytes = vec![0_u8; rustix::cmsg_space!(ScmRights(256))];
     let mut control = RecvAncillaryBuffer::new(&mut control_bytes);
-    let message = recvmsg(&socket, &mut iov, &mut control, RecvFlags::CMSG_CLOEXEC)
-        .map_err(|error| {
+    let message =
+        recvmsg(&socket, &mut iov, &mut control, RecvFlags::CMSG_CLOEXEC).map_err(|error| {
             warn!(
                 provider = "supervisor",
                 transport_error = ?error,
@@ -2822,8 +2791,8 @@ pub(crate) fn broker_round_trip_with_fds(
             }
         }
     }
-    let response = d2b_contracts::decode_frame("BrokerResponse", &payload[..bytes])
-        .map_err(|error| {
+    let response =
+        d2b_contracts::decode_frame("BrokerResponse", &payload[..bytes]).map_err(|error| {
             warn!(
                 provider = "supervisor",
                 transport_error = ?error,

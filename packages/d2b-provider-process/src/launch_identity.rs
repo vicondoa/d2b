@@ -61,9 +61,7 @@ pub struct LaunchRow<'a> {
 ///
 /// A row whose launch cannot be named completely fails here, once, naming the
 /// missing input ([`LaunchIdentityError`]).
-pub fn resolve_launch_identity(
-    row: &LaunchRow<'_>,
-) -> Result<LaunchIdentity, LaunchIdentityError> {
+pub fn resolve_launch_identity(row: &LaunchRow<'_>) -> Result<LaunchIdentity, LaunchIdentityError> {
     let owner = row.owner_ref;
     let declared_target = match row.declared_target {
         Some((target, target_owner)) if owner == Some(target_owner) => Some(target),
@@ -72,20 +70,18 @@ pub fn resolve_launch_identity(
     // The host-exec/guest-target split only exists for Host execution: a
     // Guest execution target already names its own VM.
     let target_ref = if row.execution_ref.resource_type().as_str() == "Host" {
-        declared_target
-            .cloned()
-            .or_else(|| {
-                owner
-                    .filter(|owner| {
-                        owner.resource_type().as_str() == "Guest"
-                            && guest_runtime_process_matches(
-                                row.template,
-                                row.process_name,
-                                owner.name().as_str(),
-                            )
-                    })
-                    .cloned()
-            })
+        declared_target.cloned().or_else(|| {
+            owner
+                .filter(|owner| {
+                    owner.resource_type().as_str() == "Guest"
+                        && guest_runtime_process_matches(
+                            row.template,
+                            row.process_name,
+                            owner.name().as_str(),
+                        )
+                })
+                .cloned()
+        })
     } else {
         None
     };
@@ -102,9 +98,9 @@ pub fn resolve_launch_identity(
     // split. `LaunchTicket`'s owner setter normalizes the carried flag back to
     // the owner kind; the two rules agree on every row the binding driver
     // mints, which declares exactly the serving template.
-    let binding_worker =
-        owner.is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding")
-            && row.template == WORKER_TEMPLATE;
+    let binding_worker = owner
+        .is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding")
+        && row.template == WORKER_TEMPLATE;
     LaunchIdentity::new(
         owner.cloned(),
         row.owner_uid.clone(),
@@ -119,16 +115,11 @@ pub fn resolve_launch_identity(
 /// process (the nested VMM, the qemu media runner): the rule the old
 /// `scoped_target_ref` used to bind such a row's launch target to its owning
 /// Guest, now one rule inside [`resolve_launch_identity`].
-pub fn guest_runtime_process_matches(
-    template: &str,
-    process_name: &str,
-    guest_name: &str,
-) -> bool {
+pub fn guest_runtime_process_matches(template: &str, process_name: &str, guest_name: &str) -> bool {
     GUEST_RUNTIME_PROCESS_TEMPLATES
         .iter()
         .any(|(expected_template, suffix)| {
-            template == *expected_template
-                && process_name == format!("{guest_name}{suffix}")
+            template == *expected_template && process_name == format!("{guest_name}{suffix}")
         })
 }
 
@@ -144,9 +135,9 @@ mod tests {
         let guest_ref = || ResourceRef::parse("Guest/work").expect("guest ref");
         let other_owner = ResourceRef::parse("Guest/other").expect("other owner");
         let binding_ref = ResourceRef::parse("VolumeBinding/data").expect("binding ref");
-        let execution_ref =
-            ResourceRef::parse("Host/host-system").expect("execution ref");
-        let target_of = |owner: Option<&ResourceRef>, declared: Option<(&ResourceRef, &ResourceRef)>| {
+        let execution_ref = ResourceRef::parse("Host/host-system").expect("execution ref");
+        let target_of = |owner: Option<&ResourceRef>,
+                         declared: Option<(&ResourceRef, &ResourceRef)>| {
             resolve_launch_identity(&LaunchRow {
                 owner_ref: owner,
                 owner_uid: None,
@@ -171,7 +162,11 @@ mod tests {
             None,
             "a target declared by another owner never applies"
         );
-        assert_eq!(target_of(None, None), None, "a host-owned row has no target");
+        assert_eq!(
+            target_of(None, None),
+            None,
+            "a host-owned row has no target"
+        );
 
         let vmm_owner = ResourceRef::parse("Guest/acceptance-guest").expect("guest owner");
         let vmm = resolve_launch_identity(&LaunchRow {
@@ -340,8 +335,7 @@ mod tests {
             let owner_uid = case
                 .owner_uid
                 .map(|uid| ResourceUid::parse(uid).expect("owner uid"));
-            let execution_ref =
-                ResourceRef::parse(case.execution_ref).expect("execution ref");
+            let execution_ref = ResourceRef::parse(case.execution_ref).expect("execution ref");
             let resolved = resolve_launch_identity(&LaunchRow {
                 owner_ref: owner_ref.as_ref(),
                 owner_uid: owner_uid.clone(),
@@ -370,7 +364,12 @@ mod tests {
                         case.label
                     );
                     assert_eq!(identity.vm(), *vm, "{}: vm", case.label);
-                    assert_eq!(identity.launch_vm(), *launch_vm, "{}: launch vm", case.label);
+                    assert_eq!(
+                        identity.launch_vm(),
+                        *launch_vm,
+                        "{}: launch vm",
+                        case.label
+                    );
                     assert_eq!(
                         identity.is_binding_worker(),
                         *binding_worker,

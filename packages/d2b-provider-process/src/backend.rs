@@ -303,11 +303,7 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
     /// This observes process termination without exposing the descriptor to
     /// Provider code. Service-manager owners may use the same readiness
     /// signal without taking ownership of reap.
-    fn wait(
-        &self,
-        _handle: &Self::Handle,
-        _timeout: Duration,
-    ) -> Result<(), ProcessEffectError> {
+    fn wait(&self, _handle: &Self::Handle, _timeout: Duration) -> Result<(), ProcessEffectError> {
         Err(ProcessEffectError::PidfdUnavailable)
     }
 
