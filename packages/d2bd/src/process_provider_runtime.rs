@@ -1195,6 +1195,10 @@ impl ProductionProcessProviders {
         spec: &ProcessSpec,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
+        tracing::info!(
+            process = %context.resource_ref.to_canonical_string(),
+            "launch_resource entered"
+        );
         let context = context
             .with_execution_ref(spec.execution().execution_ref())
             .with_user_ref(spec.execution().user_ref());
