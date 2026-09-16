@@ -1975,14 +1975,26 @@ impl OperationHandler for ObserveRunnerHandler {
         let executable = result
             .get("executable")
             .and_then(serde_json::Value::as_str);
+        let cgroup_verified = proc_cgroup_matches(pid, &cgroup_placement.subtree);
+        let executable_verified = executable_matches(executable, &intent.binary_path);
+        if present && (!cgroup_verified || !executable_verified) {
+            tracing::warn!(
+                pid,
+                cgroup_verified,
+                executable_verified,
+                expected_subtree = %cgroup_placement.subtree,
+                expected_binary = %intent.binary_path.display(),
+                "ObserveRunner registered-runner verification incomplete"
+            );
+        }
         let response = ObserveRunnerResponse {
             vm_id: request.vm_id.clone(),
             role_id: request.role_id.clone(),
             present: present && observed_ticks == Some(start_time_ticks),
             pid,
             start_time_ticks,
-            cgroup_verified: proc_cgroup_matches(pid, &cgroup_placement.subtree),
-            executable_verified: executable_matches(executable, &intent.binary_path),
+            cgroup_verified,
+            executable_verified,
         };
         Ok(OperationResult::new(typed_result(OBSERVE_RUNNER, &response)?))
     }
