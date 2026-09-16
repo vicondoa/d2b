@@ -4474,6 +4474,79 @@
       }
     },
     {
+      "operation": "take-controller-bootstrap",
+      "wireVariant": null,
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "U10 sandwich kernel: a daemon adopting a still-running ProviderController after its own restart takes the escrow the spawn-process kernel retained at launch (the controller's bootstrap sends land in it), so the daemon's bootstrap wait can consume them and the session acceptor can establish the controller session. One-time, keyed by the runner identity.",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "resourceRef": {
+              "type": "string"
+            },
+            "resourceUid": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "runtimeScope": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              },
+              "minItems": 32,
+              "maxItems": 32
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
       "operation": "observe-process",
       "wireVariant": null,
       "owner": "broker-generic",

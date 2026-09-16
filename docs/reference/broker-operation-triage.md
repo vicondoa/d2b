@@ -18,7 +18,7 @@ no resource family.
 - `transport-excluded` - the name is a transport-layer concern the
 operation envelope does not carry.
 
-Counts: 65 family-owned, 32 broker-generic, 0 transport-excluded (46 rows carry a wire discriminant, 51 rows do not).
+Counts: 65 family-owned, 33 broker-generic, 0 transport-excluded (46 rows carry a wire discriminant, 52 rows do not).
 
 | Operation | Owner | Family | Declaring provider | Service | Method | Profiles | Disposition | Target | Justification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -103,6 +103,7 @@ Counts: 65 family-owned, 32 broker-generic, 0 transport-excluded (46 rows carry 
 | spawn-process | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the process spawn (user namespace, mount namespace, seccomp, cgroup placement, inherited fds, activation stdin) served in-broker as the nested core of the forwarded SpawnRunner family operation; the launch task is fully parameterised while bundle/posture/device-worker resolution stays on the family side. |
 | delegate-cgroup-v2 | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U10 sandwich kernel: the cgroup v2 delegation write, served in-broker as the nested core of the forwarded DelegateCgroupV2 family operation. |
 | open-cgroup-dir | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U10 sandwich kernel: the cgroup directory open, served in-broker as the nested core of the forwarded OpenCgroupDir family operation; returns a directory fd over the fd leg. |
+| take-controller-bootstrap | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: a daemon adopting a still-running ProviderController after its own restart takes the escrow the spawn-process kernel retained at launch (the controller's bootstrap sends land in it), so the daemon's bootstrap wait can consume them and the session acceptor can establish the controller session. One-time, keyed by the runner identity. |
 | observe-process | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the /proc observation probe (presence, executable, cgroup path, start time) served in-broker as the nested core of the forwarded ObserveRunner family operation; expectation comparison stays on the family side. |
 | consume-cell | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U11 cell kernel: compare-and-consume one declared one-time state cell under the canonical identity the payload carries and the envelope-attested initiating principal, served in-broker as the generic core of the retired ConsumeLifecycleLease arm (AE2: one-time consume wins exactly once, replay refuses). |
 | complete-cell | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U11 cell kernel: record completion for one claimed one-time state cell under the canonical identity the payload carries and the envelope-attested initiating principal, served in-broker as the generic completion phase of the retired ConsumeLifecycleLease arm; the durable completed marker is what refuses replay across broker restarts (AE2). |

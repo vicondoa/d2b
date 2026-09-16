@@ -816,6 +816,16 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "take-controller-bootstrap",
+        "runner",
+        "per-VM/role",
+        &["d2bd"],
+        false,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
         "observe-process",
         "runner",
         "per-VM/role",

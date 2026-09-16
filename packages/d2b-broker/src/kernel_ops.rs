@@ -45,6 +45,7 @@ pub const SPAWN_PROCESS: &str = "spawn-process";
 pub const DELEGATE_CGROUP_V2: &str = "delegate-cgroup-v2";
 pub const OPEN_CGROUP_DIR: &str = "open-cgroup-dir";
 pub const OBSERVE_PROCESS: &str = "observe-process";
+pub const TAKE_CONTROLLER_BOOTSTRAP: &str = "take-controller-bootstrap";
 pub const CONSUME_CELL: &str = "consume-cell";
 pub const COMPLETE_CELL: &str = "complete-cell";
 /// The U12 network-fds family kernels: the privileged, resource-agnostic
@@ -133,6 +134,9 @@ pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
         })
         .with(OBSERVE_PROCESS, {
             move |invocation| observe_process(invocation)
+        })
+        .with(TAKE_CONTROLLER_BOOTSTRAP, {
+            move |invocation| take_controller_bootstrap(invocation)
         })
         .with(CONSUME_CELL, {
             move |invocation| consume_cell(invocation)
@@ -487,6 +491,48 @@ fn observe_process(
             "registered": registered,
         }))?,
         fds: Vec::new(),
+    })
+}
+
+/// The controller-bootstrap escrow surrender.
+///
+/// A daemon adopting a still-running ProviderController after its own
+/// restart takes the escrow the spawn-process kernel retained at launch:
+/// the controller's bootstrap sends have been landing in it, so the
+/// daemon's bootstrap wait can consume them and the session acceptor can
+/// establish the controller session. One-time: the escrow is removed from
+/// the registry. An absent escrow is an absent result (the caller's
+/// adoption then classifies ControllerBootstrapMissing and replaces the
+/// runner), never a dispatch error.
+fn take_controller_bootstrap(
+    invocation: &DirectInvocation<'_>,
+) -> Result<DispatchOutcome, DispatchFailure> {
+    let Some(identity) = optional_parse_identity_fields(invocation.payload) else {
+        return Err(refused(
+            "take-controller-bootstrap: runner identity fields missing",
+        ));
+    };
+    let key = crate::runtime::runner_registry_key(
+        &identity.vm_id,
+        &identity.role_id,
+        identity.resource_ref.as_ref(),
+        identity.resource_uid.as_ref(),
+        identity.zone_uid.as_ref(),
+        identity.runtime_scope,
+    );
+    let escrow = crate::runtime::controller_bootstrap_registry()
+        .lock()
+        .map_err(|_| errored("take-controller-bootstrap: registry mutex poisoned".to_owned()))?
+        .remove(&key);
+    let Some(escrow) = escrow else {
+        return Ok(DispatchOutcome {
+            result: canonical(serde_json::json!({ "taken": false }))?,
+            fds: Vec::new(),
+        });
+    };
+    Ok(DispatchOutcome {
+        result: canonical(serde_json::json!({ "taken": true }))?,
+        fds: vec![escrow],
     })
 }
 

@@ -933,7 +933,6 @@ pub fn runner_role_for_process_role(role: &ProcessRole) -> Option<RunnerRole> {
 pub struct BrokerPidfdHandle {
     pidfd: OwnedFd,
     observed: BrokerObservedProcess,
-    controller_bootstrap: Mutex<Option<OwnedFd>>,
     /// The envelope invocation id the broker minted for the spawn that
     /// produced this handle: the deregister leg presents it as the chain
     /// root so the close correlates to the launch (KTD6). Absent for a
@@ -1368,10 +1367,6 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             return Err(ProcessEffectError::IdentityChanged);
         }
         let pidfd = reply_take_fd(&mut reply, response.pidfd_index)?;
-        let controller_bootstrap = response
-            .controller_bootstrap_fd_index
-            .map(|index| reply_take_fd(&mut reply, index))
-            .transpose()?;
         if let Some(error) = launch_adoption_error(
             response.pid,
             read_proc_start_time(response.pid)?,
@@ -1392,7 +1387,6 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         let handle = BrokerPidfdHandle {
             pidfd,
             observed,
-            controller_bootstrap: Mutex::new(controller_bootstrap),
             // The deregister leg of this handle presents the spawn's
             // invocation id as its chain root, so the close correlates
             // to the launch (KTD6).
@@ -1493,10 +1487,6 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             return Err(ProcessEffectError::IdentityChanged);
         }
         let pidfd = reply_take_fd(&mut reply, response.pidfd_index)?;
-        let controller_bootstrap = response
-            .controller_bootstrap_fd_index
-            .map(|index| reply_take_fd(&mut reply, index))
-            .transpose()?;
         if read_proc_start_time(response.pid)? != Some(response.verified_start_time_ticks) {
             warn!(
                 provider = "supervisor",
@@ -1508,7 +1498,6 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         Ok(BrokerPidfdHandle {
             pidfd,
             observed,
-            controller_bootstrap: Mutex::new(controller_bootstrap),
             // An adopted handle has no spawn invocation to correlate the
             // close under; its deregister is a root call.
             spawn_invocation_id: None,
@@ -1547,17 +1536,57 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         &self,
         handle: &Self::Handle,
     ) -> Result<Option<OwnedFd>, ProcessEffectError> {
-        handle
-            .controller_bootstrap
-            .lock()
-            .map_err(|_| {
+        // The escrow lives in the broker's controller-bootstrap registry
+        // (the spawn-process kernel retained it; a duplicate stopped riding
+        // the answer leg, and the supervisor handle no longer holds one).
+        // A daemon adopting a still-running controller after its own
+        // restart takes the retained escrow so the controller's bootstrap
+        // sends - which have been landing in it - can be consumed.
+        let intent = &handle.observed.intent;
+        let payload = serde_json::json!({
+            "vmId": intent.vm_id.to_string(),
+            "roleId": intent.role_id.to_string(),
+            "resourceRef": intent.resource_ref.to_canonical_string(),
+            "resourceUid": intent.resource_uid.as_str(),
+            "zoneUid": intent.zone_uid.as_ref().map(|uid| uid.as_str()),
+            "runtimeScope": intent.runtime_scope.map(|scope| scope.to_vec()),
+        });
+        let mut reply = self
+            .envelope_call(
+                "take-controller-bootstrap",
+                &handle.observed.intent.zone,
+                payload,
+                None,
+                None,
+            )
+            .map_err(|error| {
                 warn!(
                     provider = "supervisor",
-                    "controller bootstrap endpoint lock poisoned; reporting pidfd-unavailable"
+                    error = %error,
+                    "broker take-controller-bootstrap invocation failed"
                 );
-                ProcessEffectError::PidfdUnavailable
+                response_error(&error, BrokerOperation::Other)
+            })?;
+        let taken = reply
+            .response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("taken"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !taken {
+            return Ok(None);
+        }
+        reply_take_fd(&mut reply, 0)
+            .map(Some)
+            .map_err(|error| {
+                warn!(
+                    provider = "supervisor",
+                    error = %error,
+                    "take-controller-bootstrap reply carried no escrow fd"
+                );
+                error
             })
-            .map(|mut endpoint| endpoint.take())
     }
 
     fn stop(

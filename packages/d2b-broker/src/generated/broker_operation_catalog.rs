@@ -2597,6 +2597,38 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
+        operation: "take-controller-bootstrap",
+        wire_variant: None,
+        owner: OperationOwner::BrokerGeneric,
+        family: None,
+        declaring_provider: None,
+        justification: Some("U10 sandwich kernel: a daemon adopting a still-running ProviderController after its own restart takes the escrow the spawn-process kernel retained at launch (the controller's bootstrap sends land in it), so the daemon's bootstrap wait can consume them and the session acceptor can establish the controller session. One-time, keyed by the runner identity."),
+        profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
+        w3: false,
+        capabilities: false,
+        disposition: "promoted-live",
+        stub_target: None,
+        audit_fields: &[],
+        authz: BrokerAuthzFacets {
+            subject: "runner",
+            scope: "per-VM/role",
+            allowed_groups: &["d2bd"],
+            destructive: false,
+            secret_access: "MetadataOnly",
+            broker_required: "Yes",
+            audit_mode: "Yes",
+        },
+        payload_provenance: PayloadProvenance::Request,
+        payload_fields: &["resourceRef", "resourceUid", "roleId", "runtimeScope", "vmId", "zoneUid"],
+        payload_required: &["vmId", "roleId"],
+        audit_join: None,
+        max_fds: 0,
+        fd_kind: None,
+        state_cell: None,
+        cell_durability: None,
+        deadline_tier: DeadlineTier::Standard,
+    },
+    BrokerOperationRow {
         operation: "observe-process",
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
@@ -3111,4 +3143,4 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
 ];
 
 /// The number of committed operation rows.
-pub const BROKER_OPERATION_COUNT: usize = 97;
+pub const BROKER_OPERATION_COUNT: usize = 98;
