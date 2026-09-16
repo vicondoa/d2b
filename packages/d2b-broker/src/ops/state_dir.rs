@@ -61,6 +61,9 @@ pub struct PrepareDirRequest {
     pub owner_gid: u32,
     /// Directories to create under `base_dir` (relative paths).
     pub created_paths: Vec<PathBuf>,
+    /// The trusted daemon service account whose state anchors
+    /// (`/var/lib/d2b/tpm-state`) may own the base dir's parent.
+    pub daemon_uid: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -88,7 +91,7 @@ pub fn prepare_dir(req: &PrepareDirRequest) -> io::Result<PrepareDirAudit> {
     // base_dir so the refuse_non_root_parent guard is wired via the
     // `enforce_root_parent` knob below.
     if production_path(&req.base_dir) {
-        crate::sys::path_safe::refuse_non_root_parent(&req.base_dir)?;
+        crate::sys::path_safe::refuse_non_root_parent_except(&req.base_dir, req.daemon_uid)?;
     }
     // The per-VM root base dir is created + owned by host activation
     // (`nixos-modules/host-ssh-host-keys.nix`: `install -d -m 2770 -o

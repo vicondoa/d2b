@@ -7250,6 +7250,7 @@ fn execute_vm_start_action(
                 owner_uid: dir.owner_uid,
                 owner_gid: dir.owner_gid,
                 created_paths: Vec::new(),
+                daemon_uid: None,
             })
             .map(|_| ())
             .map_err(|err| {

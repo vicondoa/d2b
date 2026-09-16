@@ -295,6 +295,15 @@ pub mod path_safe {
     }
 
     pub fn refuse_non_root_parent(path: &Path) -> io::Result<()> {
+        refuse_non_root_parent_except(path, None)
+    }
+
+    /// Refuse a non-root parent, except one owned by the named trusted
+    /// service account: the daemon-owned state anchors
+    /// (`/var/lib/d2b/tpm-state`, declared root-owned-in-spirit but
+    /// provisioned `d2bd` by the host unit) are the trusted parents the
+    /// Device state subdirectories are created inside.
+    pub fn refuse_non_root_parent_except(path: &Path, allowed_uid: Option<u32>) -> io::Result<()> {
         use std::os::unix::fs::MetadataExt;
         let parent = path.parent().ok_or_else(|| {
             io::Error::new(
@@ -303,7 +312,7 @@ pub mod path_safe {
             )
         })?;
         let md = fs::symlink_metadata(parent)?;
-        if md.uid() != 0 {
+        if md.uid() != 0 && md.uid() != allowed_uid.unwrap_or(u32::MAX) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!(

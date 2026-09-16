@@ -110,7 +110,8 @@ pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
             move |invocation| poll_child_reaped(invocation)
         })
         .with(PREPARE_DIRECTORY, {
-            move |invocation| prepare_directory(invocation)
+            let config = Arc::clone(&config);
+            move |invocation| prepare_directory(&config)(invocation)
         })
         .with(KILL_CGROUP, move |invocation| kill_cgroup(invocation))
         .with(SIGNAL_PIDFD, move |invocation| signal_pidfd(invocation))
@@ -322,9 +323,9 @@ fn poll_child_reaped(
 /// The directory-prepare kernel: the generic state/runtime directory
 /// creation with the path-safety posture of the retired
 /// `PrepareStateDir`/`PrepareRuntimeDir` arms' shared helper.
-fn prepare_directory(
-    invocation: &DirectInvocation<'_>,
-) -> Result<DispatchOutcome, DispatchFailure> {
+fn prepare_directory(config: &KernelConfig) -> impl Fn(&DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+    let daemon_uid = config.daemon_uid;
+    move |invocation: &DirectInvocation<'_>| {
     let kind = match field_str(invocation.payload, "kind")? {
         "runtime" => DirKind::RuntimeDir,
         "state" => DirKind::StateDir,
@@ -347,6 +348,7 @@ fn prepare_directory(
         owner_uid,
         owner_gid,
         created_paths,
+        daemon_uid: Some(daemon_uid),
     })
     .map_err(|error| errored(format!("prepare-directory: {error}")))?;
     let result = serde_json::to_value(&audit)
@@ -355,6 +357,7 @@ fn prepare_directory(
         result: canonical(result)?,
         fds: Vec::new(),
     })
+    }
 }
 
 /// The cgroup-kill kernel: kill exactly the named leaf under the
