@@ -5601,7 +5601,7 @@ fn discover_runner_candidate(
             continue;
         }
         let observed_exe = read_runner_executable(pid);
-        let observed_exe_ref = observed_exe.as_deref().ok();
+        let observed_exe_ref = observed_exe.as_deref().ok().map(Path::to_path_buf);
         let executable_observation =
             observe_runner_executable(observed_exe, &intent.binary_path)?;
         if matches!(executable_observation, RunnerExecutableObservation::Mismatch) {
