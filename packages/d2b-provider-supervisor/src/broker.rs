@@ -752,20 +752,10 @@ impl BundleBackedLaunchResolver {
                 return Err(ProcessEffectError::ResolutionFailed);
             }
         }
-        // The envelope family row admits no request descriptors
-        // (`max_fds: 0`), so no launch can carry inherited descriptors on
-        // the wire; the daemon-side family handler refuses any request that
-        // declares them. A ticket whose posture carries inherited
-        // descriptors cannot be launched through this backend, and the
-        // launch is refused here rather than dropped at the wire.
-        if ticket.inherited_fd_table().count() != 0 {
-            warn!(
-                provider = "supervisor",
-                resource = %ticket.process_ref().to_canonical_string(),
-                "identity-rejection: the envelope family row admits no inherited descriptors"
-            );
-            return Err(ProcessEffectError::ResolutionFailed);
-        }
+        // The SpawnRunner family row declares the request-fd facet for the
+        // ProviderController escrow leg; the escrow rides the envelope from
+        // here and the daemon-side family handler enforces the per-posture
+        // shape fail-closed.
         if intent.execution_ref != expected_execution_ref {
             warn!(
                 provider = "supervisor",
