@@ -18,7 +18,12 @@ fn broker_bin() -> std::path::PathBuf {
     if let Some(bin) = std::env::var_os("CARGO_BIN_EXE_d2b-broker") {
         return std::path::PathBuf::from(bin);
     }
-    let candidate = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    // Cargo integration tests run with the package manifest dir as cwd;
+    // resolve the workspace target dir from there at RUNTIME (a compile-time
+    // env!("CARGO_MANIFEST_DIR") would embed an absolute sandbox path, which
+    // the bazel build forbids).
+    let candidate = std::env::current_dir()
+        .expect("test cwd")
         .join("../../target/debug/d2b-broker");
     assert!(
         candidate.exists(),

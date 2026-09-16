@@ -887,7 +887,7 @@ impl BundleBackedLaunchResolver {
             activation_input: ticket.activation_input().cloned(),
             guest_execution,
             accepts_launch_args: intent.accepts_launch_args,
-            multi_instance: d2b_core::bundle_resolver::resolved_intent_is_serving_worker(&intent),
+            multi_instance: d2b_core::bundle_resolver::resolved_intent_is_serving_worker(intent),
             sandbox_plan: ticket.sandbox_plan().map(|plan| {
                 let spec = plan.spec();
                 SandboxLaunchPlan {
@@ -1415,12 +1415,11 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         // registration) before the readiness probe runs, so the family
         // handlers' runner lookup sees the kernel-spawned runner. A
         // snapshot failure never fails the launch.
-        if let Some(observer) = &self.launched_observer {
-            if let Some((vm, role, pid, start_time_ticks, pidfd_dup)) =
+        if let Some(observer) = &self.launched_observer
+            && let Some((vm, role, pid, start_time_ticks, pidfd_dup)) =
                 self.launched_runner_snapshot(&handle)?
-            {
-                observer.launched(&vm, &role, pid, start_time_ticks, pidfd_dup);
-            }
+        {
+            observer.launched(&vm, &role, pid, start_time_ticks, pidfd_dup);
         }
         Ok(BackendLaunch::new(observation, handle))
     }
@@ -1594,13 +1593,12 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         if !taken {
             return Ok(None);
         }
-        reply_take_fd(&mut reply, 0).map(Some).map_err(|error| {
+        reply_take_fd(&mut reply, 0).map(Some).inspect_err(|&error| {
             warn!(
                 provider = "supervisor",
                 error = %error,
                 "take-controller-bootstrap reply carried no escrow fd"
             );
-            error
         })
     }
 

@@ -1480,11 +1480,16 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
     // this leg's reply inside an outer forwarded call, so routing it onto
     // the outer pool can park it behind the very call that waits on it
     // (NESTED_DISPATCH_WORKERS).
+    #[cfg(not(feature = "layer1-bootstrap"))]
     let nested_leg = matches!(
         &envelope.request,
         d2b_contracts_broker::broker_wire::BrokerRequest::EnvelopeInvoke(req)
             if req.chain_root_invocation_id.is_some()
     );
+    // The layer1-bootstrap protocol carries no envelope chain (its request
+    // type is BootstrapCall), so no leg can present a chain root.
+    #[cfg(feature = "layer1-bootstrap")]
+    let nested_leg = false;
     let pool = if nested_leg {
         Arc::clone(&server.nested_dispatches)
     } else {

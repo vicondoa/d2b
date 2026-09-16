@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test", "rust_clippy_test")
 load("//bazel/checks/rust:defs.bzl", "broker_test_tags")
 
 
@@ -462,4 +462,39 @@ filegroup(
 rust_doc_test(
     name = "d2b_broker_doc_test",
     crate = "//packages/d2b-broker:d2b_broker",
+)
+
+# Aggregate clippy gate for the broker crate's own targets; wired into
+# //bazel/checks/rust:portable_rust_broker. The workspace per-crate
+# `-Dwarnings` rustc flag carries into the clippy action, so any clippy
+# warning fails the suite. `transitive = False` keeps the gate scoped to
+# the crate's own targets.
+rust_clippy_test(
+    name = "clippy",
+    targets = [":d2b_broker",
+        ":d2b_broker_test_support",
+        ":d2b_broker_layer1_bootstrap",
+        ":d2b_broker_layer1_bootstrap_test_support",
+        ":d2b_broker_fake_backends",
+        ":d2b_broker_fake_backends_test_support",
+        ":bridge_lifecycle",
+        ":broker_export_audit",
+        ":broker_protocol_compatibility",
+        ":broker_socket_acl",
+        ":bundle_tampered_broker",
+        ":kernel_surface",
+        ":persistent_tap_lifecycle",
+        ":pidfd_handoff_scm_rights",
+        ":pidfd_real_spawner",
+        ":security_key_broker",
+        ":socket_activation",
+        ":w12_fd_passing_response",
+        ":d2b_broker_test",
+        ":d2b_broker_layer1_bootstrap_test",
+        ":d2b_broker_fake_backends_test",
+        ":host_profile",
+        ":guest_profile",
+        ":profile_separation"],
+    transitive = False,
+    visibility = ["//visibility:public"],
 )

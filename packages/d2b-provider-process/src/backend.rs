@@ -312,6 +312,7 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
     /// the retained pidfd, so the daemon can register the kernel-spawned
     /// runner in its authoritative pidfd table (the family handlers' runner
     /// lookup). `None` for a backend that retains no pidfd.
+    #[allow(clippy::type_complexity)] // the launched-runner snapshot tuple is the trait's wire shape
     fn launched_runner_snapshot(
         &self,
         _handle: &Self::Handle,
