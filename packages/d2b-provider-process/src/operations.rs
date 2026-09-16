@@ -1959,7 +1959,19 @@ impl OperationHandler for ObserveRunnerHandler {
         let reply = invoke_kernel_nested(
             &ctx,
             "observe-process",
-            serde_json::json!({ "pid": pid }),
+            serde_json::json!({
+                "pid": pid,
+                // The observation carries the runner identity so the kernel
+                // can resolve the spawn-time registration: the registered
+                // binary is what actually exec'd, usable even when the
+                // broker cannot read /proc/<pid>/exe for the runner.
+                "vmId": request.vm_id.as_str(),
+                "roleId": request.role_id.as_str(),
+                "resourceRef": request.resource_ref.as_ref().map(|reference| reference.to_canonical_string()),
+                "resourceUid": request.resource_uid.as_ref().map(|uid| uid.as_str()),
+                "zoneUid": request.zone_uid.as_ref().map(|uid| uid.as_str()),
+                "runtimeScope": request.runtime_scope.map(|scope| scope.to_vec()),
+            }),
             Vec::new(),
         )
         .await?;
@@ -1975,14 +1987,23 @@ impl OperationHandler for ObserveRunnerHandler {
         let executable = result
             .get("executable")
             .and_then(serde_json::Value::as_str);
+        let registered_binary = result
+            .get("registeredBinary")
+            .and_then(serde_json::Value::as_str);
+        // The registered binary is the spawn-time record of what the kernel
+        // exec'd (the daemon's own resolved plan), so it is authoritative
+        // for the executable binding; the readlink is a cross-check only.
+        let executable_verified = registered_binary
+            .map(|path| executable_matches(Some(path), &intent.binary_path))
+            .unwrap_or_else(|| executable_matches(executable, &intent.binary_path));
         let cgroup_verified = proc_cgroup_matches(pid, &cgroup_placement.subtree);
-        let executable_verified = executable_matches(executable, &intent.binary_path);
         if present && (!cgroup_verified || !executable_verified) {
             tracing::warn!(
                 pid,
                 cgroup_verified,
                 executable_verified,
                 actual = executable.unwrap_or("<unreadable>"),
+                registered_binary = registered_binary.unwrap_or("<absent>"),
                 expected_subtree = %cgroup_placement.subtree,
                 expected_binary = %intent.binary_path.display(),
                 "ObserveRunner registered-runner verification incomplete"

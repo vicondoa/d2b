@@ -444,9 +444,33 @@ fn observe_process(
         ),
         Err(_) => (false, None, None),
     };
+    // The registered binary is the spawn-time record of what the kernel
+    // ACTUALLY exec'd (the daemon's resolved plan carried in the payload).
+    // /proc/<pid>/exe can be unreadable from the broker's context even for
+    // a present process (the runner runs under its own uid/namespace), so
+    // the family side prefers this record and uses the readlink only as a
+    // cross-check when both are readable.
     let executable = std::fs::read_link(format!("/proc/{pid}/exe"))
         .ok()
         .map(|path| path.display().to_string());
+    let registered_binary = optional_parse_identity_fields(invocation.payload)
+        .and_then(|identity| {
+            crate::runtime::runner_metadata_registry()
+                .lock()
+                .ok()
+                .and_then(|registry| {
+                    registry
+                        .get(&crate::runtime::runner_registry_key(
+                            &identity.vm_id,
+                            &identity.role_id,
+                            identity.resource_ref.as_ref(),
+                            identity.resource_uid.as_ref(),
+                            identity.zone_uid.as_ref(),
+                            identity.runtime_scope,
+                        ))
+                        .map(|registration| registration.binary_path.display().to_string())
+                })
+        });
     let invocation_id = invocation.ctx.invocation_id;
     let registered = crate::runtime::runner_pidfds().contains_key(invocation_id)
         && crate::runtime::runner_pidfds()
@@ -459,10 +483,83 @@ fn observe_process(
             "state": state,
             "startTimeTicks": start_time_ticks,
             "executable": executable,
+            "registeredBinary": registered_binary,
             "registered": registered,
         }))?,
         fds: Vec::new(),
     })
+}
+
+/// The optional runner-identity fields an observation carries, when the
+/// caller attached them.
+#[derive(Default)]
+struct ObserveIdentityFields {
+    vm_id: String,
+    role_id: String,
+    resource_ref: Option<d2b_contracts_resource::v3::ResourceRef>,
+    resource_uid: Option<d2b_contracts_resource::v3::ResourceUid>,
+    zone_uid: Option<d2b_contracts_resource::v3::ResourceUid>,
+    runtime_scope: Option<[u8; 32]>,
+}
+
+fn optional_parse_identity_fields(
+    payload: &CanonicalJsonObject,
+) -> Option<ObserveIdentityFields> {
+    let vm_id = field_str(payload, "vmId").ok()?.to_owned();
+    let role_id = field_str(payload, "roleId").ok()?.to_owned();
+    let resource_ref = match optional_field_str(payload, "resourceRef")? {
+        None => None,
+        Some(value) => Some(d2b_contracts_resource::v3::ResourceRef::parse(&value).ok()?),
+    };
+    let resource_uid = match optional_field_str(payload, "resourceUid")? {
+        None => None,
+        Some(value) => Some(d2b_contracts_resource::v3::ResourceUid::parse(value).ok()?),
+    };
+    let zone_uid = match optional_field_str(payload, "zoneUid")? {
+        None => None,
+        Some(value) => Some(d2b_contracts_resource::v3::ResourceUid::parse(value).ok()?),
+    };
+    let runtime_scope = optional_field_bytes32(payload, "runtimeScope")?;
+    Some(ObserveIdentityFields {
+        vm_id,
+        role_id,
+        resource_ref,
+        resource_uid,
+        zone_uid,
+        runtime_scope,
+    })
+}
+
+fn optional_field_str(payload: &CanonicalJsonObject, key: &str) -> Option<Option<String>> {
+    match payload.get(key) {
+        None => Some(None),
+        Some(CanonicalJsonValue::String(value)) => Some(Some(value.clone())),
+        Some(CanonicalJsonValue::Null) => Some(None),
+        Some(_) => None,
+    }
+}
+
+fn optional_field_bytes32(payload: &CanonicalJsonObject, key: &str) -> Option<Option<[u8; 32]>> {
+    match payload.get(key) {
+        None => Some(None),
+        Some(CanonicalJsonValue::Null) => Some(None),
+        Some(CanonicalJsonValue::Array(values)) => {
+            let mut bytes = [0u8; 32];
+            if values.len() != 32 {
+                return None;
+            }
+            for (index, value) in values.iter().enumerate() {
+                match value {
+                    CanonicalJsonValue::Integer(byte) if (0..=255).contains(byte) => {
+                        bytes[index] = *byte as u8;
+                    }
+                    _ => return None,
+                }
+            }
+            Some(Some(bytes))
+        }
+        Some(_) => None,
+    }
 }
 
 /// The cell-consume kernel: compare-and-consume one declared one-time
