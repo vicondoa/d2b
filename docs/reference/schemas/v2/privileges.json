@@ -282,6 +282,7 @@
             "status",
             "status --check-bridges",
             "switch",
+            "take-controller-bootstrap",
             "test",
             "up",
             "update-hosts-file",

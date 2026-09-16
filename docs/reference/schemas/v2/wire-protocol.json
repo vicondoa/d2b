@@ -3053,7 +3053,6 @@
           }
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -3073,7 +3072,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -3106,7 +3104,6 @@
       ],
       "properties": {
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -5302,7 +5299,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -5630,7 +5626,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -5750,7 +5745,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -5773,7 +5767,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -5792,7 +5785,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -5828,7 +5820,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -5870,7 +5861,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -6015,7 +6005,6 @@
           "minItems": 32
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -6077,7 +6066,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -6100,7 +6088,6 @@
       ],
       "properties": {
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -6247,7 +6234,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7168,7 +7154,6 @@
       ],
       "properties": {
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7196,7 +7181,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7264,7 +7248,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7343,7 +7326,6 @@
       ],
       "properties": {
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7383,7 +7365,6 @@
           "type": "boolean"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7415,7 +7396,6 @@
       "type": "object",
       "properties": {
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7600,7 +7580,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -8071,7 +8050,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -8565,7 +8543,6 @@
       ],
       "properties": {
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -8790,7 +8767,6 @@
           "minItems": 32
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -8865,7 +8841,6 @@
           "minimum": 0.0
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9188,7 +9163,6 @@
           "minItems": 32
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9287,7 +9261,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9307,7 +9280,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9366,7 +9338,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9406,7 +9377,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9691,7 +9661,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9784,7 +9753,6 @@
           "type": "boolean"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9836,7 +9804,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
