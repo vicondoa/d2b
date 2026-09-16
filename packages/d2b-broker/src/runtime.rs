@@ -5601,10 +5601,12 @@ fn discover_runner_candidate(
             continue;
         }
         let observed_exe = read_runner_executable(pid);
-        let executable_observation = observe_runner_executable(observed_exe.clone(), &intent.binary_path)?;
+        let observed_exe_ref = observed_exe.as_deref().ok();
+        let executable_observation =
+            observe_runner_executable(observed_exe, &intent.binary_path)?;
         if matches!(executable_observation, RunnerExecutableObservation::Mismatch) {
             tracing::warn!(
-                observed = ?observed_exe.as_deref().ok(),
+                observed = ?observed_exe_ref,
                 expected = ?intent.binary_path,
                 "runner executable mismatch observed",
             );
