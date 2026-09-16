@@ -679,6 +679,7 @@ fn broker_backend_uses_the_production_spawn_envelope_and_pidfd_handoff() {
         bundle_content_identity: "bundle-content-test".to_owned(),
         sandbox_plan: None,
         accepts_launch_args: false,
+        multi_instance: false,
     };
     let backend = BrokerProcessBackend::with_socket_and_role(
         FixedBrokerResolver { intent },

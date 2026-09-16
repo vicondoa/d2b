@@ -2383,10 +2383,12 @@ pub enum RunnerSignal {
 pub struct SignalRunnerRequest {
     pub vm_id: VmId,
     pub role_id: RoleId,
-    /// The closed runner role the signal targets; the pidfd-table role the
-    /// lookup keys on is derived from it (see `RunnerRole::pidfd_table_role`).
+    /// The bundle runner intent the signal acts for, when the caller knows
+    /// it: the pidfd-table role the lookup keys on is derived from the
+    /// resolved intent's serving-worker class (see
+    /// `resolved_intent_is_serving_worker`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<RunnerRole>,
+    pub bundle_runner_intent_ref: Option<String>,
     pub signal: RunnerSignal,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
@@ -2550,29 +2552,6 @@ pub enum RunnerRole {
     /// with the real host compositor socket bound read/write at a
     /// fixed in-jail upstream path.
     WaylandProxy,
-}
-
-impl RunnerRole {
-    /// The daemon pidfd-table role one runner registers and is looked up
-    /// under.
-    ///
-    /// Roles that admit several runners per VM - the virtiofsd sidecar is
-    /// one per `microvm.shares` row - share the template-scoped role id, so
-    /// their table role carries the row's resource uid; a bare role id
-    /// would make the second runner's registration collide with the first
-    /// and every observation would resolve to the wrong pid. Single-runner
-    /// roles (the VM runners, the controllers) keep the bare role id the
-    /// vm-stop signal paths key on.
-    pub fn pidfd_table_role(
-        role: Option<&RunnerRole>,
-        role_id: &str,
-        resource_uid: Option<&ResourceUid>,
-    ) -> String {
-        match (role, resource_uid) {
-            (Some(RunnerRole::Virtiofsd), Some(uid)) => format!("{role_id}@{}", uid.as_str()),
-            _ => role_id.to_owned(),
-        }
-    }
 }
 
 /// Typed semantic sandbox plan compiled by the daemon and re-validated by

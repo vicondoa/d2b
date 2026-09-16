@@ -97,6 +97,11 @@ pub struct BrokerLaunchIntent {
     /// Whether the resolved template admits controller-supplied launch
     /// arguments (the broker re-checks the same fence before exec).
     pub accepts_launch_args: bool,
+    /// Whether this launch is one of several same-role runners a single VM
+    /// may hold at once (the binding-owned serving worker class): its
+    /// pidfd-table registration keys on the row identity, not the bare role
+    /// id, so two same-template runners never collide.
+    pub multi_instance: bool,
 }
 
 impl std::fmt::Debug for BrokerLaunchIntent {
@@ -882,6 +887,7 @@ impl BundleBackedLaunchResolver {
             activation_input: ticket.activation_input().cloned(),
             guest_execution,
             accepts_launch_args: intent.accepts_launch_args,
+            multi_instance: d2b_core::bundle_resolver::resolved_intent_is_serving_worker(&intent),
             sandbox_plan: ticket.sandbox_plan().map(|plan| {
                 let spec = plan.spec();
                 SandboxLaunchPlan {
@@ -1503,11 +1509,15 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
     ) -> Result<Option<(String, String, i32, u64, OwnedFd)>, ProcessEffectError> {
         Ok(Some((
             handle.observed.intent.vm_id.to_string(),
-            RunnerRole::pidfd_table_role(
-                Some(&handle.observed.intent.role),
-                handle.observed.intent.role_id.as_str(),
-                Some(&handle.observed.intent.resource_uid),
-            ),
+            if handle.observed.intent.multi_instance {
+                format!(
+                    "{}@{}",
+                    handle.observed.intent.role_id.as_str(),
+                    handle.observed.intent.resource_uid.as_str()
+                )
+            } else {
+                handle.observed.intent.role_id.to_string()
+            },
             handle.observed.pid,
             handle.observed.start_time_ticks,
             handle.pidfd.try_clone().map_err(|error| {
@@ -1589,7 +1599,9 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             SignalRunnerRequest {
                 vm_id: handle.observed.intent.vm_id.clone(),
                 role_id: handle.observed.intent.role_id.clone(),
-                role: Some(handle.observed.intent.role),
+                bundle_runner_intent_ref: Some(
+                    handle.observed.intent.bundle_runner_intent_ref.to_string(),
+                ),
                 signal,
                 guest_execution: handle.observed.intent.guest_execution.clone(),
                 pid: Some(handle.observed.pid),
@@ -1937,6 +1949,7 @@ mod tests {
                 activation_input: None,
                 guest_execution: None,
                 accepts_launch_args: false,
+                multi_instance: false,
             },
             pid: i32::from(seed) + 1,
             start_time_ticks: u64::from(seed) + 1,

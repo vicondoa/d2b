@@ -2003,15 +2003,16 @@ impl OperationHandler for ObserveRunnerHandler {
         // The daemon's pidfd table is the authoritative presence source: a
         // runner the daemon does not track is not present, exactly as the
         // retired arm answered a registry miss with an absent observation.
-        let Some((pid, start_time_ticks)) = runner_lookup(
-            kernel,
-            request.vm_id.as_str(),
-            &RunnerRole::pidfd_table_role(
-                Some(&request.role),
-                request.role_id.as_str(),
-                request.resource_uid.as_ref(),
-            ),
-        ) else {
+        let table_role = match (
+            d2b_core::bundle_resolver::resolved_intent_is_serving_worker(&intent),
+            request.resource_uid.as_ref(),
+        ) {
+            (true, Some(uid)) => format!("{}@{}", request.role_id.as_str(), uid.as_str()),
+            _ => request.role_id.to_string(),
+        };
+        let Some((pid, start_time_ticks)) =
+            runner_lookup(kernel, request.vm_id.as_str(), &table_role)
+        else {
             let response = ObserveRunnerResponse {
                 vm_id: request.vm_id.clone(),
                 role_id: request.role_id.clone(),
@@ -2373,11 +2374,20 @@ impl OperationHandler for SignalRunnerHandler {
         // kernel signals through a pidfd, so the handler derives one from the
         // tracked `(pid, start_time_ticks)` via the open-pidfd kernel - the
         // retired arm's open-then-signal fallback - and signals through it.
-        let table_role = RunnerRole::pidfd_table_role(
-            request.role.as_ref(),
-            request.role_id.as_str(),
+        let table_role = match (
+            request
+                .bundle_runner_intent_ref
+                .as_deref()
+                .map(|intent_ref| resolve_intent(kernel, SIGNAL_RUNNER, intent_ref))
+                .transpose()?
+                .as_ref()
+                .map(d2b_core::bundle_resolver::resolved_intent_is_serving_worker)
+                .unwrap_or(false),
             request.resource_uid.as_ref(),
-        );
+        ) {
+            (true, Some(uid)) => format!("{}@{}", request.role_id.as_str(), uid.as_str()),
+            _ => request.role_id.to_string(),
+        };
         let Some((pid, start_time_ticks)) =
             runner_lookup(kernel, request.vm_id.as_str(), &table_role)
         else {
