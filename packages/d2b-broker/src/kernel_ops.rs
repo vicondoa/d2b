@@ -112,8 +112,8 @@ pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
         .with(PREPARE_DIRECTORY, {
             move |invocation| prepare_directory(invocation)
         })
-        .with(KILL_CGROUP, { move |invocation| kill_cgroup(invocation) })
-        .with(SIGNAL_PIDFD, { move |invocation| signal_pidfd(invocation) })
+        .with(KILL_CGROUP, move |invocation| kill_cgroup(invocation))
+        .with(SIGNAL_PIDFD, move |invocation| signal_pidfd(invocation))
         .with(DEREGISTER_PIDFD, {
             move |invocation| deregister_pidfd(invocation)
         })
@@ -134,7 +134,7 @@ pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
         .with(TAKE_CONTROLLER_BOOTSTRAP, {
             move |invocation| take_controller_bootstrap(invocation)
         })
-        .with(CONSUME_CELL, { move |invocation| consume_cell(invocation) })
+        .with(CONSUME_CELL, move |invocation| consume_cell(invocation))
         .with(COMPLETE_CELL, {
             move |invocation| complete_cell(invocation)
         })
@@ -152,7 +152,7 @@ pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
             let config = Arc::clone(&config);
             move |invocation| apply_route(&config, invocation)
         })
-        .with(APPLY_SYSCTL, { move |invocation| apply_sysctl(invocation) })
+        .with(APPLY_SYSCTL, move |invocation| apply_sysctl(invocation))
         .with(CREATE_BRIDGE, {
             move |invocation| create_bridge(invocation)
         })
