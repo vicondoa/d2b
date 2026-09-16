@@ -1296,7 +1296,15 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                 None,
                 &inherited_fds,
             )
-            .map_err(|error| response_error(&error, BrokerOperation::Other))?;
+            .map_err(|error| {
+                warn!(
+                    provider = "supervisor",
+                    error = %error,
+                    fds = inherited_fds.len(),
+                    "broker spawn invocation failed"
+                );
+                response_error(&error, BrokerOperation::Other)
+            })?;
         let response: SpawnRunnerResponse =
             serde_json::from_value(reply.response.result.clone().ok_or_else(|| {
                 warn!(
