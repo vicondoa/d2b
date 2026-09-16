@@ -1099,7 +1099,7 @@ impl BrokerEnvelope {
         .await;
         let settled_outcome = match &dispatched {
             Ok(_) => "ok".to_owned(),
-            Err(refusal) => refusal.code.clone(),
+            Err(refusal) => refusal.code.to_owned(),
         };
         tracing::info!(
             operation = operation,
