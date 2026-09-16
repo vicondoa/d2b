@@ -415,16 +415,6 @@ pub fn derive_resource_backed_paths(
     }
 
     verify_resource_backed_argv(plan, identity, &runtime_dir)?;
-    // The state directory is the backing state Volume's layout output: the
-    // Device controller ensures the Volume before the worker is usable, but
-    // the declared Process row's own driver launches as soon as the row
-    // exists. A launch racing the layout must fail retryably HERE - a child
-    // that starts without its state directory dies on its first write
-    // (swtpm opens its log there) and burns the row's restart budget for
-    // nothing.
-    if !swtpm_dir.is_dir() {
-        return Err(reasons::STATE_DIR_NOT_PROVISIONED);
-    }
     Ok(SwtpmDirPaths {
         vm_id: guest.to_owned(),
         swtpm_dir,
@@ -433,6 +423,19 @@ pub fn derive_resource_backed_paths(
         marker_dir: PathBuf::from(MARKER_TREE),
         marker_name: guest.to_owned(),
     })
+}
+
+/// The state directory a resource-backed swtpm worker opens: the trusted
+/// state Volume directory under the trusted root, which
+/// [`derive_resource_backed_paths`] fences the launch's argv against.
+///
+/// The spawn hook reads the directory's presence from here: the derivation
+/// itself stays a pure function of the plan and the identity.
+pub fn trusted_state_dir(identity: &ResourceBackedSwtpm) -> PathBuf {
+    match identity.state_volume.as_deref() {
+        Some(volume) => identity.state_root.join(volume),
+        None => identity.state_root.clone(),
+    }
 }
 
 /// Fence one resource-backed swtpm argv against the trusted identity. The
@@ -447,12 +450,6 @@ fn verify_resource_backed_argv(
     if let Some(raw) = flag_value(argv, "--tpmstate") {
         let state_dir = PathBuf::from(key_value(raw, "dir").ok_or(reasons::IDENTITY_MISMATCH)?);
         check_resource_backed_state_dir(&state_dir, identity)?;
-        // The launch must fail retryably while the backing Volume's layout
-        // has not created the directory: a child started without it dies on
-        // its first log write and burns the row's restart budget.
-        if !state_dir.is_dir() {
-            return Err(reasons::STATE_DIR_NOT_PROVISIONED);
-        }
         let ctrl = key_value(
             flag_value(argv, "--ctrl").ok_or(reasons::IDENTITY_MISMATCH)?,
             "path",

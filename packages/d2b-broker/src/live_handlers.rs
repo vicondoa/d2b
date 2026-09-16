@@ -2883,6 +2883,23 @@ fn maybe_harden_swtpm_dir(
         })?;
         crate::ops::swtpm_dir::derive_resource_backed_paths(plan, identity)
             .map_err(|reason| hardening_refusal(plan, reason))?;
+        // The long-lived worker (`--tpmstate dir=...`) opens its state
+        // directory for the log and pid file the moment it starts, so a launch
+        // racing the Volume's layout must fail retryably here instead of
+        // burning the row's restart budget on a child that dies on its first
+        // write. The one-shot flush (`--unix <dir>/ctrl.sock`) only connects
+        // to the worker's control socket inside that directory: it is admitted
+        // and waits for the socket, so refusing it would spend the row's one
+        // attempt on a race it can win. Presence is a filesystem fact, so it
+        // stays out of the pure derivation above.
+        if plan.argv.iter().any(|arg| arg == "--tpmstate")
+            && !crate::ops::swtpm_dir::trusted_state_dir(identity).is_dir()
+        {
+            return Err(hardening_refusal(
+                plan,
+                crate::ops::swtpm_dir::reasons::STATE_DIR_NOT_PROVISIONED,
+            ));
+        }
         return Ok(None);
     }
     let paths = crate::ops::swtpm_dir::derive_paths(plan)
@@ -3734,9 +3751,12 @@ mod tests {
     #[test]
     fn resource_backed_swtpm_launch_is_fenced_against_the_trusted_identity() {
         use crate::ops::swtpm_dir::{ResourceBackedSwtpm, reasons};
+        // The state Volume's layout creates the directory; the fence reads
+        // that fact from the filesystem, so the fixture owns a real one.
+        let scratch = tempfile::tempdir().expect("scratch");
         let identity = ResourceBackedSwtpm {
             guest: "acceptance-guest".to_owned(),
-            state_root: PathBuf::from("/var/lib/d2b/tpm-state"),
+            state_root: scratch.path().join("tpm-state"),
             state_volume: Some("device-6f9619ff8b864d01b42d00cf4fc964ff-tpm-state".to_owned()),
         };
         let state_dir = identity
@@ -3745,15 +3765,53 @@ mod tests {
         let runtime_dir = PathBuf::from("/run/d2b/vms/acceptance-guest");
 
         // A launch naming exactly the trusted directories passes the fence
-        // and gets no provisioning disposition: in v3 the TPM state Volume's
+        // once its state Volume directory exists: in v3 that Volume's
         // `create-if-never-provisioned`/`fail-closed` lifecycle owns the
-        // directory, so the spawn hook only fences identity.
+        // directory, and the spawn hook fences identity plus the presence the
+        // lifecycle leaves behind.
+        std::fs::create_dir_all(&state_dir).expect("state volume directory");
         let plan = resource_backed_swtpm_plan(&state_dir, &runtime_dir);
         assert!(
             maybe_harden_swtpm_dir(&plan, Some(&identity))
                 .expect("trusted launch passes")
                 .is_none()
         );
+
+        // A launch racing the Volume's layout (the directory is not there yet)
+        // fails closed retryably instead of starting a child that dies on its
+        // first log write and burns the row's restart budget.
+        std::fs::remove_dir(&state_dir).expect("drop the state volume directory");
+        let refusal =
+            maybe_harden_swtpm_dir(&plan, Some(&identity)).expect_err("unprovisioned refuses");
+        assert!(matches!(
+            refusal,
+            LiveHandlerError::SwtpmDirHardening { reason, .. }
+                if reason == reasons::STATE_DIR_NOT_PROVISIONED
+        ));
+        std::fs::create_dir_all(&state_dir).expect("restore the state volume directory");
+
+        // The one-shot flush opens the worker's control socket inside that
+        // same directory instead of writing into it, so it is admitted while
+        // the layout is still absent: it waits for the socket, and refusing it
+        // would spend the row's single launch attempt on a race it can win.
+        std::fs::remove_dir(&state_dir).expect("drop the state volume directory");
+        let mut flush = test_spawn_plan_with_argv(
+            vec![
+                "swtpm-ioctl".to_owned(),
+                "flush".to_owned(),
+                "--unix".to_owned(),
+                state_dir.join("ctrl.sock").display().to_string(),
+            ],
+            "w1-swtpm",
+        );
+        flush.cgroup_placement.subtree =
+            format!("d2b.slice/{}/swtpm", "process-".to_owned() + &"c".repeat(64));
+        assert!(
+            maybe_harden_swtpm_dir(&flush, Some(&identity))
+                .expect("one-shot flush passes")
+                .is_none()
+        );
+        std::fs::create_dir_all(&state_dir).expect("restore the state volume directory");
 
         // Without a trusted identity the launch fails closed by derivation.
         let refusal = maybe_harden_swtpm_dir(&plan, None).expect_err("missing identity refuses");
