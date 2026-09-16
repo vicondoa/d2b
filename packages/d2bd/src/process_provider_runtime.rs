@@ -1345,68 +1345,10 @@ impl ProductionProcessProviders {
         // the daemon's authoritative pidfd table is the family handlers'
         // runner lookup (ObserveRunner/SignalRunner), so every launched
         // runner must be registered here - the same snapshot the startup
-        // adoption path registers. A missing or failed registration never
-        // fails the launch: the stale-entry reap and the supervisor handle
-        // still cover signal and liveness.
-        if provider == ManagedProvider::Minijail {
-            match self
-                .minijail
-                .port()
-                .launched_runner_snapshot(&report.identity)
-                .await
-            {
-                Ok(Some((vm, role, pid, start_time_ticks, pidfd))) => {
-                    match self.pidfd_table.register(
-                        vm.clone(),
-                        role.clone(),
-                        d2bd_runtime::supervisor::pidfd_table::PidfdEntry {
-                            pidfd,
-                            pid,
-                            start_time_ticks,
-                        },
-                    ) {
-                        Ok(()) => {
-                            tracing::info!(
-                                vm = %vm,
-                                role = %role,
-                                pid,
-                                "launched runner registered in pidfd table"
-                            );
-                        }
-                        Err(d2bd_runtime::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }) => {
-                            tracing::info!(
-                                vm = %vm,
-                                role = %role,
-                                "launched runner already registered in pidfd table"
-                            );
-                        }
-                        Err(error) => {
-                            tracing::warn!(
-                                vm = %vm,
-                                role = %role,
-                                error = %error,
-                                "pidfd table registration failed for launched runner"
-                            );
-                        }
-                    }
-                }
-                Ok(None) => {
-                    tracing::warn!(
-                        provider = ?provider,
-                        identity = report.identity.to_hex(),
-                        "launched runner snapshot unavailable for pidfd table registration"
-                    );
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        provider = ?provider,
-                        identity = report.identity.to_hex(),
-                        error = ?error,
-                        "launched runner snapshot failed; pidfd table registration skipped"
-                    );
-                }
-            }
-        }
+        // adoption path registers. Registration failure never fails the
+        // launch: the stale-entry reap and the supervisor handle still
+        // cover signal and liveness.
+        self.register_launched_runner(provider, report.identity).await;
         if controller_bootstrap {
             let daemon_endpoint = match escrow_wait {
                 Some(endpoint) => endpoint,
@@ -1625,9 +1567,86 @@ impl ProductionProcessProviders {
             target_ref: Some(resource.target().clone()),
             runtime_scope: ticket.runtime_scope(),
         })?;
+        // The kernel spawns the runner and retains its pidfd broker-side;
+        // the daemon's authoritative pidfd table is the family handlers'
+        // runner lookup (ObserveRunner/SignalRunner), so every launched
+        // runner must be registered here - the same snapshot the startup
+        // adoption path registers. Registration failure never fails the
+        // launch: the stale-entry reap and the supervisor handle still
+        // cover signal and liveness.
+        self.register_launched_runner(provider, report.identity).await;
         Ok(ProviderLaunch {
             identity: report.identity,
         })
+    }
+
+    /// Register one successfully launched minijail runner in the daemon's
+    /// authoritative pidfd table (the family handlers' runner lookup).
+    async fn register_launched_runner(
+        &self,
+        provider: ManagedProvider,
+        identity: ProcessIdentityDigest,
+    ) {
+        if provider != ManagedProvider::Minijail {
+            return;
+        }
+        match self
+            .minijail
+            .port()
+            .launched_runner_snapshot(&identity)
+            .await
+        {
+            Ok(Some((vm, role, pid, start_time_ticks, pidfd))) => {
+                match self.pidfd_table.register(
+                    vm.clone(),
+                    role.clone(),
+                    d2bd_runtime::supervisor::pidfd_table::PidfdEntry {
+                        pidfd,
+                        pid,
+                        start_time_ticks,
+                    },
+                ) {
+                    Ok(()) => {
+                        tracing::info!(
+                            vm = %vm,
+                            role = %role,
+                            pid,
+                            "launched runner registered in pidfd table"
+                        );
+                    }
+                    Err(d2bd_runtime::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }) => {
+                        tracing::info!(
+                            vm = %vm,
+                            role = %role,
+                            "launched runner already registered in pidfd table"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            vm = %vm,
+                            role = %role,
+                            error = %error,
+                            "pidfd table registration failed for launched runner"
+                        );
+                    }
+                }
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    provider = ?provider,
+                    identity = identity.to_hex(),
+                    "launched runner snapshot unavailable for pidfd table registration"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    provider = ?provider,
+                    identity = identity.to_hex(),
+                    error = ?error,
+                    "launched runner snapshot failed; pidfd table registration skipped"
+                );
+            }
+        }
     }
 
     /// Adopt a signed target-local controller Process after daemon restart.
