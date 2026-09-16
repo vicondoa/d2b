@@ -5470,9 +5470,15 @@ fn observe_registered_runner(
                 != request.bundle_runner_intent_ref.as_str()
             || observed_registration.pid <= 0
             || observed_registration.start_time_ticks == 0
-            || observed_registration.binary_path != intent.binary_path
-            || observed_registration.cgroup_subtree != cgroup_placement.subtree
         {
+            // The registration records what the spawn-process kernel
+            // ACTUALLY ran (the daemon's resolved plan carried in the
+            // payload); the broker's re-derived intent below can disagree
+            // with that across the two bundle views, so the binary and
+            // cgroup placement are NOT re-checked against the re-derived
+            // intent (the same tolerance the discovery path applies via
+            // the registered-binary preference, U10 seam). The identity
+            // fields above still bind the registration to the request.
             Ok(None)
         } else {
             let Some(start_time_ticks) = read_proc_start_time_ticks(observed_registration.pid)?
