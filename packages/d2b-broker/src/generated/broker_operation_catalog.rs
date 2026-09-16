@@ -2619,7 +2619,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
             audit_mode: "Yes",
         },
         payload_provenance: PayloadProvenance::Request,
-        payload_fields: &["pid"],
+        payload_fields: &["pid", "resourceRef", "resourceUid", "roleId", "runtimeScope", "vmId", "zoneUid"],
         payload_required: &["pid"],
         audit_join: None,
         max_fds: 0,

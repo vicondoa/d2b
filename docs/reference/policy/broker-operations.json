@@ -4511,6 +4511,31 @@
           "properties": {
             "pid": {
               "type": "integer"
+            },
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "resourceRef": {
+              "type": "string"
+            },
+            "resourceUid": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "runtimeScope": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              },
+              "minItems": 32,
+              "maxItems": 32
             }
           },
           "required": [
