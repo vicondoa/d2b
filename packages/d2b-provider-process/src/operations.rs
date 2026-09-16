@@ -2760,6 +2760,12 @@ impl OperationHandler for SpawnRunnerHandler {
                     })?,
             );
         }
+        tracing::info!(
+            vm = %request.vm_id.as_str(),
+            role = %request.role_id.as_str(),
+            reply_fd_count = fds.len(),
+            "SpawnRunner handler reply fd count"
+        );
         Ok(OperationResult::with_fds(
             typed_result(SPAWN_RUNNER, &response)?,
             fds,
