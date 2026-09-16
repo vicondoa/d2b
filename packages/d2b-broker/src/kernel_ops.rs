@@ -1454,6 +1454,9 @@ fn optional_parse_field<T: serde::de::DeserializeOwned>(
     let Some(value) = payload.get(key) else {
         return Ok(None);
     };
+    if matches!(value, CanonicalJsonValue::Null) {
+        return Ok(None);
+    }
     let json = value_to_serde(value)?;
     serde_json::from_value(json)
         .map(Some)
@@ -1501,6 +1504,12 @@ fn optional_user_namespace(
     let Some(value) = payload.get("userNamespace") else {
         return Ok(None);
     };
+    // The daemon emits absent optionals as JSON null (notably from the
+    // typed request's Option fields); null means None here too, so an
+    // absent namespace never refuses a spawn.
+    if matches!(value, CanonicalJsonValue::Null) {
+        return Ok(None);
+    }
     let CanonicalJsonValue::Object(fields) = value else {
         return Err(refused("userNamespace: expected an object"));
     };
