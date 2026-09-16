@@ -12857,7 +12857,15 @@ mod tests {
             bundle_path: manifest_path.to_path_buf(),
             state_dir: root.join("state"),
             activation_helper_path: root.join("activation-helper"),
-            d2bd_uid: 1000,
+            // The peer-credential gate compares the kernel-reported peer uid
+            // against this: a fixture pinned to a literal uid only passes when
+            // the test process happens to run as it (a CI runner runs as
+            // 1001), so the fixture names the test process's own uid.
+            // The peer-credential gate compares the kernel-reported peer uid
+            // against this: a fixture pinned to a literal uid only passes when
+            // the test process happens to run as it (a CI runner runs as
+            // 1001), so the fixture names the test process's own uid.
+            d2bd_uid: nix::unistd::Uid::current().as_raw(),
             d2bd_gid: Gid::current().as_raw(),
             store_sync_export_dir: root.join("observability").join("store-sync"),
             // No forwarding peer in a broker unit test: the envelope refuses
