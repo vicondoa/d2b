@@ -869,6 +869,9 @@
             },
             "guestExecution": {
               "type": "object"
+            },
+            "bundleRunnerIntentRef": {
+              "type": "string"
             }
           },
           "required": [

@@ -507,7 +507,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
             audit_mode: "Yes",
         },
         payload_provenance: PayloadProvenance::Request,
-        payload_fields: &["expectedStartTimeTicks", "generation", "guestExecution", "ownerRef", "pid", "providerIdentity", "providerRef", "resourceRef", "resourceUid", "roleId", "runtimeScope", "signal", "templateIdentity", "vmId", "zoneUid"],
+        payload_fields: &["bundleRunnerIntentRef", "expectedStartTimeTicks", "generation", "guestExecution", "ownerRef", "pid", "providerIdentity", "providerRef", "resourceRef", "resourceUid", "roleId", "runtimeScope", "signal", "templateIdentity", "vmId", "zoneUid"],
         payload_required: &["vmId", "roleId", "signal"],
         audit_join: None,
         max_fds: 0,
