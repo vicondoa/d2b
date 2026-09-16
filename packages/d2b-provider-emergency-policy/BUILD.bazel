@@ -1,12 +1,18 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_emergency_policy",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -16,7 +22,7 @@ rust_library(
     visibility = ["//visibility:public"],
 )
 
-rust_test(
+d2b_rust_test(
     name = "registration",
     srcs = ["tests/registration.rs"],
     compile_data = ["Cargo.toml"],
@@ -48,7 +54,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_emergency_policy_doc_test",
     crate = "//packages/d2b-provider-emergency-policy:d2b_provider_emergency_policy",
 )

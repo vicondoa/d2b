@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
 
@@ -7,7 +13,7 @@ exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"
 
 d2b_controller_toolkit_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
-rust_library(
+d2b_rust_library(
     name = "d2b_controller_toolkit",
     srcs = d2b_controller_toolkit_srcs,
     compile_data = ["Cargo.toml"],
@@ -17,7 +23,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_controller_toolkit_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_controller_toolkit",
@@ -40,7 +46,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_controller_toolkit_doc_test",
     crate = "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
 )

@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 
 exports_files(
@@ -221,7 +227,7 @@ d2bd_test_support_deps = [
     "//packages/d2bd-runtime:d2bd_runtime_test_support",
 ]
 
-rust_library(
+d2b_rust_library(
     name = "d2bd_lib",
     srcs = d2bd_srcs,
     compile_data = d2bd_compile_data,
@@ -237,7 +243,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2bd_lib_test_support",
     srcs = d2bd_srcs,
     compile_data = d2bd_compile_data,
@@ -254,7 +260,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "d2bd",
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
@@ -267,7 +273,7 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "d2bd_test_support",
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
@@ -281,7 +287,7 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "bundle_tampered_envelope",
     srcs = [
         "tests/bundle_tampered_envelope.rs",
@@ -310,7 +316,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "daemon_socket_acl",
     srcs = [
         "tests/common/mod.rs",
@@ -331,7 +337,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "cloud_composition",
     srcs = ["tests/cloud_composition.rs"],
     compile_data = ["Cargo.toml"],
@@ -346,7 +352,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "daemon_state_lock",
     srcs = [
         "tests/common/mod.rs",
@@ -366,7 +372,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "daemon_state_persistence",
     srcs = [
         "tests/common/mod.rs",
@@ -392,7 +398,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "stub_no_socket",
     srcs = ["tests/stub_no_socket.rs"],
     compile_data = ["Cargo.toml"],
@@ -406,7 +412,7 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "daemon_version_file",
     srcs = [
         "tests/common/mod.rs",
@@ -430,7 +436,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "daemon_version_negotiation",
     srcs = [
         "tests/common/mod.rs",
@@ -450,7 +456,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "production_binary_policy",
     srcs = ["tests/production_binary_policy.rs"],
     compile_data = ["Cargo.toml"],
@@ -474,7 +480,7 @@ rust_test(
     visibility = ["//visibility:public"],
 )
 
-rust_test(
+d2b_rust_test(
     name = "public_status_socket",
     srcs = [
         "tests/common/mod.rs",
@@ -500,7 +506,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2bd_lib_test",
     crate = ":d2bd_lib_test_support",
     data = [
@@ -532,7 +538,7 @@ rust_test(
     ] + all_crate_deps(normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "core_composition",
     srcs = ["tests/core_composition.rs"],
     compile_data = ["Cargo.toml", "src/composition.rs"],
@@ -548,7 +554,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "volume_effect_adapter",
     srcs = ["tests/volume_effect_adapter.rs"],
     compile_data = ["Cargo.toml"],
@@ -562,7 +568,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "resource_operator_activation",
     srcs = [
         "tests/resource_operator_activation.rs",
@@ -589,7 +595,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "guest_mode_fail_closed",
     srcs = ["tests/guest_mode_fail_closed.rs"],
     compile_data = ["Cargo.toml"],
@@ -601,7 +607,7 @@ rust_test(
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "guest_mode_component_session",
     srcs = ["tests/guest_mode_component_session.rs"],
     compile_data = ["Cargo.toml"],
@@ -615,7 +621,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "guest_target_service",
     srcs = ["tests/guest_target_service.rs"],
     compile_data = ["Cargo.toml"],
@@ -631,7 +637,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "mode_separation",
     srcs = ["tests/mode_separation.rs"],
     compile_data = ["Cargo.toml"],
@@ -665,7 +671,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2bd_doc_test",
     crate = "//packages/d2bd:d2bd_lib",
 )

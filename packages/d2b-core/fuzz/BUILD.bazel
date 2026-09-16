@@ -1,5 +1,8 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+)
 
 exports_files(
     ["BUILD.bazel", "Cargo.toml"],
@@ -28,7 +31,7 @@ filegroup(
 )
 
 
-rust_binary(
+d2b_rust_binary(
     name = "core",
     srcs = [
         "src/bin/core.rs",
@@ -49,7 +52,7 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "host",
     srcs = [
         "src/bin/host.rs",
@@ -66,7 +69,7 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "manifest",
     srcs = [
         "src/bin/manifest.rs",
@@ -82,7 +85,7 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "privileges",
     srcs = [
         "src/bin/privileges.rs",

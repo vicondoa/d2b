@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 
 exports_files(
@@ -7,7 +13,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_supervisor",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
@@ -29,7 +35,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_supervisor_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
@@ -52,7 +58,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "production_adapter",
     srcs = ["tests/production_adapter.rs"],
     compile_data = [
@@ -74,7 +80,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_supervisor_test",
     compile_data = [
         "//tests/fixtures:deny-unknown/host-valid.json",  # keep
@@ -108,7 +114,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_supervisor_doc_test",
     crate = "//packages/d2b-provider-supervisor:d2b_provider_supervisor",
 )

@@ -1,12 +1,18 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 exports_files(
     ["BUILD.bazel", "nix/default.nix", "nix/tests/default.nix"],
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_guest_azure_container_apps",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -20,7 +26,7 @@ rust_library(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_provider_guest_azure_container_apps_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
@@ -35,7 +41,7 @@ rust_library(
     visibility = ["//visibility:public"],
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_provider_guest_azure_container_apps_test",
     crate = ":d2b_provider_guest_azure_container_apps",
     compile_data = ["Cargo.toml"],
@@ -46,7 +52,7 @@ rust_test(
     visibility = ["//visibility:public"],
 )
 
-rust_test(
+d2b_rust_test(
     name = "provider_lifecycle",
     srcs = [
         "tests/provider_lifecycle.rs",
@@ -81,7 +87,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_provider_guest_azure_container_apps_doc_test",
     crate = "//packages/d2b-provider-guest-azure-container-apps:d2b_provider_guest_azure_container_apps",
 )

@@ -1,5 +1,12 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
+load("@rules_rust//rust:defs.bzl", "rust_clippy_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 load("//bazel/checks/rust:defs.bzl", "broker_test_tags")
 
 
@@ -48,7 +55,7 @@ d2b_broker_test_support_deps = [
     "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
 ]
 
-rust_library(
+d2b_rust_library(
     name = "d2b_broker",
     srcs = d2b_broker_srcs,
     compile_data = d2b_broker_compile_data,
@@ -59,7 +66,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_broker_test_support",
     srcs = d2b_broker_srcs,
     compile_data = d2b_broker_compile_data,
@@ -71,7 +78,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_broker_layer1_bootstrap",
     srcs = d2b_broker_srcs,
     compile_data = d2b_broker_compile_data,
@@ -84,7 +91,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_broker_layer1_bootstrap_test_support",
     srcs = d2b_broker_srcs,
     compile_data = d2b_broker_compile_data,
@@ -97,7 +104,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_broker_fake_backends",
     srcs = d2b_broker_srcs,
     compile_data = d2b_broker_compile_data,
@@ -110,7 +117,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_broker_fake_backends_test_support",
     srcs = d2b_broker_srcs,
     compile_data = d2b_broker_compile_data,
@@ -123,7 +130,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "d2b-broker",
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
@@ -134,7 +141,7 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "d2b-broker-layer1-bootstrap",
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
@@ -146,7 +153,7 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "bridge_lifecycle",
     srcs = ["tests/bridge_lifecycle.rs"],
     compile_data = ["Cargo.toml"],
@@ -163,7 +170,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "broker_export_audit",
     srcs = [
         "tests/broker_export_audit.rs",
@@ -183,7 +190,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "broker_protocol_compatibility",
     srcs = ["tests/broker_protocol_compatibility.rs"],
     compile_data = ["Cargo.toml"],
@@ -199,7 +206,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "broker_socket_acl",
     srcs = [
         "tests/broker_socket_acl.rs",
@@ -218,7 +225,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "bundle_tampered_broker",
     srcs = ["tests/bundle_tampered_broker.rs"],
     compile_data = ["Cargo.toml"],
@@ -236,7 +243,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "kernel_surface",
     srcs = ["tests/kernel_surface.rs"],
     compile_data = ["Cargo.toml"],
@@ -251,7 +258,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "persistent_tap_lifecycle",
     srcs = ["tests/persistent_tap_lifecycle.rs"],
     compile_data = ["Cargo.toml"],
@@ -269,7 +276,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "pidfd_handoff_scm_rights",
     srcs = ["tests/pidfd_handoff_scm_rights.rs"],
     compile_data = ["Cargo.toml"],
@@ -285,7 +292,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "pidfd_real_spawner",
     srcs = ["tests/pidfd_real_spawner.rs"],
     compile_data = ["Cargo.toml"],
@@ -300,7 +307,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "security_key_broker",
     srcs = ["tests/security_key_broker.rs"],
     compile_data = ["Cargo.toml"],
@@ -318,7 +325,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "socket_activation",
     srcs = ["tests/socket_activation.rs"],
     compile_data = ["Cargo.toml"],
@@ -341,7 +348,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "w12_fd_passing_response",
     srcs = ["tests/w12_fd_passing_response.rs"],
     compile_data = ["Cargo.toml"],
@@ -356,7 +363,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_broker_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_broker_test_support",
@@ -372,7 +379,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_broker_layer1_bootstrap_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_broker_layer1_bootstrap_test_support",
@@ -386,7 +393,7 @@ rust_test(
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_broker_fake_backends_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_broker_fake_backends_test_support",
@@ -401,7 +408,7 @@ rust_test(
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "host_profile",
     srcs = ["tests/host_profile.rs"],
     compile_data = ["Cargo.toml"],
@@ -415,7 +422,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "guest_profile",
     srcs = [
         "tests/guest_profile.rs",
@@ -435,7 +442,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "profile_separation",
     srcs = [
         "tests/profile_separation.rs",
@@ -472,7 +479,47 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_broker_doc_test",
     crate = "//packages/d2b-broker:d2b_broker",
+)
+
+# Aggregate clippy gate for the broker crate's own targets; wired into
+# `//bazel/checks/rust:portable_rust_broker`. Targets go through the d2b
+# wrappers, and the clippy action runs `-Dwarnings` (workspace per-crate
+# rustc flag), so any clippy warning fails the suite. `transitive = False`
+# keeps it to exactly these targets; the test targets cover the crate's
+# `tests/**` sources, which no other suite aggregates.
+rust_clippy_test(
+    name = "clippy",
+    targets = [
+        ":d2b_broker",
+        ":d2b_broker_test_support",
+        ":d2b_broker_layer1_bootstrap",
+        ":d2b_broker_layer1_bootstrap_test_support",
+        ":d2b_broker_fake_backends",
+        ":d2b_broker_fake_backends_test_support",
+        ":d2b-broker",
+        ":d2b-broker-layer1-bootstrap",
+        ":bridge_lifecycle",
+        ":broker_export_audit",
+        ":broker_protocol_compatibility",
+        ":broker_socket_acl",
+        ":bundle_tampered_broker",
+        ":kernel_surface",
+        ":persistent_tap_lifecycle",
+        ":pidfd_handoff_scm_rights",
+        ":pidfd_real_spawner",
+        ":security_key_broker",
+        ":socket_activation",
+        ":w12_fd_passing_response",
+        ":d2b_broker_test",
+        ":d2b_broker_layer1_bootstrap_test",
+        ":d2b_broker_fake_backends_test",
+        ":host_profile",
+        ":guest_profile",
+        ":profile_separation",
+    ],
+    transitive = False,
+    visibility = ["//visibility:public"],
 )

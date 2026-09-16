@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 
 exports_files(
@@ -9,7 +15,7 @@ exports_files(
 
 d2b_host_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
-rust_library(
+d2b_rust_library(
     name = "d2b_host",
     srcs = d2b_host_srcs,
     compile_data = [
@@ -24,7 +30,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_host_test_support",
     srcs = d2b_host_srcs,
     compile_data = [
@@ -40,7 +46,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+d2b_rust_library(
     name = "d2b_host_fake_backends",
     srcs = d2b_host_srcs,
     compile_data = [
@@ -57,7 +63,7 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "d2b-activation-helper",
     srcs = ["src/bin/d2b-activation-helper.rs"],
     compile_data = ["Cargo.toml"],
@@ -70,7 +76,7 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "activation_helper_build_farm",
     srcs = ["tests/activation_helper_build_farm.rs"],
     compile_data = ["Cargo.toml"],
@@ -85,7 +91,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "activation_helper_fs_posture",
     srcs = ["tests/activation_helper_fs_posture.rs"],
     compile_data = ["Cargo.toml"],
@@ -99,7 +105,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "host_generation",
     srcs = ["tests/host_generation.rs"],
     compile_data = ["Cargo.toml"],
@@ -112,7 +118,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b_host_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_host_test_support",
@@ -149,7 +155,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-rust_doc_test(
+d2b_rust_doc_test(
     name = "d2b_host_doc_test",
     crate = "//packages/d2b-host:d2b_host",
 )

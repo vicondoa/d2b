@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+    "d2b_rust_doc_test",
+)
 
 exports_files(
     ["BUILD.bazel"],
@@ -14,7 +20,7 @@ SK_FRONTEND_DEPS = [
     "//packages/d2b-session-unix:d2b_session_unix",
 ] + all_crate_deps(normal = True, cargo_only = True)
 
-rust_library(
+d2b_rust_library(
     name = "d2b_sk_frontend",
     srcs = glob(
         ["src/**/*.rs"],
@@ -26,7 +32,7 @@ rust_library(
     deps = SK_FRONTEND_DEPS,
 )
 
-rust_binary(
+d2b_rust_binary(
     name = "d2b-sk-frontend",
     srcs = ["src/main.rs"],
     crate_root = "src/main.rs",
@@ -37,7 +43,7 @@ rust_binary(
     ] + SK_FRONTEND_DEPS,
 )
 
-rust_test(
+d2b_rust_test(
     name = "d2b-sk-frontend_test",
     crate = ":d2b_sk_frontend",
     compile_data = ["Cargo.toml"],
