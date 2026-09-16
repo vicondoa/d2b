@@ -1097,9 +1097,16 @@ impl BrokerEnvelope {
             Ok((outcome, row.audit_join_identity(&payload)))
         }
         .await;
-        let settled_outcome = match &dispatched {
-            Ok(_) => "ok".to_owned(),
-            Err(refusal) => refusal.code.to_owned(),
+        let (settled_outcome, settled_detail) = match &dispatched {
+            Ok(_) => ("ok".to_owned(), None),
+            Err(refusal) => (
+                refusal.code.to_owned(),
+                refusal.detail.clone().or_else(|| {
+                    // Our own row-level refusals carry the detail on the
+                    // failure when the dispatcher produced one.
+                    None
+                }),
+            ),
         };
         tracing::info!(
             operation = operation,
@@ -1108,6 +1115,7 @@ impl BrokerEnvelope {
             elapsed_ms = probe_start.elapsed().as_millis(),
             serving = serves_locally,
             outcome = settled_outcome.as_str(),
+            detail = settled_detail.as_deref().unwrap_or(""),
             "envelope invocation settled"
         );
         if serves_locally {
