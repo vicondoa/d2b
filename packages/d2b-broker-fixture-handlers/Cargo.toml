@@ -1,0 +1,15 @@
+[package]
+name = "d2b-broker-fixture-handlers"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[dependencies]
+# The handler seam's capability object is the broker's `DirectInvocation`;
+# the fixture handlers type against it and nothing else, so this crate is
+# the minimal pure-handler shape a provider handler crate will follow.
+d2b-broker = { path = "../d2b-broker", version = "0.0.0-bootstrap" }

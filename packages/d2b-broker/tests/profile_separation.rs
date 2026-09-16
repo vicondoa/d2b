@@ -14,7 +14,7 @@ use d2b_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_contracts_broker::broker_wire::{
     AuditJoinContext, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
-    CanonicalAuditDigest, ConsumeLifecycleLeaseRequest, HelloRequest, LifecycleLeaseOperation,
+    CanonicalAuditDigest, EnvelopeInvokeRequest, HelloRequest,
 };
 #[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_contracts_resource::v3::ResourceUid;
@@ -139,42 +139,69 @@ fn host_and_guest_instances_keep_separate_runtime_bindings() {
         panic!("guest should return Hello");
     };
     assert!(host_hello.capabilities.contains(&"Hello".to_owned()));
-    assert!(guest_hello.capabilities.contains(&"SpawnRunner".to_owned()));
+    // U10 retired the process-family wire variants and U12 the
+    // network-fds family variants: the guest advertises the remaining
+    // local-process effects (e.g. StartSystemdUnit) and never a retired
+    // process or network operation.
     assert!(
-        !guest_hello
+        guest_hello
             .capabilities
-            .contains(&"ApplyNftables".to_owned())
+            .contains(&"StartSystemdUnit".to_owned())
     );
+    for retired in [
+        "SpawnRunner",
+        "OpenPidfd",
+        "SignalRunner",
+        "ApplyNftables",
+        "CreateTapFd",
+        "SeedDnsmasqLease",
+        "CreateBridge",
+        "ApplySysctl",
+    ] {
+        assert!(
+            !guest_hello.capabilities.contains(&retired.to_owned()),
+            "guest must not advertise the retired operation {retired}"
+        );
+    }
     assert_ne!(host.audit_path(), guest.audit_path());
 }
 
 #[test]
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn host_executor_consumes_lifecycle_lease_once_and_keeps_shutdown_stop_only() {
+fn host_executor_consumes_lifecycle_lease_once_through_the_cell_kernels() {
+    // U11 retired the typed lease arm with its row: the host executor's
+    // lease now rides the generic consume-cell kernel through the
+    // EnvelopeInvoke surface, so this test drives the real broker binary
+    // with the envelope frame the migrated daemon caller sends. The
+    // stop_only/HostShutdownRestricted fence moved caller-side (the
+    // kernels are generic and never learn a lease shape), so the broker
+    // admits the host-shutdown envelope calls; the caller-side fence is
+    // pinned by the d2bd caller test.
     let broker = TestBroker::spawn_profile("lifecycle-lease-", "host-instance", "host", D2BD_UID);
     let uid = |value: &str| ResourceUid::parse(value).expect("valid UID");
-    let request_for = |operation_id: &str,
-                       guest_uid: &str,
-                       operation: LifecycleLeaseOperation,
-                       stop_only: bool| {
-        BrokerRequest::ConsumeLifecycleLease(ConsumeLifecycleLeaseRequest {
-            zone_uid: uid("11111111-1111-4111-8111-111111111111"),
-            guest_uid: uid(guest_uid),
-            guest_generation: 4,
-            provider_assignment_generation: 9,
-            policy_revision: 7,
-            operation_id: operation_id.to_owned(),
-            operation,
-            stop_only,
+    let zone_uid = uid("11111111-1111-4111-8111-111111111111");
+    let lease_payload = |operation_id: &str, guest_uid: &str, operation: &str, stop_only: bool| {
+        serde_json::json!({
+            "zoneUid": zone_uid.as_str(),
+            "guestUid": uid(guest_uid).as_str(),
+            "guestGeneration": 4,
+            "providerAssignmentGeneration": 9,
+            "policyRevision": 7,
+            "operationId": operation_id,
+            "operation": operation,
+            "stopOnly": stop_only,
         })
     };
-    let request = |operation_id: &str, operation: LifecycleLeaseOperation, stop_only: bool| {
-        request_for(
-            operation_id,
-            "22222222-2222-4222-8222-222222222222",
-            operation,
-            stop_only,
-        )
+    let request = |operation_id: &str, guest_uid: &str, operation: &str, stop_only: bool| {
+        BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+            operation: "consume-cell".to_owned(),
+            zone: zone_uid.as_str().to_owned(),
+            payload: lease_payload(operation_id, guest_uid, operation, stop_only),
+            chain_root_invocation_id: None,
+            chain_identities: None,
+            fd_indexes: Vec::new(),
+            fd_kinds: Vec::new(),
+        })
     };
     let send = |request: BrokerRequest, caller_role: BrokerCallerRole| {
         let client = connect_seqpacket(broker.socket_path()).expect("connect host broker");
@@ -204,48 +231,120 @@ fn host_executor_consumes_lifecycle_lease_once_and_keeps_shutdown_stop_only() {
             .expect("receive lifecycle lease")
             .expect("lifecycle lease response")
     };
+    let consumed = |response: &BrokerResponse| match response {
+        BrokerResponse::EnvelopeInvoke(response) => {
+            response.refusal.is_none()
+                && response
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.get("consumed"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+        }
+        _ => false,
+    };
 
     let response = send(
-        request("lease-once", LifecycleLeaseOperation::Start, false),
+        request(
+            "lease-once",
+            "22222222-2222-4222-8222-222222222222",
+            "start",
+            false,
+        ),
+        BrokerCallerRole::AdminUid { uid: D2BD_UID },
+    );
+    assert!(consumed(&response), "first consume wins: {response:?}");
+
+    // The caller's two-phase flow completes the claim before the effect
+    // runs; only then is the marker durable and the replay refused.
+    let complete = send(
+        BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+            operation: "complete-cell".to_owned(),
+            zone: zone_uid.as_str().to_owned(),
+            payload: lease_payload(
+                "lease-once",
+                "22222222-2222-4222-8222-222222222222",
+                "start",
+                false,
+            ),
+            chain_root_invocation_id: None,
+            chain_identities: None,
+            fd_indexes: Vec::new(),
+            fd_kinds: Vec::new(),
+        }),
         BrokerCallerRole::AdminUid { uid: D2BD_UID },
     );
     assert!(matches!(
-        response,
-        BrokerResponse::ConsumeLifecycleLease(response) if response.consumed
+        complete,
+        BrokerResponse::EnvelopeInvoke(response)
+            if response.refusal.is_none()
+                && response
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.get("completed"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
     ));
 
     let replay = send(
-        request("lease-once", LifecycleLeaseOperation::Start, false),
-        BrokerCallerRole::AdminUid { uid: D2BD_UID },
-    );
-    assert!(matches!(replay, BrokerResponse::Error(_)));
-
-    let same_operation_different_guest = send(
-        request_for(
+        request(
             "lease-once",
-            "33333333-3333-4333-8333-333333333333",
-            LifecycleLeaseOperation::Start,
+            "22222222-2222-4222-8222-222222222222",
+            "start",
             false,
         ),
         BrokerCallerRole::AdminUid { uid: D2BD_UID },
     );
     assert!(matches!(
-        same_operation_different_guest,
-        BrokerResponse::ConsumeLifecycleLease(response) if response.consumed
+        replay,
+        BrokerResponse::EnvelopeInvoke(response)
+            if response.refusal.as_deref() == Some(d2b_broker::envelope::HANDLER_REFUSED)
+                && response.detail.as_deref() == Some("cell-replayed")
     ));
 
+    let same_operation_different_guest = send(
+        request(
+            "lease-once",
+            "33333333-3333-4333-8333-333333333333",
+            "start",
+            false,
+        ),
+        BrokerCallerRole::AdminUid { uid: D2BD_UID },
+    );
+    assert!(
+        consumed(&same_operation_different_guest),
+        "same operation id with a different guest is a fresh grant: {same_operation_different_guest:?}"
+    );
+
+    // The host-shutdown caller is admitted to the envelope (the broker's
+    // HostShutdownUid gate admits EnvelopeInvoke, and the kernel rows
+    // grant the daemon class); the stop_only fence itself is caller-side
+    // now, so the broker's generic kernels grant both shapes.
     let shutdown_start = send(
-        request("shutdown-start", LifecycleLeaseOperation::Start, true),
+        request(
+            "shutdown-start",
+            "22222222-2222-4222-8222-222222222222",
+            "start",
+            true,
+        ),
         BrokerCallerRole::HostShutdownUid { uid: 0 },
     );
-    assert!(matches!(shutdown_start, BrokerResponse::Error(_)));
+    assert!(
+        consumed(&shutdown_start),
+        "the broker's generic cell kernel admits the host-shutdown caller: {shutdown_start:?}"
+    );
 
     let shutdown_stop = send(
-        request("shutdown-stop", LifecycleLeaseOperation::Stop, true),
+        request(
+            "shutdown-stop",
+            "22222222-2222-4222-8222-222222222222",
+            "stop",
+            true,
+        ),
         BrokerCallerRole::HostShutdownUid { uid: 0 },
     );
-    assert!(matches!(
-        shutdown_stop,
-        BrokerResponse::ConsumeLifecycleLease(response) if response.consumed
-    ));
+    assert!(
+        consumed(&shutdown_stop),
+        "the host-shutdown stop lease consumes: {shutdown_stop:?}"
+    );
 }

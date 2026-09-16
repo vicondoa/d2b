@@ -29,13 +29,13 @@ pub use child_creation::{ChildCreation, ChildCustody};
 pub use descriptor::{CONVERTED_TYPE_VERBS, DriverDescriptor};
 pub use metadata::{assert_metadata_registration, metadata_descriptor};
 pub use operation::{
-    OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult,
-    ValidatedPayload,
+    KernelCaller, OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult,
+    RunnerLookup, ValidatedPayload,
 };
 pub use provider::{
     Cardinality, IsolationPosture, PlaneAdapter, PrincipalName, ProviderDeclaration, SelfBinding,
     StorageRoot,
 };
 pub use resource_type::WellKnownType;
-pub use service::ServiceDecl;
+pub use service::{MethodFdContract, ServiceDecl, ServiceMethod};
 pub use startup::StartupStep;

@@ -278,7 +278,10 @@ in
           "--audit-dir /var/lib/d2b/audit " +
           "--audit-retention-days ${toString auditRetentionDays} " +
           "--bundle-path ${bundleManifestPath} " +
-          "--state-dir ${cfg.site.stateDir}";
+          "--state-dir ${cfg.site.stateDir} " +
+          # U10 seam: envelopes forward the committed family ops to the
+          # daemon's forward rendezvous over this socket.
+          "--forward-socket /run/d2b/broker-forward.sock";
 
         Restart = "on-failure";
         RestartSec = "2s";

@@ -7,6 +7,10 @@ load(
     "d2b_rust_doc_test",
 )
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-volume:__pkg__", "//packages/d2bd:__pkg__"])
+
 
 exports_files(
     [
@@ -28,7 +32,6 @@ d2b_rust_library(
     name = "d2b_provider_volume_local",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -42,7 +45,6 @@ d2b_rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     crate_name = "d2b_provider_volume_local",
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -55,7 +57,6 @@ d2b_rust_test(
     name = "layout_conformance",
     srcs = ["tests/layout_conformance.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -69,7 +70,6 @@ d2b_rust_test(
     name = "lock_order",
     srcs = ["tests/lock_order.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -82,7 +82,6 @@ d2b_rust_test(
     name = "marker_fail_closed",
     srcs = ["tests/marker_fail_closed.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -95,7 +94,6 @@ d2b_rust_test(
     name = "state",
     srcs = ["tests/state.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -108,7 +106,6 @@ d2b_rust_test(
     name = "status_bounds",
     srcs = ["tests/status_bounds.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -121,7 +118,6 @@ d2b_rust_test(
     name = "store_view_and_swtpm",
     srcs = ["tests/store_view_and_swtpm.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -134,7 +130,6 @@ d2b_rust_test(
     name = "views_and_sharing",
     srcs = ["tests/views_and_sharing.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -147,7 +142,6 @@ d2b_rust_test(
     name = "volume_local",
     srcs = ["tests/volume_local.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",

@@ -46,6 +46,8 @@ use d2b_resource_types::{
 };
 use serde_json::{Value, json};
 
+use crate::operations::network_family_operations;
+
 /// The Network ResourceType served by the network-local Provider.
 pub const NETWORK_TYPE_NAME: &str = "Network";
 
@@ -267,8 +269,11 @@ const NETWORK_READS: &[WellKnownType] = &[
 /// referenced by every Guest-bearing zone, so the plane must have the driver
 /// registered before it opens. The type is not exportable: `ResourceExport`
 /// admits only qualified `*.d2bus.org.*Service` types, so a network can never
-/// be an export subject. The driver serves no broker operations; the children
-/// it derives are declared in [`NETWORK_CREATIONS`].
+/// be an export subject. The driver declares the thirteen network-fds family
+/// operations (U12): the broker-generic kernels serve each operation's
+/// privileged core in-broker, while the family operation itself stays
+/// forwarded to this declaring process. The children it derives are declared
+/// in [`NETWORK_CREATIONS`].
 pub fn network_descriptor(args: NetworkDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::NETWORK,
@@ -277,7 +282,7 @@ pub fn network_descriptor(args: NetworkDriverArgs) -> DriverDescriptor {
         execution: NETWORK_EXECUTION_DOMAINS,
         exportable: false,
         reads: NETWORK_READS,
-        operations: &[],
+        operations: network_family_operations(),
         creations: &NETWORK_CREATIONS,
         startup: &[],
         services: &[],

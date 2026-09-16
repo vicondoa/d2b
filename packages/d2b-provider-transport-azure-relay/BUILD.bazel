@@ -7,6 +7,10 @@ load(
     "d2b_rust_doc_test",
 )
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2bd:__pkg__"])
+
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
@@ -30,7 +34,6 @@ d2b_rust_library(
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
-    visibility = ["//visibility:public"],
 )
 
 d2b_rust_library(
@@ -52,7 +55,6 @@ d2b_rust_library(
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
-    visibility = ["//visibility:public"],
 )
 
 d2b_rust_test(
@@ -61,7 +63,6 @@ d2b_rust_test(
         "tests/backpressure_credit.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_transport_azure_relay",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -73,7 +74,6 @@ d2b_rust_test(
         "tests/fake_relay_transport.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -89,7 +89,6 @@ d2b_rust_test(
         "tests/listener_sender_conformance.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_transport_azure_relay",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -101,7 +100,6 @@ d2b_rust_test(
         "tests/transport_credentials.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_transport_azure_relay",
@@ -114,7 +112,6 @@ d2b_rust_test(
         "tests/transport_settings_schema.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_transport_azure_relay",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

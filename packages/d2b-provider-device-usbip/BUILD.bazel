@@ -7,6 +7,10 @@ load(
     "d2b_rust_doc_test",
 )
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-device:__pkg__", "//packages/d2bd:__pkg__"])
+
 
 exports_files(
     ["BUILD.bazel", "nix/default.nix", "nix/guest.nix", "nix/tests/default.nix"],
@@ -16,7 +20,6 @@ exports_files(
 d2b_rust_library(
     name = "d2b_provider_device_usbip",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
-    visibility = ["//visibility:public"],
     compile_data = [
         "Cargo.toml",
     ],
@@ -43,7 +46,6 @@ d2b_rust_library(
     ],
     crate_name = "d2b_provider_device_usbip",
     crate_features = ["test-support"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
@@ -66,7 +68,6 @@ d2b_rust_test(
     compile_data = [
         "Cargo.toml",
     ],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -83,7 +84,6 @@ d2b_rust_test(
     name = "arbitration_conflict",
     srcs = ["tests/arbitration_conflict.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -97,7 +97,6 @@ d2b_rust_test(
     name = "conformance",
     srcs = ["tests/conformance.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -111,7 +110,6 @@ d2b_rust_test(
     name = "controller_state_machine",
     srcs = ["tests/controller_state_machine.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -124,7 +122,6 @@ d2b_rust_test(
     name = "explicit_attach_split",
     srcs = ["tests/explicit_attach_split.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [":d2b_provider_device_usbip",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -134,7 +131,6 @@ d2b_rust_test(
     name = "firewall_marker",
     srcs = ["tests/firewall_marker.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [":d2b_provider_device_usbip",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -144,7 +140,6 @@ d2b_rust_test(
     name = "wrong_zone_and_redaction",
     srcs = ["tests/wrong_zone_and_redaction.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -160,7 +155,6 @@ d2b_rust_test(
         "tests/production_port.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -175,7 +169,6 @@ d2b_rust_test(
         "tests/service_binding_lifecycle.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",

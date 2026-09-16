@@ -7,6 +7,10 @@ load(
     "d2b_rust_doc_test",
 )
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2bd:__pkg__"])
+
 
 exports_files(
     [
@@ -26,7 +30,6 @@ d2b_rust_library(
     name = "d2b_provider_network_local",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -47,9 +50,8 @@ d2b_rust_library(
     compile_data = ["Cargo.toml"],
     crate_features = ["test-support"],
     crate_name = "d2b_provider_network_local",
-    visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-core:d2b_core_test_support",
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail_test_support",
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor_test_support",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
@@ -66,7 +68,6 @@ d2b_rust_test(
     name = "reconcile",
     srcs = ["tests/reconcile.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -79,7 +80,6 @@ d2b_rust_test(
     name = "ifname_derive",
     srcs = ["tests/ifname_derive.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -95,7 +95,6 @@ d2b_rust_test(
         "Cargo.toml",
         "nix/net-vm.nix",
     ],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -108,7 +107,6 @@ d2b_rust_test(
     name = "network_primitives",
     srcs = ["tests/network_primitives.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -122,7 +120,6 @@ d2b_rust_test(
     name = "telemetry_redaction",
     srcs = ["tests/telemetry_redaction.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [":d2b_provider_network_local",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -138,7 +135,6 @@ d2b_rust_test(
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
-        "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts_test_support",

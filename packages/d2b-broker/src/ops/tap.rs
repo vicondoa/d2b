@@ -191,7 +191,7 @@ pub fn live_create_tap_fd(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
     req: &d2b_contracts_broker::broker_wire::CreateTapFdRequest,
-    _audit_log: &crate::audit::AuditLog,
+    _audit_log: Option<&crate::audit::AuditLog>,
 ) -> Result<LiveCreateTapOutcome, super::OpError> {
     let provenance = network_provenance_fd(req);
     require_installed_generation(resolver, &provenance)?;
@@ -254,7 +254,7 @@ pub fn live_create_persistent_tap(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
     req: &d2b_contracts_broker::broker_wire::CreatePersistentTapRequest,
-    _audit_log: &crate::audit::AuditLog,
+    _audit_log: Option<&crate::audit::AuditLog>,
 ) -> Result<LiveCreateTapOutcome, super::OpError> {
     let provenance = network_provenance(req);
     require_installed_generation(resolver, &provenance)?;
@@ -1213,7 +1213,6 @@ pub fn fake_backend() -> FakeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use d2b_contracts_resource::v3::IfName as BundleIfName;
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::host::{
@@ -1223,6 +1222,7 @@ mod tests {
     };
     use d2b_core::manifest_v04::ManifestV04;
     use d2b_core::processes::ProcessesJson;
+    use std::collections::BTreeMap;
 
     fn network_tap_context() -> d2b_contracts_broker::broker_wire::NetworkTapContext {
         let zone_uid =

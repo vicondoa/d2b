@@ -7,6 +7,10 @@ load(
     "d2b_rust_doc_test",
 )
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-clipboard-wayland:__pkg__", "//packages/d2b-provider-credential-entra:__pkg__", "//packages/d2b-provider-credential-managed-identity:__pkg__", "//packages/d2b-provider-credential-secret-service:__pkg__", "//packages/d2b-provider-device:__pkg__", "//packages/d2b-provider-device-security-key:__pkg__", "//packages/d2b-provider-device-usbip:__pkg__", "//packages/d2b-provider-display-wayland:__pkg__", "//packages/d2b-provider-guest-azure-virtual-machine:__pkg__", "//packages/d2b-provider-network-local:__pkg__", "//packages/d2b-provider-notification-desktop:__pkg__", "//packages/d2b-provider-observability-otel:__pkg__", "//packages/d2b-provider-process-systemd:__pkg__", "//packages/d2b-sk-frontend:__pkg__", "//packages/d2b-zone-routing:__pkg__", "//packages/d2bd:__pkg__"])
+
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
@@ -19,7 +23,6 @@ d2b_rust_library(
     srcs = d2b_provider_toolkit_srcs,
     compile_data = ["Cargo.toml"],
     crate_features = ["unix-transport"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -40,7 +43,6 @@ d2b_rust_library(
     compile_data = ["Cargo.toml"],
     crate_features = ["unix-transport"],
     crate_name = "d2b_provider_toolkit",
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -59,7 +61,6 @@ d2b_rust_binary(
     name = "d2b-provider-toolkit",
     srcs = ["src/bin/d2b-provider-toolkit.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -75,7 +76,6 @@ d2b_rust_test(
     data = [":d2b-provider-toolkit"],
     env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -93,7 +93,6 @@ d2b_rust_test(
     data = [":d2b-provider-toolkit"],
     env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -110,7 +109,6 @@ d2b_rust_test(
     data = [":d2b-provider-toolkit"],
     env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -143,7 +141,6 @@ d2b_rust_test(
         "CARGO_BIN_EXE_d2b-managed-identity-controller": "$(rootpath //packages/d2b-provider-credential-managed-identity:d2b-managed-identity-controller)",
         "CARGO_BIN_EXE_d2b-managed-identity-agent": "$(rootpath //packages/d2b-provider-credential-managed-identity:d2b-managed-identity-agent)",
     },
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -159,7 +156,6 @@ d2b_rust_test(
     name = "harness",
     srcs = ["tests/harness.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",

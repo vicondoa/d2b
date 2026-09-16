@@ -37,23 +37,23 @@ use std::{
     time::Duration,
 };
 
+use crate::effects::{ProcessDriverEffects, ProviderAdoption, ProviderLiveness};
+use crate::execution::{ExecutionMode, execution_target_allowed};
+use crate::identity::{ProcessFamilySpec, ProcessResourceIdentity};
+use crate::launch_identity::{LaunchRow, resolve_launch_identity};
+use crate::operations::process_family_operations;
+use crate::worker_launch::{ServingWorkerLaunch, ServingWorkerRoot};
 use d2b_contracts_resource::v3::{
     AdoptionPolicy, ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef,
     ResourceSpec, ResourceTypeName as ContractResourceTypeName, ResourceUid, ZoneId,
     process::{DesiredLifecycle, EphemeralProcessSpec, ProcessSpec, RestartClass},
 };
-use crate::effects::{ProcessDriverEffects, ProviderAdoption, ProviderLiveness};
-use crate::identity::{ProcessFamilySpec, ProcessResourceIdentity};
-use crate::launch_identity::{LaunchRow, resolve_launch_identity};
-use crate::operations::process_family_operations;
-use crate::execution::{ExecutionMode, execution_target_allowed};
-use crate::worker_launch::{ServingWorkerLaunch, ServingWorkerRoot};
 use d2b_process_conformance::{GuestExecutionBinding, ProcessStatusReport};
 use d2b_resource_runtime::context::{
     EffectCompleted, EffectResult, ResourceContext, SpecDecoder, typed_spec_decoder,
 };
 use d2b_resource_runtime::driver::{
-    DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver, ResourceDriverFactory,
+    DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
 };
 use d2b_resource_runtime::error::{
     DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
@@ -188,7 +188,11 @@ pub(crate) struct ProcessDriverError {
 
 impl ProcessDriverError {
     fn new(kind: ProcessDriverErrorKind, op: DriverOp) -> Self {
-        Self { kind, op, detail: FailureDetail::new() }
+        Self {
+            kind,
+            op,
+            detail: FailureDetail::new(),
+        }
     }
 
     fn with_detail(mut self, detail: FailureDetail) -> Self {
@@ -275,12 +279,15 @@ impl core::error::Error for SpecDecodeFailure {}
 /// spec from the row's own type name.
 pub fn process_spec_decoder() -> Arc<dyn SpecDecoder> {
     typed_spec_decoder(|bytes| {
-        serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| ProcessSpecEnvelope {
-            raw: bytes.to_vec(),
-            provider_ref: spec.provider_ref().cloned(),
-            base: spec.base().clone(),
-        })
-        .map_err(|error| SpecDecodeFailure { reason: error.to_string() })
+        serde_json::from_slice::<ResourceSpec>(bytes)
+            .map(|spec| ProcessSpecEnvelope {
+                raw: bytes.to_vec(),
+                provider_ref: spec.provider_ref().cloned(),
+                base: spec.base().clone(),
+            })
+            .map_err(|error| SpecDecodeFailure {
+                reason: error.to_string(),
+            })
     })
 }
 
@@ -359,8 +366,22 @@ pub fn resource_uid_from_bytes(bytes: &[u8; 16]) -> Option<ResourceUid> {
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let text = format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
     );
     ResourceUid::parse(text).ok()
 }
@@ -624,24 +645,23 @@ pub(crate) const PROCESS_FAMILY_READS: &[WellKnownType] = &[
 pub fn process_family_descriptors(args: ProcessDriverArgs) -> [DriverDescriptor; 2] {
     let factory: Arc<dyn ResourceDriverFactory> = Arc::new(ProcessDriverFactory::new(args));
     let decoder = process_spec_decoder();
-    let descriptor = |resource_type: WellKnownType,
-                      operations: &'static [OperationDef]|
-     -> DriverDescriptor {
-        DriverDescriptor {
-            resource_type,
-            allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
-            verbs: PROCESS_FAMILY_VERBS,
-            execution: PROCESS_FAMILY_EXECUTION_DOMAINS,
-            exportable: false,
-            reads: PROCESS_FAMILY_READS,
-            operations,
-            creations: &[],
-            startup: &[],
-            services: &[],
-            decoder: Arc::clone(&decoder),
-            factory: Arc::clone(&factory),
-        }
-    };
+    let descriptor =
+        |resource_type: WellKnownType, operations: &'static [OperationDef]| -> DriverDescriptor {
+            DriverDescriptor {
+                resource_type,
+                allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+                verbs: PROCESS_FAMILY_VERBS,
+                execution: PROCESS_FAMILY_EXECUTION_DOMAINS,
+                exportable: false,
+                reads: PROCESS_FAMILY_READS,
+                operations,
+                creations: &[],
+                startup: &[],
+                services: &[],
+                decoder: Arc::clone(&decoder),
+                factory: Arc::clone(&factory),
+            }
+        };
     [
         descriptor(WellKnownType::PROCESS, process_family_operations()),
         descriptor(WellKnownType::EPHEMERAL_PROCESS, &[]),
@@ -828,13 +848,14 @@ impl ProcessDriver {
     /// (issue #508): the observed adoption condition and phase name what was
     /// ambiguous instead of a bare code.
     fn identity_ambiguous(&self, op: DriverOp, report: &ProcessStatusReport) -> ProcessDriverError {
-        self.error(ProcessDriverErrorKind::IdentityAmbiguous, op).with_detail(
-            FailureDetail::at("adopt/identity").comparison(FailureComparison::new(
-                "observed.adoption",
-                "exactly one matching identity",
-                format!("{:?} ({:?})", report.adoption, report.phase),
-            )),
-        )
+        self.error(ProcessDriverErrorKind::IdentityAmbiguous, op)
+            .with_detail(
+                FailureDetail::at("adopt/identity").comparison(FailureComparison::new(
+                    "observed.adoption",
+                    "exactly one matching identity",
+                    format!("{:?} ({:?})", report.adoption, report.phase),
+                )),
+            )
     }
 
     /// The terminal failure for one row identity field that does not parse
@@ -845,11 +866,16 @@ impl ProcessDriver {
         field: &'static str,
         detail: String,
     ) -> ProcessDriverError {
-        self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
-            FailureDetail::at("identity/field")
-                .comparison(FailureComparison::new(field, "a valid contract value", "invalid"))
-                .with_note(detail),
-        )
+        self.error(ProcessDriverErrorKind::SpecInvalid, op)
+            .with_detail(
+                FailureDetail::at("identity/field")
+                    .comparison(FailureComparison::new(
+                        field,
+                        "a valid contract value",
+                        "invalid",
+                    ))
+                    .with_note(detail),
+            )
     }
 
     /// The terminal failure for a declared Device-worker launch whose typed
@@ -869,37 +895,38 @@ impl ProcessDriver {
         op: DriverOp,
     ) -> Result<(ProcessSpecEnvelope, ProcessFamilySpec), ProcessDriverError> {
         let envelope = ctx.spec::<ProcessSpecEnvelope>().map_err(|error| {
-            self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
-                FailureDetail::at("spec/decode").with_note(error.to_string()),
-            )
+            self.error(ProcessDriverErrorKind::SpecInvalid, op)
+                .with_detail(FailureDetail::at("spec/decode").with_note(error.to_string()))
         })?;
         let base = envelope.base.to_canonical_bytes();
         let spec = match ctx.key().type_name.as_str() {
             EPHEMERAL_PROCESS_TYPE_NAME => serde_json::from_slice::<EphemeralProcessSpec>(&base)
                 .map(ProcessFamilySpec::Ephemeral)
                 .map_err(|error| {
-                    self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
-                        FailureDetail::at("spec/decode")
-                            .comparison(FailureComparison::new(
-                                "spec.contract",
-                                EPHEMERAL_PROCESS_TYPE_NAME,
-                                "decode failed",
-                            ))
-                            .with_note(error.to_string()),
-                    )
+                    self.error(ProcessDriverErrorKind::SpecInvalid, op)
+                        .with_detail(
+                            FailureDetail::at("spec/decode")
+                                .comparison(FailureComparison::new(
+                                    "spec.contract",
+                                    EPHEMERAL_PROCESS_TYPE_NAME,
+                                    "decode failed",
+                                ))
+                                .with_note(error.to_string()),
+                        )
                 })?,
             other => serde_json::from_slice::<ProcessSpec>(&base)
                 .map(ProcessFamilySpec::Process)
                 .map_err(|error| {
-                    self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
-                        FailureDetail::at("spec/decode")
-                            .comparison(FailureComparison::new(
-                                "spec.contract",
-                                other,
-                                "decode failed",
-                            ))
-                            .with_note(error.to_string()),
-                    )
+                    self.error(ProcessDriverErrorKind::SpecInvalid, op)
+                        .with_detail(
+                            FailureDetail::at("spec/decode")
+                                .comparison(FailureComparison::new(
+                                    "spec.contract",
+                                    other,
+                                    "decode failed",
+                                ))
+                                .with_note(error.to_string()),
+                        )
                 })?,
         };
         Ok((envelope.clone(), spec))
@@ -918,34 +945,37 @@ impl ProcessDriver {
             d2b_provider_process_systemd::PROVIDER_REF
         );
         let Some(provider_ref) = envelope.provider_ref.as_ref() else {
-            return Err(self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
-                FailureDetail::at("spec/provider").comparison(FailureComparison::new(
-                    "spec.providerRef",
-                    expected,
-                    "absent",
-                )),
-            ));
+            return Err(self
+                .error(ProcessDriverErrorKind::SpecInvalid, op)
+                .with_detail(FailureDetail::at("spec/provider").comparison(
+                    FailureComparison::new("spec.providerRef", expected, "absent"),
+                )));
         };
         if provider_ref.resource_type().as_str() != "Provider" {
-            return Err(self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
-                FailureDetail::at("spec/provider").comparison(FailureComparison::new(
-                    "spec.providerRef",
-                    expected,
-                    provider_ref.to_canonical_string(),
-                )),
-            ));
+            return Err(self
+                .error(ProcessDriverErrorKind::SpecInvalid, op)
+                .with_detail(FailureDetail::at("spec/provider").comparison(
+                    FailureComparison::new(
+                        "spec.providerRef",
+                        expected,
+                        provider_ref.to_canonical_string(),
+                    ),
+                )));
         }
         if !matches!(
             provider_ref.name().as_str(),
-            d2b_provider_process_minijail::PROVIDER_NAME | d2b_provider_process_systemd::PROVIDER_NAME
+            d2b_provider_process_minijail::PROVIDER_NAME
+                | d2b_provider_process_systemd::PROVIDER_NAME
         ) {
-            return Err(self.error(ProcessDriverErrorKind::ProviderUnsupported, op).with_detail(
-                FailureDetail::at("spec/provider").comparison(FailureComparison::new(
-                    "spec.providerRef",
-                    expected,
-                    provider_ref.to_canonical_string(),
-                )),
-            ));
+            return Err(self
+                .error(ProcessDriverErrorKind::ProviderUnsupported, op)
+                .with_detail(FailureDetail::at("spec/provider").comparison(
+                    FailureComparison::new(
+                        "spec.providerRef",
+                        expected,
+                        provider_ref.to_canonical_string(),
+                    ),
+                )));
         }
         Ok(())
     }
@@ -973,8 +1003,9 @@ impl ProcessDriver {
             .map_err(|error| self.identity_field_invalid(op, "resource.name", error.to_string()))?;
         let zone = ZoneId::parse(&key.zone)
             .map_err(|error| self.identity_field_invalid(op, "resource.zone", error.to_string()))?;
-        let resource_uid = resource_uid_from_bytes(ctx.uid())
-            .ok_or_else(|| self.identity_field_invalid(op, "resource.uid", "not a uid".to_owned()))?;
+        let resource_uid = resource_uid_from_bytes(ctx.uid()).ok_or_else(|| {
+            self.identity_field_invalid(op, "resource.uid", "not a uid".to_owned())
+        })?;
         let resource_generation = ResourceGeneration::new(ctx.generation()).map_err(|_| {
             self.identity_field_invalid(op, "resource.generation", ctx.generation().to_string())
         })?;
@@ -989,7 +1020,9 @@ impl ProcessDriver {
         // appears in the plane).
         let owner_ref = ctx
             .owner_key()
-            .and_then(|owner| ResourceRef::parse(&format!("{}/{}", owner.type_name, owner.name)).ok())
+            .and_then(|owner| {
+                ResourceRef::parse(&format!("{}/{}", owner.type_name, owner.name)).ok()
+            })
             .or_else(|| crate::identity::decode_metadata_owner_ref(ctx.metadata()));
         // A binding-owned virtiofsd worker executes on the host (the signed
         // `virtiofsd-worker` template binds the Host execution reference) and
@@ -1009,9 +1042,7 @@ impl ProcessDriver {
                             .ok()
                         });
                     if let Some(binding) = binding.as_ref() {
-                        worker_launch = self
-                            .serving_worker_launch(ctx, binding, op)
-                            .await;
+                        worker_launch = self.serving_worker_launch(ctx, binding, op).await;
                     }
                     binding.map(|binding| binding.execution_ref().clone())
                 }
@@ -1027,9 +1058,7 @@ impl ProcessDriver {
             template: spec.execution().template().as_str(),
             // The binding row is the owner that declares this target, so the
             // declared-target rule applies to it.
-            declared_target: declared_target
-                .as_ref()
-                .zip(owner_ref.as_ref()),
+            declared_target: declared_target.as_ref().zip(owner_ref.as_ref()),
         })
         .map_err(|error| {
             tracing::warn!(
@@ -1037,14 +1066,16 @@ impl ProcessDriver {
                 identity_error = error.code(),
                 "process launch identity incomplete"
             );
-            self.error(ProcessDriverErrorKind::IdentityIncomplete, op).with_detail(
-                FailureDetail::at("identity/resolve").comparison(FailureComparison::new(
-                    "launch.identity",
-                    "complete",
-                    "incomplete",
-                ))
-                .with_note(error.code()),
-            )
+            self.error(ProcessDriverErrorKind::IdentityIncomplete, op)
+                .with_detail(
+                    FailureDetail::at("identity/resolve")
+                        .comparison(FailureComparison::new(
+                            "launch.identity",
+                            "complete",
+                            "incomplete",
+                        ))
+                        .with_note(error.code()),
+                )
         })?;
         let resource_ref = ResourceRef::new(resource_type, name);
         let mut identity = ProcessResourceIdentity {
@@ -1290,7 +1321,10 @@ impl ProcessDriver {
                     }
                 }
             };
-            let _ = effect_sender.send(EffectCompleted { operation, result: effect_result });
+            let _ = effect_sender.send(EffectCompleted {
+                operation,
+                result: effect_result,
+            });
         });
         Ok(ReconcileOutcome::InProgress { operation })
     }
@@ -1315,7 +1349,9 @@ impl ProcessDriver {
             }
             Ok(ProviderAdoption::Absent) => Ok(RecoveryOutcome::Missing),
             Ok(ProviderAdoption::Stale { .. }) | Ok(ProviderAdoption::Quarantined(_)) => {
-                ctx.set_status(ProcessDriverStatus::Quarantined { code: "identity-ambiguous" });
+                ctx.set_status(ProcessDriverStatus::Quarantined {
+                    code: "identity-ambiguous",
+                });
                 Ok(RecoveryOutcome::Quarantined)
             }
             Ok(ProviderAdoption::ControllerBootstrapMissing) => Err(self.error(
@@ -1334,7 +1370,9 @@ impl ProcessDriver {
         spec: &ProcessSpec,
     ) -> Result<ReconcileOutcome, ProcessDriverError> {
         if spec.desired_lifecycle() == DesiredLifecycle::Stopped {
-            ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-stopped" });
+            ctx.set_status(ProcessDriverStatus::Succeeded {
+                code: "process-stopped",
+            });
             return Ok(ReconcileOutcome::Satisfied);
         }
 
@@ -1358,11 +1396,13 @@ impl ProcessDriver {
             // is armed by the launch effect, and the observation branch above
             // takes over; without that gate the next pass would read its own
             // process as unexpected and stop it on every completion.
-            if self
-                .effects
-                .has_active(&identity.zone, identity.zone_uid.as_ref(), &identity.resource_ref)
-            {
-                self.stop_and_finalize(&identity, spec, DriverOp::Reconcile).await?;
+            if self.effects.has_active(
+                &identity.zone,
+                identity.zone_uid.as_ref(),
+                &identity.resource_ref,
+            ) {
+                self.stop_and_finalize(&identity, spec, DriverOp::Reconcile)
+                    .await?;
             }
             ctx.set_status(ProcessDriverStatus::Launching);
             return self.spawn_launch(ctx, identity, spec);
@@ -1390,9 +1430,14 @@ impl ProcessDriver {
                 // Nothing re-enters the pass, no relaunch happens, and no
                 // signal ever reaches the unverifiable candidate.
                 Ok(ProviderLiveness::Unknown) => {
-                    ctx.set_status(ProcessDriverStatus::Failed { code: "identity-ambiguous" });
+                    ctx.set_status(ProcessDriverStatus::Failed {
+                        code: "identity-ambiguous",
+                    });
                     Err(self
-                        .error(ProcessDriverErrorKind::IdentityAmbiguous, DriverOp::Reconcile)
+                        .error(
+                            ProcessDriverErrorKind::IdentityAmbiguous,
+                            DriverOp::Reconcile,
+                        )
                         .with_detail(
                             FailureDetail::at("observe/liveness")
                                 .comparison(FailureComparison::new(
@@ -1425,7 +1470,8 @@ impl ProcessDriver {
                 // The Provider owns the exact stop and finalization before the
                 // replacement launch (preserved controller-bootstrap effect
                 // ordering).
-                self.stop_and_finalize(&identity, spec, DriverOp::Reconcile).await?;
+                self.stop_and_finalize(&identity, spec, DriverOp::Reconcile)
+                    .await?;
                 ctx.set_status(ProcessDriverStatus::Launching);
                 self.spawn_launch(ctx, identity, spec)
             }
@@ -1467,19 +1513,20 @@ impl ProcessDriver {
             // the failure's note. The row stays under observation, so a later
             // trigger re-reports the exit instead of reading the row as a
             // first sight and launching a process the policy forbade.
-            ctx.set_status(ProcessDriverStatus::Failed { code: "process-exited" });
-            return Err(
-                self.error(ProcessDriverErrorKind::StartExhausted, DriverOp::Reconcile)
-                    .with_detail(
-                        FailureDetail::at("observe/liveness")
-                            .comparison(FailureComparison::new(
-                                "restart.budget",
-                                "restarts available",
-                                "exhausted",
-                            ))
-                            .with_note("process-exited"),
-                    ),
-            );
+            ctx.set_status(ProcessDriverStatus::Failed {
+                code: "process-exited",
+            });
+            return Err(self
+                .error(ProcessDriverErrorKind::StartExhausted, DriverOp::Reconcile)
+                .with_detail(
+                    FailureDetail::at("observe/liveness")
+                        .comparison(FailureComparison::new(
+                            "restart.budget",
+                            "restarts available",
+                            "exhausted",
+                        ))
+                        .with_note("process-exited"),
+                ));
         }
         self.budget.consume_restart();
         let restart_count = self.budget.count();
@@ -1522,10 +1569,11 @@ impl ProcessDriver {
             && let Some(started_at) = self.ephemeral.started_at()
             && started_at.elapsed() >= Duration::from_millis(spec.runtime_deadline().as_millis())
         {
-            if self
-                .effects
-                .has_active(&identity.zone, identity.zone_uid.as_ref(), &identity.resource_ref)
-            {
+            if self.effects.has_active(
+                &identity.zone,
+                identity.zone_uid.as_ref(),
+                &identity.resource_ref,
+            ) {
                 self.stop_and_finalize_ephemeral(identity, spec, DriverOp::Reconcile)
                     .await?;
             } else {
@@ -1538,7 +1586,9 @@ impl ProcessDriver {
             }
             let completion = self.ephemeral.finish(true, "runtime-deadline");
             Self::publish_ephemeral_outcome(ctx, completion);
-            ctx.set_status(ProcessDriverStatus::Failed { code: "runtime-deadline" });
+            ctx.set_status(ProcessDriverStatus::Failed {
+                code: "runtime-deadline",
+            });
             return self.ephemeral_retention(ctx, spec, completion).await;
         }
 
@@ -1560,13 +1610,17 @@ impl ProcessDriver {
                 Ok(ProviderLiveness::Exited) => {
                     let completion = self.ephemeral.finish(false, "process-exited");
                     Self::publish_ephemeral_outcome(ctx, completion);
-                    ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-exited" });
+                    ctx.set_status(ProcessDriverStatus::Succeeded {
+                        code: "process-exited",
+                    });
                     self.ephemeral_retention(ctx, spec, completion).await
                 }
                 Ok(ProviderLiveness::Unknown) => {
                     let completion = self.ephemeral.finish(true, "identity-ambiguous");
                     Self::publish_ephemeral_outcome(ctx, completion);
-                    ctx.set_status(ProcessDriverStatus::Failed { code: "identity-ambiguous" });
+                    ctx.set_status(ProcessDriverStatus::Failed {
+                        code: "identity-ambiguous",
+                    });
                     self.ephemeral_retention(ctx, spec, completion).await
                 }
                 Err(error) => Err(map_provider_error(error, DriverOp::Reconcile)),
@@ -1628,9 +1682,13 @@ impl ProcessDriver {
         // published.
         Self::publish_ephemeral_outcome(ctx, completion);
         ctx.set_status(if completion.failed {
-            ProcessDriverStatus::Failed { code: completion.code }
+            ProcessDriverStatus::Failed {
+                code: completion.code,
+            }
         } else {
-            ProcessDriverStatus::Succeeded { code: completion.code }
+            ProcessDriverStatus::Succeeded {
+                code: completion.code,
+            }
         });
         if completion.failed && spec.incident_hold() {
             return Ok(ReconcileOutcome::Satisfied);
@@ -1716,7 +1774,10 @@ impl ProcessDriver {
         let task_spec = spec.clone();
         let identity = identity.clone();
         tokio::spawn(async move {
-            let effect_result = match effects.launch_ephemeral(&identity, &task_spec, timeout).await {
+            let effect_result = match effects
+                .launch_ephemeral(&identity, &task_spec, timeout)
+                .await
+            {
                 Ok(_) => {
                     ephemeral.mark_started();
                     EffectResult::Completed
@@ -1733,18 +1794,24 @@ impl ProcessDriver {
                         "ephemeral process launch failed"
                     );
                     EffectResult::Failed(
-                        DriverFailure::refused(DriverOp::Reconcile, provider_error_kind(&error).failure_kind())
-                            .at("reconcile/launch")
-                            .with_comparison(FailureComparison::new(
-                                "launch.attempt",
-                                "accepted",
-                                "failed",
-                            ))
-                            .with_note(error),
+                        DriverFailure::refused(
+                            DriverOp::Reconcile,
+                            provider_error_kind(&error).failure_kind(),
+                        )
+                        .at("reconcile/launch")
+                        .with_comparison(FailureComparison::new(
+                            "launch.attempt",
+                            "accepted",
+                            "failed",
+                        ))
+                        .with_note(error),
                     )
                 }
             };
-            let _ = effect_sender.send(EffectCompleted { operation, result: effect_result });
+            let _ = effect_sender.send(EffectCompleted {
+                operation,
+                result: effect_result,
+            });
         });
         Ok(ReconcileOutcome::InProgress { operation })
     }
@@ -1763,12 +1830,11 @@ impl ProcessDriver {
                 self.stop_and_finalize_ephemeral(identity, spec, DriverOp::Delete)
                     .await
             }
-            Ok(ProviderAdoption::Stale { candidate }) => {
-                self.effects
-                    .stop_stale(&identity.provider_ref, &candidate)
-                    .await
-                    .map_err(|error| map_provider_error(error, DriverOp::Delete))
-            }
+            Ok(ProviderAdoption::Stale { candidate }) => self
+                .effects
+                .stop_stale(&identity.provider_ref, &candidate)
+                .await
+                .map_err(|error| map_provider_error(error, DriverOp::Delete)),
             Ok(ProviderAdoption::Absent) | Ok(ProviderAdoption::ControllerBootstrapMissing) => {
                 Ok(())
             }
@@ -1877,14 +1943,17 @@ impl ResourceDriver for ProcessDriver {
         self.check_provider(&envelope, DriverOp::Validate)?;
         if !execution_target_allowed(self.authority.mode, spec.execution().execution_ref()) {
             return Err(self
-                .error(ProcessDriverErrorKind::ExecutionUnsupported, DriverOp::Validate)
-                .with_detail(
-                    FailureDetail::at("spec/execution").comparison(FailureComparison::new(
+                .error(
+                    ProcessDriverErrorKind::ExecutionUnsupported,
+                    DriverOp::Validate,
+                )
+                .with_detail(FailureDetail::at("spec/execution").comparison(
+                    FailureComparison::new(
                         "spec.executionRef",
                         "a target this daemon mode drives",
                         spec.execution().execution_ref().to_canonical_string(),
-                    )),
-                ));
+                    ),
+                )));
         }
         Ok(())
     }
@@ -1894,7 +1963,13 @@ impl ResourceDriver for ProcessDriver {
     async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, Self::Error> {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Recover)?;
         self.check_provider(&envelope, DriverOp::Recover)?;
-        let identity = self.identity(ctx, &envelope.provider_ref.clone().expect("checked"), DriverOp::Recover).await?;
+        let identity = self
+            .identity(
+                ctx,
+                &envelope.provider_ref.clone().expect("checked"),
+                DriverOp::Recover,
+            )
+            .await?;
 
         match &spec {
             ProcessFamilySpec::Ephemeral(ephemeral) => {
@@ -1902,17 +1977,21 @@ impl ResourceDriver for ProcessDriver {
             }
             ProcessFamilySpec::Process(process) => {
                 if process.desired_lifecycle() == DesiredLifecycle::Stopped {
-                    ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-stopped" });
+                    ctx.set_status(ProcessDriverStatus::Succeeded {
+                        code: "process-stopped",
+                    });
                     return Ok(RecoveryOutcome::Missing);
                 }
                 if process.adoption_policy() == AdoptionPolicy::NeverAdopt {
                     // NeverAdopt never adopts; an unexpected live identity is stopped
                     // exactly (preserved behavior) and the next launch starts fresh.
-                    if self
-                        .effects
-                        .has_active(&identity.zone, identity.zone_uid.as_ref(), &identity.resource_ref)
-                    {
-                        self.stop_and_finalize(&identity, process, DriverOp::Recover).await?;
+                    if self.effects.has_active(
+                        &identity.zone,
+                        identity.zone_uid.as_ref(),
+                        &identity.resource_ref,
+                    ) {
+                        self.stop_and_finalize(&identity, process, DriverOp::Recover)
+                            .await?;
                     }
                     return Ok(RecoveryOutcome::Missing);
                 }
@@ -1929,9 +2008,13 @@ impl ResourceDriver for ProcessDriver {
                     Ok(ProviderAdoption::Absent) => Ok(RecoveryOutcome::Missing),
                     // A static controller without its exact bootstrap endpoint:
                     // nothing to adopt; reconcile restarts it.
-                    Ok(ProviderAdoption::ControllerBootstrapMissing) => Ok(RecoveryOutcome::Missing),
+                    Ok(ProviderAdoption::ControllerBootstrapMissing) => {
+                        Ok(RecoveryOutcome::Missing)
+                    }
                     Ok(ProviderAdoption::Stale { .. }) | Ok(ProviderAdoption::Quarantined(_)) => {
-                        ctx.set_status(ProcessDriverStatus::Quarantined { code: "identity-ambiguous" });
+                        ctx.set_status(ProcessDriverStatus::Quarantined {
+                            code: "identity-ambiguous",
+                        });
                         Ok(RecoveryOutcome::Quarantined)
                     }
                     Err(error) => Err(map_provider_error(error, DriverOp::Recover)),
@@ -1942,10 +2025,19 @@ impl ResourceDriver for ProcessDriver {
 
     /// One reconcile pass: probe, then adopt/launch/stop-stale per the
     /// preserved classification. Launches spawn as long effects (R5).
-    async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, Self::Error> {
+    async fn reconcile(
+        &mut self,
+        ctx: &mut ResourceContext,
+    ) -> Result<ReconcileOutcome, Self::Error> {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Reconcile)?;
         self.check_provider(&envelope, DriverOp::Reconcile)?;
-        let identity = self.identity(ctx, &envelope.provider_ref.clone().expect("checked"), DriverOp::Reconcile).await?;
+        let identity = self
+            .identity(
+                ctx,
+                &envelope.provider_ref.clone().expect("checked"),
+                DriverOp::Reconcile,
+            )
+            .await?;
         match &spec {
             ProcessFamilySpec::Ephemeral(ephemeral) => {
                 self.reconcile_ephemeral(ctx, &identity, ephemeral).await
@@ -1962,13 +2054,14 @@ impl ResourceDriver for ProcessDriver {
     /// row is still live. Idempotent under retry.
     async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         ctx.finalize_owned_resources().await.map_err(|_| {
-            self.error(ProcessDriverErrorKind::DrainPending, DriverOp::Delete).with_detail(
-                FailureDetail::at("delete/drain").comparison(FailureComparison::new(
-                    "owned.children",
-                    "retired",
-                    "still live",
-                )),
-            )
+            self.error(ProcessDriverErrorKind::DrainPending, DriverOp::Delete)
+                .with_detail(
+                    FailureDetail::at("delete/drain").comparison(FailureComparison::new(
+                        "owned.children",
+                        "retired",
+                        "still live",
+                    )),
+                )
         })?;
         Ok(())
     }
@@ -1987,7 +2080,14 @@ impl ResourceDriver for ProcessDriver {
             // converged).
             return Ok(());
         };
-        let identity = match self.identity(ctx, &envelope.provider_ref.clone().expect("checked"), DriverOp::Delete).await {
+        let identity = match self
+            .identity(
+                ctx,
+                &envelope.provider_ref.clone().expect("checked"),
+                DriverOp::Delete,
+            )
+            .await
+        {
             Ok(identity) => identity,
             Err(_) => return Ok(()),
         };
@@ -2000,25 +2100,27 @@ impl ResourceDriver for ProcessDriver {
                 if process.adoption_policy() == AdoptionPolicy::NeverAdopt {
                     // NeverAdopt never adopts; an unexpected live identity stops
                     // exactly through its retained authority.
-                    if self
-                        .effects
-                        .has_active(&identity.zone, identity.zone_uid.as_ref(), &identity.resource_ref)
-                    {
-                        self.stop_and_finalize(&identity, process, DriverOp::Delete).await?;
+                    if self.effects.has_active(
+                        &identity.zone,
+                        identity.zone_uid.as_ref(),
+                        &identity.resource_ref,
+                    ) {
+                        self.stop_and_finalize(&identity, process, DriverOp::Delete)
+                            .await?;
                     }
                     return Ok(());
                 }
 
                 match self.effects.adopt(&identity, process).await {
                     Ok(ProviderAdoption::Adopted(_)) => {
-                        self.stop_and_finalize(&identity, process, DriverOp::Delete).await
-                    }
-                    Ok(ProviderAdoption::Stale { candidate }) => {
-                        self.effects
-                            .stop_stale(&identity.provider_ref, &candidate)
+                        self.stop_and_finalize(&identity, process, DriverOp::Delete)
                             .await
-                            .map_err(|error| map_provider_error(error, DriverOp::Delete))
                     }
+                    Ok(ProviderAdoption::Stale { candidate }) => self
+                        .effects
+                        .stop_stale(&identity.provider_ref, &candidate)
+                        .await
+                        .map_err(|error| map_provider_error(error, DriverOp::Delete)),
                     Ok(ProviderAdoption::Absent)
                     | Ok(ProviderAdoption::ControllerBootstrapMissing) => {
                         // Nothing this daemon can stop exactly (old deletion treated
@@ -2033,7 +2135,6 @@ impl ResourceDriver for ProcessDriver {
             }
         }
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -2047,12 +2148,10 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use crate::effects::{ProviderAdoption, ProviderLiveness};
     use crate::execution::ExecutionMode;
-    use d2b_contracts_resource::v3::{
-        ControllerGeneration, ResourceRef, ResourceUid, ZoneId,
-    };
+    use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
     use d2b_process_conformance::testing::fixtures;
     use d2b_process_conformance::{
         AdoptionCandidate, AdoptionCondition, IdentityBinding, ObservedIdentity,
@@ -2140,7 +2239,11 @@ mod tests {
 
     fn ephemeral_row() -> StoredDesiredResource {
         StoredDesiredResource {
-            key: ResourceKey::new("work", "EphemeralProcess", "activation-nixos--runner--gen-1"),
+            key: ResourceKey::new(
+                "work",
+                "EphemeralProcess",
+                "activation-nixos--runner--gen-1",
+            ),
             uid: [0x43; 16],
             generation: 1,
             owner_uid: None,
@@ -2292,12 +2395,7 @@ mod tests {
             &self,
             key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Ok(self
-                .rows
-                .lock()
-                .iter()
-                .find(|row| row.key == *key)
-                .cloned())
+            Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned())
         }
 
         async fn view(
@@ -2325,7 +2423,9 @@ mod tests {
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<d2b_resource_runtime::context::WatchId, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected register_watch".into()))
+            Err(ResourceError::ManagerRpc(
+                "unexpected register_watch".into(),
+            ))
         }
 
         async fn cancel_watch(
@@ -2434,7 +2534,11 @@ mod tests {
 
     impl Fixture {
         fn requeue_calls(&self) -> Vec<Duration> {
-            self.requeue.recorded().into_iter().map(|(_, after)| after).collect()
+            self.requeue
+                .recorded()
+                .into_iter()
+                .map(|(_, after)| after)
+                .collect()
         }
     }
 
@@ -2459,18 +2563,21 @@ mod tests {
     }
 
     impl DriverUnderTest {
-        async fn validate(
-            &mut self,
-            ctx: &mut ResourceContext,
-        ) -> Result<(), DriverFailure> {
+        async fn validate(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure> {
             self.erased.validate(ctx).await
         }
 
-        async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, DriverFailure> {
+        async fn recover(
+            &mut self,
+            ctx: &mut ResourceContext,
+        ) -> Result<RecoveryOutcome, DriverFailure> {
             self.erased.recover(ctx).await
         }
 
-        async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, DriverFailure> {
+        async fn reconcile(
+            &mut self,
+            ctx: &mut ResourceContext,
+        ) -> Result<ReconcileOutcome, DriverFailure> {
             self.erased.reconcile(ctx).await
         }
 
@@ -2508,7 +2615,9 @@ mod tests {
         DriverUnderTest { erased, typed }
     }
 
-    fn expect_in_progress(outcome: Result<ReconcileOutcome, DriverFailure>) -> d2b_resource_runtime::context::OperationId {
+    fn expect_in_progress(
+        outcome: Result<ReconcileOutcome, DriverFailure>,
+    ) -> d2b_resource_runtime::context::OperationId {
         match outcome {
             Ok(ReconcileOutcome::InProgress { operation }) => operation,
             other => panic!("expected InProgress, got {other:?}"),
@@ -2657,7 +2766,10 @@ mod tests {
 
         assert_eq!(
             identity.launch.owner_ref(),
-            Some(&ResourceRef::parse("VolumeBinding/vol-binding-000000000000000000000000").expect("owner ref"))
+            Some(
+                &ResourceRef::parse("VolumeBinding/vol-binding-000000000000000000000000")
+                    .expect("owner ref")
+            )
         );
         assert_eq!(
             identity.launch.target_ref(),
@@ -2690,7 +2802,11 @@ mod tests {
             deleting: false,
             spec: br#"{"providerRef":"Provider/device-tpm"}"#.to_vec(),
             metadata: owner
-                .map(|owner| serde_json::json!({ "ownerRef": owner }).to_string().into_bytes())
+                .map(|owner| {
+                    serde_json::json!({ "ownerRef": owner })
+                        .to_string()
+                        .into_bytes()
+                })
                 .unwrap_or_default(),
             created_at: 0,
         };
@@ -2896,14 +3012,18 @@ mod tests {
     /// and quarantined (R15).
     #[test]
     fn resolution_refusals_are_never_identity_ambiguity() {
-        let refused = super::map_provider_error("resolution-failed".to_owned(), DriverOp::Reconcile);
+        let refused =
+            super::map_provider_error("resolution-failed".to_owned(), DriverOp::Reconcile);
         assert_eq!(refused.to_string(), "process-resolution-refused");
         assert_eq!(refused.kind, ProcessDriverErrorKind::ResolutionRefused);
-        let missing = super::map_provider_error("template-not-found".to_owned(), DriverOp::Reconcile);
+        let missing =
+            super::map_provider_error("template-not-found".to_owned(), DriverOp::Reconcile);
         assert_eq!(missing.to_string(), "process-template-unavailable");
-        let outside = super::map_provider_error("guest-process-not-vmm".to_owned(), DriverOp::Recover);
+        let outside =
+            super::map_provider_error("guest-process-not-vmm".to_owned(), DriverOp::Recover);
         assert_eq!(outside.to_string(), "process-guest-process-not-vmm");
-        let observed = super::map_provider_error("adoption-ambiguous".to_owned(), DriverOp::Reconcile);
+        let observed =
+            super::map_provider_error("adoption-ambiguous".to_owned(), DriverOp::Reconcile);
         assert_eq!(observed.to_string(), "process-identity-ambiguous");
         // Every mapping is terminal and names the provider's own code.
         for (error, expected_kind) in [
@@ -2914,7 +3034,10 @@ mod tests {
         ] {
             assert_eq!(error.kind, expected_kind);
             assert_eq!(error.kind.class(), FailureClass::Terminal);
-            assert!(!error.detail.is_empty(), "a provider mapping carries the provider code");
+            assert!(
+                !error.detail.is_empty(),
+                "a provider mapping carries the provider code"
+            );
         }
     }
 
@@ -3048,7 +3171,9 @@ mod tests {
         );
         assert_eq!(
             *f.ctx.status::<ProcessDriverStatus>().expect("status"),
-            ProcessDriverStatus::Succeeded { code: "process-exited" }
+            ProcessDriverStatus::Succeeded {
+                code: "process-exited"
+            }
         );
         assert_eq!(
             f.ctx.take_status_projection(),
@@ -3101,12 +3226,22 @@ mod tests {
         let stops = fake.stop_calls();
         assert_eq!(stops.len(), 1, "one preserved one-shot stop escalation");
         assert_eq!(stops[0].kind, "EphemeralProcess");
-        assert_eq!(stops[0].term_timeout, Duration::from_secs(30), "fixed one-shot term");
-        assert_eq!(stops[0].kill_timeout, Duration::from_secs(30), "preserved kill budget");
+        assert_eq!(
+            stops[0].term_timeout,
+            Duration::from_secs(30),
+            "fixed one-shot term"
+        );
+        assert_eq!(
+            stops[0].kill_timeout,
+            Duration::from_secs(30),
+            "preserved kill budget"
+        );
         assert_eq!(fake.finalize_calls(), 1, "finalize after the exact stop");
         assert_eq!(
             *f.ctx.status::<ProcessDriverStatus>().expect("status"),
-            ProcessDriverStatus::Failed { code: "runtime-deadline" }
+            ProcessDriverStatus::Failed {
+                code: "runtime-deadline"
+            }
         );
         assert_eq!(
             f.ctx.take_status_projection(),
@@ -3148,10 +3283,18 @@ mod tests {
         );
         assert_eq!(
             *f.ctx.status::<ProcessDriverStatus>().expect("status"),
-            ProcessDriverStatus::Failed { code: "runtime-deadline" }
+            ProcessDriverStatus::Failed {
+                code: "runtime-deadline"
+            }
         );
-        assert!(f.requeue_calls().is_empty(), "no cleanup timer under incident hold");
-        assert!(driver.ephemeral_completed(), "the terminal state is recorded");
+        assert!(
+            f.requeue_calls().is_empty(),
+            "no cleanup timer under incident hold"
+        );
+        assert!(
+            driver.ephemeral_completed(),
+            "the terminal state is recorded"
+        );
 
         driver.backdate_completion(Duration::from_secs(365 * 24 * 3600));
         assert_eq!(
@@ -3221,7 +3364,10 @@ mod tests {
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied
         );
-        assert!(fake.launch_calls().is_empty(), "no relaunch on a live identity");
+        assert!(
+            fake.launch_calls().is_empty(),
+            "no relaunch on a live identity"
+        );
         assert_eq!(f.requeue_calls(), [Duration::from_secs(5)]);
     }
 
@@ -3308,7 +3454,10 @@ mod tests {
         let failure = driver.delete(&mut f.ctx).await.unwrap_err();
         assert_eq!(failure.class(), FailureClass::Terminal);
         assert_eq!(failure.op(), DriverOp::Delete);
-        assert!(fake.stop_calls().is_empty(), "no destructive action on ambiguity");
+        assert!(
+            fake.stop_calls().is_empty(),
+            "no destructive action on ambiguity"
+        );
     }
 
     /// A row no host-minted ticket can describe - a Guest-owned one-shot
@@ -3330,7 +3479,10 @@ mod tests {
         let failure = driver.reconcile(&mut f.ctx).await.unwrap_err();
         assert_eq!(failure.class(), FailureClass::Terminal);
         assert_eq!(failure.op(), DriverOp::Reconcile);
-        assert!(fake.launch_calls().is_empty(), "an unmintable ticket never launches");
+        assert!(
+            fake.launch_calls().is_empty(),
+            "an unmintable ticket never launches"
+        );
 
         driver.delete(&mut f.ctx).await.expect("delete converges");
         assert!(fake.stop_calls().is_empty(), "no provider effect ran");
@@ -3364,7 +3516,10 @@ mod tests {
         assert_eq!(launch.resource_uid, "42424242-4242-4242-8242-424242424242");
         assert_eq!(launch.generation, 3);
         assert_eq!(launch.zone.as_str(), "work");
-        assert_eq!(launch.zone_uid.as_ref().map(ResourceUid::as_str), Some(ZONE_UID));
+        assert_eq!(
+            launch.zone_uid.as_ref().map(ResourceUid::as_str),
+            Some(ZONE_UID)
+        );
         assert_eq!(launch.policy_revision, Some(7));
         assert_eq!(launch.provider_ref, "Provider/system-minijail");
         assert_eq!(launch.template, "reaction");
@@ -3372,7 +3527,10 @@ mod tests {
 
         let completed = f.effects.recv().await.expect("typed completion");
         assert_eq!(completed.operation, operation);
-        assert!(matches!(completed.result, d2b_resource_runtime::context::EffectResult::Completed));
+        assert!(matches!(
+            completed.result,
+            d2b_resource_runtime::context::EffectResult::Completed
+        ));
 
         // Post-launch probe adopts the identity the Provider retained.
         fake.push_adoption(ProviderAdoption::Adopted(adopted_report()));
@@ -3415,7 +3573,11 @@ mod tests {
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied
         );
-        assert_eq!(fake.launch_calls().len(), 1, "the launched identity is not relaunched");
+        assert_eq!(
+            fake.launch_calls().len(),
+            1,
+            "the launched identity is not relaunched"
+        );
         assert!(
             fake.stop_calls().is_empty(),
             "a live identity this row launched is not an unexpected one"
@@ -3448,7 +3610,9 @@ mod tests {
     #[tokio::test]
     async fn recover_classifies_drifted_and_ambiguous_processes_as_quarantined() {
         for adoption in [
-            ProviderAdoption::Stale { candidate: stale_candidate() },
+            ProviderAdoption::Stale {
+                candidate: stale_candidate(),
+            },
             ProviderAdoption::Quarantined(quarantined_report()),
         ] {
             let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
@@ -3479,15 +3643,24 @@ mod tests {
 
         // A live owned child: the erased children-first boundary refuses with
         // the shared `children-draining` NotYet before the driver body runs.
-        let failure = d.finalize(&mut f.ctx).await.expect_err("owned child still live");
+        let failure = d
+            .finalize(&mut f.ctx)
+            .await
+            .expect_err("owned child still live");
         assert_eq!(
             failure,
             DriverFailure::not_yet(DriverOp::Delete, FailureKinds::CHILDREN_DRAINING)
         );
-        assert_eq!(manager.deleted.lock().len(), 1, "the owned child is nudged first");
+        assert_eq!(
+            manager.deleted.lock().len(),
+            1,
+            "the owned child is nudged first"
+        );
 
         // The manager removed the retired child row: the same pass converges.
-        d.finalize(&mut f.ctx).await.expect("converged once the child retired");
+        d.finalize(&mut f.ctx)
+            .await
+            .expect("converged once the child retired");
     }
 
     // -- delete: term then kill ----------------------------------------------
@@ -3505,8 +3678,16 @@ mod tests {
 
         let stops = fake.stop_calls();
         assert_eq!(stops.len(), 1, "one preserved stop escalation");
-        assert_eq!(stops[0].term_timeout, Duration::from_millis(250), "drain timeout from the spec");
-        assert_eq!(stops[0].kill_timeout, Duration::from_secs(30), "preserved kill budget");
+        assert_eq!(
+            stops[0].term_timeout,
+            Duration::from_millis(250),
+            "drain timeout from the spec"
+        );
+        assert_eq!(
+            stops[0].kill_timeout,
+            Duration::from_secs(30),
+            "preserved kill budget"
+        );
         assert_eq!(fake.finalize_calls(), 1, "finalize after the exact stop");
         assert_eq!(fake.call_order(), ["adopt", "stop", "finalize"]);
     }
@@ -3528,7 +3709,9 @@ mod tests {
     #[tokio::test]
     async fn delete_stops_an_exact_stale_candidate_after_restart() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
-            adoption: VecDeque::from([ProviderAdoption::Stale { candidate: stale_candidate() }]),
+            adoption: VecDeque::from([ProviderAdoption::Stale {
+                candidate: stale_candidate(),
+            }]),
             ..FakeEffectsConfig::default()
         }));
         let mut f = fixture(test_row());
@@ -3602,7 +3785,10 @@ mod tests {
         expect_in_progress(driver.reconcile(&mut f.ctx).await);
         yield_until_effects_settled().await;
         let completed = f.effects.recv().await.expect("completion");
-        assert!(matches!(completed.result, d2b_resource_runtime::context::EffectResult::Failed(_)));
+        assert!(matches!(
+            completed.result,
+            d2b_resource_runtime::context::EffectResult::Failed(_)
+        ));
         if let d2b_resource_runtime::context::EffectResult::Failed(failure) = completed.result {
             assert_eq!(failure.class(), FailureClass::Retryable);
             assert_eq!(failure.op(), DriverOp::Reconcile);
@@ -3779,7 +3965,11 @@ mod tests {
             completed.result,
             d2b_resource_runtime::context::EffectResult::Completed
         ));
-        assert_eq!(fake.launch_calls().len(), 1, "the exited process was relaunched");
+        assert_eq!(
+            fake.launch_calls().len(),
+            1,
+            "the exited process was relaunched"
+        );
     }
 
     /// The same observation edge never laundered the exit into a first sight:
@@ -3817,28 +4007,43 @@ mod tests {
         assert_eq!(failure.op(), DriverOp::Reconcile);
         assert_eq!(failure.kind().code(), "process-start-budget-exhausted");
         assert_eq!(failure.stage(), "observe/liveness");
-        assert!(!failure.defers(), "a spent restart budget schedules no retry");
+        assert!(
+            !failure.defers(),
+            "a spent restart budget schedules no retry"
+        );
         assert_eq!(
             *f.ctx.status::<ProcessDriverStatus>().expect("status"),
-            ProcessDriverStatus::Failed { code: "process-exited" }
+            ProcessDriverStatus::Failed {
+                code: "process-exited"
+            }
         );
         assert_eq!(
             d2b_resource_runtime::ResourceStatus::Failed(failure.clone()).wire_phase(),
             "Failed",
             "an exit no restart can follow is never a readiness claim"
         );
-        assert_eq!(driver.restart_count(), 0, "a refused restart consumes nothing");
+        assert_eq!(
+            driver.restart_count(),
+            0,
+            "a refused restart consumes nothing"
+        );
         assert_eq!(
             f.requeue_calls(),
             [super::PROCESS_RESYNC],
             "a terminal exit arms no observation cadence"
         );
-        assert!(fake.launch_calls().is_empty(), "no relaunch past the policy");
+        assert!(
+            fake.launch_calls().is_empty(),
+            "no relaunch past the policy"
+        );
 
         // A later trigger re-observes the exit; it never becomes a launch.
         let failure = driver.reconcile(&mut f.ctx).await.unwrap_err();
         assert_eq!(failure.kind().code(), "process-start-budget-exhausted");
-        assert!(fake.launch_calls().is_empty(), "no relaunch past the policy");
+        assert!(
+            fake.launch_calls().is_empty(),
+            "no relaunch past the policy"
+        );
     }
 
     /// An identity the liveness probe can no longer verify (old
@@ -3877,7 +4082,9 @@ mod tests {
         // agree: `Failed`, never `Ready`.
         assert_eq!(
             *f.ctx.status::<ProcessDriverStatus>().expect("status"),
-            ProcessDriverStatus::Failed { code: "identity-ambiguous" }
+            ProcessDriverStatus::Failed {
+                code: "identity-ambiguous"
+            }
         );
         assert_eq!(
             d2b_resource_runtime::ResourceStatus::Failed(failure).wire_phase(),
@@ -3893,8 +4100,14 @@ mod tests {
             [super::PROCESS_RESYNC],
             "the refusal arms no observation cadence"
         );
-        assert!(fake.launch_calls().is_empty(), "an ambiguous identity is never launched");
-        assert!(fake.stop_calls().is_empty(), "no signal reaches the ambiguous candidate");
+        assert!(
+            fake.launch_calls().is_empty(),
+            "an ambiguous identity is never launched"
+        );
+        assert!(
+            fake.stop_calls().is_empty(),
+            "no signal reaches the ambiguous candidate"
+        );
     }
 
     // -- a durable launch no retry can resolve fails terminally --------------
@@ -3911,7 +4124,10 @@ mod tests {
                 "provider-ticket:template-not-found",
                 FailureKinds::PROCESS_TEMPLATE_UNAVAILABLE,
             ),
-            ("resolution-failed", FailureKinds::PROCESS_RESOLUTION_REFUSED),
+            (
+                "resolution-failed",
+                FailureKinds::PROCESS_RESOLUTION_REFUSED,
+            ),
             (
                 "provider-ticket:guest-process-not-vmm",
                 FailureKinds::PROCESS_GUEST_PROCESS_NOT_VMM,

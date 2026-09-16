@@ -26,10 +26,11 @@
 //! mutate it on every pass), and the launch parameters their templates admit
 //! travel on the Process controller's `launch_args` channel.
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 
-use d2b_contracts::types::{BundleOpId, PathClass, VmId};
-use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest, BrokerResponse};
+use d2b_contracts::types::{BundleOpId, VmId};
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;
 use d2b_provider_device_tpm::{
@@ -219,7 +220,14 @@ impl DeclaredTpmRows<'_> {
         self.children
             .ensure(child)
             .await
-            .map_err(|_| TpmResourceEffectError::Transient)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    device = %self.device_ref.to_canonical_string(),
+                    error = ?error,
+                    "tpm state volume child ensure failed"
+                );
+                TpmResourceEffectError::Transient
+            })?;
         self.wait_ready(&reference).await?;
         Ok(reference)
     }
@@ -248,6 +256,11 @@ enum TpmLifecycleAdmission {
 struct LiveTpmResourceEffectPort<'a> {
     state: &'a crate::ServerState,
     vm_id: VmId,
+    /// The Zone the Device row lives in: every manager/broker surface this
+    /// port touches (declared children, the prepare-directory kernel) is
+    /// anchored here, not on the Device's Guest target - a nested Guest VM
+    /// is never registered with the host daemon's zone coordinator.
+    zone: String,
     migration_intent_ref: BundleOpId,
     migration_decision: LegacyTpmMigrationDecision,
     caller_role: BrokerCallerRole,
@@ -352,31 +365,134 @@ impl LiveTpmResourceEffectPort<'_> {
 
     /// The broker-owned state-directory preparation (the trusted marker and
     /// hardening step the legacy TPM connector supplies). Not a spawn.
+    ///
+    /// The retired typed `PrepareStateDir` arm resolved the subject's trusted
+    /// state directory from the bundle; the U10 leg resolves the same intent
+    /// from the daemon's bundle copy and invokes the prepare-directory kernel
+    /// with the resolved parameters. A v3 zone-native Guest carries no
+    /// legacy per-VM state-directory intent, so the retired arm's zone-native
+    /// fallback is preserved: its TPM state directory is the
+    /// controller-created state Volume the trusted `path:swtpm-state:<guest>`
+    /// storage row roots - the same row the worker derivation, the
+    /// spawn-time swtpm-dir fence and the volume-local controller's root all
+    /// agree on.
     fn prepare_state_dir(&self) -> Result<(), TpmResourceEffectError> {
-        let response = crate::dispatch_broker_request_as(
-            self.state,
-            BrokerRequest::PrepareStateDir(
-                d2b_contracts_broker::broker_wire::PrepareDirRequest {
-                    vm_id: self.vm_id.clone(),
-                    path_class: PathClass::Vm,
-                    tracing_span_id: None,
-                },
-            ),
-            self.caller_role.clone(),
+        let resolver = d2bd_runtime::runtime_util::block_on_future(
+            crate::load_bundle_resolver_on_worker(self.state),
         )
-        .map_err(|_| TpmResourceEffectError::Transient)?;
-        match response {
-            BrokerResponse::Ack(_) => Ok(()),
-            other => {
+        .map_err(|error| {
+            tracing::warn!(error = ?error, "tpm prepare: bundle resolver load failed");
+            TpmResourceEffectError::Transient
+        })?;
+        let (base_dir, owner_uid, owner_gid, mode) = match resolver
+            .resolve_prepare_dir_intent(self.vm_id.as_str(), false)
+        {
+            Some(intent) => (
+                intent.base_dir,
+                intent.owner_uid,
+                intent.owner_gid,
+                intent.mode,
+            ),
+            None => {
+                // Zone-native posture (retired-arm parity): no legacy
+                // state-directory intent for this Guest. Prepare the state
+                // root the trusted storage row names. Narrowing that root to
+                // the unique TPM Device's state Volume directory is the
+                // broker's job - its `PrepareStateDir` resolves it from the
+                // same trusted artifacts - so this shared daemon never
+                // assembles a per-Device directory name itself.
+                let (spec, state_root) =
+                    zone_native_swtpm_state_row(&resolver, self.vm_id.as_str())
+                        .ok_or(TpmResourceEffectError::StateIntegrity)?;
+                let (owner_uid, owner_gid, mode) = row_posture(spec)
+                    .ok_or(TpmResourceEffectError::StateIntegrity)?;
+                (state_root, owner_uid, owner_gid, mode)
+            }
+        };
+        // The Device row's own Zone - never a zone-authority lookup of the
+        // Guest target VM, which the host daemon's coordinator does not
+        // register (the guest's plane lives inside the nested VM).
+        let zone = self.zone.clone();
+        let invocation = d2b_contracts_broker::kernel_client::KernelInvocation {
+            operation: "prepare-directory",
+            zone: zone.as_str(),
+            payload: serde_json::json!({
+                "kind": "state",
+                "baseDir": base_dir.display().to_string(),
+                "vmIdOrScope": self.vm_id.as_str(),
+                "mode": mode,
+                "ownerUid": owner_uid,
+                "ownerGid": owner_gid,
+                "createdPaths": [],
+            }),
+            fds: &[],
+            chain_root_invocation_id: None,
+            chain_identities: None,
+        };
+        match d2b_contracts_broker::kernel_client::envelope_invoke_kernel(
+            &crate::broker_socket_path(self.state),
+            crate::KERNEL_IO_TIMEOUT,
+            self.caller_role.clone(),
+            invocation,
+        ) {
+            Ok(_) => Ok(()),
+            Err(error) => {
                 tracing::warn!(
                     device = %self.device_ref.to_canonical_string(),
-                    response = ?other,
+                    error = %error,
                     "broker state-directory preparation refused",
                 );
                 Err(TpmResourceEffectError::StateIntegrity)
             }
         }
     }
+}
+
+/// The trusted `path:swtpm-state:<guest>` storage row of one zone-native
+/// Guest: the row plus the absolute state root it names. `None` for a
+/// subject no trusted artifact names - the caller keeps failing closed
+/// rather than inventing a directory (retired-arm parity).
+fn zone_native_swtpm_state_row<'a>(
+    resolver: &'a d2b_core::bundle_resolver::BundleResolver,
+    guest: &str,
+) -> Option<(&'a d2b_core::storage::StoragePathSpec, PathBuf)> {
+    let spec = resolver.find_storage_path_spec(&format!("path:swtpm-state:{guest}"))?;
+    let path = PathBuf::from(spec.path_template.as_str());
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    Some((spec, path))
+}
+
+/// The numeric posture one trusted storage row declares for its path -
+/// `(owner_uid, owner_gid, mode)` - resolved against this host. `None` when
+/// the row's principals or mode cannot be resolved here (retired-arm parity:
+/// a caller that must record a posture fails closed instead of inventing
+/// one).
+fn row_posture(spec: &d2b_core::storage::StoragePathSpec) -> Option<(u32, u32, u32)> {
+    use d2b_core::storage::PrincipalKind;
+    let owner_uid = match spec.owner.kind {
+        PrincipalKind::Uid => spec.owner.value.as_str().parse::<u32>().ok()?,
+        PrincipalKind::User => nix::unistd::User::from_name(spec.owner.value.as_str())
+            .ok()?
+            .map(|user| user.uid.as_raw())?,
+        _ => return None,
+    };
+    let owner_gid = match spec.group.kind {
+        PrincipalKind::Gid => spec.group.value.as_str().parse::<u32>().ok()?,
+        PrincipalKind::Group => nix::unistd::Group::from_name(spec.group.value.as_str())
+            .ok()?
+            .map(|group| group.gid.as_raw())?,
+        _ => return None,
+    };
+    let trimmed = spec.mode.trim_start_matches('0');
+    let normalized = if trimmed.is_empty() { "0" } else { trimmed };
+    let mode = u32::from_str_radix(normalized, 8).ok()?;
+    Some((owner_uid, owner_gid, mode))
 }
 
 impl TpmResourceEffectPort for LiveTpmResourceEffectPort<'_> {
@@ -529,6 +645,7 @@ impl AdmittedTpmDevice {
         LiveTpmResourceEffectPort {
             state,
             vm_id,
+            zone: self.zone.clone(),
             migration_intent_ref,
             migration_decision,
             caller_role,

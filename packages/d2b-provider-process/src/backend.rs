@@ -303,12 +303,21 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
     /// This observes process termination without exposing the descriptor to
     /// Provider code. Service-manager owners may use the same readiness
     /// signal without taking ownership of reap.
-    fn wait(
+    fn wait(&self, _handle: &Self::Handle, _timeout: Duration) -> Result<(), ProcessEffectError> {
+        Err(ProcessEffectError::PidfdUnavailable)
+    }
+
+    /// The broker-retained launch snapshot of one handle: the runner's
+    /// `(vm, role)` keys, live `(pid, start_time_ticks)` and a duplicate of
+    /// the retained pidfd, so the daemon can register the kernel-spawned
+    /// runner in its authoritative pidfd table (the family handlers' runner
+    /// lookup). `None` for a backend that retains no pidfd.
+    #[allow(clippy::type_complexity)] // the launched-runner snapshot tuple is the trait's wire shape
+    fn launched_runner_snapshot(
         &self,
         _handle: &Self::Handle,
-        _timeout: Duration,
-    ) -> Result<(), ProcessEffectError> {
-        Err(ProcessEffectError::PidfdUnavailable)
+    ) -> Result<Option<(String, String, i32, u64, OwnedFd)>, ProcessEffectError> {
+        Ok(None)
     }
 
     /// Take a broker-retained Provider-controller bootstrap endpoint.

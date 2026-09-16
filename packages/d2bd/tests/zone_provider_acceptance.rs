@@ -70,6 +70,13 @@ use d2bd_runtime::target_runtime::{
 use serde_json::json;
 
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    // The boundary doubles below adapt blocking filesystem work through
+    // `tokio::task::spawn_blocking`, so a runtime context must be present
+    // even though the poll loop itself stays the noop-waker busy loop.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("block_on runtime");
+    let _guard = runtime.enter();
     let waker = std::task::Waker::noop();
     let mut context = std::task::Context::from_waker(waker);
     let mut future = std::pin::pin!(future);
@@ -153,7 +160,10 @@ impl VolumeSourceEffectPort for &FilesystemVolume {
         _system_artifact_id: Option<&BoundedToken>,
         _kind: d2b_contracts_resource::v3::volume::SourceKind,
     ) -> Result<VolumeRootHandle, d2b_provider_volume_local::VolumeLocalError> {
-        fs::create_dir_all(&self.root)
+        let root = self.root.clone();
+        tokio::task::spawn_blocking(move || fs::create_dir_all(&root))
+            .await
+            .expect("resolve_root blocking task panicked")
             .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?;
         Ok(VolumeRootHandle::held())
     }
@@ -236,9 +246,13 @@ impl VolumeLayoutEffectPort for &FilesystemVolume {
         if self.marker.exists() {
             Ok(MarkerState::Provisioned)
         } else {
-            File::create(&self.marker)
-                .and_then(|file| file.sync_all())
-                .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?;
+            let marker = self.marker.clone();
+            tokio::task::spawn_blocking(move || {
+                File::create(&marker).and_then(|file| file.sync_all())
+            })
+            .await
+            .expect("marker_state blocking task panicked")
+            .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?;
             Ok(MarkerState::NeverProvisioned)
         }
     }
@@ -364,7 +378,10 @@ impl NetworkEffectPort for &FilesystemNetworkBoundary {
     }
 
     async fn create_bridges(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
-        fs::create_dir_all(self.root.join("bridges"))
+        let bridges = self.root.join("bridges");
+        tokio::task::spawn_blocking(move || fs::create_dir_all(&bridges))
+            .await
+            .expect("create_bridges blocking task panicked")
             .map_err(|_| NetworkEffectError::BridgeCreate)?;
         self.event("bridges")
     }
@@ -377,17 +394,21 @@ impl NetworkEffectPort for &FilesystemNetworkBoundary {
         &self,
         intent: &FirewallIntent,
     ) -> Result<FirewallDigest, NetworkEffectError> {
-        fs::write(
-            self.root.join("firewall-generation"),
-            intent.expected_generation_id().as_str(),
-        )
-        .map_err(|_| NetworkEffectError::Transient)?;
+        let path = self.root.join("firewall-generation");
+        let generation = intent.expected_generation_id().as_str().to_owned();
+        tokio::task::spawn_blocking(move || fs::write(&path, generation))
+            .await
+            .expect("apply_host_firewall blocking task panicked")
+            .map_err(|_| NetworkEffectError::Transient)?;
         self.event("firewall-apply")?;
         Ok(FirewallDigest::new([1; 32]))
     }
 
     async fn remove_host_firewall(&self, _: &FirewallIntent) -> Result<(), NetworkEffectError> {
-        let _ = fs::remove_file(self.root.join("firewall-generation"));
+        let path = self.root.join("firewall-generation");
+        let _ = tokio::task::spawn_blocking(move || fs::remove_file(&path))
+            .await
+            .expect("remove_host_firewall blocking task panicked");
         self.event("firewall-remove")
     }
 
@@ -437,11 +458,20 @@ impl NetworkResourcePort for &FilesystemNetworkBoundary {
         &self,
         content: &NetworkConfigContent,
     ) -> Result<(), NetworkEffectError> {
-        fs::write(self.root.join("dnsmasq.conf"), &content.dnsmasq)
-            .and_then(|_| fs::write(self.root.join("nftables.conf"), &content.nftables))
-            .and_then(|_| fs::write(self.root.join("routing.conf"), &content.routing))
-            .and_then(|_| fs::write(self.root.join("attachments.conf"), &content.attachments))
-            .map_err(|_| NetworkEffectError::Transient)?;
+        let root = self.root.clone();
+        let dnsmasq = content.dnsmasq.clone();
+        let nftables = content.nftables.clone();
+        let routing = content.routing.clone();
+        let attachments = content.attachments.clone();
+        tokio::task::spawn_blocking(move || {
+            fs::write(root.join("dnsmasq.conf"), &dnsmasq)
+                .and_then(|_| fs::write(root.join("nftables.conf"), &nftables))
+                .and_then(|_| fs::write(root.join("routing.conf"), &routing))
+                .and_then(|_| fs::write(root.join("attachments.conf"), &attachments))
+        })
+        .await
+        .expect("upsert_volume_content blocking task panicked")
+        .map_err(|_| NetworkEffectError::Transient)?;
         self.event("volume-write")
     }
 
@@ -678,7 +708,10 @@ impl TpmResourceEffectPort for FilesystemTpm {
         _: &ResourceRef,
         _: &ResourceRef,
     ) -> Result<ResourceRef, TpmResourceEffectError> {
-        fs::create_dir_all(self.root.join("tpm-state"))
+        let state_dir = self.root.join("tpm-state");
+        tokio::task::spawn_blocking(move || fs::create_dir_all(&state_dir))
+            .await
+            .expect("ensure_state_volume blocking task panicked")
             .map_err(|_| TpmResourceEffectError::Transient)?;
         Ok(ResourceRef::parse("Volume/device-tpm-state").unwrap())
     }
@@ -708,7 +741,11 @@ impl TpmResourceEffectPort for FilesystemTpm {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|_| TpmResourceEffectError::Transient)?;
-        fs::write(self.root.join("swtpm.pid"), child.id().to_string())
+        let pid_path = self.root.join("swtpm.pid");
+        let pid = child.id().to_string();
+        tokio::task::spawn_blocking(move || fs::write(&pid_path, pid))
+            .await
+            .expect("request_swtpm_process blocking task panicked")
             .map_err(|_| TpmResourceEffectError::Transient)?;
         *self
             .process
@@ -725,7 +762,10 @@ impl TpmResourceEffectPort for FilesystemTpm {
         Command::new("true")
             .status()
             .map_err(|_| TpmResourceEffectError::Transient)?;
-        fs::write(self.root.join("flush.complete"), b"ok")
+        let flush_path = self.root.join("flush.complete");
+        tokio::task::spawn_blocking(move || fs::write(&flush_path, b"ok"))
+            .await
+            .expect("request_flush_process blocking task panicked")
             .map_err(|_| TpmResourceEffectError::Transient)?;
         Ok(ResourceRef::parse("EphemeralProcess/device-tpm-flush").unwrap())
     }
@@ -743,12 +783,18 @@ impl TpmResourceEffectPort for FilesystemTpm {
             .kill()
             .and_then(|_| child.wait())
             .map_err(|_| TpmResourceEffectError::Transient)?;
-        fs::write(self.root.join("swtpm.stopped"), b"ok")
+        let stopped_path = self.root.join("swtpm.stopped");
+        tokio::task::spawn_blocking(move || fs::write(&stopped_path, b"ok"))
+            .await
+            .expect("stop_swtpm_process blocking task panicked")
             .map_err(|_| TpmResourceEffectError::Transient)
     }
 
     async fn delete_flush_process(&self, _: &ResourceRef) -> Result<(), TpmResourceEffectError> {
-        let _ = fs::remove_file(self.root.join("flush.complete"));
+        let flush_path = self.root.join("flush.complete");
+        let _ = tokio::task::spawn_blocking(move || fs::remove_file(&flush_path))
+            .await
+            .expect("delete_flush_process blocking task panicked");
         Ok(())
     }
 
@@ -1050,7 +1096,10 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
     ) -> Result<CloudHypervisorResourceResponse, CloudHypervisorResourceApiError> {
         match request {
             CloudHypervisorResourceRequest::Register { .. } => {
-                fs::write(self.root.join("registered"), b"registered")
+                let registered_path = self.root.join("registered");
+                tokio::task::spawn_blocking(move || fs::write(&registered_path, b"registered"))
+                    .await
+                    .expect("Register blocking task panicked")
                     .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
                 Ok(CloudHypervisorResourceResponse::Registered)
             }
@@ -1263,12 +1312,13 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                 ))
             }
             CloudHypervisorResourceRequest::UpdateStatus { status, .. } => {
-                fs::write(
-                    self.root.join("status.json"),
-                    serde_json::to_vec(status.status())
-                        .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?,
-                )
-                .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+                let status_path = self.root.join("status.json");
+                let status_bytes = serde_json::to_vec(status.status())
+                    .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
+                tokio::task::spawn_blocking(move || fs::write(&status_path, status_bytes))
+                    .await
+                    .expect("UpdateStatus blocking task panicked")
+                    .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
                 Ok(CloudHypervisorResourceResponse::StatusUpdated)
             }
             CloudHypervisorResourceRequest::ObserveProcessAdoption { .. } => {

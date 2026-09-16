@@ -61,6 +61,9 @@ pub struct PrepareDirRequest {
     pub owner_gid: u32,
     /// Directories to create under `base_dir` (relative paths).
     pub created_paths: Vec<PathBuf>,
+    /// The trusted daemon service account whose state anchors
+    /// (`/var/lib/d2b/tpm-state`) may own the base dir's parent.
+    pub daemon_uid: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -88,7 +91,7 @@ pub fn prepare_dir(req: &PrepareDirRequest) -> io::Result<PrepareDirAudit> {
     // base_dir so the refuse_non_root_parent guard is wired via the
     // `enforce_root_parent` knob below.
     if production_path(&req.base_dir) {
-        crate::sys::path_safe::refuse_non_root_parent(&req.base_dir)?;
+        crate::sys::path_safe::refuse_non_root_parent_except(&req.base_dir, req.daemon_uid)?;
     }
     // The per-VM root base dir is created + owned by host activation
     // (`nixos-modules/host-ssh-host-keys.nix`: `install -d -m 2770 -o
@@ -308,9 +311,10 @@ fn fixture_content_hash(resources: &[serde_json::Value]) -> String {
         CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest,
     };
     let array = serde_json::Value::Array(resources.to_vec());
-    let canonical =
-        CanonicalJsonValue::parse(&serde_json::to_vec(&array).expect("fixture resources serialize"))
-            .expect("fixture resources are canonical JSON");
+    let canonical = CanonicalJsonValue::parse(
+        &serde_json::to_vec(&array).expect("fixture resources serialize"),
+    )
+    .expect("fixture resources are canonical JSON");
     framed_canonical_digest(
         "d2b:v3:resource-bundle",
         &canonical_json_bytes(&canonical).expect("fixture resources encode"),
@@ -325,10 +329,9 @@ pub(crate) fn resolver_with_swtpm_state_row(guest: &str) -> BundleResolver {
     use d2b_core::manifest_v04::ManifestV04;
     use d2b_core::processes::ProcessesJson;
     use d2b_core::storage::{
-        ActorKind, ActorRef, CleanupPolicy, LeaseClass, PrincipalKind, PrincipalRef,
-        RepairPolicy, SensitivityClass, StorageAdoptionPolicy, StorageInvariant, StorageJson,
-        StorageLifecycle, StoragePathKind, StoragePathSpec, StoragePersistence,
-        StorageRestartPolicy,
+        ActorKind, ActorRef, CleanupPolicy, LeaseClass, PrincipalKind, PrincipalRef, RepairPolicy,
+        SensitivityClass, StorageAdoptionPolicy, StorageInvariant, StorageJson, StorageLifecycle,
+        StoragePathKind, StoragePathSpec, StoragePersistence, StorageRestartPolicy,
     };
 
     let principal = |kind, value: &str| PrincipalRef {
@@ -470,6 +473,7 @@ mod tests {
             owner_uid: nix::unistd::geteuid().as_raw(),
             owner_gid: nix::unistd::getegid().as_raw(),
             created_paths: vec![PathBuf::from("logs"), PathBuf::from("artifacts")],
+            daemon_uid: None,
         };
         let audit = prepare_dir(&req).unwrap();
         assert!(base.is_dir());
@@ -492,6 +496,7 @@ mod tests {
             owner_uid: nix::unistd::geteuid().as_raw(),
             owner_gid: nix::unistd::getegid().as_raw(),
             created_paths: vec![PathBuf::from("logs")],
+            daemon_uid: None,
         };
         let first = prepare_dir(&req).unwrap();
         assert_eq!(
@@ -532,6 +537,7 @@ mod tests {
             owner_uid: nix::unistd::geteuid().as_raw(),
             owner_gid: nix::unistd::getegid().as_raw(),
             created_paths: vec![],
+            daemon_uid: None,
         };
         let audit = prepare_dir(&req).unwrap();
         assert_eq!(
@@ -560,6 +566,7 @@ mod tests {
             owner_uid: nix::unistd::geteuid().as_raw(),
             owner_gid: nix::unistd::getegid().as_raw(),
             created_paths: vec![],
+            daemon_uid: None,
         };
         let audit = prepare_dir(&req).unwrap();
         assert_eq!(
@@ -583,6 +590,7 @@ mod tests {
             owner_uid: nix::unistd::geteuid().as_raw(),
             owner_gid: nix::unistd::getegid().as_raw(),
             created_paths: vec![PathBuf::from("/etc/passwd")],
+            daemon_uid: None,
         };
         let err = prepare_dir(&req).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
@@ -600,6 +608,7 @@ mod tests {
             owner_uid: nix::unistd::geteuid().as_raw(),
             owner_gid: nix::unistd::getegid().as_raw(),
             created_paths: vec![PathBuf::from("../escape")],
+            daemon_uid: None,
         };
         let err = prepare_dir(&req).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
@@ -631,16 +640,12 @@ mod tests {
             &audit_log,
         )
         .expect("the zone-native TPM subject prepares as a no-op");
-        let device_uid = crate::ops::device_worker::deterministic_resource_uid(
-            "work",
-            "Device",
-            "tpm0",
-        );
+        let device_uid =
+            crate::ops::device_worker::deterministic_resource_uid("work", "Device", "tpm0");
         assert_eq!(
             prepared.base_dir,
-            PathBuf::from("/var/lib/d2b/tpm-state").join(crate::ops::swtpm_dir::state_volume_name(
-                &device_uid
-            ))
+            PathBuf::from("/var/lib/d2b/tpm-state")
+                .join(crate::ops::swtpm_dir::state_volume_name(&device_uid))
         );
         assert_ne!(
             prepared.base_dir,

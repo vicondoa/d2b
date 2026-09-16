@@ -846,6 +846,63 @@ impl d2bd_runtime::supervisor::readiness_liveness::LivenessProbe for ProviderLiv
 
 /// Production process Provider controllers.
 ///
+/// The daemon-side launched-runner observer: registers the kernel-spawned
+/// runner in the authoritative pidfd table (the family handlers' runner
+/// lookup) as soon as the broker backend confirms the spawn, before the
+/// launch's readiness probe. Registration failure never fails the launch:
+/// the stale-entry reap and the supervisor handle still cover signal and
+/// liveness.
+struct PidfdTableLaunchedObserver {
+    pidfd_table: Arc<d2bd_runtime::supervisor::pidfd_table::PidfdTable>,
+}
+
+impl d2b_provider_supervisor::LaunchedObserver for PidfdTableLaunchedObserver {
+    fn launched(
+        &self,
+        vm: &str,
+        role: &str,
+        pid: i32,
+        start_time_ticks: u64,
+        pidfd: std::os::fd::OwnedFd,
+    ) {
+        match self.pidfd_table.register(
+            vm.to_owned(),
+            role.to_owned(),
+            d2bd_runtime::supervisor::pidfd_table::PidfdEntry {
+                pidfd,
+                pid,
+                start_time_ticks,
+            },
+        ) {
+            Ok(()) => {
+                // Persist the registration: the table is restored from disk
+                // on daemon restart, and the post-restart adoption of a
+                // still-running controller depends on the entry surviving
+                // (the old crash-consistent snapshot happened only on the
+                // startup-adoption paths).
+                if let Err(error) = self.pidfd_table.snapshot() {
+                    tracing::warn!(
+                        vm,
+                        role,
+                        error = %error,
+                        "pidfd table snapshot failed after launched-runner registration"
+                    );
+                }
+                let _ = pid;
+            }
+            Err(d2bd_runtime::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }) => {}
+            Err(error) => {
+                tracing::warn!(
+                    vm,
+                    role,
+                    error = %error,
+                    "pidfd table registration failed for launched runner"
+                );
+            }
+        }
+    }
+}
+
 /// The concrete supervisors are retained by the daemon for its whole
 /// lifetime. Their internal handles and broker effect owners never cross the
 /// Provider boundary; Provider code sees only the
@@ -881,8 +938,15 @@ impl ProductionProcessProviders {
         bundle: BundleResolver,
         broker_socket: impl Into<PathBuf>,
         caller_role: BrokerCallerRole,
+        pidfd_table: Arc<d2bd_runtime::supervisor::pidfd_table::PidfdTable>,
     ) -> Self {
-        Self::new_for_mode(bundle, broker_socket, caller_role, DaemonMode::Host)
+        Self::new_for_mode(
+            bundle,
+            broker_socket,
+            caller_role,
+            DaemonMode::Host,
+            pidfd_table,
+        )
     }
 
     /// Construct both fixed process Providers over a mode-bound broker.
@@ -894,6 +958,7 @@ impl ProductionProcessProviders {
         broker_socket: impl Into<PathBuf>,
         caller_role: BrokerCallerRole,
         mode: DaemonMode,
+        pidfd_table: Arc<d2bd_runtime::supervisor::pidfd_table::PidfdTable>,
     ) -> Self {
         let broker_socket = broker_socket.into();
         let socket_runtime_dir = broker_socket
@@ -907,13 +972,21 @@ impl ProductionProcessProviders {
             Duration::from_secs(10),
             caller_role.clone(),
         );
-        let minijail_backend = BrokerProcessBackend::with_socket_profile_and_role(
+        let mut minijail_backend = BrokerProcessBackend::with_socket_profile_and_role(
             resolver.clone(),
             broker_socket.clone(),
             Duration::from_secs(10),
             mode.broker_profile(),
             caller_role.clone(),
         );
+        // The kernel-spawned runner must be visible to the family handlers'
+        // runner lookup (the daemon's pidfd table) before the launch's
+        // readiness probe runs, so the table registration rides the backend's
+        // launch-success notification - not the driver's post-launch path,
+        // which runs after the probe.
+        minijail_backend.set_launched_observer(std::sync::Arc::new(PidfdTableLaunchedObserver {
+            pidfd_table: pidfd_table.clone(),
+        }));
         let systemd_owner = BrokerSystemdEffectOwner::with_socket_profile_and_role(
             resolver,
             broker_socket,
@@ -1246,9 +1319,19 @@ impl ProductionProcessProviders {
         if controller_bootstrap {
             self.forget_controller_bootstrap_for_resource_context(&context);
         }
+        // The daemon keeps its own copy of the escrow daemon end to wait
+        // on: the kernel retains the attached descriptor as custody and
+        // returns no duplicate (a dup of the caller's own descriptor is
+        // refused by the forward carrier's anti-replay fence).
+        let mut escrow_wait = None;
         let controller_endpoints = if controller_bootstrap {
             let (daemon_endpoint, child_endpoint) = prearmed_seqpacket_pair()
                 .map_err(|_| "provider-controller-bootstrap-create".to_owned())?;
+            escrow_wait = Some(
+                daemon_endpoint
+                    .try_clone()
+                    .map_err(|_| "provider-controller-bootstrap-dup".to_owned())?,
+            );
             let (child_fds, delivery_key_handoff, backend_lease) =
                 if ticket.inherited_fd_table().count() == 2 {
                     let supervisor = self.guest_backend_supervisor.as_ref().ok_or_else(|| {
@@ -1319,14 +1402,9 @@ impl ProductionProcessProviders {
             runtime_scope: ticket.runtime_scope(),
         })?;
         if controller_bootstrap {
-            let daemon_endpoint = match self
-                .minijail
-                .port()
-                .take_controller_bootstrap(&report.identity)
-                .await
-            {
-                Ok(Some(endpoint)) => endpoint,
-                Ok(None) => {
+            let daemon_endpoint = match escrow_wait {
+                Some(endpoint) => endpoint,
+                None => {
                     self.cleanup_failed_resource_launch(
                         &context,
                         provider,
@@ -1335,16 +1413,6 @@ impl ProductionProcessProviders {
                     )
                     .await;
                     return Err("provider-controller-bootstrap-missing".to_owned());
-                }
-                Err(error) => {
-                    self.cleanup_failed_resource_launch(
-                        &context,
-                        provider,
-                        report.identity,
-                        spec.execution().execution_ref(),
-                    )
-                    .await;
-                    return Err(provider_error(error));
                 }
             };
             let daemon_endpoint =
@@ -2082,24 +2150,28 @@ impl ProductionProcessProviders {
     }
 
     fn wake_controller_session_reconcile(&self, zone: &ZoneId) -> Result<(), String> {
-        let result = self
+        // A missing waker is not a launch failure: the zone's controller-
+        // session coordinator registers its waker during activation, which
+        // can race a controller launch, and the registration path wakes any
+        // marker already pending for the zone (`set_controller_session_waker`
+        // reconciles pending markers itself).
+        let wake = match self
             .controller_session_wakers
             .lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
             .get(zone)
             .cloned()
-            .ok_or_else(|| "provider-controller-session-wake-unavailable".to_owned())
-            .and_then(|wake| {
-                wake().map_err(|error| format!("provider-controller-session-wake-failed:{error}"))
-            });
-        if let Err(error) = &result {
-            tracing::warn!(
-                zone = %zone.as_str(),
-                error = %error,
-                "controller-session coordinator wake failed",
-            );
-        }
-        result
+        {
+            Some(wake) => wake,
+            None => {
+                tracing::info!(
+                    zone = %zone.as_str(),
+                    "controller-session coordinator wake deferred: waker not registered yet"
+                );
+                return Ok(());
+            }
+        };
+        wake().map_err(|error| format!("provider-controller-session-wake-failed:{error}"))
     }
 
     pub(crate) fn controller_bootstrap_present(
@@ -4752,14 +4824,14 @@ mod tests {
             SockFlag::SOCK_CLOEXEC,
         )
         .expect("bootstrap socketpair");
-        let writer = std::thread::spawn(move || {
+        let writer = tokio::task::spawn_blocking(move || {
             nix::sys::socket::send(sender.as_raw_fd(), b"ready", nix::sys::socket::MsgFlags::empty())
                 .expect("bootstrap readiness frame");
         });
         let endpoint = wait_for_controller_bootstrap_endpoint(receiver, Duration::from_secs(1))
             .await
             .expect("bootstrap endpoint should become readable");
-        writer.join().expect("bootstrap writer");
+        writer.await.expect("bootstrap writer");
         drop(endpoint);
     }
 

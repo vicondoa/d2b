@@ -7,6 +7,10 @@ load(
     "d2b_rust_doc_test",
 )
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-device:__pkg__", "//packages/d2bd:__pkg__"])
+
 
 exports_files(
     ["BUILD.bazel", "nix/default.nix", "nix/guest.nix", "nix/tests/default.nix"],
@@ -22,7 +26,6 @@ d2b_rust_library(
         "Cargo.toml",
         "//:tests/golden/runner-shape/swtpm-argv-minimal.txt",
     ],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -35,7 +38,6 @@ d2b_rust_library(
     srcs = d2b_provider_device_tpm_srcs,
     compile_data = ["Cargo.toml"],
     crate_name = "d2b_provider_device_tpm",
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -50,7 +52,6 @@ d2b_rust_test(
         "Cargo.toml",
         "//:tests/golden/runner-shape/swtpm-argv-minimal.txt",
     ],
-    visibility = ["//visibility:public"],
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -58,7 +59,6 @@ d2b_rust_test(
     name = "conformance",
     srcs = ["tests/conformance.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -72,7 +72,6 @@ d2b_rust_test(
         "tests/resource_controller.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",

@@ -7,6 +7,10 @@ load(
     "d2b_rust_doc_test",
 )
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2bd:__pkg__"])
+
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
@@ -18,7 +22,6 @@ d2b_rust_library(
     name = "d2b_provider_device",
     srcs = d2b_provider_device_srcs,
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-core-controller:d2b_core_controller",
@@ -38,7 +41,6 @@ d2b_rust_library(
     compile_data = ["Cargo.toml"],
     crate_features = ["test-support"],
     crate_name = "d2b_provider_device",
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
@@ -56,7 +58,6 @@ d2b_rust_test(
     name = "d2b_provider_device_unit_test",
     crate = ":d2b_provider_device",
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
@@ -68,7 +69,6 @@ d2b_rust_test(
     name = "device_family",
     srcs = ["tests/device_family.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-device-gpu:d2b_provider_device_gpu",
@@ -86,7 +86,6 @@ d2b_rust_test(
     name = "device_family_integration",
     srcs = ["integration/device_family.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
@@ -122,5 +121,4 @@ filegroup(
 test_suite(
     name = "all-tests",
     tags = ["-local", "-no-remote-exec"],
-    visibility = ["//visibility:public"],
 )

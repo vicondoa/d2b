@@ -59,10 +59,7 @@ impl DeviceWorkerScope {
     /// The per-Guest runtime socket directory the worker binds its socket in
     /// (`<runtime_root>/vms/<guest>`), validated to stay strictly inside the
     /// broker's own runtime root.
-    pub(crate) fn socket_directory(
-        &self,
-        runtime_root: &Path,
-    ) -> Result<PathBuf, &'static str> {
+    pub(crate) fn socket_directory(&self, runtime_root: &Path) -> Result<PathBuf, &'static str> {
         guest_socket_directory(runtime_root, &self.guest)
     }
 }
@@ -234,9 +231,9 @@ pub(crate) fn unique_tpm_state_dir(
     state_root: &Path,
 ) -> Option<PathBuf> {
     match devices {
-        [(_, device_uid)] => Some(
-            state_root.join(crate::ops::swtpm_dir::state_volume_name(device_uid)),
-        ),
+        [(_, device_uid)] => {
+            Some(state_root.join(crate::ops::swtpm_dir::state_volume_name(device_uid)))
+        }
         _ => None,
     }
 }
@@ -458,8 +455,22 @@ pub(crate) fn deterministic_resource_uid(
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let text = format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8],
-        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
     );
     ResourceUid::parse(text).expect("shaped row uids satisfy the UUIDv4 contract")
 }
@@ -496,7 +507,10 @@ mod tests {
             );
         }
         let mut metadata = serde_json::Map::new();
-        metadata.insert("name".to_owned(), serde_json::Value::String(name.to_owned()));
+        metadata.insert(
+            "name".to_owned(),
+            serde_json::Value::String(name.to_owned()),
+        );
         metadata.insert(
             "zone".to_owned(),
             serde_json::Value::String("work".to_owned()),
@@ -514,7 +528,6 @@ mod tests {
             "spec": serde_json::Value::Object(spec),
         })
     }
-
 
     /// The canonical content hash of one fixture resource array, computed the
     /// way `ResourceBundle` computes it (`d2b:v3:resource-bundle` over the

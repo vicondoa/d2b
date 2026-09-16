@@ -984,8 +984,8 @@ mod tests {
         ));
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn accept_socket_bind_creates_socket() {
+    #[test]
+    fn accept_socket_bind_creates_socket() {
         let dir = test_scratch_dir("accept-socket-bind");
         let socket_path = dir.join("vsock.sock_14320");
 

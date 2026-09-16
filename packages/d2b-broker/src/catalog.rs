@@ -24,7 +24,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_broker::broker_wire::BrokerRequest;
+use d2b_contracts_broker::broker_wire::{
+    BrokerRequest, DEFAULT_CONTEXT_DEADLINE_MS, FdKind, MAX_CONTEXT_DEADLINE_MS,
+};
 use d2b_contracts_resource::v3::{CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes};
 
 use crate::ops::audit_op::OperationFields;
@@ -97,6 +99,55 @@ pub struct BrokerAuthzFacets {
     pub audit_mode: &'static str,
 }
 
+/// The declared durability facet of one state cell.
+///
+/// The facet rides the committed row (U3/KTD3): a one-time cell persists its
+/// consumed records under the broker's state root and refuses re-consume of a
+/// completed record across a broker restart; an ephemeral cell keeps
+/// in-process reset-on-restart semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellDurability {
+    /// Completed records persist durably; re-consume refuses across restarts
+    /// and retention never evicts a consumed marker.
+    OneTime,
+    /// Records live in the broker process only and reset on restart.
+    Ephemeral,
+}
+
+/// The closed deadline-tier set of one committed operation row (KTD4).
+///
+/// The tier is the row's declared per-call budget: the broker mints the
+/// tier's concrete budget into the attested context block, and both
+/// execution legs serve the context's budget as the handler deadline -
+/// never a flat per-leg constant. The budgets are the shared carrier's own
+/// constants (see [`DeadlineTier::budget_ms`]), so a tier cannot drift
+/// from the contract the receiving leg enforces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeadlineTier {
+    /// The default per-call budget: the carrier's historical fixed handler
+    /// deadline, which every context-free leg also serves.
+    Standard,
+    /// The largest per-call budget the carrier admits: a row whose work
+    /// legitimately outruns the standard tier runs under the shared
+    /// absolute ceiling.
+    Extended,
+}
+
+impl DeadlineTier {
+    /// The concrete budget one tier admits, in milliseconds.
+    ///
+    /// The values are the shared carrier's own constants (`broker_wire`
+    /// remains the source: `DEFAULT_CONTEXT_DEADLINE_MS` and
+    /// `MAX_CONTEXT_DEADLINE_MS`), so the envelope and the receiving leg
+    /// cannot disagree about what a tier means.
+    pub const fn budget_ms(self) -> u64 {
+        match self {
+            Self::Standard => DEFAULT_CONTEXT_DEADLINE_MS,
+            Self::Extended => MAX_CONTEXT_DEADLINE_MS,
+        }
+    }
+}
+
 /// One committed broker operation row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrokerOperationRow {
@@ -141,6 +192,23 @@ pub struct BrokerOperationRow {
     /// The payload property names the operation's audit join is derived
     /// from, when the operation declares a durable per-invocation identity.
     pub audit_join: Option<&'static [&'static str]>,
+    /// The most descriptors one invocation of this operation may carry in
+    /// the forward frame. 0 when the operation declares no fd carriage.
+    pub max_fds: u8,
+    /// The kernel kind every descriptor this operation carries must present,
+    /// required when [`Self::max_fds`] is nonzero.
+    pub fd_kind: Option<FdKind>,
+    /// The declared state cell the operation's broker-owned state lives on,
+    /// when it has one (U3/KTD3).
+    pub state_cell: Option<&'static str>,
+    /// The cell's declared durability facet, present exactly when
+    /// [`Self::state_cell`] is.
+    pub cell_durability: Option<CellDurability>,
+    /// The row's declared deadline tier (KTD4): the concrete budget the
+    /// broker mints into the attested context block, which both execution
+    /// legs serve as the per-call handler deadline. Rows without a
+    /// declared tier sit on the standard tier.
+    pub deadline_tier: DeadlineTier,
 }
 
 include!("generated/broker_operation_catalog.rs");
@@ -243,20 +311,11 @@ macro_rules! wire_variants {
 
 wire_variants! {
         BrokerRequest::ApplyHostGenerationHandoff(..) => "ApplyHostGenerationHandoff",
-        BrokerRequest::ApplyNftables(..) => "ApplyNftables",
-        BrokerRequest::ApplyNftablesProjection(..) => "ApplyNftablesProjection",
-        BrokerRequest::ApplyNmUnmanaged(..) => "ApplyNmUnmanaged",
-        BrokerRequest::ApplyRoute(..) => "ApplyRoute",
-        BrokerRequest::ApplySysctl(..) => "ApplySysctl",
         BrokerRequest::CreateOrReconcileUsersGroups(..) => "CreateOrReconcileUsersGroups",
-        BrokerRequest::CreateBridge(..) => "CreateBridge",
-        BrokerRequest::DeleteBridge(..) => "DeleteBridge",
-        BrokerRequest::CreatePersistentTap(..) => "CreatePersistentTap",
-        BrokerRequest::DeletePersistentTap(..) => "DeletePersistentTap",
-        BrokerRequest::CreateTapFd(..) => "CreateTapFd",
         BrokerRequest::DelegateCgroupV2(..) => "DelegateCgroupV2",
         BrokerRequest::ExportBrokerAudit(..) => "ExportBrokerAudit",
         BrokerRequest::Hello(..) => "Hello",
+        BrokerRequest::PublishTrustedContext(..) => "PublishTrustedContext",
         BrokerRequest::InjectSecretById(..) => "InjectSecretById",
         BrokerRequest::LaunchMinijailChild(..) => "LaunchMinijailChild",
         BrokerRequest::ModprobeIfAllowed(..) => "ModprobeIfAllowed",
@@ -273,10 +332,6 @@ wire_variants! {
         BrokerRequest::QemuMediaQuit(..) => "QemuMediaQuit",
         BrokerRequest::QemuMediaAttach(..) => "QemuMediaAttach",
         BrokerRequest::QemuMediaDetach(..) => "QemuMediaDetach",
-        BrokerRequest::OpenPidfd(..) => "OpenPidfd",
-        BrokerRequest::ConsumeLifecycleLease(..) => "ConsumeLifecycleLease",
-        BrokerRequest::OpenPeerPidfdFromAcceptedSocket(..) => "OpenPeerPidfdFromAcceptedSocket",
-        BrokerRequest::ObserveRunner(..) => "ObserveRunner",
         BrokerRequest::PipeWireAudio(..) => "PipeWireAudio",
         BrokerRequest::StartSystemdUnit(..) => "StartSystemdUnit",
         BrokerRequest::CheckSystemdUserManager(..) => "CheckSystemdUserManager",
@@ -284,32 +339,23 @@ wire_variants! {
         BrokerRequest::OpenSystemdUnitPidfd(..) => "OpenSystemdUnitPidfd",
         BrokerRequest::StopSystemdUnit(..) => "StopSystemdUnit",
         BrokerRequest::OpenVhostNet(..) => "OpenVhostNet",
-        BrokerRequest::PollChildReaped => "PollChildReaped",
-        BrokerRequest::PrepareRuntimeDir(..) => "PrepareRuntimeDir",
-        BrokerRequest::PrepareStateDir(..) => "PrepareStateDir",
         BrokerRequest::ReconcileStorageScope(..) => "ReconcileStorageScope",
         BrokerRequest::ValidateLockSpec(..) => "ValidateLockSpec",
         BrokerRequest::StoreSync(..) => "StoreSync",
         BrokerRequest::ReadSecretById(..) => "ReadSecretById",
         BrokerRequest::RotateSecretById(..) => "RotateSecretById",
-        BrokerRequest::SetBridgePortFlags(..) => "SetBridgePortFlags",
-        BrokerRequest::CgroupKill(..) => "CgroupKill",
-        BrokerRequest::SignalRunner(..) => "SignalRunner",
-        BrokerRequest::DeregisterRunnerPidfd(..) => "DeregisterRunnerPidfd",
-        BrokerRequest::SpawnRunner(..) => "SpawnRunner",
-        BrokerRequest::UpdateHostsFile(..) => "UpdateHostsFile",
         BrokerRequest::UsbipBind(..) => "UsbipBind",
         BrokerRequest::UsbipBindFirewallRule(..) => "UsbipBindFirewallRule",
         BrokerRequest::UsbipProxyReconcile(..) => "UsbipProxyReconcile",
         BrokerRequest::UsbipUnbind(..) => "UsbipUnbind",
         BrokerRequest::UsbipExplicitBind(..) => "UsbipExplicitBind",
         BrokerRequest::UsbipExplicitFirewallRule(..) => "UsbipExplicitFirewallRule",
-        BrokerRequest::SeedDnsmasqLease(..) => "SeedDnsmasqLease",
         BrokerRequest::OwnershipMatrixCheck(..) => "OwnershipMatrixCheck",
         BrokerRequest::SshHostKeyPreflight(..) => "SshHostKeyPreflight",
         BrokerRequest::DiskInit(..) => "DiskInit",
         BrokerRequest::SecurityKeyOpenDevice(..) => "SecurityKeyOpenDevice",
         BrokerRequest::SecurityKeyApplyUdevRules(..) => "SecurityKeyApplyUdevRules",
+        BrokerRequest::EnvelopeInvoke(..) => "EnvelopeInvoke",
 }
 
 /// The committed row one wire variant names, when a row declares it.
@@ -365,7 +411,6 @@ audit_fields! {
         OperationFields::SetBridgePortFlags { .. } => "SetBridgePortFlags",
         OperationFields::SpawnRunner { .. } => "SpawnRunner",
         OperationFields::OpenPidfd { .. } => "OpenPidfd",
-        OperationFields::ConsumeLifecycleLease { .. } => "ConsumeLifecycleLease",
         OperationFields::OpenPeerPidfdFromAcceptedSocket { .. } => "OpenPeerPidfdFromAcceptedSocket",
         OperationFields::ObserveRunner { .. } => "ObserveRunner",
         OperationFields::PipeWireAudio { .. } => "PipeWireAudio",
@@ -392,6 +437,7 @@ audit_fields! {
         OperationFields::DeregisterRunnerPidfd { .. } => "DeregisterRunnerPidfd",
         OperationFields::ApplyHostGenerationHandoff { .. } => "ApplyHostGenerationHandoff",
         OperationFields::Hello { .. } => "Hello",
+        OperationFields::PublishTrustedContext { .. } => "PublishTrustedContext",
         OperationFields::ExportBrokerAudit { .. } => "ExportBrokerAudit",
         OperationFields::DiskInit { .. } => "DiskInit",
         OperationFields::ReconcileStorageScope { .. } => "ReconcileStorageScope",
@@ -452,10 +498,16 @@ fn sequence_matches<T, U>(
     let expected_set: std::collections::BTreeSet<&str> =
         expected.iter().map(AsRef::as_ref).collect();
     for name in expected_set.difference(&declared_set) {
-        mismatches.push(missing(view, format!("{name}: declared by the rows, absent")));
+        mismatches.push(missing(
+            view,
+            format!("{name}: declared by the rows, absent"),
+        ));
     }
     for name in declared_set.difference(&expected_set) {
-        mismatches.push(missing(view, format!("{name}: present, no row declares it")));
+        mismatches.push(missing(
+            view,
+            format!("{name}: present, no row declares it"),
+        ));
     }
     if declared_set == expected_set {
         mismatches.push(missing(
@@ -479,7 +531,10 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
     let mut wire_variants = std::collections::BTreeSet::new();
     for row in rows {
         if !operations.insert(row.operation) {
-            mismatches.push(missing("rows", format!("{}: declared twice", row.operation)));
+            mismatches.push(missing(
+                "rows",
+                format!("{}: declared twice", row.operation),
+            ));
         }
         if let Some(variant) = row.wire_variant {
             if !wire_variants.insert(variant) {
@@ -494,14 +549,20 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
             if !row.admits_profile(BrokerProfileId::Host) {
                 mismatches.push(missing(
                     "rows",
-                    format!("{}: a wire operation no fixed profile admits", row.operation),
+                    format!(
+                        "{}: a wire operation no fixed profile admits",
+                        row.operation
+                    ),
                 ));
             }
         }
         if row.owner == OperationOwner::Family && row.declaring_provider.is_none() {
             mismatches.push(missing(
                 "rows",
-                format!("{}: family-owned without a declaring provider", row.operation),
+                format!(
+                    "{}: family-owned without a declaring provider",
+                    row.operation
+                ),
             ));
         }
         if row.owner != OperationOwner::Family && row.family.is_some() {
@@ -522,7 +583,10 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
         if row.owner == OperationOwner::Family && row.justification.is_some() {
             mismatches.push(missing(
                 "rows",
-                format!("{}: family-owned but records a justification", row.operation),
+                format!(
+                    "{}: family-owned but records a justification",
+                    row.operation
+                ),
             ));
         }
         if row.disposition == "stubbed-unimplemented" && row.stub_target.is_none() {
@@ -537,7 +601,10 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
         if row.authz.allowed_groups.is_empty() {
             mismatches.push(missing(
                 "authz",
-                format!("{}: no allowed group, so every caller is denied", row.operation),
+                format!(
+                    "{}: no allowed group, so every caller is denied",
+                    row.operation
+                ),
             ));
         }
         for field in row.audit_fields {
@@ -651,10 +718,7 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
         ));
     }
     for field in &views.audit {
-        if !rows
-            .iter()
-            .any(|row| row.audit_fields.contains(field))
-        {
+        if !rows.iter().any(|row| row.audit_fields.contains(field)) {
             mismatches.push(missing(
                 "audit",
                 format!("{field}: an audit field no committed row uses"),
@@ -669,9 +733,7 @@ mod tests {
     use super::*;
     use d2b_contracts::privileges_w3::W3BrokerOperation;
     use d2b_contracts_broker::BrokerCapabilities;
-    use d2b_contracts_broker::broker_wire::{
-        GUEST_OPERATION_CATALOG, HOST_OPERATION_CATALOG,
-    };
+    use d2b_contracts_broker::broker_wire::{GUEST_OPERATION_CATALOG, HOST_OPERATION_CATALOG};
 
     /// Every view as the running binary carries it.
     fn live_views() -> CatalogViews {
@@ -699,7 +761,11 @@ mod tests {
     #[test]
     fn committed_rows_cover_every_view() {
         let mismatches = audit(BROKER_OPERATION_CATALOG, &live_views());
-        assert_eq!(mismatches, Vec::new(), "catalog views drifted from the rows");
+        assert_eq!(
+            mismatches,
+            Vec::new(),
+            "catalog views drifted from the rows"
+        );
     }
 
     #[test]
@@ -829,9 +895,17 @@ mod tests {
 
     #[test]
     fn wire_row_resolves_every_variant_it_names() {
+        // U10 retired the process-family wire variants (their rows keep the
+        // names as envelope-request operations without a wire variant), so
+        // the resolver pair is pinned on a current wire operation.
         let (request, name) = (
-            d2b_contracts_broker::broker_wire::BrokerRequest::PollChildReaped,
-            "PollChildReaped",
+            d2b_contracts_broker::broker_wire::BrokerRequest::Hello(
+                d2b_contracts_broker::broker_wire::HelloRequest {
+                    client_version: "0.0.0-test".to_owned(),
+                    supported_features: Vec::new(),
+                },
+            ),
+            "Hello",
         );
         assert_eq!(wire_variant_name(&request), name);
         assert_eq!(wire_row(&request).map(|row| row.operation), Some(name));
@@ -846,11 +920,9 @@ mod tests {
         views.wire.push("NoSuchVariant");
         let mismatches = audit(BROKER_OPERATION_CATALOG, &views);
         assert!(
-            mismatches
-                .iter()
-                .any(|mismatch| mismatch.view == "wire"
-                    && mismatch.detail.contains("NoSuchVariant")
-                    && mismatch.detail.contains("no committed row")),
+            mismatches.iter().any(|mismatch| mismatch.view == "wire"
+                && mismatch.detail.contains("NoSuchVariant")
+                && mismatch.detail.contains("no committed row")),
             "a wire variant with no committed row must fail: {mismatches:?}"
         );
 
@@ -861,11 +933,9 @@ mod tests {
             .collect();
         let mismatches = audit(&rows, &live_views());
         assert!(
-            mismatches
-                .iter()
-                .any(|mismatch| mismatch.view == "wire"
-                    && mismatch.detail.contains("Hello")
-                    && mismatch.detail.contains("no committed row")),
+            mismatches.iter().any(|mismatch| mismatch.view == "wire"
+                && mismatch.detail.contains("Hello")
+                && mismatch.detail.contains("no committed row")),
             "a wire variant with no committed row must fail: {mismatches:?}"
         );
     }
@@ -905,7 +975,9 @@ mod tests {
         assert!(
             mismatches.iter().any(|mismatch| mismatch.view == "wire"
                 && mismatch.detail.contains("NoSuchVariant")
-                && mismatch.detail.contains("the wire enum does not declare it")),
+                && mismatch
+                    .detail
+                    .contains("the wire enum does not declare it")),
             "a row inheriting an undeclared variant must fail: {mismatches:?}"
         );
     }

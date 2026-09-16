@@ -161,7 +161,9 @@ pub fn validate_lock_spec(
     _resolver: &BundleResolver,
     lock_ref: &BundleOpId,
 ) -> Result<ValidateLockSpecResponse, StorageContractError> {
-    Err(StorageContractError::UnknownLock(lock_ref.as_str().to_owned()))
+    Err(StorageContractError::UnknownLock(
+        lock_ref.as_str().to_owned(),
+    ))
 }
 
 fn has_unexpanded_template(path: &str) -> bool {
@@ -338,7 +340,6 @@ pub(crate) fn row_posture(spec: &StoragePathSpec) -> Option<(u32, u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use d2b_contracts::types::BundleOpId;
     use d2b_core::bundle::Bundle;
     use d2b_core::bundle_resolver::BundleResolver;
@@ -352,6 +353,7 @@ mod tests {
         StorageAdoptionPolicy, StorageInvariant, StorageJson, StorageLifecycle, StoragePathSpec,
         StoragePersistence, StorageRestartPolicy,
     };
+    use std::collections::BTreeMap;
 
     #[test]
     fn template_paths_are_check_only_unless_expanded() {
@@ -465,11 +467,7 @@ mod tests {
                 .keys()
                 .cloned()
                 .collect::<Vec<_>>(),
-            vec![
-                "apply".to_owned(),
-                "storageRef".to_owned(),
-                "tracingSpanId".to_owned(),
-            ]
+            vec!["apply".to_owned(), "storageRef".to_owned()]
         );
 
         let lock =
@@ -484,7 +482,7 @@ mod tests {
                 .keys()
                 .cloned()
                 .collect::<Vec<_>>(),
-            vec!["lockRef".to_owned(), "tracingSpanId".to_owned()]
+            vec!["lockRef".to_owned()]
         );
         for value in [&storage, &lock] {
             for forbidden in [
@@ -547,11 +545,7 @@ mod tests {
         ScratchDir(dir)
     }
 
-    fn resolver_with_storage_path(
-        id: &str,
-        path: &str,
-        kind: StoragePathKind,
-    ) -> BundleResolver {
+    fn resolver_with_storage_path(id: &str, path: &str, kind: StoragePathKind) -> BundleResolver {
         let storage_contract = storage(id, path, kind);
         let bundle = Bundle {
             bundle_version: 6,

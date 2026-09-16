@@ -273,14 +273,6 @@ pub enum OperationFields {
         pid: i32,
         expected_start_time_ticks: u64,
     },
-    ConsumeLifecycleLease {
-        operation_id: String,
-        operation: String,
-        policy_revision: u64,
-        guest_generation: u64,
-        provider_assignment_generation: u64,
-        stop_only: bool,
-    },
     /// Accepted-socket peer pidfd handoff has no caller-controlled fields.
     OpenPeerPidfdFromAcceptedSocket {},
     ObserveRunner {
@@ -432,6 +424,15 @@ pub enum OperationFields {
     },
     Hello {
         client_version: String,
+    },
+    /// Trusted-context publication audit fields. Records the Zone and the
+    /// published generational values; the broker-epoch ack is the response,
+    /// never a caller-supplied field.
+    PublishTrustedContext {
+        zone: String,
+        provider_set_revision: u64,
+        controller_generation: u64,
+        guest_generation: u64,
     },
     ExportBrokerAudit {
         since: Option<String>,
@@ -737,6 +738,12 @@ impl OperationFields {
             }),
             "Hello" => parse_fields!(value => Hello {
                 client_version: String,
+            }),
+            "PublishTrustedContext" => parse_fields!(value => PublishTrustedContext {
+                zone: String,
+                provider_set_revision: u64,
+                controller_generation: u64,
+                guest_generation: u64,
             }),
             "ExportBrokerAudit" => parse_fields!(value => ExportBrokerAudit {
                 since: Option<String>,

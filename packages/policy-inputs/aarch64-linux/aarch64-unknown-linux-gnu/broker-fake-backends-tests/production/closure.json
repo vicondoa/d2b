@@ -12,7 +12,7 @@
   ],
   "default_features": false,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "ef8f59f1c9134fba10b00758c0cf3e19b4374b46af4f27f5dc79793c8b6c8117",
+  "lock_sha256": "ca357ab4e7c122062e3782edcc957997bc590ff1a9ade37765df8ad983ab289c",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -799,6 +799,14 @@
       "target": "aarch64-unknown-linux-gnu"
     },
     {
+      "id": "socket2@0.5.10#registry+https://github.com/rust-lang/crates.io-index",
+      "name": "socket2",
+      "version": "0.5.10",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678",
+      "target": "aarch64-unknown-linux-gnu"
+    },
+    {
       "id": "socket2@0.6.5#registry+https://github.com/rust-lang/crates.io-index",
       "name": "socket2",
       "version": "0.6.5",
@@ -1558,6 +1566,12 @@
     },
     {
       "from": "d2b-contracts-broker@0.0.0-bootstrap#path",
+      "to": "rustix@0.38.44#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-contracts-broker@0.0.0-bootstrap#path",
       "to": "schemars@0.8.22#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -1577,6 +1591,12 @@
     {
       "from": "d2b-contracts-broker@0.0.0-bootstrap#path",
       "to": "sha2@0.10.9#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-contracts-broker@0.0.0-bootstrap#path",
+      "to": "socket2@0.5.10#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -2491,6 +2511,12 @@
       "to": "libc@0.2.189#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
+    },
+    {
+      "from": "socket2@0.5.10#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "libc@0.2.189#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": "cfg(unix)"
     },
     {
       "from": "socket2@0.6.5#registry+https://github.com/rust-lang/crates.io-index",

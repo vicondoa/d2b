@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::fd::{OwnedFd, RawFd};
+use std::os::fd::OwnedFd;
 #[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -30,17 +30,19 @@ use d2b_contracts::{
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, VmId},
 };
 use d2b_contracts_broker::broker_wire::{
-    ApplyNftablesRequest as BrokerApplyNftablesRequest,
-    ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest, BrokerCallerRole,
+    BrokerCallerRole,
     BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
-    DeregisterRunnerPidfdRequest, ExportBrokerAuditRequest,
-    OpenPidfdRequest as BrokerOpenPidfdRequest,
+    ChildExitKind, ChildExitStatus, ChildReapedNotification,
+    ExportBrokerAuditRequest,
     QemuMediaBootRequest as BrokerQemuMediaBootRequest,
     QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
     QemuMediaRefreshRegistryRequest as BrokerQemuMediaRefreshRegistryRequest,
     RunnerRole, RunnerSignal,
-    SignalRunnerRequest,
 };
+use d2b_contracts_broker::kernel_client::{
+    KernelInvocation, KernelInvokeError, envelope_invoke_kernel,
+};
+use d2b_resource_types::{KernelCaller, RunnerLookup};
 use d2b_contracts_control::public_wire::{
     self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability,
 };
@@ -130,9 +132,8 @@ use d2bd_runtime::supervisor::pidfd_table::{
 #[cfg(test)]
 use d2bd_runtime::unix_transport::write_frame;
 pub(crate) use d2bd_runtime::unix_transport::{
-    close_received_fds, connect_seqpacket, connect_seqpacket_with_timeout,
-    drain_rejected_peer_input, read_frame, read_frame_with_fds, set_frame_read_deadline,
-    write_json_frame, write_json_frame_deadlined, write_json_frame_with_fds,
+    connect_seqpacket, connect_seqpacket_with_timeout, drain_rejected_peer_input, read_frame,
+    set_frame_read_deadline, write_json_frame, write_json_frame_deadlined,
 };
 #[cfg(test)]
 use d2bd_runtime::wire_response_helpers::response_remediation;
@@ -182,7 +183,7 @@ pub use d2bd_runtime::runtime_process::{
     write_daemon_version_file,
 };
 use d2bd_runtime::runtime_util::{
-    block_on_future, duplicate_received_fd, hex_bytes, projection_digest_bytes,
+    block_on_future, hex_bytes, projection_digest_bytes,
 };
 #[cfg(test)]
 use d2bd_runtime::shell_backend::shell_poll_timeout;
@@ -3582,6 +3583,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                             BrokerCallerRole::AdminUid {
                                 uid: state.daemon_uid,
                             },
+                            state.pidfd_table.clone(),
                         ));
                     let process_providers_ready = state
                         .provider_runtime
@@ -3822,7 +3824,17 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             // Fail closed for doctor/status consumers if the replacement
             // report cannot be written below: stale clean evidence is worse
             // than an absent report.
-            match std::fs::remove_file(&report_path) {
+            // KTD9: the removal is a blocking fs call; never run it on a
+            // runtime worker.
+            let removed = tokio::task::spawn_blocking({
+                let report_path = report_path.clone();
+                move || std::fs::remove_file(&report_path)
+            })
+            .await
+            .unwrap_or_else(|join| {
+                Err(std::io::Error::other(join.to_string()))
+            });
+            match removed {
                 Ok(()) => {}
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => {
@@ -4335,7 +4347,17 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     if options.validate_only {
         return Ok(());
     }
-    fs::create_dir_all(&options.state_dir).map_err(|_| TypedError::InternalConfig {
+    // KTD9: the mkdir is a blocking fs call; never run it on a runtime
+    // worker.
+    tokio::task::spawn_blocking({
+        let state_dir = options.state_dir.clone();
+        move || fs::create_dir_all(&state_dir)
+    })
+    .await
+    .map_err(|join| TypedError::InternalConfig {
+        detail: format!("guest state root unavailable: {join}"),
+    })?
+    .map_err(|_| TypedError::InternalConfig {
         detail: "guest state root unavailable".to_owned(),
     })?;
     let runtime = d2bd_runtime::guest_mode::GuestRuntime::new(
@@ -4750,63 +4772,52 @@ impl d2bd_runtime::supervisor::state::PidfdOpener for BrokerPidfdOpener<'_> {
     fn open_pidfd(
         &self,
         vm: &str,
-        role_id: &str,
+        _role_id: &str,
         pid: i32,
         expected_start_time_ticks: u64,
     ) -> Result<OwnedFd, String> {
-        match dispatch_broker_request_with_fds_timeout(
-            self.state,
-            BrokerRequest::OpenPidfd(BrokerOpenPidfdRequest {
-                vm_id: VmId::new(vm),
-                role_id: RoleId::new(role_id),
-                bundle_runner_intent_ref: None,
-                pid,
-                expected_start_time_ticks,
-                resource_ref: None,
-                resource_uid: None,
-                zone_uid: None,
-                owner_ref: None,
-                provider_ref: None,
-                provider_identity: None,
-                template_identity: None,
-                generation: None,
-                runtime_scope: None,
-                guest_execution: None,
-                tracing_span_id: None,
-            }),
-            Duration::from_secs(10),
+        // The U10 kernel leg: the open-pidfd kernel performs the same
+        // `pidfd_open` plus start-time verification the retired typed arm's
+        // live handler ran, and returns the pidfd over the fd leg.
+        let zone = match kernel_zone_for_vm(self.state, vm) {
+            Ok(zone) => zone,
+            Err(error) => return Err(format!("broker-dispatch:{error}")),
+        };
+        match envelope_invoke_kernel(
+            &broker_socket_path(self.state),
+            KERNEL_IO_TIMEOUT,
+            BrokerCallerRole::AdminUid {
+                uid: self.state.daemon_uid,
+            },
+            KernelInvocation {
+                operation: "open-pidfd",
+                zone: &zone,
+                payload: serde_json::json!({
+                    "pid": pid,
+                    "expectedStartTimeTicks": expected_start_time_ticks,
+                }),
+                fds: &[],
+                chain_root_invocation_id: None,
+                chain_identities: None,
+            },
         ) {
-            Ok((BrokerResponse::OpenPidfd(response), received_fds)) => {
-                let pidfd = duplicate_received_fd(
-                    &received_fds,
-                    response.pidfd_index,
-                    "duplicate OpenPidfd pidfd",
-                )
-                .map_err(|error| error.message());
-                close_received_fds(&received_fds);
-                match pidfd {
-                    Ok(pidfd) => {
-                        if response.vm_id.as_str() != vm
-                            || response.role_id.as_str() != role_id
-                            || response.verified_start_time_ticks != expected_start_time_ticks
-                        {
-                            Err("broker-response-mismatch".to_owned())
-                        } else {
-                            Ok(pidfd)
-                        }
-                    }
-                    Err(error) => Err(error),
+            Ok(reply) => {
+                let verified = reply
+                    .response
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.get("verifiedStartTimeTicks"))
+                    .and_then(serde_json::Value::as_i64)
+                    .map(|value| value as u64);
+                let mut fds = reply.fds;
+                let pidfd = fds.remove(0);
+                if verified != Some(expected_start_time_ticks) {
+                    Err("broker-response-mismatch".to_owned())
+                } else {
+                    Ok(pidfd)
                 }
             }
-            Ok((BrokerResponse::Error(error), received_fds)) => {
-                close_received_fds(&received_fds);
-                Err(format!("broker-error:{}", error.kind))
-            }
-            Ok((other, received_fds)) => {
-                close_received_fds(&received_fds);
-                Err(format!("broker-protocol:{}", broker_response_kind(&other)))
-            }
-            Err(error) => Err(format!("broker-dispatch:{}", error.message())),
+            Err(error) => Err(format!("broker-dispatch:{error}")),
         }
     }
 }
@@ -9993,12 +10004,48 @@ fn mutating_verb_preflight(
     None
 }
 
-fn broker_socket_path(state: &ServerState) -> PathBuf {
+pub(crate) fn broker_socket_path(state: &ServerState) -> PathBuf {
     if state.config.broker_socket_path.as_os_str().is_empty() {
         PathBuf::from(BROKER_SOCKET_PATH)
     } else {
         state.config.broker_socket_path.clone()
     }
+}
+
+/// The broker kernel IO budget one legacy kernel invocation may take.
+pub(crate) const KERNEL_IO_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The daemon-side runner lookup the U10 family seam wires: `(vm, role)` to
+/// the retained `(pid, start_time_ticks)` of the daemon's pidfd table.
+///
+/// The family observation/control handlers validate against this table, the
+/// daemon's authoritative runner source, instead of re-deriving presence
+/// from `/proc`.
+#[derive(Debug)]
+struct PidfdRunnerLookup {
+    table: Arc<PidfdTable>,
+}
+
+impl RunnerLookup for PidfdRunnerLookup {
+    fn lookup(&self, vm: &str, role: &str) -> Option<(i32, u64)> {
+        self.table
+            .list_for_vm(vm)
+            .into_iter()
+            .find(|entry| entry.role == role)
+            .map(|entry| (entry.pid, entry.start_time_ticks))
+    }
+}
+
+/// The Zone label one legacy daemon kernel call runs under: the zone the
+/// daemon's zone coordinator bound the VM to (the same plane zones the
+/// composition point published to the rendezvous).
+fn kernel_zone_for_vm(state: &ServerState, vm: &str) -> Result<String, String> {
+    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    )
+    .map_err(|error| format!("zone lookup for {vm} failed: {error}"))?;
+    Ok(zone.as_str().to_owned())
 }
 
 /// Canonical broker-owned group for per-Guest runtime state.
@@ -13603,19 +13650,6 @@ fn emit_detached_create_audit(state: &ServerState, peer_uid: u32, vm: &str, exec
     }
 }
 
-fn dispatch_broker_request(
-    state: &ServerState,
-    request: BrokerRequest,
-) -> Result<BrokerResponse, TypedError> {
-    dispatch_broker_request_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-    )
-}
-
 fn dispatch_broker_request_as(
     state: &ServerState,
     request: BrokerRequest,
@@ -13642,21 +13676,6 @@ fn dispatch_broker_request_as(
     Ok(decoded)
 }
 
-fn dispatch_broker_request_with_timeout(
-    state: &ServerState,
-    request: BrokerRequest,
-    timeout: Duration,
-) -> Result<BrokerResponse, TypedError> {
-    dispatch_broker_request_with_timeout_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-        timeout,
-    )
-}
-
 fn dispatch_broker_request_with_timeout_as(
     state: &ServerState,
     request: BrokerRequest,
@@ -13668,27 +13687,99 @@ fn dispatch_broker_request_with_timeout_as(
 }
 
 fn poll_broker_child_reaped(state: &ServerState) -> Result<usize, TypedError> {
-    let response = dispatch_broker_request(state, BrokerRequest::PollChildReaped)?;
-    match response {
-        BrokerResponse::PollChildReaped(response) => {
-            let count = response.notifications.len();
-            for notification in response.notifications {
-                state.broker_reap_log.insert(notification);
-            }
-            Ok(count)
+    // The U10 per-entry leg: the retired typed drain answered from the
+    // broker's reap buffer; the poll-child-reaped kernel probes one pidfd
+    // per call, so the daemon walks its own pidfd table and probes each
+    // tracked runner. A reaped entry is recorded into the daemon's reap log
+    // under the `vm:role` runner id, exactly as the broker's notifications
+    // were keyed.
+    let mut reaped = 0_usize;
+    let Some(providers) = state.provider_runtime.process_providers() else {
+        return Ok(0);
+    };
+    for vm in providers.vm_ids() {
+        let registrations = state.pidfd_table.list_for_vm(&vm);
+        if registrations.is_empty() {
+            continue;
         }
-        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
-            path: broker_socket_path(state),
-            detail: format!(
-                "PollChildReaped rejected by broker: {} ({})",
-                error.message, error.kind
-            ),
-        }),
-        other => Err(TypedError::InternalBrokerUnavailable {
-            path: broker_socket_path(state),
-            detail: format!("PollChildReaped returned unexpected response: {other:?}"),
-        }),
+        let zone = match kernel_zone_for_vm(state, &vm) {
+            Ok(zone) => zone,
+            Err(error) => {
+                tracing::warn!(vm = %vm, error = %error, "broker child reap probe skipped: no kernel zone");
+                continue;
+            }
+        };
+        for registration in registrations {
+            let Some((pidfd, _, _)) = state.pidfd_table.dup_pidfd_for(&vm, &registration.role)
+            else {
+                continue;
+            };
+            let outcome = envelope_invoke_kernel(
+                &broker_socket_path(state),
+                KERNEL_IO_TIMEOUT,
+                BrokerCallerRole::AdminUid {
+                    uid: state.daemon_uid,
+                },
+                KernelInvocation {
+                    operation: "poll-child-reaped",
+                    zone: &zone,
+                    payload: serde_json::json!({}),
+                    fds: std::slice::from_ref(&pidfd),
+                    chain_root_invocation_id: None,
+                    chain_identities: None,
+                },
+            );
+            match outcome {
+                Ok(reply) => {
+                    if let Some(result) = reply.response.result.as_ref()
+                        && result
+                            .get("reaped")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false)
+                    {
+                        let exit_kind = match result
+                            .get("exitKind")
+                            .and_then(serde_json::Value::as_str)
+                        {
+                            Some("exited") => ChildExitKind::Exited,
+                            Some("killed") => ChildExitKind::Killed,
+                            _ => ChildExitKind::Signaled,
+                        };
+                        let notification = ChildReapedNotification {
+                            runner_id: format!("{}:{}", vm, registration.role),
+                            pid: registration.pid,
+                            exit_status: ChildExitStatus {
+                                kind: exit_kind,
+                                code: result
+                                    .get("exitCode")
+                                    .and_then(serde_json::Value::as_i64)
+                                    .map(|code| code as i32),
+                                signal: result
+                                    .get("exitSignal")
+                                    .and_then(serde_json::Value::as_i64)
+                                    .map(|signal| signal as i32),
+                            },
+                            reaped_at_ms: result
+                                .get("reapedAtMs")
+                                .and_then(serde_json::Value::as_i64)
+                                .unwrap_or_default(),
+                        };
+                        state.broker_reap_log.insert(notification);
+                        reaped += 1;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        vm = %vm,
+                        role = %registration.role,
+                        error = %error,
+                        "broker child reap probe failed"
+                    );
+                }
+            }
+        }
     }
+    Ok(reaped)
 }
 
 fn refresh_broker_reap_log(state: &ServerState, context: &str) {
@@ -13699,133 +13790,79 @@ fn refresh_broker_reap_log(state: &ServerState, context: &str) {
     }
 }
 
-fn dispatch_broker_request_with_fds_timeout(
-    state: &ServerState,
-    request: BrokerRequest,
-    timeout: Duration,
-) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
-    dispatch_broker_request_with_fds_timeout_as(
-        state,
-        request,
-        BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
-        timeout,
-    )
-}
-
-fn dispatch_broker_request_with_fds_timeout_as(
-    state: &ServerState,
-    request: BrokerRequest,
-    caller_role: BrokerCallerRole,
-    timeout: Duration,
-) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
-    dispatch_broker_request_with_optional_request_fds(state, request, caller_role, &[], timeout)
-}
-
-fn dispatch_broker_request_with_optional_request_fds(
-    state: &ServerState,
-    request: BrokerRequest,
-    caller_role: BrokerCallerRole,
-    request_fds: &[RawFd],
-    timeout: Duration,
-) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
-    let socket_path = broker_socket_path(state);
-    let audit_join = default_audit_join_context(&request);
-    let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
-    socket
-        .set_read_timeout(Some(timeout))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker read timeout to {timeout:?}"),
-            detail: err.to_string(),
-        })?;
-    socket
-        .set_write_timeout(Some(timeout))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker write timeout to {timeout:?}"),
-            detail: err.to_string(),
-        })?;
-    write_json_frame_with_fds(
-        &socket,
-        &BrokerRequestEnvelope {
-            request,
-            caller_role,
-            test_peer_uid: None,
-            audit_join: audit_join.clone(),
-        },
-        request_fds,
-    )?;
-    let (response, received_fds) = read_frame_with_fds(&socket)?;
-    let decoded = serde_json::from_slice(&response).map_err(|err| {
-        close_received_fds(&received_fds);
-        TypedError::InternalBrokerUnavailable {
-            path: socket_path,
-            detail: err.to_string(),
-        }
-    })?;
-    Ok((decoded, received_fds))
-}
-
-fn dispatch_broker_ack_request_as(
+/// Dispatch one broker-generic kernel invocation as a host-prep / host-wide
+/// leg (U12): the retired typed network-family arms now run as direct
+/// envelope kernel calls, so this helper maps the envelope refusal/error
+/// into the same launcher-side redaction vocabulary the typed dispatcher
+/// used.
+fn dispatch_broker_kernel_ack(
     state: &ServerState,
     verb: &str,
     op_name: &str,
-    request: BrokerRequest,
+    operation: &str,
+    zone: &str,
+    payload: serde_json::Value,
     caller_role: BrokerCallerRole,
 ) -> Result<(), Value> {
-    match dispatch_broker_request_as(state, request, caller_role) {
-        Ok(BrokerResponse::Ack(ack)) if ack.accepted && ack.operation == op_name => Ok(()),
-        Ok(BrokerResponse::Ack(ack)) => {
+    match envelope_invoke_kernel(
+        &broker_socket_path(state),
+        KERNEL_IO_TIMEOUT,
+        caller_role,
+        KernelInvocation {
+            operation,
+            zone,
+            payload,
+            fds: &[],
+            chain_root_invocation_id: None,
+            chain_identities: None,
+        },
+    ) {
+        Ok(_) => Ok(()),
+        Err(KernelInvokeError::Refused { code, detail }) => {
             tracing::warn!(
-                op_name = op_name,
-                broker_ack_operation = %ack.operation,
-                broker_ack_accepted = ack.accepted,
-                "broker returned unexpected ack payload"
+                broker_kind = %code,
+                broker_operation = operation,
+                broker_message = detail.as_deref().unwrap_or(""),
+                "broker kernel op failed"
             );
             let (summary, remediation) =
-                redact_broker_error_for_launcher(op_name, None, "Broker.Protocol");
-            Err(broker_failure_response(verb, summary, remediation, None))
-        }
-        Ok(BrokerResponse::Error(error)) => {
-            tracing::warn!(
-                broker_kind = %error.kind,
-                broker_operation = %error.operation,
-                broker_target_wave = error.target_wave.as_deref().unwrap_or("none"),
-                broker_message = %error.message,
-                broker_action = %error.action,
-                "broker live op failed"
-            );
-            let (summary, remediation) = redact_broker_error_for_launcher(
-                op_name,
-                error.target_wave.as_deref(),
-                &error.kind,
-            );
-            Err(broker_failure_response(
-                verb,
-                summary,
-                remediation,
-                error.target_wave,
-            ))
-        }
-        Ok(other) => {
-            tracing::warn!(
-                op_name = op_name,
-                broker_response_kind = %broker_response_kind(&other),
-                "broker returned unexpected response kind"
-            );
-            let (summary, remediation) =
-                redact_broker_error_for_launcher(op_name, None, "Broker.Protocol");
+                redact_broker_error_for_launcher(op_name, None, &code);
             Err(broker_failure_response(verb, summary, remediation, None))
         }
         Err(error) => {
-            tracing::warn!(op_name = op_name, error = ?error, "broker dispatch failed");
+            tracing::warn!(op_name = op_name, error = %error, "broker kernel dispatch failed");
             let (summary, remediation) = redact_broker_dispatch_failure_for_launcher(op_name);
             Err(broker_failure_response(verb, summary, remediation, None))
         }
     }
 }
 
-fn load_bundle_resolver(state: &ServerState) -> Result<BundleResolver, TypedError> {
+/// The resolved host-wide nft intent payload one apply-nftables kernel
+/// invocation carries (the host firewall slice of `host prepare` /
+/// `host destroy` / `host reconcile` and the host-prep DAG).
+fn host_nft_kernel_payload(
+    resolver: &BundleResolver,
+    intent_ref: &str,
+    destroy: bool,
+) -> Result<serde_json::Value, String> {
+    let intent = resolver
+        .find_nft_intent(intent_ref)
+        .ok_or_else(|| "host nft intent missing".to_owned())?;
+    Ok(serde_json::json!({
+        "family": resolver.host.nftables.family,
+        "table": resolver.host.nftables.table,
+        "scriptBody": intent.script_body,
+        "ownershipId": intent.ownership_id,
+        "destroy": destroy,
+        "desiredHash": serde_json::Value::Null,
+        "tableHashAfterApply": resolver.host.nftables.table_hash_after_apply,
+        "coexistencePolicy": serde_json::to_value(&resolver.host.firewall_coexistence_policy).ok(),
+    }))
+}
+
+
+
+pub(crate) fn load_bundle_resolver(state: &ServerState) -> Result<BundleResolver, TypedError> {
     #[cfg(test)]
     let loaded = BundleResolver::load_with_policy(
         &state.config.artifacts.bundle_path,
@@ -13845,7 +13882,9 @@ fn load_bundle_resolver(state: &ServerState) -> Result<BundleResolver, TypedErro
 /// bounded loader worker; a saturated queue or a dead worker surfaces as the
 /// loader's named refusal through the same
 /// [`bundle_resolver_load_error`] mapping.
-async fn load_bundle_resolver_on_worker(state: &ServerState) -> Result<BundleResolver, TypedError> {
+pub(crate) async fn load_bundle_resolver_on_worker(
+    state: &ServerState,
+) -> Result<BundleResolver, TypedError> {
     #[cfg(test)]
     let loaded = BundleResolver::load_with_policy_on_loader_worker(
         &state.config.artifacts.bundle_path,
@@ -14357,6 +14396,25 @@ async fn open_resource_plane(
         };
         let plane_v3 = std::sync::Arc::new(plane_v3);
         rendezvous.publish(_zone.as_str(), plane_v3.provider_runtime());
+        // The U10 family seam: the broker kernel socket, the daemon's caller
+        // role, the Zone's trusted bundle, and the daemon-side runner lookup
+        // the family handlers invoke kernels through and validate against.
+        // Wired once per Zone alongside the provider publication; a Zone
+        // whose seam was never wired serves forwarded family operations
+        // without a kernel leg (they refuse when their handler needs one).
+        rendezvous.set_kernel_seam(
+            _zone.as_str(),
+            KernelCaller {
+                socket_path: broker_socket_path(state),
+                caller_role: BrokerCallerRole::AdminUid {
+                    uid: state.daemon_uid,
+                },
+                bundle: Arc::new(resolver.clone()),
+                runner_lookup: Some(Arc::new(PidfdRunnerLookup {
+                    table: Arc::clone(&state.pidfd_table),
+                })),
+            },
+        );
         v3_planes.insert(_zone.as_str().to_owned(), plane_v3);
     }
     // U14: publish the complete table before any Zone activates; the
@@ -16247,66 +16305,67 @@ fn signal_via_broker(
     role_id: &str,
     signal: RunnerSignal,
 ) -> Result<(), Value> {
-    let registration = state
-        .pidfd_table
-        .list_for_vm(vm)
-        .into_iter()
-        .find(|entry| entry.role == role_id);
-    let request = BrokerRequest::SignalRunner(SignalRunnerRequest {
-        vm_id: VmId::new(vm),
-        role_id: RoleId::new(role_id),
-        signal,
-        pid: registration.as_ref().map(|entry| entry.pid),
-        expected_start_time_ticks: registration.as_ref().map(|entry| entry.start_time_ticks),
-        resource_ref: None,
-        resource_uid: None,
-        zone_uid: None,
-        owner_ref: None,
-        provider_ref: None,
-        provider_identity: None,
-        template_identity: None,
-        generation: None,
-        runtime_scope: None,
-        guest_execution: None,
-        tracing_span_id: None,
-    });
-    match dispatch_broker_request_as(state, request, caller_role) {
-        Ok(BrokerResponse::SignalRunner(resp))
-            if resp.vm_id.as_str() == vm && resp.role_id.as_str() == role_id && resp.signaled =>
-        {
-            Ok(())
+    // The U10 kernel leg: the signal-pidfd kernel signals through the
+    // attached pidfd, so the daemon duplicates the tracked runner's pidfd
+    // from its own table and attaches it as the call's fd 0.
+    let Some((pidfd, _, _)) = state.pidfd_table.dup_pidfd_for(vm, role_id) else {
+        return Err(broker_fallback_failure(
+            vm,
+            role_id,
+            signal,
+            "no tracked pidfd to signal",
+        ));
+    };
+    let zone = match kernel_zone_for_vm(state, vm) {
+        Ok(zone) => zone,
+        Err(error) => {
+            return Err(broker_fallback_failure(vm, role_id, signal, error));
         }
-        Ok(BrokerResponse::SignalRunner(resp)) => Err(broker_fallback_failure(
+    };
+    // The POSIX signal numbers the kernel's `signal-pidfd` payload names
+    // (SIGTERM/SIGKILL/SIGQUIT, the same mapping the retired arm used).
+    let signal_number = match signal {
+        RunnerSignal::Term => 15,
+        RunnerSignal::Kill => 9,
+        RunnerSignal::Quit => 3,
+    };
+    match envelope_invoke_kernel(
+        &broker_socket_path(state),
+        KERNEL_IO_TIMEOUT,
+        caller_role,
+        KernelInvocation {
+            operation: "signal-pidfd",
+            zone: &zone,
+            payload: serde_json::json!({ "signal": signal_number }),
+            fds: std::slice::from_ref(&pidfd),
+            chain_root_invocation_id: None,
+            chain_identities: None,
+        },
+    ) {
+        Ok(reply) => {
+            let signaled = reply
+                .response
+                .result
+                .as_ref()
+                .and_then(|result| result.get("signaled"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if signaled {
+                Ok(())
+            } else {
+                Err(broker_fallback_failure(
+                    vm,
+                    role_id,
+                    signal,
+                    "signal-pidfd returned signaled=false",
+                ))
+            }
+        }
+        Err(error) => Err(broker_fallback_failure(
             vm,
             role_id,
             signal,
-            format!(
-                "SignalRunner returned vm={} role={} signaled={}",
-                resp.vm_id.as_str(),
-                resp.role_id.as_str(),
-                resp.signaled
-            ),
-        )),
-        Ok(BrokerResponse::Error(error)) => Err(broker_fallback_failure(
-            vm,
-            role_id,
-            signal,
-            format!(
-                "SignalRunner rejected by broker: {} ({})",
-                error.message, error.kind
-            ),
-        )),
-        Ok(other) => Err(broker_fallback_failure(
-            vm,
-            role_id,
-            signal,
-            format!("SignalRunner returned unexpected response: {other:?}"),
-        )),
-        Err(err) => Err(broker_fallback_failure(
-            vm,
-            role_id,
-            signal,
-            format!("{err:?}"),
+            format!("{error}"),
         )),
     }
 }
@@ -16317,57 +16376,63 @@ fn deregister_runner_pidfd_via_broker(
     vm: &str,
     role_id: &str,
 ) {
-    let request = BrokerRequest::DeregisterRunnerPidfd(DeregisterRunnerPidfdRequest {
-        vm_id: VmId::new(vm),
-        role_id: RoleId::new(role_id),
-        pid: state
-            .pidfd_table
-            .list_for_vm(vm)
-            .into_iter()
-            .find(|entry| entry.role == role_id)
-            .map(|entry| entry.pid),
-        expected_start_time_ticks: state
-            .pidfd_table
-            .list_for_vm(vm)
-            .into_iter()
-            .find(|entry| entry.role == role_id)
-            .map(|entry| entry.start_time_ticks),
-        resource_ref: None,
-        resource_uid: None,
-        zone_uid: None,
-        owner_ref: None,
-        provider_ref: None,
-        provider_identity: None,
-        template_identity: None,
-        generation: None,
-        runtime_scope: None,
-        guest_execution: None,
-        tracing_span_id: None,
-    });
-    match dispatch_broker_request_as(state, request, caller_role) {
-        Ok(BrokerResponse::DeregisterRunnerPidfd(resp))
-            if resp.vm_id.as_str() == vm && resp.role_id.as_str() == role_id =>
-        {
-            if !resp.removed {
-                tracing::warn!(
+    // The U10 kernel leg. The deregister-pidfd kernel removes the broker's
+    // runner-pidfd registry record keyed by the invocation id of the call
+    // it runs under. The daemon's legacy deregister carries no spawn id -
+    // these runners were adopted or spawned under broker-minted invocation
+    // ids the daemon never retained - so the root call mints a fresh
+    // invocation id and the kernel reports `removed: false`: the daemon's
+    // own pidfd table (deregistered by the caller) is the authoritative
+    // lifecycle record, and the broker-side registry entry for a
+    // legacy/adopted runner has no daemon-held key to remove. The call is
+    // kept so the kernel leg stays exercised and its refusal stays loud.
+    let zone = match kernel_zone_for_vm(state, vm) {
+        Ok(zone) => zone,
+        Err(error) => {
+            tracing::warn!(vm = %vm, role = %role_id, error = %error, "broker runner pidfd deregister skipped: no kernel zone");
+            return;
+        }
+    };
+    match envelope_invoke_kernel(
+        &broker_socket_path(state),
+        KERNEL_IO_TIMEOUT,
+        caller_role,
+        KernelInvocation {
+            operation: "deregister-pidfd",
+            zone: &zone,
+            payload: serde_json::json!({}),
+            fds: &[],
+            chain_root_invocation_id: None,
+            chain_identities: None,
+        },
+    ) {
+        Ok(reply) => {
+            let removed = reply
+                .response
+                .result
+                .as_ref()
+                .and_then(|result| result.get("removed"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if removed {
+                tracing::info!(
+                    vm = %vm,
+                    role = %role_id,
+                    "broker runner pidfd deregister removed a registry entry"
+                );
+            } else {
+                tracing::debug!(
                     vm = %vm,
                     role = %role_id,
                     removed = false,
-                    "broker runner pidfd deregister reported no entry"
+                    "broker runner pidfd deregister reported no entry (legacy no-op: the daemon holds no spawn invocation id)"
                 );
             }
         }
-
-        Ok(other) => tracing::warn!(
-            vm = %vm,
-            role = %role_id,
-            response = ?other,
-            "broker runner pidfd deregister returned unexpected response"
-        ),
         Err(error) => tracing::warn!(
             vm = %vm,
             role = %role_id,
-            error = ?error,
+            error = %error,
             "broker runner pidfd deregister failed"
         ),
     }
@@ -16481,25 +16546,45 @@ fn request_cgroup_kill_if_populated(
     vm: &str,
     role_id: &str,
 ) {
-    let request = json!({
-        "kind": "CgroupKill",
-        "payload": {
-            "vmId": vm,
-            "roleId": role_id,
-            "tracingSpanId": Value::Null,
+    // The U10 kernel leg: the daemon derives the runner's cgroup leaf from
+    // its own processes.json placement (the same derivation the old typed
+    // CgroupKill arm performed broker-side from the bundle) and the
+    // kill-cgroup kernel kills exactly that leaf, refusing any path outside
+    // the delegated d2b.slice subtree.
+    let Some(cgroup_path) = role_cgroup_path(state, vm, role_id) else {
+        tracing::warn!(vm = %vm, role = %role_id, "broker CgroupKill request skipped: no cgroup placement");
+        return;
+    };
+    let zone = match kernel_zone_for_vm(state, vm) {
+        Ok(zone) => zone,
+        Err(error) => {
+            tracing::warn!(vm = %vm, role = %role_id, error = %error, "broker CgroupKill request skipped: no kernel zone");
+            return;
         }
-    });
-    match dispatch_raw_broker_value_with_timeout(
-        state,
-        request,
+    };
+    match envelope_invoke_kernel(
+        &broker_socket_path(state),
+        KERNEL_IO_TIMEOUT,
         caller_role,
-        Duration::from_secs(5),
+        KernelInvocation {
+            operation: "kill-cgroup",
+            zone: &zone,
+            payload: serde_json::json!({ "cgroupPath": cgroup_path.display().to_string() }),
+            fds: &[],
+            chain_root_invocation_id: None,
+            chain_identities: None,
+        },
     ) {
-        Ok(response) => {
-            tracing::info!(vm = %vm, role = %role_id, response = ?response, "broker CgroupKill requested for populated runner leaf")
+        Ok(reply) => {
+            tracing::info!(
+                vm = %vm,
+                role = %role_id,
+                response = ?reply.response.result,
+                "broker CgroupKill requested for populated runner leaf"
+            )
         }
-        Err(err) => {
-            tracing::warn!(vm = %vm, role = %role_id, error = ?err, "broker CgroupKill request failed")
+        Err(error) => {
+            tracing::warn!(vm = %vm, role = %role_id, error = %error, "broker CgroupKill request failed")
         }
     }
 }
@@ -17242,18 +17327,12 @@ fn wait_terminated_with_broker_poll(
                     return Ok(WaitTermination::Terminated);
                 }
                 poll_count = poll_count.saturating_add(1);
-                let budget = remaining.min(Duration::from_millis(200));
-                if let Ok(BrokerResponse::PollChildReaped(resp)) =
-                    dispatch_broker_request_with_timeout(
-                        state,
-                        BrokerRequest::PollChildReaped,
-                        budget,
-                    )
+                // The U10 per-entry leg: the daemon probes its own pidfd
+                // table through the poll-child-reaped kernel and records
+                // any reaped child into the reap log.
+                if poll_broker_child_reaped(state).is_ok()
+                    && let Some(notification) = state.broker_reap_log.take_for(vm, role_id)
                 {
-                    for notification in resp.notifications {
-                        state.broker_reap_log.insert(notification);
-                    }
-                    if let Some(notification) = state.broker_reap_log.take_for(vm, role_id) {
                         let elapsed = started.elapsed();
                         tracing::info!(
                             outcome = "echild-broker-recovered",
@@ -17266,7 +17345,6 @@ fn wait_terminated_with_broker_poll(
                         return Ok(WaitTermination::TerminatedByBroker {
                             exit_status: notification.exit_status,
                         });
-                    }
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -17645,6 +17723,115 @@ fn dispatch_broker_host_prep_step(
     }
 }
 
+/// The caller budget for one ownership-matrix preflight round trip over the
+/// broker socket.
+///
+/// The budget is mapped to the envelope's forward budget for the operation:
+/// the row's standard deadline tier (the shared context-deadline constant
+/// every committed row's tier resolves under, U4b). The broker's own
+/// envelope dispatch and its forwarding leg serve the same order of budget,
+/// so the caller's expiry and the serving side's deadline do not disagree by
+/// an order of magnitude.
+const OWNERSHIP_PREFLIGHT_ROUND_TRIP_BUDGET: Duration =
+    Duration::from_millis(d2b_contracts_broker::broker_wire::DEFAULT_CONTEXT_DEADLINE_MS);
+
+/// Dispatch one ownership-matrix preflight through the broker envelope and
+/// map the reply into the host-prep DAG failure vocabulary.
+///
+/// The wire request crosses over the established origination-leg carrier
+/// (`dispatch_broker_request_to_socket`, the same bounded round trip the
+/// trusted-context publication uses) and is served broker-side through the
+/// committed-operation envelope under `CallerAuthority::Daemon`.
+///
+/// `round_trip_budget` bounds the caller's whole connect/write/read round
+/// trip; production passes [`OWNERSHIP_PREFLIGHT_ROUND_TRIP_BUDGET`] (the
+/// envelope row's forward budget), tests may pass a shorter budget.
+/// Timeouts are reported as the unknown-outcome case: when the broker does
+/// not answer within the budget, the daemon cannot know whether the
+/// preflight ran, so the failure carries the `internal-broker-timeout` code
+/// (never a definitive refusal such as `unregistered-handler`, which the
+/// broker itself reports when the envelope holds no serving handler - the
+/// documented prebind gap: calls before the daemon binds its forwarding leg
+/// refuse fail-closed with `unregistered-handler`, no transparent queue).
+fn dispatch_ownership_matrix_preflight(
+    state: &ServerState,
+    verb: &str,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+    round_trip_budget: Duration,
+) -> Result<(), Value> {
+    const OP_NAME: &str = "OwnershipMatrixCheck";
+    match dispatch_broker_request_with_timeout_as(
+        state,
+        request,
+        caller_role,
+        round_trip_budget,
+    ) {
+        Ok(BrokerResponse::Ack(ack)) if ack.accepted && ack.operation == OP_NAME => Ok(()),
+        Ok(BrokerResponse::Ack(ack)) => {
+            tracing::warn!(
+                op_name = OP_NAME,
+                broker_ack_operation = %ack.operation,
+                broker_ack_accepted = ack.accepted,
+                "broker returned unexpected ack payload"
+            );
+            let (summary, remediation) =
+                redact_broker_error_for_launcher(OP_NAME, None, "Broker.Protocol");
+            Err(broker_failure_response(verb, summary, remediation, None))
+        }
+        Ok(BrokerResponse::Error(error)) => {
+            tracing::warn!(
+                broker_kind = %error.kind,
+                broker_operation = %error.operation,
+                broker_target_wave = error.target_wave.as_deref().unwrap_or("none"),
+                broker_message = %error.message,
+                broker_action = %error.action,
+                "broker live op failed"
+            );
+            let (summary, remediation) = redact_broker_error_for_launcher(
+                OP_NAME,
+                error.target_wave.as_deref(),
+                &error.kind,
+            );
+            Err(broker_failure_response(
+                verb,
+                summary,
+                remediation,
+                error.target_wave,
+            ))
+        }
+        Ok(other) => {
+            tracing::warn!(
+                op_name = OP_NAME,
+                broker_response_kind = broker_response_kind(&other),
+                "broker returned an unexpected response shape"
+            );
+            let (summary, remediation) =
+                redact_broker_error_for_launcher(OP_NAME, None, "Broker.Protocol");
+            Err(broker_failure_response(verb, summary, remediation, None))
+        }
+        Err(TypedError::InternalBrokerTimeout { .. }) => {
+            // Unknown-outcome semantics on expiry: the round trip exceeded
+            // the caller's forward budget, so the preflight MAY have run.
+            // The failure names the timeout code, never a synthesized
+            // handler verdict.
+            Err(broker_failure_response(
+                verb,
+                format!(
+                    "{OP_NAME} round trip exceeded its forward budget; outcome unknown"
+                ),
+                "Check that d2b-broker is responsive (not backlogged or half-open) and retry VM start; the preflight may have run.".to_owned(),
+                Some("internal-broker-timeout".to_owned()),
+            ))
+        }
+        Err(error) => {
+            tracing::warn!(op_name = OP_NAME, error = ?error, "broker dispatch failed");
+            let (summary, remediation) = redact_broker_dispatch_failure_for_launcher(OP_NAME);
+            Err(broker_failure_response(verb, summary, remediation, None))
+        }
+    }
+}
+
 /// Execute the host-prep DAG by dispatching the corresponding broker op
 /// for each step in topo order. On step failure surfaces the broker
 /// envelope; the operator sees the step id, the broker op kind, and the
@@ -17670,7 +17857,11 @@ fn execute_host_prep_dag(
         .and_then(|resolver| network_tap_context_for_vm(state, &resolver, vm));
     for step in steps {
         let op_name = step.kind.broker_op_name();
-        let request = match step.kind {
+        // Every DAG arm either dispatches its kernel/typed leg inline and
+        // continues, or skips with a log; the match is a statement, not an
+        // expression (U12: the last typed-value arm retired with the
+        // network wire variants).
+        match step.kind {
             HostPrepStepKind::ApplyNftablesRules => {
                 let nft_ref = step
                     .bundle_ref
@@ -17691,13 +17882,67 @@ fn execute_host_prep_dag(
                     );
                     continue;
                 }
-                BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
-                    bundle_nft_intent_ref: nft_ref,
-                    scope_id,
-                    desired_hash: None,
-                    destroy: false,
-                    tracing_span_id: None,
-                })
+                // U12: the retired typed ApplyNftables arm's core is the
+                // apply-nftables kernel; the daemon resolves the trusted
+                // host nft intent and invokes the kernel directly.
+                let resolver = match load_bundle_resolver(state) {
+                    Ok(resolver) => resolver,
+                    Err(error) => {
+                        tracing::warn!(
+                            vm = %vm,
+                            step_id = %step.id,
+                            op_kind = op_name,
+                            error = ?error,
+                            "host-prep nft application refused: bundle resolver unavailable"
+                        );
+                        let (summary, remediation) =
+                            redact_broker_dispatch_failure_for_launcher(op_name);
+                        return Err(broker_failure_response(
+                            VERB,
+                            summary,
+                            remediation,
+                            None,
+                        ));
+                    }
+                };
+                let payload = match host_nft_kernel_payload(&resolver, nft_ref.as_str(), false) {
+                    Ok(payload) => payload,
+                    Err(reason) => {
+                        tracing::warn!(
+                            vm = %vm,
+                            step_id = %step.id,
+                            op_kind = op_name,
+                            reason,
+                            "host-prep nft application refused: intent resolution failed"
+                        );
+                        let (summary, remediation) =
+                            redact_broker_dispatch_failure_for_launcher(op_name);
+                        return Err(broker_failure_response(
+                            VERB,
+                            summary,
+                            remediation,
+                            None,
+                        ));
+                    }
+                };
+                if let Err(response) = dispatch_broker_kernel_ack(
+                    state,
+                    VERB,
+                    op_name,
+                    "apply-nftables",
+                    scope_id.as_str(),
+                    payload,
+                    caller_role.clone(),
+                ) {
+                    tracing::warn!(
+                        vm = %vm,
+                        step_id = %step.id,
+                        op_kind = op_name,
+                        "host-prep DAG step failed"
+                    );
+                    return Err(response);
+                }
+                continue;
             }
             HostPrepStepKind::SeedDnsmasqLease => {
                 tracing::warn!(
@@ -17709,45 +17954,51 @@ fn execute_host_prep_dag(
                 continue;
             }
             HostPrepStepKind::OwnershipMatrixCheck => {
-                // Run the daemon-native ownership preflight instead of
-                // dispatching the broker stub. The check is a pure stat walk
-                // over the per-VM state subtree the daemon already has
-                // `CAP_DAC_READ_SEARCH` for, and the real implementation
-                // lives in `d2bd-runtime` (`ownership_preflight`); the typed
-                // variant therefore has no production caller and retires with
-                // the typed arms.
-                let Some(state_dir) = per_vm_state_dir.as_ref() else {
+                // U5: the first production envelope caller. The
+                // ownership-matrix preflight used to run daemon-side from a
+                // typed placeholder arm (d9d41b4ec) that had no state ledger
+                // and silently skipped; that placeholder path is RETIRED.
+                // The DAG step now dispatches the typed wire request over
+                // the established origination-leg carrier (the same broker
+                // socket the trusted-context publication uses), and the
+                // broker serves it through the operation envelope as
+                // `CallerAuthority::Daemon` (committed `OwnershipMatrixCheck`
+                // row, see `docs/reference/policy/broker-operations.json`).
+                //
+                // The caller's round trip is bounded by the row's forward
+                // budget, so a broker that does not answer within it is
+                // reported as the unknown-outcome case
+                // (`internal-broker-timeout`) - never synthesized into a
+                // definitive refusal such as `unregistered-handler`.
+                //
+                // Prebind gap: before the daemon's forwarding leg is bound
+                // (and until the declaring process registers a handler), the
+                // envelope refuses the call with `unregistered-handler`.
+                // There is NO transparent queue: the DAG step fails closed
+                // on that refusal rather than letting the preflight pass
+                // unserved.
+                let request = BrokerRequest::OwnershipMatrixCheck(
+                    d2b_contracts_broker::broker_wire::OwnershipMatrixCheckRequest {
+                        vm_id: step.bundle_ref.vm_id.clone(),
+                        tracing_span_id: None,
+                    },
+                );
+                if let Err(response) = dispatch_ownership_matrix_preflight(
+                    state,
+                    VERB,
+                    request,
+                    caller_role.clone(),
+                    OWNERSHIP_PREFLIGHT_ROUND_TRIP_BUDGET,
+                ) {
                     tracing::warn!(
                         vm = %vm,
                         step_id = %step.id,
                         op_kind = op_name,
-                        "ownership-matrix preflight skipped: no per-VM state ledger",
+                        "host-prep DAG step failed"
                     );
-                    continue;
-                };
-                match d2bd_runtime::ownership_preflight::preflight(vm, state_dir) {
-                    d2bd_runtime::ownership_preflight::OwnershipPreflightOutcome::Clean => {
-                        continue;
-                    }
-                    d2bd_runtime::ownership_preflight::OwnershipPreflightOutcome::Drift(drift) => {
-                        let message = d2bd_runtime::ownership_preflight::render_drift_message(
-                            vm, &drift,
-                        );
-                        tracing::warn!(
-                            vm = %vm,
-                            step_id = %step.id,
-                            outcome = "ownership-matrix-drift",
-                            "host-prep DAG step failed: ownership drift (path in typed envelope + audit log)",
-                        );
-                        return Err(broker_failure_response(
-                            VERB,
-                            message,
-                            "Restore the ownership matrix the preflight names and retry VM start."
-                                .to_owned(),
-                            None,
-                        ));
-                    }
+                    return Err(response);
                 }
+                continue;
             }
             HostPrepStepKind::SshHostKeyPreflight => {
                 // Run the daemon-native posture check instead of dispatching
@@ -17847,24 +18098,31 @@ fn execute_host_prep_dag(
                         ));
                     }
                 };
-                let req = BrokerRequest::CreatePersistentTap(
-                    d2b_contracts_broker::broker_wire::CreatePersistentTapRequest {
-                        role_id: role_id.clone(),
-                        vm_id: step.bundle_ref.vm_id.clone(),
-                        bundle_tap_intent_ref: tap_identity.intent_ref,
-                        attachment_id: context.attachment_id.clone(),
-                        network_generation: context.network_generation,
-                        attachment_generation: context.attachment_generation,
-                        zone_uid: context.zone_uid.clone(),
-                        network_uid: context.network_uid.clone(),
-                        bundle_generation: context.bundle_generation.clone(),
-                        admitted_interface_names: context.admitted_interface_names.clone(),
-                        tracing_span_id: None,
-                    },
-                );
-                if let Err(response) =
-                    dispatch_broker_host_prep_step(state, VERB, op_name, req, caller_role.clone())
-                {
+                // U12: the retired typed CreatePersistentTap arm's core is
+                // the create-persistent-tap kernel; the typed request is
+                // the kernel's payload (the kernel re-derives the trusted
+                // tap intent from its own bundle copy).
+                let payload = serde_json::json!({
+                    "roleId": role_id.as_str(),
+                    "vmId": step.bundle_ref.vm_id.as_str(),
+                    "bundleTapIntentRef": tap_identity.intent_ref.as_str(),
+                    "attachmentId": context.attachment_id.as_str(),
+                    "networkGeneration": context.network_generation.get(),
+                    "attachmentGeneration": context.attachment_generation.get(),
+                    "zoneUid": context.zone_uid.as_str(),
+                    "networkUid": context.network_uid.as_str(),
+                    "bundleGeneration": context.bundle_generation.as_str(),
+                    "admittedInterfaceNames": context.admitted_interface_names.iter().map(|name| name.as_str()).collect::<Vec<_>>(),
+                });
+                if let Err(response) = dispatch_broker_kernel_ack(
+                    state,
+                    VERB,
+                    op_name,
+                    "create-persistent-tap",
+                    provenance.zone_uid().as_str(),
+                    payload,
+                    caller_role.clone(),
+                ) {
                     tracing::warn!(
                         vm = %vm,
                         step_id = %step.id,
@@ -17902,25 +18160,77 @@ fn execute_host_prep_dag(
                 continue;
             }
             HostPrepStepKind::ApplyNmUnmanaged => {
-                // Compose ApplyNmUnmanaged against the single host-wide
-                // intent row
-                // (`nm-unmanaged:host`). The scope_id falls back to
-                // the bundle_ref's env scope when the DAG carries
-                // one; otherwise "host".
+                // Compose the apply-nm-unmanaged kernel against the single
+                // host-wide intent row (`nm-unmanaged:host`). The scope_id
+                // falls back to the bundle_ref's env scope when the DAG
+                // carries one; otherwise "host".
                 let scope_id = step
                     .bundle_ref
                     .scope_id
                     .clone()
                     .unwrap_or_else(|| ScopeId::new("host"));
-                let req = BrokerRequest::ApplyNmUnmanaged(BrokerApplyNmUnmanagedRequest {
-                    bundle_nm_intent_ref: BundleOpId::new(intent_id_nm_unmanaged_host()),
-                    scope_id,
-                    destroy: false,
-                    tracing_span_id: None,
+                // U12: the daemon resolves the trusted nm intent and
+                // invokes the kernel directly.
+                let resolver = match load_bundle_resolver(state) {
+                    Ok(resolver) => resolver,
+                    Err(error) => {
+                        tracing::warn!(
+                            vm = %vm,
+                            step_id = %step.id,
+                            op_kind = op_name,
+                            error = ?error,
+                            "host-prep nm-unmanaged refused: bundle resolver unavailable"
+                        );
+                        let (summary, remediation) =
+                            redact_broker_dispatch_failure_for_launcher(op_name);
+                        return Err(broker_failure_response(
+                            VERB,
+                            summary,
+                            remediation,
+                            None,
+                        ));
+                    }
+                };
+                let intent = match resolver.find_nm_unmanaged_intent(
+                    &intent_id_nm_unmanaged_host(),
+                ) {
+                    Some(intent) => intent.clone(),
+                    None => {
+                        tracing::warn!(
+                            vm = %vm,
+                            step_id = %step.id,
+                            op_kind = op_name,
+                            "host-prep nm-unmanaged refused: intent missing"
+                        );
+                        let (summary, remediation) =
+                            redact_broker_dispatch_failure_for_launcher(op_name);
+                        return Err(broker_failure_response(
+                            VERB,
+                            summary,
+                            remediation,
+                            None,
+                        ));
+                    }
+                };
+                let payload = serde_json::json!({
+                    "intentId": intent.intent_id,
+                    "filePath": intent.file_path.display().to_string(),
+                    "contents": intent.contents,
+                    "mode": intent.mode,
+                    "owner": intent.owner,
+                    "group": intent.group,
+                    "reloadBehavior": intent.reload_behavior,
+                    "destroy": false,
                 });
-                if let Err(response) =
-                    dispatch_broker_ack_request_as(state, VERB, op_name, req, caller_role.clone())
-                {
+                if let Err(response) = dispatch_broker_kernel_ack(
+                    state,
+                    VERB,
+                    op_name,
+                    "apply-nm-unmanaged",
+                    scope_id.as_str(),
+                    payload,
+                    caller_role.clone(),
+                ) {
                     tracing::warn!(
                         vm = %vm,
                         step_id = %step.id,
@@ -17963,17 +18273,6 @@ fn execute_host_prep_dag(
                 );
                 continue;
             }
-        };
-        if let Err(response) =
-            dispatch_broker_ack_request_as(state, VERB, op_name, request, caller_role.clone())
-        {
-            tracing::warn!(
-                vm = %vm,
-                step_id = %step.id,
-                op_kind = op_name,
-                "host-prep DAG step failed"
-            );
-            return Err(response);
         }
     }
     Ok(())
@@ -18261,40 +18560,83 @@ pub(crate) fn consume_lifecycle_lease(
     operation: provider_effects::GuestLifecycleOperation,
     caller_role: &BrokerCallerRole,
 ) -> Result<(), provider_effects::ProviderEffectError> {
-    let operation = match operation {
-        provider_effects::GuestLifecycleOperation::Start => {
-            d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Start
-        }
-        provider_effects::GuestLifecycleOperation::Stop => {
-            d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Stop
-        }
-        provider_effects::GuestLifecycleOperation::Restart => {
-            d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Restart
-        }
-    };
-    let response = dispatch_broker_request_as(
-        state,
-        BrokerRequest::ConsumeLifecycleLease(
-            d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest {
-                zone_uid: authorization.zone_uid().clone(),
-                guest_uid: authorization.guest_uid().clone(),
-                guest_generation: authorization.guest_generation().get(),
-                provider_assignment_generation: authorization
-                    .provider_assignment_generation()
-                    .get(),
-                policy_revision: authorization.policy_revision(),
-                operation_id: authorization.operation_id().to_owned(),
-                operation,
-                stop_only: authorization.is_stop_only(),
-            },
-        ),
-        caller_role.clone(),
-    )
-    .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
-    match response {
-        BrokerResponse::ConsumeLifecycleLease(response) if response.consumed => Ok(()),
-        _ => Err(provider_effects::ProviderEffectError::EffectRejected),
+    let zone_uid = authorization.zone_uid();
+    let guest_uid = authorization.guest_uid();
+    let guest_generation = authorization.guest_generation().get();
+    let provider_assignment_generation = authorization.provider_assignment_generation().get();
+    let policy_revision = authorization.policy_revision();
+    let operation_id = authorization.operation_id();
+    let stop_only = authorization.is_stop_only();
+    // The lease validation the retired broker arm ran moves caller-side
+    // (U11): the consume-cell/complete-cell kernels are generic cell
+    // machinery and never learn a lease shape, so the caller validates the
+    // identity fields and classifies itself before invoking.
+    if guest_generation == 0
+        || provider_assignment_generation == 0
+        || policy_revision == 0
+        || operation_id.is_empty()
+        || operation_id.len() > 128
+        || operation_id.chars().any(char::is_control)
+    {
+        return Err(provider_effects::ProviderEffectError::EffectRejected);
     }
+    // The stop_only/HostShutdownRestricted fence, moved side: the caller
+    // classifies itself - host-shutdown only when the envelope caller is
+    // HostShutdownUid - and keeps the retired arm's shape (stop-only
+    // shutdowns may only stop, never start or restart).
+    let is_shutdown = matches!(caller_role, BrokerCallerRole::HostShutdownUid { .. });
+    if stop_only != is_shutdown
+        || (is_shutdown && operation != provider_effects::GuestLifecycleOperation::Stop)
+        || matches!(caller_role, BrokerCallerRole::NotAuthorized)
+    {
+        return Err(provider_effects::ProviderEffectError::EffectRejected);
+    }
+    // The full lease identity is the one-time cell key (KTD3): the payload
+    // carries every field the retired arm keyed on, in the wire
+    // vocabulary's camelCase spelling, and the cell kernels derive the
+    // canonical identity from it.
+    let payload = serde_json::json!({
+        "zoneUid": zone_uid.as_str(),
+        "guestUid": guest_uid.as_str(),
+        "guestGeneration": guest_generation,
+        "providerAssignmentGeneration": provider_assignment_generation,
+        "policyRevision": policy_revision,
+        "operationId": operation_id,
+        "operation": operation.as_str(),
+        "stopOnly": stop_only,
+    });
+    let zone = zone_uid.as_str();
+    // The two-phase cell flow mirrors the retired arm exactly: the claim
+    // (consume-cell) is granted once, and the completion (complete-cell)
+    // records the durable marker before the effect runs, so a replayed
+    // invocation is refused (AE2).
+    for (kernel, result_field) in [("consume-cell", "consumed"), ("complete-cell", "completed")] {
+        let reply = envelope_invoke_kernel(
+            &broker_socket_path(state),
+            KERNEL_IO_TIMEOUT,
+            caller_role.clone(),
+            KernelInvocation {
+                operation: kernel,
+                zone,
+                payload: payload.clone(),
+                fds: &[],
+                chain_root_invocation_id: None,
+                chain_identities: None,
+            },
+        )
+        .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
+        let granted = reply
+            .response
+            .result
+            .as_ref()
+            .and_then(|result| result.get(result_field))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !granted {
+            return Err(provider_effects::ProviderEffectError::EffectRejected);
+        }
+    }
+    Ok(())
 }
 
 fn next_provider_lifecycle_operation_id(
@@ -19332,27 +19674,27 @@ fn dispatch_broker_host_prepare_as(
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
         return Ok(response);
     }
-    let dispatch_broker_ack_request =
-        |state: &ServerState, verb: &str, op_name: &str, request: BrokerRequest| {
-            dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
-        };
-
-    if let Err(response) = dispatch_broker_ack_request(
+    // U12: the retired typed ApplyNftables arm's core is the
+    // apply-nftables kernel; the daemon resolves the trusted host nft
+    // intent and invokes the kernel directly.
+    let resolver = load_bundle_resolver(state)?;
+    let payload = host_nft_kernel_payload(&resolver, &intent_id_nft_host(), false).map_err(|reason| {
+        TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: format!("host nft intent resolution failed: {reason}"),
+        }
+    })?;
+    if let Err(response) = dispatch_broker_kernel_ack(
         state,
         VERB,
         "ApplyNftables",
-        BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
-            bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
-            scope_id: ScopeId::new("host"),
-            desired_hash: None,
-            destroy: false,
-            tracing_span_id: None,
-        }),
+        "apply-nftables",
+        "host",
+        payload,
+        caller_role.clone(),
     ) {
         return Ok(response);
     }
-
-    let resolver = load_bundle_resolver(state)?;
     let generation =
         resolver
             .installed_generation_identity()
@@ -19399,35 +19741,52 @@ fn dispatch_broker_host_destroy_as(
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
         return Ok(response);
     }
-    let dispatch_broker_ack_request =
-        |state: &ServerState, verb: &str, op_name: &str, request: BrokerRequest| {
-            dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
-        };
-
-    if let Err(response) = dispatch_broker_ack_request(
+    // U12: the retired typed ApplyNmUnmanaged / ApplyNftables arms' cores
+    // are the apply-nm-unmanaged / apply-nftables kernels; the daemon
+    // resolves the trusted host intents and invokes the kernels directly.
+    let resolver = load_bundle_resolver(state)?;
+    let nm_intent = resolver
+        .find_nm_unmanaged_intent(&intent_id_nm_unmanaged_host())
+        .ok_or(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: "host nm-unmanaged intent missing".to_owned(),
+        })?
+        .clone();
+    let nm_payload = serde_json::json!({
+        "intentId": nm_intent.intent_id,
+        "filePath": nm_intent.file_path.display().to_string(),
+        "contents": nm_intent.contents,
+        "mode": nm_intent.mode,
+        "owner": nm_intent.owner,
+        "group": nm_intent.group,
+        "reloadBehavior": nm_intent.reload_behavior,
+        "destroy": true,
+    });
+    if let Err(response) = dispatch_broker_kernel_ack(
         state,
         VERB,
         "ApplyNmUnmanaged",
-        BrokerRequest::ApplyNmUnmanaged(BrokerApplyNmUnmanagedRequest {
-            bundle_nm_intent_ref: BundleOpId::new(intent_id_nm_unmanaged_host()),
-            scope_id: ScopeId::new("host"),
-            destroy: true,
-            tracing_span_id: None,
-        }),
+        "apply-nm-unmanaged",
+        "host",
+        nm_payload,
+        caller_role.clone(),
     ) {
         return Ok(response);
     }
-    if let Err(response) = dispatch_broker_ack_request(
+    let nft_payload = host_nft_kernel_payload(&resolver, &intent_id_nft_host(), true).map_err(|reason| {
+        TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: format!("host nft intent resolution failed: {reason}"),
+        }
+    })?;
+    if let Err(response) = dispatch_broker_kernel_ack(
         state,
         VERB,
         "ApplyNftables",
-        BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
-            bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
-            scope_id: ScopeId::new("host"),
-            desired_hash: None,
-            destroy: true,
-            tracing_span_id: None,
-        }),
+        "apply-nftables",
+        "host",
+        nft_payload,
+        caller_role.clone(),
     ) {
         return Ok(response);
     }
@@ -19455,28 +19814,30 @@ fn dispatch_broker_host_reconcile_as(
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
         return Ok(response);
     }
-    let dispatch_broker_ack_request =
-        |state: &ServerState, verb: &str, op_name: &str, request: BrokerRequest| {
-            dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
-        };
-
     if !request.network {
         return Err(TypedError::WireUnknownField {
             detail: "hostReconcile: at least one scope flag must be set; today only --network is supported".to_owned(),
         });
     }
 
-    if let Err(response) = dispatch_broker_ack_request(
+    // U12: the retired typed ApplyNftables arm's core is the
+    // apply-nftables kernel; the daemon resolves the trusted host nft
+    // intent and invokes the kernel directly.
+    let resolver = load_bundle_resolver(state)?;
+    let payload = host_nft_kernel_payload(&resolver, &intent_id_nft_host(), false).map_err(|reason| {
+        TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: format!("host nft intent resolution failed: {reason}"),
+        }
+    })?;
+    if let Err(response) = dispatch_broker_kernel_ack(
         state,
         VERB,
         "ApplyNftables",
-        BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
-            bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
-            scope_id: ScopeId::new("host"),
-            desired_hash: None,
-            destroy: false,
-            tracing_span_id: None,
-        }),
+        "apply-nftables",
+        "host",
+        payload,
+        caller_role.clone(),
     ) {
         return Ok(response);
     }
@@ -23373,12 +23734,10 @@ mod broker_dispatch_tests {
     use std::time::{Duration, Instant};
     use std::{fs, thread};
 
-    use d2b_contracts::types::{RoleId, VmId};
+    use d2b_contracts::types::VmId;
     use d2b_contracts_broker::broker_wire::{
-        BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, ChildExitKind,
-        ChildExitStatus, ChildReapedNotification, DeregisterRunnerPidfdResponse,
-        PollChildReapedResponse, RunnerRole, RunnerSignal, SignalRunnerResponse,
-        SpawnRunnerResponse,
+        BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
+        EnvelopeInvokeResponse, FdKind, RunnerRole, SpawnRunnerRequest, SpawnRunnerResponse,
     };
     use d2b_contracts_control::public_wire;
     use d2b_contracts_control::public_wire::{
@@ -23517,11 +23876,19 @@ mod broker_dispatch_tests {
     fn test_state_with_broker_socket_and_host(path: PathBuf, host_path: PathBuf) -> ServerState {
         let daemon_state_dir = test_daemon_state_dir("broker-host");
         let broker_reap_log = BrokerReapLog::new();
+        // U12: the host-prep/destroy legs resolve trusted bundle intents
+        // before invoking the kernels, so the state must carry a real
+        // (test-policy) bundle - the default artifact paths point at the
+        // production /etc/d2b bundle and fail the test-policy owner check.
+        let fixture = write_minimal_vm_start_bundle_artifacts(&daemon_state_dir);
         ServerState {
             config: DaemonConfig {
                 broker_socket_path: path,
                 artifacts: ArtifactPaths {
                     host_path,
+                    bundle_path: fixture.bundle_path,
+                    public_manifest_path: fixture.public_manifest_path,
+                    processes_path: fixture.processes_path,
                     ..ArtifactPaths::default()
                 },
                 ..DaemonConfig::default()
@@ -24039,6 +24406,95 @@ mod broker_dispatch_tests {
             err,
             d2bd_runtime::typed_error::TypedError::InternalBrokerTimeout { .. }
         ));
+    }
+
+    /// The wire request the migrated host-prep caller dispatches.
+    ///
+    /// Mirrors the exact shape the production DAG arm composes for
+    /// [`HostPrepStepKind::OwnershipMatrixCheck`].
+    fn ownership_matrix_check_request() -> BrokerRequest {
+        BrokerRequest::OwnershipMatrixCheck(
+            d2b_contracts_broker::broker_wire::OwnershipMatrixCheckRequest {
+                vm_id: VmId::new("vm-1"),
+                tracing_span_id: None,
+            },
+        )
+    }
+
+    /// The daemon-side caller (U5): a broker that answers the envelope
+    /// serving of the ownership-matrix preflight with an Ack drives the DAG
+    /// step to success over the established origination-leg carrier.
+    #[test]
+    fn the_preflight_caller_answers_through_the_broker_so_the_dag_step_passes() {
+        use d2b_contracts_broker::broker_wire::{AckResponse, BrokerResponse};
+
+        let (socket_path, broker) =
+            start_test_broker_server("preflight-envelope-happy", 1, |_index, envelope, fd| {
+                assert_eq!(envelope.request.op_name(), "OwnershipMatrixCheck");
+                let BrokerRequest::OwnershipMatrixCheck(request) = envelope.request else {
+                    panic!("expected the typed ownership-matrix request");
+                };
+                assert_eq!(request.vm_id.as_str(), "vm-1");
+                write_test_json_frame(
+                    fd,
+                    &BrokerResponse::Ack(AckResponse {
+                        accepted: true,
+                        operation: "OwnershipMatrixCheck".to_owned(),
+                    }),
+                )
+                .expect("write broker ack");
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let result = super::dispatch_ownership_matrix_preflight(
+            &state,
+            "vm start",
+            ownership_matrix_check_request(),
+            BrokerCallerRole::AdminUid {
+                uid: state.daemon_uid,
+            },
+            super::OWNERSHIP_PREFLIGHT_ROUND_TRIP_BUDGET,
+        );
+        assert!(result.is_ok(), "the DAG step passes on the broker ack");
+        broker.join().expect("the test broker completes");
+    }
+
+    /// The caller's own budget expiry maps to the unknown-outcome code
+    /// (`internal-broker-timeout`), never to `unregistered-handler`: a
+    /// broker that accepted the frame and then stalls leaves the DAG step
+    /// with the documented unknown outcome, not a synthesized handler
+    /// verdict.
+    #[test]
+    fn a_stalled_broker_maps_the_caller_timeout_to_the_unknown_outcome_code() {
+        let (socket_path, broker) =
+            start_test_broker_server("preflight-envelope-timeout", 1, |_index, envelope, _fd| {
+                assert_eq!(envelope.request.op_name(), "OwnershipMatrixCheck");
+                // Hold the accepted connection open past the caller's
+                // budget without answering: a closed peer would surface as a
+                // transport EOF, but the expiry under test is the caller's
+                // own read deadline.
+                std::thread::sleep(Duration::from_secs(2));
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let result = super::dispatch_ownership_matrix_preflight(
+            &state,
+            "vm start",
+            ownership_matrix_check_request(),
+            BrokerCallerRole::AdminUid {
+                uid: state.daemon_uid,
+            },
+            Duration::from_millis(250),
+        );
+        let response = result.expect_err("a stalled round trip fails the DAG step");
+        let rendered = response.to_string();
+        assert!(
+            rendered.contains("internal-broker-timeout"),
+            "the expiry surfaces the unknown-outcome code: {rendered}"
+        );
+        assert!(
+            !rendered.contains("unregistered-handler"),
+            "an expiry is never synthesized into a handler verdict: {rendered}"
+        );
+        broker.join().expect("the test broker completes");
     }
 
     fn read_child_start_time(child: &Child) -> u64 {
@@ -24655,7 +25111,6 @@ mod broker_dispatch_tests {
         ignore = "P2fu1 software-r2 (longstanding pre-existing): same root/owner requirement as vm_start_broker_unreachable_returns_broker_error."
     )]
     fn vm_start_registers_pidfd_table_entry_from_broker_fd() {
-        use d2b_contracts::types::{RoleId, VmId};
         use d2b_contracts_broker::broker_wire::{BrokerRequest, RunnerRole};
 
         let socket_path = unreachable_broker_socket_path("vm-start-registers");
@@ -24730,14 +25185,16 @@ mod broker_dispatch_tests {
             let frame = read_test_frame(accepted_fd).expect("read broker request frame");
             let envelope: BrokerRequestEnvelope =
                 serde_json::from_slice(&frame).expect("decode broker request frame");
-            match envelope.request {
-                BrokerRequest::SpawnRunner(request) => {
-                    assert_eq!(request.vm_id.as_str(), "vm-a");
-                    assert_eq!(request.role_id.as_str(), VM_RUNNER_ROLE_ID);
-                    assert_eq!(request.role, RunnerRole::CloudHypervisor);
-                }
+            let invoke = match envelope.request {
+                BrokerRequest::EnvelopeInvoke(invoke) => invoke,
                 other => panic!("unexpected broker request: {other:?}"),
-            }
+            };
+            assert_eq!(invoke.operation, "SpawnRunner");
+            let request: SpawnRunnerRequest = serde_json::from_value(invoke.payload)
+                .expect("spawn envelope payload is the typed spawn request");
+            assert_eq!(request.vm_id.as_str(), "vm-a");
+            assert_eq!(request.role_id.as_str(), VM_RUNNER_ROLE_ID);
+            assert_eq!(request.role, RunnerRole::CloudHypervisor);
 
             let child = ChildGuard::new(
                 Command::new("sleep")
@@ -24746,31 +25203,40 @@ mod broker_dispatch_tests {
                     .expect("spawn child for broker reply"),
             );
             let pidfd = open_child_pidfd(child.child());
+            let response = SpawnRunnerResponse {
+                vm_id: request.vm_id,
+                role_id: request.role_id,
+                role: request.role,
+                resource_ref: None,
+                resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                runtime_scope: None,
+                execution_ref: request.execution_ref,
+                execution_domain: request.execution_domain,
+                user_ref: request.user_ref,
+                guest_execution: request.guest_execution,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                bundle_content_identity: request.bundle_content_identity,
+                pid: child.child().id() as i32,
+                start_time_ticks: read_child_start_time(child.child()),
+                pidfd_index: 0,
+                controller_bootstrap_fd_index: None,
+                console_fd_index: None,
+            };
             write_test_json_frame_with_fds(
                 accepted_fd,
-                &BrokerResponse::SpawnRunner(Box::new(SpawnRunnerResponse {
-                    vm_id: VmId::new("vm-a"),
-                    role_id: RoleId::new(VM_RUNNER_ROLE_ID),
-                    role: RunnerRole::CloudHypervisor,
-                    resource_ref: None,
-                    resource_uid: None,
-                    zone_uid: None,
-                    owner_ref: None,
-                    runtime_scope: None,
-                    execution_ref: None,
-                    execution_domain: None,
-                    user_ref: None,
-                    guest_execution: None,
-                    provider_identity: None,
-                    template_identity: None,
-                    generation: None,
-                    bundle_content_identity: None,
-                    pid: child.child().id() as i32,
-                    start_time_ticks: read_child_start_time(child.child()),
-                    pidfd_index: 0,
-                    controller_bootstrap_fd_index: None,
-                    console_fd_index: None,
-                })),
+                &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                    operation: "SpawnRunner".to_owned(),
+                    invocation_id: "fake-spawn-invocation".to_owned(),
+                    result: Some(serde_json::to_value(response).expect("spawn response json")),
+                    refusal: None,
+                    detail: None,
+                    fd_indexes: vec![0],
+                    fd_kinds: vec![FdKind::Any],
+                }),
                 &[pidfd.as_raw_fd()],
             )
             .expect("write spawn response with pidfd");
@@ -24826,7 +25292,6 @@ mod broker_dispatch_tests {
     #[test]
     #[ignore = "flaky on shared hosts; Unix socket reuse races"]
     fn vm_start_drives_supervisor_dag_in_topo_order() {
-        use d2b_contracts::types::{RoleId, VmId};
         use d2b_contracts_broker::broker_wire::{BrokerRequest, RunnerRole};
 
         let daemon_state_dir = test_daemon_state_dir("vm-start-dag");
@@ -25006,10 +25471,13 @@ mod broker_dispatch_tests {
                 let frame = read_test_frame(accepted_fd).expect("read broker request frame");
                 let envelope: BrokerRequestEnvelope =
                     serde_json::from_slice(&frame).expect("decode broker request frame");
-                let request = match envelope.request {
-                    BrokerRequest::SpawnRunner(request) => request,
+                let invoke = match envelope.request {
+                    BrokerRequest::EnvelopeInvoke(invoke) => invoke,
                     other => panic!("unexpected broker request: {other:?}"),
                 };
+                assert_eq!(invoke.operation, "SpawnRunner");
+                let request: SpawnRunnerRequest = serde_json::from_value(invoke.payload)
+                    .expect("spawn envelope payload is the typed spawn request");
                 request_order_thread
                     .lock()
                     .expect("lock request order")
@@ -25048,33 +25516,44 @@ mod broker_dispatch_tests {
                         .expect("spawn child for broker reply"),
                 );
                 let pidfd = open_child_pidfd(child.child());
-                write_test_json_frame_with_fds(
-                    accepted_fd,
-                    &BrokerResponse::SpawnRunner(Box::new(SpawnRunnerResponse {
-                        vm_id: VmId::new("vm-a"),
-                        role_id: RoleId::new(request.role_id.as_str()),
+                let response = SpawnRunnerResponse {
+                        vm_id: request.vm_id.clone(),
+                        role_id: request.role_id.clone(),
                         role: expected_runner_role,
                         resource_ref: None,
                         resource_uid: None,
                         zone_uid: None,
                         owner_ref: None,
                         runtime_scope: None,
-                        execution_ref: None,
-                        execution_domain: None,
-                        user_ref: None,
-                        guest_execution: None,
+                        execution_ref: request.execution_ref.clone(),
+                        execution_domain: request.execution_domain,
+                        user_ref: request.user_ref.clone(),
+                        guest_execution: request.guest_execution.clone(),
                         provider_identity: None,
                         template_identity: None,
                         generation: None,
-                        bundle_content_identity: None,
+                        bundle_content_identity: request.bundle_content_identity.clone(),
                         pid: child.child().id() as i32,
                         start_time_ticks: read_child_start_time(child.child()),
                         pidfd_index: 0,
                         controller_bootstrap_fd_index: None,
                         console_fd_index: None,
-                    })),
-                    &[pidfd.as_raw_fd()],
-                )
+                    };
+                    write_test_json_frame_with_fds(
+                        accepted_fd,
+                        &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                            operation: "SpawnRunner".to_owned(),
+                            invocation_id: format!("fake-spawn-{}", request.role_id.as_str()),
+                            result: Some(
+                                serde_json::to_value(response).expect("spawn response json"),
+                            ),
+                            refusal: None,
+                            detail: None,
+                            fd_indexes: vec![0],
+                            fd_kinds: vec![FdKind::Any],
+                        }),
+                        &[pidfd.as_raw_fd()],
+                    )
                 .expect("write spawn response with pidfd");
                 close(accepted_fd).expect("close broker peer");
                 if request.role_id.as_str() == VM_RUNNER_ROLE_ID {
@@ -25897,24 +26376,36 @@ mod broker_dispatch_tests {
         fs::write(cgroup.join("cgroup.events"), "populated 1\n").expect("write cgroup.events");
         let cgroup_for_broker = cgroup.clone();
         let (socket_path, broker) =
-            start_raw_value_broker_server("cgroup-kill-escalation", 1, move |_, envelope, fd| {
-                let request = envelope.get("request").expect("request");
-                assert_eq!(
-                    request.get("kind").and_then(Value::as_str),
-                    Some("CgroupKill")
-                );
-                assert_eq!(
-                    request.pointer("/payload/vmId").and_then(Value::as_str),
-                    Some("vm-a")
-                );
-                assert_eq!(
-                    request.pointer("/payload/roleId").and_then(Value::as_str),
-                    Some(VM_RUNNER_ROLE_ID)
-                );
+            start_test_broker_server("cgroup-kill-escalation", 1, move |_, env, fd| {
+                let cgroup_path = cgroup_for_broker.display().to_string();
+                match env.request {
+                    BrokerRequest::EnvelopeInvoke(invoke) => {
+                        assert_eq!(invoke.operation, "kill-cgroup");
+                        assert_eq!(
+                            invoke
+                                .payload
+                                .get("cgroupPath")
+                                .and_then(serde_json::Value::as_str),
+                            Some(cgroup_path.as_str())
+                        );
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
                 fs::write(cgroup_for_broker.join("cgroup.events"), "populated 0\n")
                     .expect("clear populated state");
-                write_test_json_frame(fd, &json!({"kind": "Ack", "payload": {}}))
-                    .expect("write cgroup kill ack");
+                write_test_json_frame(
+                    fd,
+                    &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                        operation: "kill-cgroup".to_owned(),
+                        invocation_id: "fake-cgroup-kill-invocation".to_owned(),
+                        result: Some(serde_json::json!({ "killed": true })),
+                        refusal: None,
+                        detail: None,
+                        fd_indexes: vec![],
+                        fd_kinds: vec![],
+                    }),
+                )
+                .expect("write cgroup kill ack");
             });
         let mut state = test_state_with_broker_socket(socket_path);
         state.config.artifacts = write_custom_vm_start_bundle_artifacts(
@@ -25950,6 +26441,225 @@ mod broker_dispatch_tests {
                 VM_RUNNER_ROLE_ID
             ),
             "broker CgroupKill should clear the populated leaf before restart proceeds"
+        );
+        broker.join().expect("broker join");
+    }
+
+    /// The lease-shaped payload assertions one migrated lease-caller test
+    /// checks: the full lease identity in the wire vocabulary's camelCase
+    /// spelling, exactly as the retired typed request carried it (the
+    /// one-time cell key, KTD3).
+    fn assert_lease_cell_payload(payload: &Value, operation_id: &str) {
+        assert_eq!(
+            payload.get("zoneUid").and_then(Value::as_str),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
+        assert_eq!(
+            payload.get("guestUid").and_then(Value::as_str),
+            Some("22222222-2222-4222-8222-222222222222")
+        );
+        assert_eq!(payload.get("guestGeneration").and_then(Value::as_u64), Some(4));
+        assert_eq!(
+            payload.get("providerAssignmentGeneration").and_then(Value::as_u64),
+            Some(9)
+        );
+        assert_eq!(payload.get("policyRevision").and_then(Value::as_u64), Some(7));
+        assert_eq!(payload.get("operationId").and_then(Value::as_str), Some(operation_id));
+        assert_eq!(payload.get("operation").and_then(Value::as_str), Some("start"));
+        assert_eq!(payload.get("stopOnly").and_then(Value::as_bool), Some(false));
+    }
+
+    #[test]
+    fn the_lease_caller_consumes_and_completes_through_the_cell_kernels() {
+        // The migrated lease caller (U11): the daemon's convenience shim
+        // invokes the generic consume-cell and complete-cell kernels as two
+        // EnvelopeInvoke frames carrying the full lease identity, and only
+        // a consumed+completed pair admits the effect - the two-phase flow
+        // the retired broker arm ran in one typed request.
+        let (socket_path, broker) =
+            start_test_broker_server("lease-cell-caller", 2, move |index, env, fd| {
+                let BrokerRequest::EnvelopeInvoke(invoke) = env.request else {
+                    panic!("unexpected request: {env:?}");
+                };
+                match index {
+                    0 => {
+                        assert_eq!(invoke.operation, "consume-cell");
+                        assert_eq!(invoke.zone, "11111111-1111-4111-8111-111111111111");
+                        assert_lease_cell_payload(&invoke.payload, "lease-caller-test");
+                        assert_eq!(invoke.fd_indexes, Vec::<u32>::new());
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "consume-cell".to_owned(),
+                                invocation_id: "fake-consume-invocation".to_owned(),
+                                result: Some(json!({ "consumed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
+                            }),
+                        )
+                        .expect("write consume ack");
+                    }
+                    1 => {
+                        assert_eq!(invoke.operation, "complete-cell");
+                        assert_eq!(invoke.zone, "11111111-1111-4111-8111-111111111111");
+                        assert_lease_cell_payload(&invoke.payload, "lease-caller-test");
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "complete-cell".to_owned(),
+                                invocation_id: "fake-complete-invocation".to_owned(),
+                                result: Some(json!({ "completed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
+                            }),
+                        )
+                        .expect("write complete ack");
+                    }
+                    other => panic!("unexpected request index {other}"),
+                }
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let authorization = LifecycleAuthorization::for_test_with_guest(
+            "Guest/vm-a",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            4,
+            9,
+            7,
+            "lease-caller-test",
+        );
+        super::consume_lifecycle_lease(
+            &state,
+            &authorization,
+            super::provider_effects::GuestLifecycleOperation::Start,
+            &BrokerCallerRole::AdminUid { uid: 0 },
+        )
+        .expect("the lease caller consumes and completes");
+        broker.join().expect("broker join");
+    }
+
+    #[test]
+    fn the_lease_caller_refuses_when_a_cell_kernel_refuses() {
+        // The consumed+completed pair is the admission: a refused
+        // consume-cell (the lease is already granted - AE2 replay) fails
+        // the caller without a completion frame.
+        let (socket_path, broker) =
+            start_test_broker_server("lease-cell-refusal", 1, move |_, env, fd| {
+                let BrokerRequest::EnvelopeInvoke(invoke) = env.request else {
+                    panic!("unexpected request: {env:?}");
+                };
+                assert_eq!(invoke.operation, "consume-cell");
+                write_test_json_frame(
+                    fd,
+                    &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                        operation: "consume-cell".to_owned(),
+                        invocation_id: "fake-replay-invocation".to_owned(),
+                        result: None,
+                        refusal: Some("handler-refused".to_owned()),
+                        detail: Some("cell-replayed".to_owned()),
+                        fd_indexes: vec![],
+                        fd_kinds: vec![],
+                    }),
+                )
+                .expect("write replay refusal");
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let authorization = LifecycleAuthorization::for_test_with_guest(
+            "Guest/vm-a",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            4,
+            9,
+            7,
+            "lease-caller-refused",
+        );
+        assert_eq!(
+            super::consume_lifecycle_lease(
+                &state,
+                &authorization,
+                super::provider_effects::GuestLifecycleOperation::Start,
+                &BrokerCallerRole::AdminUid { uid: 0 },
+            ),
+            Err(super::provider_effects::ProviderEffectError::EffectRejected)
+        );
+        broker.join().expect("broker join");
+    }
+
+    #[test]
+    fn the_lease_caller_applies_the_fence_before_invoking() {
+        // The caller-side fence (U11): invalid identity fields and
+        // stop_only/host-shutdown mismatches are refused without any
+        // broker call - the broker's cell kernels are generic and never
+        // see a lease shape.
+        let (socket_path, broker) = start_test_broker_server("lease-cell-fence", 0, move |_, _, _| {
+            panic!("the fence must refuse before any broker call");
+        });
+        let state = test_state_with_broker_socket(socket_path);
+        let authorization = LifecycleAuthorization::for_test_with_guest(
+            "Guest/vm-a",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            4,
+            9,
+            7,
+            "lease-caller-fence",
+        );
+        let start = super::provider_effects::GuestLifecycleOperation::Start;
+        // stop_only (a host-shutdown lease) under a plain admin caller
+        // classifies wrong and refuses.
+        let shutdown_lease = LifecycleAuthorization::host_shutdown(
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("valid Zone UID"),
+            d2b_contracts_resource::v3::ResourceRef::parse("Guest/vm-a").expect("valid Guest ref"),
+            ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("valid Guest UID"),
+            ResourceGeneration::new(4).expect("valid generation"),
+            ResourceGeneration::new(9).expect("valid generation"),
+            7,
+            "lease-caller-fence-shutdown".to_owned(),
+        )
+        .expect("host-shutdown lease");
+        assert_eq!(
+            super::consume_lifecycle_lease(
+                &state,
+                &shutdown_lease,
+                start,
+                &BrokerCallerRole::AdminUid { uid: 0 },
+            ),
+            Err(super::provider_effects::ProviderEffectError::EffectRejected)
+        );
+        // A non-stop-only lease under the host-shutdown caller classifies
+        // wrong too.
+        assert_eq!(
+            super::consume_lifecycle_lease(
+                &state,
+                &authorization,
+                start,
+                &BrokerCallerRole::HostShutdownUid { uid: 0 },
+            ),
+            Err(super::provider_effects::ProviderEffectError::EffectRejected)
+        );
+        // Invalid identity fields (a zero policy revision) refuse before
+        // any broker call.
+        let invalid = LifecycleAuthorization::for_test_with_guest(
+            "Guest/vm-a",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            4,
+            9,
+            0,
+            "lease-caller-fence-invalid",
+        );
+        assert_eq!(
+            super::consume_lifecycle_lease(
+                &state,
+                &invalid,
+                start,
+                &BrokerCallerRole::AdminUid { uid: 0 },
+            ),
+            Err(super::provider_effects::ProviderEffectError::EffectRejected)
         );
         broker.join().expect("broker join");
     }
@@ -26090,14 +26800,18 @@ mod broker_dispatch_tests {
         let child = ChildGuard::new(child);
         let pid = child.child().id() as i32;
         let (socket_path, broker) =
-            start_test_broker_server("eperm-term", 3, move |index, env, fd| {
+            start_test_broker_server("eperm-term", 2, move |index, env, fd| {
                 let caller_role_display = env.caller_role.for_display();
                 match (index, env.request) {
-                    (0, BrokerRequest::SignalRunner(req)) => {
+                    (0, BrokerRequest::EnvelopeInvoke(invoke)) => {
                         assert_broker_envelope_launcher_role(caller_role_display);
-                        assert_eq!(req.vm_id.as_str(), vm);
-                        assert_eq!(req.role_id.as_str(), role);
-                        assert_eq!(req.signal, RunnerSignal::Term);
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                        assert_eq!(
+                            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                            Some(15)
+                        );
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
                         nix::sys::signal::kill(
                             nix::unistd::Pid::from_raw(pid),
                             nix::sys::signal::Signal::SIGTERM,
@@ -26105,33 +26819,31 @@ mod broker_dispatch_tests {
                         .expect("broker kill child");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: VmId::new(vm),
-                                role_id: RoleId::new(role),
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "signal-pidfd".to_owned(),
+                                invocation_id: "fake-signal-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "signaled": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write signal response");
                     }
-                    (1, BrokerRequest::PollChildReaped) => {
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                                notifications: vec![],
-                            }),
-                        )
-                        .expect("write poll response");
-                    }
-                    (2, BrokerRequest::DeregisterRunnerPidfd(req)) => {
+                    (1, BrokerRequest::EnvelopeInvoke(invoke)) => {
                         assert_broker_envelope_launcher_role(caller_role_display);
-                        assert_eq!(req.vm_id.as_str(), vm);
-                        assert_eq!(req.role_id.as_str(), role);
+                        assert_eq!(invoke.operation, "deregister-pidfd");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: VmId::new(vm),
-                                role_id: RoleId::new(role),
-                                removed: true,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "deregister-pidfd".to_owned(),
+                                invocation_id: "fake-dereg-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "removed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write dereg response");
@@ -26200,34 +26912,41 @@ mod broker_dispatch_tests {
         );
         let pid = child.child().id() as i32;
         let (socket_path, broker) =
-            start_test_broker_server("eperm-kill", 5, move |index, env, fd| {
+            start_test_broker_server("eperm-kill", 3, move |index, env, fd| {
                 let caller_role_display = env.caller_role.for_display();
                 match (index, env.request) {
-                    (0, BrokerRequest::SignalRunner(req)) => {
+                    (0, BrokerRequest::EnvelopeInvoke(invoke)) => {
                         assert_broker_envelope_launcher_role(caller_role_display);
-                        assert_eq!(req.signal, RunnerSignal::Term);
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                        assert_eq!(
+                            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                            Some(15)
+                        );
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "signal-pidfd".to_owned(),
+                                invocation_id: "fake-term-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "signaled": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write term signal response");
                     }
-                    (1, BrokerRequest::PollChildReaped) | (3, BrokerRequest::PollChildReaped) => {
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                                notifications: vec![],
-                            }),
-                        )
-                        .expect("write poll response");
-                    }
-                    (2, BrokerRequest::SignalRunner(req)) => {
+                    (1, BrokerRequest::EnvelopeInvoke(invoke)) => {
                         assert_broker_envelope_launcher_role(caller_role_display);
-                        assert_eq!(req.signal, RunnerSignal::Kill);
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                        assert_eq!(
+                            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                            Some(9)
+                        );
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
                         nix::sys::signal::kill(
                             nix::unistd::Pid::from_raw(pid),
                             nix::sys::signal::Signal::SIGKILL,
@@ -26235,22 +26954,31 @@ mod broker_dispatch_tests {
                         .expect("broker sigkill child");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "signal-pidfd".to_owned(),
+                                invocation_id: "fake-kill-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "signaled": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write kill signal response");
                     }
-                    (4, BrokerRequest::DeregisterRunnerPidfd(req)) => {
+                    (2, BrokerRequest::EnvelopeInvoke(invoke)) => {
                         assert_broker_envelope_launcher_role(caller_role_display);
+                        assert_eq!(invoke.operation, "deregister-pidfd");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
-                                removed: true,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "deregister-pidfd".to_owned(),
+                                invocation_id: "fake-dereg-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "removed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write dereg response");
@@ -26327,31 +27055,32 @@ mod broker_dispatch_tests {
         );
         let pid = eperm_child.child().id() as i32;
         let (socket_path, broker) =
-            start_test_broker_server("eperm-multi", 5, move |index, env, fd| {
+            start_test_broker_server("eperm-multi", 3, move |index, env, fd| {
                 match (index, env.request) {
-                    (0, BrokerRequest::PollChildReaped) | (3, BrokerRequest::PollChildReaped) => {
+                    (0, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "deregister-pidfd");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                                notifications: vec![],
-                            }),
-                        )
-                        .expect("write poll response");
-                    }
-                    (1, BrokerRequest::DeregisterRunnerPidfd(req)) => {
-                        assert_eq!(req.role_id.as_str(), normal_role);
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
-                                removed: true,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "deregister-pidfd".to_owned(),
+                                invocation_id: "fake-normal-dereg-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "removed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write normal dereg response");
                     }
-                    (2, BrokerRequest::SignalRunner(req)) => {
-                        assert_eq!(req.role_id.as_str(), eperm_role);
+                    (1, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                        assert_eq!(
+                            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                            Some(15)
+                        );
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
                         nix::sys::signal::kill(
                             nix::unistd::Pid::from_raw(pid),
                             nix::sys::signal::Signal::SIGTERM,
@@ -26359,22 +27088,30 @@ mod broker_dispatch_tests {
                         .expect("broker signal eperm role");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "signal-pidfd".to_owned(),
+                                invocation_id: "fake-multi-signal-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "signaled": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write signal response");
                     }
-                    (4, BrokerRequest::DeregisterRunnerPidfd(req)) => {
-                        assert_eq!(req.role_id.as_str(), eperm_role);
+                    (2, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "deregister-pidfd");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
-                                removed: true,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "deregister-pidfd".to_owned(),
+                                invocation_id: "fake-ep-term-dereg-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "removed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write dereg response");
@@ -26447,9 +27184,16 @@ mod broker_dispatch_tests {
         );
         let pid = child.child().id() as i32;
         let (socket_path, broker) =
-            start_test_broker_server("eperm-idem", 3, move |index, env, fd| {
+            start_test_broker_server("eperm-idem", 2, move |index, env, fd| {
                 match (index, env.request) {
-                    (0, BrokerRequest::SignalRunner(req)) => {
+                    (0, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                        assert_eq!(
+                            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                            Some(15)
+                        );
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
                         nix::sys::signal::kill(
                             nix::unistd::Pid::from_raw(pid),
                             nix::sys::signal::Signal::SIGTERM,
@@ -26457,30 +27201,30 @@ mod broker_dispatch_tests {
                         .expect("kill child");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "signal-pidfd".to_owned(),
+                                invocation_id: "fake-signal-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "signaled": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write signal");
                     }
-                    (1, BrokerRequest::PollChildReaped) => {
+                    (1, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "deregister-pidfd");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                                notifications: vec![],
-                            }),
-                        )
-                        .expect("write poll");
-                    }
-                    (2, BrokerRequest::DeregisterRunnerPidfd(req)) => {
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
-                                removed: true,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "deregister-pidfd".to_owned(),
+                                invocation_id: "fake-dereg-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "removed": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write dereg");
@@ -26589,15 +27333,28 @@ mod broker_dispatch_tests {
         let role = VM_RUNNER_ROLE_ID;
         let (socket_path, broker) =
             start_test_broker_server("eperm-false", 1, move |_, env, fd| match env.request {
-                BrokerRequest::SignalRunner(req) => write_test_json_frame(
-                    fd,
-                    &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                        signaled: false,
-                        vm_id: req.vm_id,
-                        role_id: req.role_id,
-                    }),
-                )
-                .expect("write false response"),
+                BrokerRequest::EnvelopeInvoke(invoke) => {
+                    assert_eq!(invoke.operation, "signal-pidfd");
+                    assert_eq!(
+                        invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                        Some(15)
+                    );
+                    assert_eq!(invoke.fd_indexes, vec![0]);
+                    assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
+                    write_test_json_frame(
+                        fd,
+                        &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                            operation: "signal-pidfd".to_owned(),
+                            invocation_id: "fake-signal-invocation".to_owned(),
+                            result: Some(serde_json::json!({ "signaled": false })),
+                            refusal: None,
+                            detail: None,
+                            fd_indexes: vec![],
+                            fd_kinds: vec![],
+                        }),
+                    )
+                    .expect("write false response")
+                }
                 other => panic!("unexpected request {other:?}"),
             });
         let state = test_state_with_broker_socket(socket_path);
@@ -26630,7 +27387,12 @@ mod broker_dispatch_tests {
         let vm = "vm-eperm-eof";
         let role = VM_RUNNER_ROLE_ID;
         let (socket_path, broker) = start_test_broker_server("eperm-eof", 1, move |_, env, _fd| {
-            assert!(matches!(env.request, BrokerRequest::SignalRunner(_)));
+            match env.request {
+                BrokerRequest::EnvelopeInvoke(invoke) => {
+                    assert_eq!(invoke.operation, "signal-pidfd");
+                }
+                other => panic!("unexpected request {other:?}"),
+            }
         });
         let state = test_state_with_broker_socket(socket_path);
         let child =
@@ -26662,7 +27424,12 @@ mod broker_dispatch_tests {
         let role = VM_RUNNER_ROLE_ID;
         let (socket_path, broker) =
             start_test_broker_server("eperm-short", 1, move |_, env, fd| {
-                assert!(matches!(env.request, BrokerRequest::SignalRunner(_)));
+                match env.request {
+                    BrokerRequest::EnvelopeInvoke(invoke) => {
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
                 nix::sys::socket::send(fd, &[1, 0], MsgFlags::empty()).expect("send short frame");
             });
         let state = test_state_with_broker_socket(socket_path);
@@ -26695,13 +27462,22 @@ mod broker_dispatch_tests {
         let role = VM_RUNNER_ROLE_ID;
         let (socket_path, broker) =
             start_test_broker_server("eperm-wrong", 1, move |_, env, fd| {
-                assert!(matches!(env.request, BrokerRequest::SignalRunner(_)));
+                match env.request {
+                    BrokerRequest::EnvelopeInvoke(invoke) => {
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
                 write_test_json_frame(
                     fd,
-                    &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                        vm_id: VmId::new(vm),
-                        role_id: RoleId::new(role),
-                        removed: true,
+                    &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                        operation: "deregister-pidfd".to_owned(),
+                        invocation_id: "fake-wrong-invocation".to_owned(),
+                        result: Some(serde_json::json!({ "removed": true })),
+                        refusal: None,
+                        detail: None,
+                        fd_indexes: vec![],
+                        fd_kinds: vec![],
                     }),
                 )
                 .expect("write wrong response");
@@ -26748,9 +27524,16 @@ mod broker_dispatch_tests {
         let child = ChildGuard::new(child);
         let pid = child.child().id() as i32;
         let (socket_path, broker) =
-            start_test_broker_server("eperm-dereg-false", 3, move |index, env, fd| {
+            start_test_broker_server("eperm-dereg-false", 2, move |index, env, fd| {
                 match (index, env.request) {
-                    (0, BrokerRequest::SignalRunner(req)) => {
+                    (0, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "signal-pidfd");
+                        assert_eq!(
+                            invoke.payload.get("signal").and_then(serde_json::Value::as_i64),
+                            Some(15)
+                        );
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
                         nix::sys::signal::kill(
                             nix::unistd::Pid::from_raw(pid),
                             nix::sys::signal::Signal::SIGTERM,
@@ -26758,30 +27541,30 @@ mod broker_dispatch_tests {
                         .expect("kill child");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "signal-pidfd".to_owned(),
+                                invocation_id: "fake-signal-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "signaled": true })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write signal");
                     }
-                    (1, BrokerRequest::PollChildReaped) => {
+                    (1, BrokerRequest::EnvelopeInvoke(invoke)) => {
+                        assert_eq!(invoke.operation, "deregister-pidfd");
                         write_test_json_frame(
                             fd,
-                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                                notifications: vec![],
-                            }),
-                        )
-                        .expect("write poll");
-                    }
-                    (2, BrokerRequest::DeregisterRunnerPidfd(req)) => {
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: req.vm_id,
-                                role_id: req.role_id,
-                                removed: false,
+                            &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                                operation: "deregister-pidfd".to_owned(),
+                                invocation_id: "fake-dereg-invocation".to_owned(),
+                                result: Some(serde_json::json!({ "removed": false })),
+                                refusal: None,
+                                detail: None,
+                                fd_indexes: vec![],
+                                fd_kinds: vec![],
                             }),
                         )
                         .expect("write dereg false");
@@ -26867,29 +27650,102 @@ mod broker_dispatch_tests {
 
     #[test]
     fn wait_terminated_with_broker_poll_echild_polls_reap_log() {
-        let vm = "vm-echild-poll";
+        // The U10 per-entry reap probe walks the pidfd table of the VMs the
+        // process-Provider composition tracks, so this test attaches the
+        // bundle-backed providers; the minimal fixture bundle names its VM
+        // "vm-a".
+        let vm = "vm-a";
         let role = VM_RUNNER_ROLE_ID;
         let (socket_path, broker) =
             start_test_broker_server("echild-poll", 1, move |_, env, fd| {
-                assert!(matches!(env.request, BrokerRequest::PollChildReaped));
+                match env.request {
+                    BrokerRequest::EnvelopeInvoke(invoke) => {
+                        assert_eq!(invoke.operation, "poll-child-reaped");
+                        assert_eq!(invoke.fd_indexes, vec![0]);
+                        assert_eq!(invoke.fd_kinds, vec![FdKind::Any]);
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
                 write_test_json_frame(
                     fd,
-                    &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                        notifications: vec![ChildReapedNotification {
-                            pid: 424242,
-                            runner_id: format!("{vm}:{role}"),
-                            exit_status: ChildExitStatus {
-                                kind: ChildExitKind::Exited,
-                                code: Some(0),
-                                signal: None,
-                            },
-                            reaped_at_ms: 1,
-                        }],
+                    &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                        operation: "poll-child-reaped".to_owned(),
+                        invocation_id: "fake-poll-invocation".to_owned(),
+                        result: Some(serde_json::json!({
+                            "reaped": true,
+                            "exitKind": "exited",
+                            "exitCode": 0,
+                            "reapedAtMs": 1
+                        })),
+                        refusal: None,
+                        detail: None,
+                        fd_indexes: vec![],
+                        fd_kinds: vec![],
                     }),
                 )
                 .expect("write poll response");
             });
-        let state = test_state_with_broker_socket(socket_path);
+        let state = test_state_with_broker_socket(socket_path.clone());
+        // The U10 reap probe enumerates the VMs the process-Provider
+        // composition tracks, so this test composes the bundle-backed
+        // providers from the fixture artifacts (the v3 loader itself does
+        // not carry the process DAGs).
+        let host: d2b_core::host::HostJson = serde_json::from_str(
+            &fs::read_to_string(state.config.artifacts.host_path.clone())
+                .expect("read host fixture"),
+        )
+        .expect("parse host fixture");
+        let processes: d2b_core::processes::ProcessesJson = serde_json::from_str(
+            &fs::read_to_string(state.config.artifacts.processes_path.clone())
+                .expect("read processes fixture"),
+        )
+        .expect("parse processes fixture");
+        let resolver =
+            d2b_core::bundle_resolver::BundleResolver::from_artifacts_with_zone_resource_bundles(
+                d2b_core::bundle::Bundle {
+                    bundle_version: 1,
+                    schema_version: "v3".to_owned(),
+                    privileges_path: state
+                        .config
+                        .artifacts
+                        .bundle_path
+                        .with_file_name("privileges.json")
+                        .display()
+                        .to_string(),
+                    storage_path: None,
+                    realm_workloads_launcher_v2_path: None,
+                    generation: d2b_core::bundle::BundleGeneration {
+                        generator: "tests".to_owned(),
+                        source_revision: None,
+                        generated_at: None,
+                    },
+                    bundle_hash: None,
+                    artifact_hashes: None,
+                },
+                host,
+                processes,
+                d2b_core::manifest_v04::ManifestV04::from_slice(
+                    br#"{"_manifest":{"manifestVersion":7},"_observability":{"enabled":false,"obsVsockCid":0,"obsVsockHostSocket":"","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"signozUrl":"","vmName":""}}"#,
+                )
+                .expect("parse manifest fixture"),
+                std::collections::BTreeMap::new(),
+            );
+        let providers = Arc::new(
+            crate::process_provider_runtime::ProductionProcessProviders::new(
+                resolver,
+                socket_path,
+                BrokerCallerRole::AdminUid {
+                    uid: state.daemon_uid,
+                },
+                Arc::new(d2bd_runtime::supervisor::pidfd_table::PidfdTable::new(
+                    state.daemon_state_dir.join("pidfd-table-test.json"),
+                )),
+            ),
+        );
+        state
+            .provider_runtime
+            .attach_process_providers(providers)
+            .expect("attach process providers");
         let child = register_echild_wait_entry(&state, vm, role);
         let result = super::wait_terminated_with_broker_poll(
             &state,
@@ -26993,7 +27849,7 @@ mod broker_dispatch_tests {
     #[test]
     fn host_destroy_removes_only_host_owned_network_state() {
         use d2b_contracts_broker::broker_wire::{
-            AckResponse, BrokerRequestEnvelope, BrokerResponse,
+            BrokerRequest, BrokerRequestEnvelope, BrokerResponse, EnvelopeInvokeResponse,
         };
         use nix::sys::socket::{
             AddressFamily, Backlog, MsgFlags, SockFlag, SockType, UnixAddr, accept4, bind, listen,
@@ -27077,16 +27933,27 @@ mod broker_dispatch_tests {
                 let frame = read_test_frame(accepted_fd).expect("read broker request frame");
                 let envelope: BrokerRequestEnvelope =
                     serde_json::from_slice(&frame).expect("decode broker request frame");
-                let operation = envelope.request.op_name().to_owned();
+                // U12: the daemon's host-destroy legs invoke the
+                // apply-nm-unmanaged / apply-nftables kernels over the
+                // generic envelope carrier.
+                let BrokerRequest::EnvelopeInvoke(invoke) = envelope.request else {
+                    panic!("expected an envelope kernel invocation, got {:?}", envelope.request);
+                };
+                let operation = invoke.operation.clone();
                 operations.push(operation.clone());
                 write_test_json_frame(
                     accepted_fd,
-                    &BrokerResponse::Ack(AckResponse {
-                        accepted: true,
-                        operation,
+                    &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                        operation: operation.clone(),
+                        invocation_id: format!("fake-{operation}"),
+                        result: Some(serde_json::json!({ "applied": true })),
+                        refusal: None,
+                        detail: None,
+                        fd_indexes: vec![],
+                        fd_kinds: vec![],
                     }),
                 )
-                .expect("write broker ack frame");
+                .expect("write broker envelope frame");
                 close(accepted_fd).expect("close broker peer");
             }
             fs::remove_file(&server_socket_path).ok();
@@ -27109,7 +27976,7 @@ mod broker_dispatch_tests {
 
         assert_eq!(
             broker.join().expect("join broker thread"),
-            vec!["ApplyNmUnmanaged", "ApplyNftables",]
+            vec!["apply-nm-unmanaged", "apply-nftables"]
         );
         assert_eq!(
             response.get("type").and_then(serde_json::Value::as_str),

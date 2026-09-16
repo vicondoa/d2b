@@ -1,13 +1,62 @@
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[path = "common/mod.rs"]
+mod common;
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+use std::os::fd::AsRawFd;
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+use common::TestBroker;
+#[cfg(not(feature = "layer1-bootstrap"))]
+use d2b_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
 use d2b_contracts::types::{BundleOpId, ScopeId};
 use d2b_contracts_broker::PROTOCOL_VERSION;
 use d2b_contracts_broker::broker_wire::{
     ApplyNftablesProjectionRequest, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope,
-    CreateBridgeRequest, DeleteBridgeRequest, DeletePersistentTapRequest, NftablesProjectionAction,
+    BrokerResponse, CreateBridgeRequest, DeleteBridgeRequest, DeletePersistentTapRequest,
+    EnvelopeInvokeRequest, NftablesProjectionAction,
 };
 use d2b_contracts_resource::v3::{ResourceBundleGenerationId, ResourceGeneration, ResourceUid};
 use serde::{Deserialize, Serialize};
 
 const PREVIOUS_PROTOCOL_VERSION: u32 = 3;
+
+/// The wire variants U10/U11/U12 retired at wire v6 (KTD10). The matrix
+/// pins them exactly: each is still the *literal frame shape* an old
+/// binary at wire v<6 sent, none of them decodes as a current
+/// `RequestEnvelope`, and the retired-wire gate names every one of them
+/// with the v6 boundary, the typed stale-wire-version refusal, and an
+/// audit record. U10 retired the ten process-family variants; U11 retired
+/// `ConsumeLifecycleLease` with its row (the lease now rides the generic
+/// consume-cell/complete-cell kernels through the envelope); U12 retired
+/// the thirteen network-fds family variants (their cores ride the
+/// broker-generic network kernels through the envelope).
+const RETIRED_WIRE_VARIANTS_MATRIX: &[&str] = &[
+    "OpenPidfd",
+    "OpenPeerPidfdFromAcceptedSocket",
+    "ObserveRunner",
+    "PollChildReaped",
+    "PrepareRuntimeDir",
+    "PrepareStateDir",
+    "CgroupKill",
+    "SignalRunner",
+    "DeregisterRunnerPidfd",
+    "SpawnRunner",
+    "ConsumeLifecycleLease",
+    "ApplyNftables",
+    "ApplyNftablesProjection",
+    "ApplyNmUnmanaged",
+    "ApplyRoute",
+    "ApplySysctl",
+    "CreateBridge",
+    "DeleteBridge",
+    "CreatePersistentTap",
+    "DeletePersistentTap",
+    "CreateTapFd",
+    "SetBridgePortFlags",
+    "UpdateHostsFile",
+    "SeedDnsmasqLease",
+];
 
 // The production envelope carries no protocol version and has no negotiation
 // path. These reduced prior-version types pin the actual serde compatibility:
@@ -40,66 +89,90 @@ fn current_envelope(request: BrokerRequest) -> BrokerRequestEnvelope {
 }
 
 fn current_only_requests() -> [BrokerRequest; 4] {
+    // U12 retired the typed network-fds variants: the four current-only
+    // operations ride the broker-generic network kernels through the
+    // EnvelopeInvoke surface, so the current-only frames are the envelope
+    // carriers the migrated daemon sends, each with the kernel's operation
+    // name and the typed wire request as its payload.
     let generation_id = ResourceBundleGenerationId::parse(format!("sha256:{}", "1".repeat(64)))
         .expect("valid generation identity");
+    let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+    let network_uid = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
+    let network_generation = ResourceGeneration::new(7).unwrap();
+    let attachment_generation = ResourceGeneration::new(11).unwrap();
+    let envelope = |operation: &str, payload: serde_json::Value| {
+        BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+            operation: operation.to_owned(),
+            zone: "scope:test".to_owned(),
+            payload,
+            chain_root_invocation_id: None,
+            chain_identities: None,
+            fd_indexes: Vec::new(),
+            fd_kinds: Vec::new(),
+        })
+    };
     [
-        BrokerRequest::ApplyNftablesProjection(ApplyNftablesProjectionRequest {
-            bundle_nft_projection_intent_ref: BundleOpId::new("nft-projection:test"),
-            scope_id: ScopeId::new("scope:test"),
-            action: NftablesProjectionAction::Apply,
-            zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-            network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
-            network_generation: ResourceGeneration::new(7).unwrap(),
-            attachment_generation: ResourceGeneration::new(11).unwrap(),
-            expected_generation_id: generation_id,
-            desired_hash: None,
-            tracing_span_id: None,
-        }),
-        BrokerRequest::CreateBridge(CreateBridgeRequest {
-            bundle_bridge_intent_ref: BundleOpId::new("bridge:test"),
-            scope_id: ScopeId::new("scope:test"),
-            zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-            network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
-            network_generation: ResourceGeneration::new(7).unwrap(),
-            attachment_generation: ResourceGeneration::new(11).unwrap(),
-            bundle_generation: ResourceBundleGenerationId::parse(format!(
-                "sha256:{}",
-                "1".repeat(64)
-            ))
-            .unwrap(),
-            tracing_span_id: None,
-        }),
-        BrokerRequest::DeleteBridge(DeleteBridgeRequest {
-            bundle_bridge_intent_ref: BundleOpId::new("bridge:test"),
-            scope_id: ScopeId::new("scope:test"),
-            zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-            network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
-            network_generation: ResourceGeneration::new(7).unwrap(),
-            attachment_generation: ResourceGeneration::new(11).unwrap(),
-            bundle_generation: ResourceBundleGenerationId::parse(format!(
-                "sha256:{}",
-                "1".repeat(64)
-            ))
-            .unwrap(),
-            tracing_span_id: None,
-        }),
-        BrokerRequest::DeletePersistentTap(DeletePersistentTapRequest {
-            attachment_id: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
-                .expect("valid attachment id"),
-            expected_zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
-                .expect("valid zone id"),
-            expected_network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002")
-                .expect("valid network id"),
-            expected_network_generation: ResourceGeneration::new(7)
-                .expect("valid network generation"),
-            expected_attachment_generation: ResourceGeneration::new(11)
-                .expect("valid attachment generation"),
-            expected_bundle_generation: ResourceBundleGenerationId::parse(
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            )
-            .expect("valid bundle generation"),
-            tracing_span_id: None,
-        }),
+        envelope(
+            "apply-nftables-projection",
+            serde_json::to_value(ApplyNftablesProjectionRequest {
+                bundle_nft_projection_intent_ref: BundleOpId::new("nft-projection:test"),
+                scope_id: ScopeId::new("scope:test"),
+                action: NftablesProjectionAction::Apply,
+                zone_uid: zone_uid.clone(),
+                network_uid: network_uid.clone(),
+                network_generation,
+                attachment_generation,
+                expected_generation_id: generation_id.clone(),
+                desired_hash: None,
+                tracing_span_id: None,
+            })
+            .expect("projection payload serializes"),
+        ),
+        envelope(
+            "create-bridge",
+            serde_json::to_value(CreateBridgeRequest {
+                bundle_bridge_intent_ref: BundleOpId::new("bridge:test"),
+                scope_id: ScopeId::new("scope:test"),
+                zone_uid: zone_uid.clone(),
+                network_uid: network_uid.clone(),
+                network_generation,
+                attachment_generation,
+                bundle_generation: generation_id.clone(),
+                tracing_span_id: None,
+            })
+            .expect("create-bridge payload serializes"),
+        ),
+        envelope(
+            "delete-bridge",
+            serde_json::to_value(DeleteBridgeRequest {
+                bundle_bridge_intent_ref: BundleOpId::new("bridge:test"),
+                scope_id: ScopeId::new("scope:test"),
+                zone_uid: zone_uid.clone(),
+                network_uid: network_uid.clone(),
+                network_generation,
+                attachment_generation,
+                bundle_generation: generation_id.clone(),
+                tracing_span_id: None,
+            })
+            .expect("delete-bridge payload serializes"),
+        ),
+        envelope(
+            "delete-persistent-tap",
+            serde_json::to_value(DeletePersistentTapRequest {
+                attachment_id: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                    .expect("valid attachment id"),
+                expected_zone_uid: zone_uid,
+                expected_network_uid: network_uid,
+                expected_network_generation: network_generation,
+                expected_attachment_generation: attachment_generation,
+                expected_bundle_generation: ResourceBundleGenerationId::parse(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .expect("valid bundle generation"),
+                tracing_span_id: None,
+            })
+            .expect("delete-persistent-tap payload serializes"),
+        ),
     ]
 }
 
@@ -134,6 +207,150 @@ fn a_retired_previous_request_is_unknown_to_the_current_decoder() {
     assert!(
         error.to_string().contains("unknown variant"),
         "a retired request failed for an unexpected reason: {error}"
+    );
+}
+
+#[test]
+fn the_retired_wire_gate_machinery_names_a_retired_variant() {
+    use d2b_broker::runtime::{RetiredWireVariant, retired_wire_variant};
+    // The machinery U10's retirements inherit: a retired variant is
+    // recognized by name and carries the negotiated-wire boundary it was
+    // retired at. `ValidateBundle` is the previous protocol's request the
+    // current protocol retired (see
+    // `a_retired_previous_request_is_unknown_to_the_current_decoder` above),
+    // standing in as the fixture retired-variant of the old/new matrix.
+    const FIXTURE: &[RetiredWireVariant] = &[RetiredWireVariant {
+        variant: "ValidateBundle",
+        retired_in_version: 4,
+    }];
+    let retired = retired_wire_variant("ValidateBundle", FIXTURE)
+        .expect("the fixture table names the retired variant");
+    assert_eq!(retired.retired_in_version, 4);
+    // A variant the table does not carry - current or never-existing - is
+    // not gated.
+    assert!(retired_wire_variant("Hello", FIXTURE).is_none());
+    // The boundary sits between the previous protocol and the current one:
+    // a straggler negotiated before the boundary, and the gate - not the
+    // decoder - is what answers its call with the stale-wire-version
+    // refusal.
+    assert!(PREVIOUS_PROTOCOL_VERSION < retired.retired_in_version);
+    assert!(PROTOCOL_VERSION > retired.retired_in_version);
+}
+
+#[test]
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn the_retired_wire_gate_names_every_retired_variant_at_wire_v6() {
+    use d2b_broker::catalog::WIRE_VARIANTS;
+    use d2b_broker::runtime::{RETIRED_WIRE_VARIANTS, retired_wire_variant};
+
+    assert_eq!(PROTOCOL_VERSION, 6);
+    // The production table names exactly the twenty-four retired variants
+    // (the ten U10 process-family variants, U11's ConsumeLifecycleLease,
+    // and the thirteen U12 network-fds variants), all at the same wire
+    // boundary.
+    let mut names: Vec<&str> = RETIRED_WIRE_VARIANTS
+        .iter()
+        .map(|entry| entry.variant)
+        .collect();
+    names.sort_unstable();
+    let mut expected = RETIRED_WIRE_VARIANTS_MATRIX.to_vec();
+    expected.sort_unstable();
+    assert_eq!(names, expected, "the retirement table and the matrix agree");
+    for variant in RETIRED_WIRE_VARIANTS_MATRIX {
+        let retired = retired_wire_variant(variant, RETIRED_WIRE_VARIANTS)
+            .expect("the gate names every retired variant");
+        assert_eq!(retired.retired_in_version, PROTOCOL_VERSION);
+        assert!(
+            PREVIOUS_PROTOCOL_VERSION < retired.retired_in_version,
+            "{variant} was retired before the previous protocol boundary"
+        );
+    }
+    // The wire enum no longer declares any retired variant: the current
+    // decoder cannot spell a retired `kind`, and the gate alone still
+    // recognizes the name as a straggler it must refuse.
+    for variant in RETIRED_WIRE_VARIANTS_MATRIX {
+        assert!(
+            WIRE_VARIANTS.iter().all(|declared| *declared != *variant),
+            "{variant} is retired but the wire enum still declares it"
+        );
+    }
+    // A current wire variant is not gated.
+    assert!(retired_wire_variant("Hello", RETIRED_WIRE_VARIANTS).is_none());
+    assert!(retired_wire_variant("EnvelopeInvoke", RETIRED_WIRE_VARIANTS).is_none());
+}
+
+#[test]
+fn a_retired_variant_old_frame_is_unknown_to_the_current_decoder() {
+    // A literal wire-v<6 frame for each retired variant: the current
+    // decoder must refuse every one as an unknown variant (the arm is
+    // gone), never decode it into a neighboring request.
+    for variant in RETIRED_WIRE_VARIANTS_MATRIX {
+        let encoded = serde_json::to_vec(&serde_json::json!({
+            "request": { "kind": variant, "payload": {} },
+        }))
+        .expect("the old-binary frame serializes");
+        let error = serde_json::from_slice::<BrokerRequestEnvelope>(&encoded)
+            .expect_err("the current broker must not decode a retired variant");
+        assert!(
+            error.to_string().contains("unknown variant"),
+            "{variant} failed for an unexpected reason: {error}"
+        );
+    }
+}
+
+#[test]
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn an_old_binary_retired_variant_frame_is_refused_with_the_stale_wire_code_and_audited() {
+    // The full mixed-version matrix on the real broker binary (KTD10):
+    // each literal v<6 retired frame is answered with the typed
+    // stale-wire-version refusal that names the variant and the v6
+    // boundary, and each refusal produces an audit record under the
+    // variant's own operation name - the record vocabulary is the
+    // pre-retirement op name, unchanged across the cut.
+    let broker = TestBroker::spawn("retired-wire-gate-");
+    for variant in RETIRED_WIRE_VARIANTS_MATRIX {
+        let client = connect_seqpacket(broker.socket_path()).expect("connect broker");
+        send_json_frame(
+            client.as_raw_fd(),
+            &serde_json::json!({
+                "request": { "kind": variant, "payload": {} },
+                "callerRole": { "role": "AdminUid", "uid": 0 },
+            }),
+        )
+        .expect("send the old-binary frame");
+        let response: BrokerResponse = recv_json_frame(client.as_raw_fd())
+            .expect("receive the gate reply")
+            .expect("the gate wrote a reply frame");
+        let BrokerResponse::Error(refusal) = response else {
+            panic!("expected a typed stale-wire-version refusal, got {response:?}");
+        };
+        assert_eq!(refusal.kind, d2b_broker::envelope::STALE_WIRE_VERSION);
+        assert_eq!(refusal.operation, *variant);
+        assert!(
+            refusal.message.contains(variant) && refusal.message.contains("6"),
+            "the refusal names the retired variant and the wire boundary it was retired at: {}",
+            refusal.message
+        );
+    }
+
+    let audit = broker.audit_contents();
+    for variant in RETIRED_WIRE_VARIANTS_MATRIX {
+        assert!(
+            audit.contains(&format!(r#""op":"{variant}""#)),
+            "the audit record carries the committed op name {variant}: {audit}"
+        );
+    }
+    assert_eq!(
+        audit
+            .matches(r#""disposition":"stale-wire-version""#)
+            .count(),
+        RETIRED_WIRE_VARIANTS_MATRIX.len(),
+        "every retired call is audited with the stale-wire-version disposition: {audit}"
+    );
+    assert_eq!(
+        audit.matches(r#""outcome":"refused""#).count(),
+        RETIRED_WIRE_VARIANTS_MATRIX.len(),
+        "every retired call is audited as refused: {audit}"
     );
 }
 

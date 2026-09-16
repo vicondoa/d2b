@@ -504,10 +504,7 @@ fn validate_persistent_tap_identity(
         &request.zone_uid,
         &request.network_uid,
         &request.attachment_id,
-        (
-            request.network_generation,
-            request.attachment_generation,
-        ),
+        (request.network_generation, request.attachment_generation),
         &request.bundle_generation,
         canonical_role_id,
         request.vm_id.as_str(),

@@ -25,3 +25,4 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 semver = "1"
 rustix = { workspace = true }
 sha2 = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,58 @@
+[package]
+name = "d2b-broker-composition"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+# The broker executable's composition root (KTD1). The `d2b-broker` crate
+# stays provider-free; this crate is where provider handler crates are
+# LINKED - the binary name is preserved (`d2b-broker`) because the socket
+# and service units, the prebuilt host-tool selection, and the guest static
+# package all reference the binary by that name.
+#
+# This pass ships fixture-exercised: no census operation maps to the
+# in-broker leg, so the only linked handler crate is the seam's pure
+# fixture (`d2b-broker-fixture-handlers`). The syscall-surface fixture is a
+# dev-dependency only: the dependency-surface audit scans it, the
+# production closure never links it.
+
+[lints.rust]
+unsafe_code = "deny"
+
+[features]
+# Forward the broker's legacy feature set: the layer1-bootstrap feature
+# rebuilds the bootstrap-shaped binary (a probe harness), and fake-backends
+# pulls d2b-host's matching fake backends for the W3 oracles.
+layer1-bootstrap = ["d2b-broker/layer1-bootstrap"]
+fake-backends = ["d2b-broker/fake-backends"]
+
+[[bin]]
+name = "d2b-broker"
+path = "src/main.rs"
+
+# The legacy bootstrap-shaped binary, built only when the feature is on
+# (the Nix and guest builds never enable it).
+[[bin]]
+name = "d2b-broker-layer1-bootstrap"
+path = "src/main.rs"
+required-features = ["layer1-bootstrap"]
+
+[dependencies]
+d2b-broker = { path = "../d2b-broker", version = "0.0.0-bootstrap" }
+# The provider handler crates the composition root registers (fixture this
+# pass, per the Operation leg assignment record: the first family that maps
+# an operation in-broker replaces this entry with its own crate).
+d2b-broker-fixture-handlers = { path = "../d2b-broker-fixture-handlers", version = "0.0.0-bootstrap" }
+# The dependency-surface audit parses `cargo metadata` output and runs the
+# lexical source probes.
+regex = "1"
+serde_json = "1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+[dev-dependencies]
+# Scannable-only: never linked into the binary (see the package doc).
+d2b-broker-fixture-syscall-surface = { path = "../d2b-broker-fixture-syscall-surface", version = "0.0.0-bootstrap" }
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt"] }

@@ -7,6 +7,10 @@ load(
     "d2b_rust_doc_test",
 )
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2bd:__pkg__"])
+
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
@@ -24,7 +28,6 @@ d2b_rust_library(
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, cargo_only = True),
-    visibility = ["//visibility:public"],
 )
 
 d2b_rust_library(
@@ -40,14 +43,12 @@ d2b_rust_library(
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, cargo_only = True),
-    visibility = ["//visibility:public"],
 )
 
 d2b_rust_test(
     name = "registration",
     srcs = ["tests/registration.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",

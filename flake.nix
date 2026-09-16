@@ -76,6 +76,9 @@
           mkdir -p $out/packages
           cp -r ${./packages/d2b-audit} $out/packages/d2b-audit
           cp -r ${./packages/d2b-broker} $out/packages/d2b-broker
+          cp -r ${./packages/d2b-broker-composition} $out/packages/d2b-broker-composition
+          cp -r ${./packages/d2b-broker-fixture-handlers} $out/packages/d2b-broker-fixture-handlers
+          cp -r ${./packages/d2b-broker-fixture-syscall-surface} $out/packages/d2b-broker-fixture-syscall-surface
           cp -r ${./packages/d2b-bus} $out/packages/d2b-bus
           cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
           cp -r ${./packages/d2b-contracts-broker} $out/packages/d2b-contracts-broker
@@ -451,7 +454,7 @@
         '';
         d2bd-guest-static = guestStaticPackage "d2bd" "d2bd";
         d2b-broker-guest-static =
-          guestStaticPackage "d2b-broker" "d2b-broker";
+          guestStaticPackage "d2b-broker-composition" "d2b-broker";
         d2b-sk-frontend-static =
           guestStaticPackage "d2b-sk-frontend" "d2b-sk-frontend";
         d2b-clipd = rustWorkspace {

@@ -41,7 +41,24 @@ use tempfile::TempDir;
 
 /// Path to the broker binary under test; set by cargo when building
 /// integration tests for this package.
-const BROKER_BIN: &str = env!("CARGO_BIN_EXE_d2b-broker");
+fn broker_bin() -> std::path::PathBuf {
+    if let Some(bin) = std::env::var_os("CARGO_BIN_EXE_d2b-broker") {
+        return std::path::PathBuf::from(bin);
+    }
+    // Cargo integration tests run with the package manifest dir as cwd;
+    // resolve the workspace target dir from there at RUNTIME (a compile-time
+    // env!("CARGO_MANIFEST_DIR") would embed an absolute sandbox path, which
+    // the bazel build forbids).
+    let candidate = std::env::current_dir()
+        .expect("test cwd")
+        .join("../../target/debug/d2b-broker");
+    assert!(
+        candidate.exists(),
+        "the d2b-broker binary is not built; run `cargo build -p d2b-broker-composition --bin d2b-broker` first (expected at {})",
+        candidate.display()
+    );
+    candidate
+}
 
 fn scratch_dir() -> TempDir {
     tempfile::tempdir().expect("tempdir")
@@ -113,7 +130,7 @@ fn broker_adopts_socket_activated_fd_and_serves_hello() {
         assert!(rc >= 0, "F_SETFD failed: {}", io::Error::last_os_error());
     }
 
-    let broker_bin = PathBuf::from(BROKER_BIN);
+    let broker_bin = broker_bin();
     assert!(
         broker_bin.exists(),
         "broker binary not found at {}: set CARGO_BIN_EXE_d2b-broker",

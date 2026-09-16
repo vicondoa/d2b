@@ -43,6 +43,15 @@ pub enum ProviderToolkitError {
     SessionLoopFailed,
     /// A ComponentSession frame did not satisfy the Provider wire contract.
     WireInvalid,
+    /// Two or more declared service methods claim one committed operation
+    /// row (U7/KD6): the operation envelope would dispatch the row
+    /// arbitrarily, so the build refuses the ambiguous declaration instead.
+    OperationAmbiguous,
+    /// A declared service method carries a contract facet outside the closed
+    /// set the envelope admits (U7): a deadline tier the rows do not name, an
+    /// fd contract without its descriptor kind, or an empty schema or method
+    /// name.
+    OperationFacetInvalid,
 }
 
 impl ProviderToolkitError {
@@ -62,11 +71,13 @@ impl ProviderToolkitError {
             Self::AuthorizationDenied => "authorization-denied",
             Self::SessionLoopFailed => "session-loop-failed",
             Self::WireInvalid => "wire-invalid",
+            Self::OperationAmbiguous => "operation-ambiguous",
+            Self::OperationFacetInvalid => "operation-facet-invalid",
         }
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 15] = [
         Self::BootstrapProviderMismatch,
         Self::BootstrapZoneMismatch,
         Self::BootstrapRefWrongType,
@@ -80,6 +91,8 @@ impl ProviderToolkitError {
         Self::AuthorizationDenied,
         Self::SessionLoopFailed,
         Self::WireInvalid,
+        Self::OperationAmbiguous,
+        Self::OperationFacetInvalid,
     ];
 }
 

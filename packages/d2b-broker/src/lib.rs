@@ -44,10 +44,13 @@ pub mod forwarding;
 // reconcile-executor calls). Pure-shaped: take their inputs directly so
 // the dispatch layer is the only mixer of wire decoding + bundle
 // resolution + live execution.
+#[cfg(not(feature = "layer1-bootstrap"))]
+pub mod kernel_ops;
 pub mod live_handlers;
 pub mod ops;
 pub mod protocol;
 pub mod runtime;
+pub mod state_cells;
 pub mod sys;
 pub mod zone_identity;
 

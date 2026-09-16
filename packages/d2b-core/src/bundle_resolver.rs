@@ -4304,6 +4304,17 @@ pub fn is_serving_worker_template(provider_ref: &str, template: &str) -> bool {
     provider_ref == SERVING_WORKER_PROVIDER_REF && template == SERVING_WORKER_TEMPLATE
 }
 
+/// Whether one resolved runner intent is the binding-owned serving worker:
+/// the same triple the broker's `intent_is_serving_worker_template` reads
+/// (role, profile id, owner). Consumers that cannot reach the broker's copy
+/// (the process family handlers) derive the serving-worker class from the
+/// resolved intent with this predicate, so both spellings stay one rule.
+pub fn resolved_intent_is_serving_worker(intent: &ResolvedRunnerIntent) -> bool {
+    intent.role == ProcessRole::ProviderController
+        && intent.profile_id == SERVING_WORKER_TEMPLATE
+        && intent.owner_ref.as_deref() == Some(SERVING_WORKER_PROVIDER_REF)
+}
+
 /// The private sandbox shape one template intent is minted with.
 enum TemplateIntentShape {
     /// A Provider controller: the static signed controller template, the

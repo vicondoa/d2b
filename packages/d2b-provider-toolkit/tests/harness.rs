@@ -14,11 +14,12 @@ use d2b_provider_toolkit::{
     AllocatorEnrollment, AttachError, Cardinality, ChildCreation, ChildCreationFailure,
     ChildCustody, CreationRefusal, DeterministicClock, DrainDeadline, DrainError, DriverDescriptor,
     FaultPlan, GuestAgent, GuestError, GuestFrame, GuestLink, GuestLinkFuture, GuestPlacement,
-    HarnessDeclarations, IsolationPosture,
-    OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult, PlaneCall,
-    ProviderAgentAuditOutcome, ProviderBase, ProviderDeclaration, ReconcileCause, ReconcileCtx,
-    ReconcileOutcome, ReconcileTarget, RowPhase, StartupStep, StartupStepError, StartupStepExecutor,
-    TestHarness, ValidatedPayload, WellKnownType, ZonePlaneHandle, run_guest,
+    HarnessDeclarations, IsolationPosture, MethodFdContract,
+    OperationCtx, OperationDef, OperationEnvelope, OperationFailure, OperationHandler,
+    OperationResult, PlaneCall, ProviderAgentAuditOutcome, ProviderAgentAuditLog, ProviderBase,
+    ProviderDeclaration, ReconcileCause, ReconcileCtx, ReconcileOutcome, ReconcileTarget, RowPhase,
+    ServiceDecl, ServiceMethod, StartupStep, StartupStepError, StartupStepExecutor, TestHarness,
+    ValidatedPayload, WellKnownType, ZonePlaneHandle, run_guest,
 };
 
 const PROVIDER_REF: &str = "harness";
@@ -122,6 +123,81 @@ impl OperationHandler for MintHandler {
     }
 }
 
+/// The resolve test's own handler and invocation log: envelope tests run
+/// concurrently, so the U7 resolve path observes a log only it writes.
+static SEEN_VERIFY_INVOCATIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+struct VerifyHandler;
+
+#[async_trait]
+impl OperationHandler for VerifyHandler {
+    async fn execute(
+        &self,
+        ctx: OperationCtx<'_>,
+        _payload: ValidatedPayload,
+    ) -> Result<OperationResult, OperationFailure> {
+        SEEN_VERIFY_INVOCATIONS
+            .lock()
+            .expect("invocation log")
+            .push(ctx.invocation_id.to_owned());
+        Ok(OperationResult::new(
+            CanonicalJsonObject::parse(br#"{"verified":true}"#).expect("canonical result"),
+        ))
+    }
+}
+
+/// The permissive path's handler: proves dispatch by answer alone and
+/// writes no log, so no concurrent envelope test can observe it.
+struct RelayHandler;
+
+#[async_trait]
+impl OperationHandler for RelayHandler {
+    async fn execute(
+        &self,
+        _ctx: OperationCtx<'_>,
+        _payload: ValidatedPayload,
+    ) -> Result<OperationResult, OperationFailure> {
+        Ok(OperationResult::new(
+            CanonicalJsonObject::parse(br#"{"relayed":true}"#).expect("canonical result"),
+        ))
+    }
+}
+
+/// The resolve test's declared service and operation rows.
+static VERIFY_SERVICE: ServiceDecl = ServiceDecl {
+    id: "harness.d2bus.org",
+    methods: &[ServiceMethod {
+        name: "mint",
+        operation: Some("harness-mint"),
+        payload_schema: Some("harness-mint.request.v1"),
+        request_fds: MethodFdContract::NONE,
+        response_fds: MethodFdContract::NONE,
+        state_cells: &[],
+        privileges: &["d2bd"],
+        deadline_tier: None,
+    }],
+    attach_kinds: &[],
+    streams: &[],
+    endpoint_policy: None,
+};
+
+static VERIFY_SERVICES: &[ServiceDecl] = &[VERIFY_SERVICE];
+
+static VERIFY_OPERATIONS: LazyLock<[OperationDef; 1]> = LazyLock::new(|| {
+    [OperationDef {
+        operation_ref: operation_ref(),
+        handler: &VerifyHandler,
+    }]
+});
+
+/// The permissive path's operation row, served by the log-free handler.
+static RELAY_OPERATIONS: LazyLock<[OperationDef; 1]> = LazyLock::new(|| {
+    [OperationDef {
+        operation_ref: operation_ref(),
+        handler: &RelayHandler,
+    }]
+});
+
 /// The declared operation reference.
 ///
 /// The committed `Operation` resource type is not in the standard catalog
@@ -132,6 +208,28 @@ fn operation_ref() -> ResourceRef {
         .expect("a declared operation reference")
 }
 
+/// A harness over the resolve test's own declaration rows.
+fn verify_harness() -> TestHarness<FakePortProvider> {
+    let harness = TestHarness::with_declarations(
+        FakePortProvider,
+        HarnessDeclarations {
+            owned_types: &[WellKnownType::VOLUME],
+            creations: DECLARATION_ROWS,
+            services: VERIFY_SERVICES,
+            operations: &VERIFY_OPERATIONS[..],
+            startup: STARTUP_ROWS,
+        },
+    );
+    harness
+        .commit(
+            WellKnownType::PROVIDER,
+            CHILD_PROVIDER,
+            CanonicalJsonObject::empty(),
+        )
+        .expect("the provider identity commits");
+    harness
+}
+
 fn declarations() -> HarnessDeclarations {
     HarnessDeclarations {
         // The one type the fake provider serves. The child its declaration
@@ -139,6 +237,7 @@ fn declarations() -> HarnessDeclarations {
         // through the declaration rather than through this list.
         owned_types: &[WellKnownType::VOLUME],
         creations: DECLARATION_ROWS,
+        services: VERIFY_SERVICES,
         operations: &OPERATIONS[..],
         startup: STARTUP_ROWS,
     }
@@ -364,6 +463,246 @@ async fn an_ungranted_and_an_uncommitted_invocation_are_refused_and_audited() {
             .all(|event| event.outcome() == ProviderAgentAuditOutcome::Denied)
     );
     assert_eq!(harness.envelope().grant_count(), 0);
+}
+
+/// The happy U7 path: a committed row resolves to the declaring service's
+/// declared method, the resolution carries the method's contract facets
+/// (the row schema reference among them), and dispatch reaches the
+/// declaring driver's handler - which stays the execution source.
+#[tokio::test]
+async fn a_declared_method_resolves_validates_against_its_row_and_dispatches() {
+    let harness = verify_harness();
+    SEEN_VERIFY_INVOCATIONS
+        .lock()
+        .expect("invocation log")
+        .clear();
+
+    let (service, method) = harness
+        .envelope()
+        .resolved_method(&operation_ref())
+        .expect("the committed row resolves to a declared method");
+    assert_eq!(service, "harness.d2bus.org");
+    assert_eq!(method.name, "mint");
+    assert_eq!(
+        method.payload_schema,
+        Some("harness-mint.request.v1"),
+        "the row schema reference rides the resolution"
+    );
+    assert_eq!(method.privileges, &["d2bd"]);
+    assert_eq!(method.deadline_tier, None, "no tier sits on the standard tier");
+
+    harness.grant(&caller(), &operation_ref());
+    let result = harness
+        .envelope()
+        .invoke_named(
+            "harness-mint",
+            "invocation-broker-7",
+            &caller(),
+            CanonicalJsonObject::parse(br#"{"name":"worker"}"#).expect("canonical payload"),
+        )
+        .await
+        .expect("the resolved method dispatches to the declaring handler");
+    assert!(result.object().get("verified").is_some());
+
+    let seen = SEEN_VERIFY_INVOCATIONS.lock().expect("invocation log");
+    assert_eq!(seen.as_slice(), &["invocation-broker-7"]);
+    drop(seen);
+
+    let events = harness.audit_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].outcome(), ProviderAgentAuditOutcome::Accepted);
+    assert_eq!(events[0].method().as_str(), "harness-mint");
+}
+
+/// The error U7 path, provider side: an operation row two declared methods
+/// claim fails the envelope build - the envelope would dispatch the row
+/// arbitrarily. A row no declared method serves is not an error: it keeps
+/// an operation-keyed entry with no service link, the shape a driver that
+/// declares operations without service methods (the forward path today)
+/// builds.
+#[test]
+fn an_ambiguous_method_resolution_fails_the_envelope_build() {
+    let zone = ZoneId::parse("dev").expect("a zone label");
+    let provider_ref = ResourceRef::parse("Provider/harness").expect("a provider reference");
+    let audit = Arc::new(Mutex::new(ProviderAgentAuditLog::new()));
+
+    static CLAIMED_TWICE: &[ServiceDecl] = &[
+        ServiceDecl {
+            id: "harness.one",
+            methods: &[ServiceMethod::serving("harness-mint", "mint-a")],
+            attach_kinds: &[],
+            streams: &[],
+            endpoint_policy: None,
+        },
+        ServiceDecl {
+            id: "harness.two",
+            methods: &[ServiceMethod::serving("harness-mint", "mint-b")],
+            attach_kinds: &[],
+            streams: &[],
+            endpoint_policy: None,
+        },
+    ];
+    let error = OperationEnvelope::from_operations(
+        zone.clone(),
+        provider_ref.clone(),
+        CLAIMED_TWICE,
+        &OPERATIONS[..],
+        Arc::clone(&audit),
+    )
+    .expect_err("an ambiguous resolution fails the build");
+    assert_eq!(error.code(), "operation-ambiguous");
+
+    // Two methods of ONE service claiming one row are ambiguous too.
+    static ONE_SERVICE_TWICE: &[ServiceDecl] = &[ServiceDecl {
+        id: "harness.one",
+        methods: &[
+            ServiceMethod::serving("harness-mint", "mint-a"),
+            ServiceMethod::serving("harness-mint", "mint-b"),
+        ],
+        attach_kinds: &[],
+        streams: &[],
+        endpoint_policy: None,
+    }];
+    let error = OperationEnvelope::from_operations(
+        zone,
+        provider_ref,
+        ONE_SERVICE_TWICE,
+        &OPERATIONS[..],
+        audit,
+    )
+    .expect_err("a service claiming one row on two methods is ambiguous");
+    assert_eq!(error.code(), "operation-ambiguous");
+}
+
+/// The permissive U7 shape: a driver that declares operations without
+/// service methods keeps operation-keyed dispatch, with no service link -
+/// the forward path's shape, which must not break when the declaration
+/// surface has no methods yet.
+#[tokio::test]
+async fn an_operation_without_a_declared_method_dispatches_without_a_service_link() {
+    let zone = ZoneId::parse("dev").expect("a zone label");
+    let provider_ref = ResourceRef::parse("Provider/harness").expect("a provider reference");
+    let audit = Arc::new(Mutex::new(ProviderAgentAuditLog::new()));
+    let envelope = OperationEnvelope::from_operations(
+        zone,
+        provider_ref,
+        &[],
+        &RELAY_OPERATIONS[..],
+        audit,
+    )
+    .expect("a service-less driver builds its operation-keyed envelope");
+
+    assert!(envelope.is_declared(&operation_ref()));
+    assert_eq!(
+        envelope.resolved_method(&operation_ref()),
+        None,
+        "no declared method means no service link"
+    );
+
+    envelope.commit_grant(&caller(), &operation_ref());
+    let result = envelope
+        .invoke_named(
+            "harness-mint",
+            "invocation-broker-9",
+            &caller(),
+            CanonicalJsonObject::empty(),
+        )
+        .await
+        .expect("the operation-keyed entry dispatches by committed row name");
+    // Dispatch proof is the handler's own answer; the relay handler writes
+    // no shared log, so no concurrent envelope test can observe it.
+    assert!(result.object().get("relayed").is_some());
+}
+
+/// The closed facet set: a declared method whose facets no committed row
+/// could state fails the envelope build instead of meaning something the
+/// rows never sanctioned.
+#[test]
+fn a_method_facet_outside_the_closed_set_fails_the_envelope_build() {
+    let zone = ZoneId::parse("dev").expect("a zone label");
+    let provider_ref = ResourceRef::parse("Provider/harness").expect("a provider reference");
+
+    static UNKNOWN_TIER: &[ServiceDecl] = &[ServiceDecl {
+        id: "harness.tier",
+        methods: &[ServiceMethod {
+            name: "mint",
+            operation: Some("harness-mint"),
+            payload_schema: None,
+            request_fds: MethodFdContract::NONE,
+            response_fds: MethodFdContract::NONE,
+            state_cells: &[],
+            privileges: &[],
+            deadline_tier: Some("turbo"),
+        }],
+        attach_kinds: &[],
+        streams: &[],
+        endpoint_policy: None,
+    }];
+    let audit = Arc::new(Mutex::new(ProviderAgentAuditLog::new()));
+    let error = OperationEnvelope::from_operations(
+        zone.clone(),
+        provider_ref.clone(),
+        UNKNOWN_TIER,
+        &OPERATIONS[..],
+        Arc::clone(&audit),
+    )
+    .expect_err("an unknown deadline tier fails the build");
+    assert_eq!(error.code(), "operation-facet-invalid");
+
+    static EMPTY_SCHEMA: &[ServiceDecl] = &[ServiceDecl {
+        id: "harness.schema",
+        methods: &[ServiceMethod {
+            name: "mint",
+            operation: Some("harness-mint"),
+            payload_schema: Some(""),
+            request_fds: MethodFdContract::NONE,
+            response_fds: MethodFdContract::NONE,
+            state_cells: &[],
+            privileges: &[],
+            deadline_tier: None,
+        }],
+        attach_kinds: &[],
+        streams: &[],
+        endpoint_policy: None,
+    }];
+    let error = OperationEnvelope::from_operations(
+        zone.clone(),
+        provider_ref.clone(),
+        EMPTY_SCHEMA,
+        &OPERATIONS[..],
+        Arc::clone(&audit),
+    )
+    .expect_err("an empty schema reference fails the build");
+    assert_eq!(error.code(), "operation-facet-invalid");
+
+    static UNKINDED_FDS: &[ServiceDecl] = &[ServiceDecl {
+        id: "harness.fds",
+        methods: &[ServiceMethod {
+            name: "mint",
+            operation: Some("harness-mint"),
+            payload_schema: None,
+            request_fds: MethodFdContract {
+                max_fds: 2,
+                fd_kind: None,
+            },
+            response_fds: MethodFdContract::NONE,
+            state_cells: &[],
+            privileges: &[],
+            deadline_tier: None,
+        }],
+        attach_kinds: &[],
+        streams: &[],
+        endpoint_policy: None,
+    }];
+    let error = OperationEnvelope::from_operations(
+        zone,
+        provider_ref,
+        UNKINDED_FDS,
+        &OPERATIONS[..],
+        audit,
+    )
+    .expect_err("an fd contract without its kind fails the build");
+    assert_eq!(error.code(), "operation-facet-invalid");
 }
 
 #[test]

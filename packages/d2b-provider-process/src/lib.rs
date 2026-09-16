@@ -32,9 +32,9 @@ pub use backend::{
     ProcessLaunchRequest, ProcessRequest, ProcessStopClass,
 };
 pub use driver::{
-    DeviceWorkerFamily, GuestOwnerIdentitySource,
-    ProcessDriverArgs, device_worker_family, device_worker_vm, process_family_descriptors,
-    process_spec_decoder, resolve_guest_owner_uid, resource_uid_from_bytes,
+    DeviceWorkerFamily, GuestOwnerIdentitySource, ProcessDriverArgs, device_worker_family,
+    device_worker_vm, process_family_descriptors, process_spec_decoder, resolve_guest_owner_uid,
+    resource_uid_from_bytes,
 };
 pub use effects::{ProcessDriverEffects, ProviderAdoption, ProviderLiveness};
 pub use execution::{ExecutionMode, execution_target_allowed};

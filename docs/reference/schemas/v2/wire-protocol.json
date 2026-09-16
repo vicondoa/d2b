@@ -142,40 +142,6 @@
       },
       "additionalProperties": false
     },
-    "ActivationRunnerInput": {
-      "description": "Closed input delivered to an activation-runner `EphemeralProcess`.\n\nThe broker serializes this value into the bounded stdin envelope consumed by `d2b-activation-helper`. It deliberately carries no executable, store path, target path, or caller-controlled bytes.",
-      "type": "object",
-      "required": [
-        "activationMode",
-        "systemArtifactId",
-        "targetGeneration"
-      ],
-      "properties": {
-        "activationMode": {
-          "description": "Closed activation mode.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/ActivationMode"
-            }
-          ]
-        },
-        "systemArtifactId": {
-          "description": "Private-catalog artifact identifier.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/ArtifactId"
-            }
-          ]
-        },
-        "targetGeneration": {
-          "description": "Target generation ordinal bound to the owning `NixosGeneration`.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 1.0
-        }
-      },
-      "additionalProperties": false
-    },
     "ApplyHostGenerationHandoff": {
       "description": "Typed broker request. The broker derives its target from this authenticated request and never accepts a path, command, or authority token.",
       "type": "object",
@@ -245,222 +211,6 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
-        }
-      },
-      "additionalProperties": false
-    },
-    "ApplyNftablesProjectionRequest": {
-      "description": "The broker re-derives the desired projection from `bundle_nft_projection_intent_ref`. As with [`ApplyNftablesRequest`], the daemon passes no inline rule text.",
-      "type": "object",
-      "required": [
-        "action",
-        "attachmentGeneration",
-        "bundleNftProjectionIntentRef",
-        "expectedGenerationId",
-        "networkGeneration",
-        "networkUid",
-        "scopeId",
-        "zoneUid"
-      ],
-      "properties": {
-        "action": {
-          "$ref": "#/definitions/NftablesProjectionAction"
-        },
-        "attachmentGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "bundleNftProjectionIntentRef": {
-          "type": "string"
-        },
-        "desiredHash": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "expectedGenerationId": {
-          "description": "Immutable installed bundle generation the projection was resolved from.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceBundleGenerationId"
-            }
-          ]
-        },
-        "networkGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "networkUid": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "scopeId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "zoneUid": {
-          "$ref": "#/definitions/ResourceUid"
-        }
-      },
-      "additionalProperties": false
-    },
-    "ApplyNftablesRequest": {
-      "description": "The broker re-derives the desired nft state from `bundle_nft_intent_ref`. The daemon does NOT pass inline rule text. `desired_hash` is a stable digest of the resolved intent, used for idempotent audit + drift detection.",
-      "type": "object",
-      "required": [
-        "bundleNftIntentRef",
-        "scopeId"
-      ],
-      "properties": {
-        "bundleNftIntentRef": {
-          "type": "string"
-        },
-        "desiredHash": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "destroy": {
-          "default": false,
-          "type": "boolean"
-        },
-        "scopeId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "ApplyNmUnmanagedRequest": {
-      "type": "object",
-      "required": [
-        "bundleNmIntentRef",
-        "scopeId"
-      ],
-      "properties": {
-        "bundleNmIntentRef": {
-          "type": "string"
-        },
-        "destroy": {
-          "default": false,
-          "type": "boolean"
-        },
-        "scopeId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "ApplyRouteRequest": {
-      "type": "object",
-      "required": [
-        "attachmentGeneration",
-        "bundleGeneration",
-        "bundleRouteIntentRef",
-        "networkGeneration",
-        "networkUid",
-        "scopeId",
-        "zoneUid"
-      ],
-      "properties": {
-        "attachmentGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "bundleGeneration": {
-          "$ref": "#/definitions/ResourceBundleGenerationId"
-        },
-        "bundleRouteIntentRef": {
-          "type": "string"
-        },
-        "destroy": {
-          "default": false,
-          "type": "boolean"
-        },
-        "networkGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "networkUid": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "scopeId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "zoneUid": {
-          "$ref": "#/definitions/ResourceUid"
-        }
-      },
-      "additionalProperties": false
-    },
-    "ApplySysctlRequest": {
-      "type": "object",
-      "required": [
-        "attachmentGeneration",
-        "bundleGeneration",
-        "bundleSysctlIntentRef",
-        "networkGeneration",
-        "networkUid",
-        "scopeId",
-        "zoneUid"
-      ],
-      "properties": {
-        "attachmentGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "bundleGeneration": {
-          "$ref": "#/definitions/ResourceBundleGenerationId"
-        },
-        "bundleSysctlIntentRef": {
-          "type": "string"
-        },
-        "destroy": {
-          "default": false,
-          "type": "boolean"
-        },
-        "networkGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "networkUid": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "scopeId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "zoneUid": {
-          "$ref": "#/definitions/ResourceUid"
         }
       },
       "additionalProperties": false
@@ -1240,30 +990,6 @@
       },
       "additionalProperties": false
     },
-    "BridgePortFlagsResponse": {
-      "type": "object",
-      "required": [
-        "bridge",
-        "isolated",
-        "neighSuppress",
-        "port"
-      ],
-      "properties": {
-        "bridge": {
-          "$ref": "#/definitions/IfName"
-        },
-        "isolated": {
-          "type": "boolean"
-        },
-        "neighSuppress": {
-          "type": "boolean"
-        },
-        "port": {
-          "$ref": "#/definitions/IfName"
-        }
-      },
-      "additionalProperties": false
-    },
     "BrokerAuditFilter": {
       "type": "object",
       "properties": {
@@ -1384,195 +1110,11 @@
             "kind": {
               "type": "string",
               "enum": [
-                "ApplyNftables"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ApplyNftablesRequest"
-            }
-          }
-        },
-        {
-          "description": "Apply or remove one Provider-owned nftables projection.\n\nDistinct from [`BrokerRequest::ApplyNftables`], which owns the framework's own `inet d2b` table: this op carries a projection a Provider owns, and its action is a closed enum rather than a boolean, so a caller cannot express a third meaning.\n\nThe live handler refuses a request whose fence differs from the installed generation, mutating nothing and requeueing as stale.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ApplyNftablesProjection"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ApplyNftablesProjectionRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ApplyNmUnmanaged"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ApplyNmUnmanagedRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ApplyRoute"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ApplyRouteRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ApplySysctl"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ApplySysctlRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
                 "CreateOrReconcileUsersGroups"
               ]
             },
             "payload": {
               "$ref": "#/definitions/CreateOrReconcileUsersGroupsRequest"
-            }
-          }
-        },
-        {
-          "description": "Create the bridge an environment's links attach to. The daemon names only the opaque bundle intent ref and scope; the broker derives the bridge ifname and its attributes from its own trusted bundle copy.\n\nThe live handler suppresses IPv6 on the link before bringing it up.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "CreateBridge"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/CreateBridgeRequest"
-            }
-          }
-        },
-        {
-          "description": "Delete a bridge this framework created. Follows the same opaque-identifier contract as [`BrokerRequest::CreateBridge`].\n\nThe live handler removes the bridge only after its TAP removals are confirmed.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "DeleteBridge"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/DeleteBridgeRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "CreatePersistentTap"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/CreatePersistentTapRequest"
-            }
-          }
-        },
-        {
-          "description": "Delete a persistent TAP this framework created. Follows the same opaque-identifier contract as [`BrokerRequest::CreatePersistentTap`].\n\nThe live handler requires both generation fences to match and the VMM descriptor to be closed before removing the TAP.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "DeletePersistentTap"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/DeletePersistentTapRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "CreateTapFd"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/CreateTapFdRequest"
             }
           }
         },
@@ -1628,6 +1170,25 @@
             },
             "payload": {
               "$ref": "#/definitions/HelloRequest"
+            }
+          }
+        },
+        {
+          "description": "One daemon publication of the trusted-context values it currently holds for one Zone.\n\nThe daemon owns the provider-set revision and the controller/guest generations, so it publishes them over the same origination leg its other broker operations use; the broker caches them as durable, monotonically increasing state and refuses to mint a context block until it holds a value for the Zone a call names. The reply carries the broker-epoch nonce every context minted from that point on carries.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PublishTrustedContext"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/PublishTrustedContextValues"
             }
           }
         },
@@ -1929,82 +1490,6 @@
           }
         },
         {
-          "description": "Daemon-side reconcile-and-adopt support. The daemon asks the broker to `pidfd_open(pid)` AND re-verify `/proc/<pid>/stat` field 22 matches the expected start-time in one atomic call (no daemon-side syscall surface needed). The pidfd is returned via SCM_RIGHTS; if start-time drifted the broker closes the fd and surfaces a typed pidfd-race error.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "OpenPidfd"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/OpenPidfdRequest"
-            }
-          }
-        },
-        {
-          "description": "Consume one sealed Guest lifecycle lease before any host effect.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ConsumeLifecycleLease"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ConsumeLifecycleLeaseRequest"
-            }
-          }
-        },
-        {
-          "description": "Obtain a pidfd for the peer of exactly one accepted Unix socket.\n\nThe accepted socket is the sole SCM_RIGHTS request attachment. The request body deliberately contains no descriptor number, PID, credential tuple, path, or subject claim.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "OpenPeerPidfdFromAcceptedSocket"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/OpenPeerPidfdFromAcceptedSocketRequest"
-            }
-          }
-        },
-        {
-          "description": "Observe one broker-owned runner after validating its retained pidfd-backed identity against the trusted bundle.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ObserveRunner"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ObserveRunnerRequest"
-            }
-          }
-        },
-        {
           "description": "Apply one bounded host-side PipeWire effect for a trusted audio runner. The broker resolves all executable and runtime details from the signed runner intent; the daemon supplies only opaque identities and a closed action.",
           "type": "object",
           "required": [
@@ -2137,57 +1622,6 @@
           }
         },
         {
-          "description": "Drain the broker's in-memory ring buffer of ChildReaped events. Returns [`PollChildReapedResponse`] containing all buffered notifications in FIFO order; clears the buffer. Idempotent.",
-          "type": "object",
-          "required": [
-            "kind"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "PollChildReaped"
-              ]
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "PrepareRuntimeDir"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/PrepareDirRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "PrepareStateDir"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/PrepareDirRequest"
-            }
-          }
-        },
-        {
           "type": "object",
           "required": [
             "kind",
@@ -2275,115 +1709,6 @@
             },
             "payload": {
               "$ref": "#/definitions/SecretByIdRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "SetBridgePortFlags"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/SetBridgePortFlagsRequest"
-            }
-          }
-        },
-        {
-          "description": "teardown. The broker resolves the leaf from its trusted runner intent; callers never provide a cgroup path.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "CgroupKill"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/CgroupKillRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "SignalRunner"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/SignalRunnerRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "DeregisterRunnerPidfd"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/DeregisterRunnerPidfdRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "SpawnRunner"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/SpawnRunnerRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "UpdateHostsFile"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/UpdateHostsFileRequest"
             }
           }
         },
@@ -2498,25 +1823,6 @@
           }
         },
         {
-          "description": "Write the per-VM dnsmasq lease file. Replaces leaves of the retired `microvm-setup@<vm>.service`. Currently a typed stub (`Unimplemented`) until the live handler is wired.\n\nLive handler target: `live_seed_dnsmasq_lease`, resolved through `BundleResolver` from the per-VM dnsmasq lease row.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "SeedDnsmasqLease"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/SeedDnsmasqLeaseRequest"
-            }
-          }
-        },
-        {
           "description": "Enforce the per-leaf ownership/mode matrix on `/var/lib/d2b/vms/<vm>/`. Currently a typed stub (`Unimplemented`) until the real check is wired.\n\nLive handler target: `d2b_host::ownership_matrix::check`.",
           "type": "object",
           "required": [
@@ -2610,6 +1916,25 @@
               "$ref": "#/definitions/SecurityKeyApplyUdevRulesRequest"
             }
           }
+        },
+        {
+          "description": "Invoke one committed operation through the broker's generic operation envelope (U10, KTD10).\n\nThis is the generic invocation surface of the retirement template: a caller names a committed operation and carries the canonical payload the row's schema admits, and the broker runs the envelope's five steps - resolve the committed row, authorize the caller against the row's grants, validate the payload, audit with an invocation id, and dispatch - in place of one typed dispatch arm per operation. A root call carries no evidence chain and is authorized as the attested caller's own class; a handler's nested (sandwich) call carries the chain it was dispatched under and is authorized against the chain's initiating principal (KTD6). The reply rides [`BrokerResponse::EnvelopeInvoke`] with any descriptors the dispatch minted attached via SCM_RIGHTS.\n\nThe variant replaces per-operation wire variants as their typed arms retire; a retired variant's name stays gated on the Hello-negotiated wire version (KTD10) so a straggler peer gets the stale-wire-version refusal plus an audit record, never a silent malformed-wire drop.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EnvelopeInvoke"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/EnvelopeInvokeRequest"
+            }
+          }
         }
       ]
     },
@@ -2649,42 +1974,6 @@
             },
             "payload": {
               "$ref": "#/definitions/AckResponse"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "CreatePersistentTap"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/TapReadyResponse"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "CreateTapFd"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/TapReadyResponse"
             }
           }
         },
@@ -2741,6 +2030,25 @@
             },
             "payload": {
               "$ref": "#/definitions/HelloResponse"
+            }
+          }
+        },
+        {
+          "description": "Acknowledgement of one [`BrokerRequest::PublishTrustedContext`]. Carries the broker-epoch nonce the broker is currently minting with, so the daemon's receiving leg can refuse every context minted before a broker restart.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PublishTrustedContext"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/PublishTrustedContextResponse"
             }
           }
         },
@@ -2908,82 +2216,6 @@
           }
         },
         {
-          "description": "OpenPidfd response. The pidfd itself is returned via SCM_RIGHTS on the same frame; the JSON body confirms which `(pid, start_time_ticks)` the broker verified.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "OpenPidfd"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/OpenPidfdResponse"
-            }
-          }
-        },
-        {
-          "description": "Confirmation that one lifecycle lease was consumed.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ConsumeLifecycleLease"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ConsumeLifecycleLeaseResponse"
-            }
-          }
-        },
-        {
-          "description": "Response for [`BrokerRequest::OpenPeerPidfdFromAcceptedSocket`]. The only attachment is the returned close-on-exec pidfd.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "OpenPeerPidfdFromAcceptedSocket"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/OpenPeerPidfdFromAcceptedSocketResponse"
-            }
-          }
-        },
-        {
-          "description": "Observation of a broker-owned runner. No pidfd is returned because the operation is a status query over the broker's retained registry.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ObserveRunner"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ObserveRunnerResponse"
-            }
-          }
-        },
-        {
           "description": "Result of one broker-owned PipeWire effect. Raw node identifiers and runtime paths never cross the wire.",
           "type": "object",
           "required": [
@@ -3098,25 +2330,6 @@
           }
         },
         {
-          "description": "Drain response for `BrokerRequest::PollChildReaped`.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "PollChildReaped"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/PollChildReapedResponse"
-            }
-          }
-        },
-        {
           "type": "object",
           "required": [
             "kind",
@@ -3131,78 +2344,6 @@
             },
             "payload": {
               "$ref": "#/definitions/ReconcileStorageScopeResponse"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "SetBridgePortFlags"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/BridgePortFlagsResponse"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "SignalRunner"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/SignalRunnerResponse"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "DeregisterRunnerPidfd"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/DeregisterRunnerPidfdResponse"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "SpawnRunner"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/SpawnRunnerResponse"
             }
           }
         },
@@ -3240,6 +2381,25 @@
             },
             "payload": {
               "$ref": "#/definitions/ValidateLockSpecResponse"
+            }
+          }
+        },
+        {
+          "description": "The reply to one generic envelope invocation ([`BrokerRequest::EnvelopeInvoke`]): the dispatch's canonical result or its closed refusal, plus any descriptors the dispatching leg minted via the response frame's SCM_RIGHTS attachments.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EnvelopeInvoke"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/EnvelopeInvokeResponse"
             }
           }
         }
@@ -3303,29 +2463,6 @@
       "maxItems": 64,
       "uniqueItems": true
     },
-    "CgroupKillRequest": {
-      "type": "object",
-      "required": [
-        "roleId",
-        "vmId"
-      ],
-      "properties": {
-        "roleId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
     "CheckSystemdUserManagerResponse": {
       "description": "Response from a same-UID per-user manager reachability check.",
       "type": "object",
@@ -3342,75 +2479,6 @@
           "type": "string"
         },
         "vmId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "ChildExitKind": {
-      "description": "Exit status kind for a broker-reaped child.\n\n- `Exited`: child called `_exit(n)` / `exit(n)`. - `Signaled`: child was killed by a signal that is NOT SIGKILL. - `Killed`: child was killed specifically by SIGKILL (unexpected termination).",
-      "type": "string",
-      "enum": [
-        "exited",
-        "signaled",
-        "killed"
-      ]
-    },
-    "ChildExitStatus": {
-      "description": "Typed exit status carried in [`ChildReapedNotification`].",
-      "type": "object",
-      "required": [
-        "kind"
-      ],
-      "properties": {
-        "code": {
-          "description": "Exit code (present when `kind == \"exited\"`).",
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        },
-        "kind": {
-          "$ref": "#/definitions/ChildExitKind"
-        },
-        "signal": {
-          "description": "Signal number (present when `kind == \"signaled\"` or `\"killed\"`).",
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        }
-      },
-      "additionalProperties": false
-    },
-    "ChildReapedNotification": {
-      "description": "One broker-reaped child notification.",
-      "type": "object",
-      "required": [
-        "exitStatus",
-        "pid",
-        "reapedAtMs",
-        "runnerId"
-      ],
-      "properties": {
-        "exitStatus": {
-          "$ref": "#/definitions/ChildExitStatus"
-        },
-        "pid": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "reapedAtMs": {
-          "description": "Unix timestamp milliseconds when the broker called `waitid`.",
-          "type": "integer",
-          "format": "int64"
-        },
-        "runnerId": {
-          "description": "`\"<vm_id>:<role_id>\"` key from the broker's pidfd registry.",
           "type": "string"
         }
       },
@@ -3965,115 +3033,12 @@
       },
       "additionalProperties": false
     },
-    "ConsumeLifecycleLeaseRequest": {
-      "description": "Broker-side consumption of one daemon-issued Guest lifecycle lease.\n\nThe broker validates the complete immutable identity and records this unique lease identity as consumed before allowing the daemon to request effects. Replay retention is bounded by the broker's lease expiry.",
-      "type": "object",
-      "required": [
-        "guestGeneration",
-        "guestUid",
-        "operation",
-        "operationId",
-        "policyRevision",
-        "providerAssignmentGeneration",
-        "zoneUid"
-      ],
-      "properties": {
-        "guestGeneration": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "guestUid": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "operation": {
-          "$ref": "#/definitions/LifecycleLeaseOperation"
-        },
-        "operationId": {
-          "type": "string"
-        },
-        "policyRevision": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "providerAssignmentGeneration": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "stopOnly": {
-          "default": false,
-          "type": "boolean"
-        },
-        "zoneUid": {
-          "$ref": "#/definitions/ResourceUid"
-        }
-      },
-      "additionalProperties": false
-    },
-    "ConsumeLifecycleLeaseResponse": {
-      "type": "object",
-      "required": [
-        "consumed"
-      ],
-      "properties": {
-        "consumed": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false
-    },
     "ContractId": {
       "description": "Bounded storage/synchronization contract identifier.",
       "type": "string",
       "maxLength": 160,
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
-    },
-    "CreateBridgeRequest": {
-      "description": "The broker derives the bridge ifname and its attributes from the trusted bundle row anchored by `bundle_bridge_intent_ref` + `scope_id`. As with the TAP ops, no caller-supplied ifname crosses the wire; the observed ifname appears only in the audit record.",
-      "type": "object",
-      "required": [
-        "attachmentGeneration",
-        "bundleBridgeIntentRef",
-        "bundleGeneration",
-        "networkGeneration",
-        "networkUid",
-        "scopeId",
-        "zoneUid"
-      ],
-      "properties": {
-        "attachmentGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "bundleBridgeIntentRef": {
-          "type": "string"
-        },
-        "bundleGeneration": {
-          "$ref": "#/definitions/ResourceBundleGenerationId"
-        },
-        "networkGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "networkUid": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "scopeId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "zoneUid": {
-          "$ref": "#/definitions/ResourceUid"
-        }
-      },
-      "additionalProperties": false
     },
     "CreateOrReconcileUsersGroupsRequest": {
       "type": "object",
@@ -4088,133 +3053,10 @@
           }
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
           ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "CreatePersistentTapRequest": {
-      "description": "The broker derives the bridge ifname, owner uid/gid, and TAP attributes from the admitted Network identity. Every field in the provenance tuple and the exact admitted interface set is mandatory; there is no legacy env/manifest path.",
-      "type": "object",
-      "required": [
-        "admittedInterfaceNames",
-        "attachmentGeneration",
-        "attachmentId",
-        "bundleGeneration",
-        "bundleTapIntentRef",
-        "networkGeneration",
-        "networkUid",
-        "roleId",
-        "vmId",
-        "zoneUid"
-      ],
-      "properties": {
-        "admittedInterfaceNames": {
-          "description": "Exact interface set copied from the live Network admission proof.",
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/IfName"
-          }
-        },
-        "attachmentGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "attachmentId": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "bundleGeneration": {
-          "$ref": "#/definitions/ResourceBundleGenerationId"
-        },
-        "bundleTapIntentRef": {
-          "description": "Opaque TAP identity bound to the complete Network tuple below.",
-          "type": "string"
-        },
-        "networkGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "networkUid": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        },
-        "zoneUid": {
-          "$ref": "#/definitions/ResourceUid"
-        }
-      },
-      "additionalProperties": false
-    },
-    "CreateTapFdRequest": {
-      "description": "See [`CreatePersistentTapRequest`] for the provenance contract; `CreateTapFd` carries the same complete identity tuple and interface proof.",
-      "type": "object",
-      "required": [
-        "admittedInterfaceNames",
-        "attachmentGeneration",
-        "attachmentId",
-        "bundleGeneration",
-        "bundleTapIntentRef",
-        "networkGeneration",
-        "networkUid",
-        "roleId",
-        "vmId",
-        "zoneUid"
-      ],
-      "properties": {
-        "admittedInterfaceNames": {
-          "description": "Exact interface set copied from the live Network admission proof.",
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/IfName"
-          }
-        },
-        "attachmentGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "attachmentId": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "bundleGeneration": {
-          "$ref": "#/definitions/ResourceBundleGenerationId"
-        },
-        "bundleTapIntentRef": {
-          "description": "Opaque TAP identity bound to the complete Network tuple below.",
-          "type": "string"
-        },
-        "networkGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "networkUid": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        },
-        "zoneUid": {
-          "$ref": "#/definitions/ResourceUid"
         }
       },
       "additionalProperties": false
@@ -4230,96 +3072,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "DeleteBridgeRequest": {
-      "description": "See [`CreateBridgeRequest`] for the opaque-ID rationale; `DeleteBridge` follows the same contract.",
-      "type": "object",
-      "required": [
-        "attachmentGeneration",
-        "bundleBridgeIntentRef",
-        "bundleGeneration",
-        "networkGeneration",
-        "networkUid",
-        "scopeId",
-        "zoneUid"
-      ],
-      "properties": {
-        "attachmentGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "bundleBridgeIntentRef": {
-          "type": "string"
-        },
-        "bundleGeneration": {
-          "$ref": "#/definitions/ResourceBundleGenerationId"
-        },
-        "networkGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "networkUid": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "scopeId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "zoneUid": {
-          "$ref": "#/definitions/ResourceUid"
-        }
-      },
-      "additionalProperties": false
-    },
-    "DeletePersistentTapRequest": {
-      "description": "Delete one trusted attachment realization without accepting its ifname, path, or ownership marker from the caller.",
-      "type": "object",
-      "required": [
-        "attachmentId",
-        "expectedAttachmentGeneration",
-        "expectedBundleGeneration",
-        "expectedNetworkGeneration",
-        "expectedNetworkUid",
-        "expectedZoneUid"
-      ],
-      "properties": {
-        "attachmentId": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "expectedAttachmentGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "expectedBundleGeneration": {
-          "$ref": "#/definitions/ResourceBundleGenerationId"
-        },
-        "expectedNetworkGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "expectedNetworkUid": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "expectedZoneUid": {
-          "description": "Exact Zone/Network identity and installed bundle generation required for deletion; none are accepted from a caller as a wildcard.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            }
-          ]
-        },
-        "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -4344,180 +3096,6 @@
       },
       "additionalProperties": false
     },
-    "DeregisterRunnerPidfdRequest": {
-      "type": "object",
-      "required": [
-        "roleId",
-        "vmId"
-      ],
-      "properties": {
-        "expectedStartTimeTicks": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "generation": {
-          "description": "Desired Process generation for the private runtime scope.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "guestExecution": {
-          "description": "Exact Guest target/session binding for target-local Process cleanup.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/GuestExecutionBinding"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "ownerRef": {
-          "description": "Exact semantic owner of a typed Process resource, when present.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pid": {
-          "description": "Optional exact process identity. Deregistration must not remove a replacement runner that reused the VM/role tuple.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        },
-        "providerIdentity": {
-          "description": "Provider identity commitment for typed Process cleanup.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "providerRef": {
-          "description": "Selected Process Provider reference for typed Process cleanup.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resourceRef": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resourceUid": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "runtimeScope": {
-          "description": "Broker-independent commitment to the private runtime scope.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "templateIdentity": {
-          "description": "Template identity commitment for typed Process cleanup.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        },
-        "zoneUid": {
-          "description": "Immutable Zone identity for typed Process cleanup.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "DeregisterRunnerPidfdResponse": {
-      "type": "object",
-      "required": [
-        "removed",
-        "roleId",
-        "vmId"
-      ],
-      "properties": {
-        "removed": {
-          "type": "boolean"
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "vmId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
     "DiskInitRequest": {
       "description": "Disk-image provisioning request.\n\nThe daemon sends the VM's opaque `vm_id`; the broker resolves every `DiskInit` plan-op from the trusted bundle's `ProcessNode.plan_ops` for that VM and creates or validates the disk images before runner spawn. Existing `ifAbsent` images are skipped only after fd-bound identity and ext4-superblock validation; declared owner/mode posture drift is repaired automatically when the held fd is safe, and a present unformatted image is repaired only when it is proven empty. Otherwise the broker fails closed.\n\nSecurity: the broker NEVER trusts a caller-supplied path. All `target_path`, `size_bytes`, `mode`, `owner_uid`, and `owner_gid` values come from the bundle; the caller supplies only an opaque VM identifier.",
       "type": "object",
@@ -4526,7 +3104,6 @@
       ],
       "properties": {
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -4563,6 +3140,118 @@
           ]
         }
       ]
+    },
+    "EnvelopeInvokeRequest": {
+      "description": "One generic envelope invocation the daemon or a provider handler sends over the origination leg (U10, KTD10).\n\nThe operation names a committed row exactly as the catalog declares it; the payload is the canonical object the envelope validates against the row's declared shape. A root call (a driver invoking a service) carries no chain; a nested call (a provider handler's sandwich leg reaching a broker-generic core) carries the evidence chain it was dispatched under, so the graft rule authorizes the call against the chain's initiating principal and the DB-side records the correlation leg (KTD6).\n\nThe chain crosses as its two parts - the root invocation id and the ordered identities - so the contract crate needs no evidence-chain dependency; the broker reassembles the chain before the envelope admission.",
+      "type": "object",
+      "required": [
+        "fdIndexes",
+        "fdKinds",
+        "operation",
+        "payload",
+        "zone"
+      ],
+      "properties": {
+        "chainIdentities": {
+          "description": "The ordered chain identities, root first; present exactly when [`Self::chain_root_invocation_id`] is, and never empty then (the first identity is the initiating principal).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "chainRootInvocationId": {
+          "description": "The root invocation id of the evidence chain a nested call presents; absent for a root call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fdIndexes": {
+          "description": "The SCM_RIGHTS request attachments' indexes, in frame order.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "fdKinds": {
+          "description": "The kernel kinds of the attached descriptors, in frame order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FdKind"
+          }
+        },
+        "operation": {
+          "description": "The committed operation name the call resolves to, exactly as the committed row declares it.",
+          "type": "string"
+        },
+        "payload": {
+          "description": "The canonical payload object the envelope validates against the row's declared shape."
+        },
+        "zone": {
+          "description": "The Zone the invocation runs in.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvelopeInvokeResponse": {
+      "description": "The reply to one [`BrokerRequest::EnvelopeInvoke`].\n\nA success carries the canonical result the dispatch returned plus the descriptors the answering leg minted (via the response frame's SCM_RIGHTS attachments); a refusal carries the envelope's closed refusal code and its detail. Both carry the invocation id the audit record keys on, so a caller can join the reply to the audit log either way.",
+      "type": "object",
+      "required": [
+        "fdIndexes",
+        "fdKinds",
+        "invocationId",
+        "operation"
+      ],
+      "properties": {
+        "detail": {
+          "description": "Detail of the refusal, when the refusing side contributed one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fdIndexes": {
+          "description": "The response frame's SCM_RIGHTS attachments this result owns, by index.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "fdKinds": {
+          "description": "The kernel kinds of the returned descriptors, in frame order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FdKind"
+          }
+        },
+        "invocationId": {
+          "description": "The invocation identifier the audit record carries.",
+          "type": "string"
+        },
+        "operation": {
+          "description": "The committed operation name that ran.",
+          "type": "string"
+        },
+        "refusal": {
+          "description": "The closed envelope refusal code, present exactly when the invocation was refused.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "description": "The canonical result object, present exactly when [`Self::refusal`] is absent."
+        }
+      },
+      "additionalProperties": false
     },
     "EnvironmentClass": {
       "description": "Semantic environment inheritance class.",
@@ -6062,6 +4751,60 @@
       },
       "additionalProperties": false
     },
+    "FdKind": {
+      "description": "The kernel kind one forwarded descriptor must present.from\n\nThe kind is declared per descriptor on the wire,index-aligned with the fd-index declarations,and validated against the received descriptor's fstat mode on the receiving leg;a mismatch is the [`FD_LEG`] refusal。",
+      "oneOf": [
+        {
+          "description": "A FIFO (pipe) end。",
+          "type": "string",
+          "enum": [
+            "fifo"
+          ]
+        },
+        {
+          "description": "A socket。",
+          "type": "string",
+          "enum": [
+            "socket"
+          ]
+        },
+        {
+          "description": "A character device。",
+          "type": "string",
+          "enum": [
+            "char-device"
+          ]
+        },
+        {
+          "description": "A block device。",
+          "type": "string",
+          "enum": [
+            "block-device"
+          ]
+        },
+        {
+          "description": "Any descriptor kind.\n\nDeclared by an operation whose leg carries a mixed or anon-inode set (an fd-inheriting spawn, or descriptors whose fstat reports no named kind). Admission treats a declared `Any` as accepting every attached descriptor regardless of fstat kind - including anon-inodes such as pidfds, whose fstat mode carries no file type (U10 fd leg).",
+          "type": "string",
+          "enum": [
+            "any"
+          ]
+        },
+        {
+          "description": "A regular file。",
+          "type": "string",
+          "enum": [
+            "regular"
+          ]
+        },
+        {
+          "description": "A directory。",
+          "type": "string",
+          "enum": [
+            "directory"
+          ]
+        }
+      ]
+    },
     "FeatureFlag": {
       "type": "string"
     },
@@ -6556,7 +5299,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -6704,15 +5446,6 @@
       "type": "integer",
       "maximum": 100.0,
       "minimum": 0.0
-    },
-    "LifecycleLeaseOperation": {
-      "description": "Operation named by a sealed Guest lifecycle lease.",
-      "type": "string",
-      "enum": [
-        "start",
-        "stop",
-        "restart"
-      ]
     },
     "ListEntry": {
       "type": "object",
@@ -6893,7 +5626,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -6968,254 +5700,6 @@
         "time"
       ]
     },
-    "NetworkTapContext": {
-      "description": "Admitted Network identity passed through a VMM runner launch.",
-      "type": "object",
-      "required": [
-        "admittedInterfaceNames",
-        "attachmentGeneration",
-        "attachmentId",
-        "bundleGeneration",
-        "networkGeneration",
-        "networkUid",
-        "zoneUid"
-      ],
-      "properties": {
-        "admittedInterfaceNames": {
-          "description": "Exact interface set copied from the live Network admission proof.",
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/IfName"
-          }
-        },
-        "attachmentGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "attachmentId": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "bundleGeneration": {
-          "$ref": "#/definitions/ResourceBundleGenerationId"
-        },
-        "networkGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "networkUid": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "zoneUid": {
-          "$ref": "#/definitions/ResourceUid"
-        }
-      },
-      "additionalProperties": false
-    },
-    "NftablesProjectionAction": {
-      "description": "The action an [`ApplyNftablesProjectionRequest`] carries.\n\nClosed on purpose: the framework's own nftables op spells its two directions as a `destroy` boolean, which leaves \"neither\" and \"both\" expressible in a future field pair. A projection names exactly one of two directions and nothing else.",
-      "oneOf": [
-        {
-          "description": "Install the resolved projection.",
-          "type": "string",
-          "enum": [
-            "apply"
-          ]
-        },
-        {
-          "description": "Remove the resolved projection.",
-          "type": "string",
-          "enum": [
-            "remove"
-          ]
-        }
-      ]
-    },
-    "ObserveRunnerRequest": {
-      "description": "Observe one runner by its trusted `(vm_id, role_id)` identity. The broker resolves the intent reference again and refuses stale or ambiguous ownership rather than trusting caller-supplied process data.",
-      "type": "object",
-      "required": [
-        "bundleRunnerIntentRef",
-        "role",
-        "roleId",
-        "vmId"
-      ],
-      "properties": {
-        "bundleRunnerIntentRef": {
-          "type": "string"
-        },
-        "generation": {
-          "description": "Desired Process generation for the private runtime scope.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "guestExecution": {
-          "description": "Exact Guest target/session binding for target-local Process adoption.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/GuestExecutionBinding"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "ownerRef": {
-          "description": "Exact semantic owner of a typed Process resource, when present.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "providerIdentity": {
-          "description": "Provider identity commitment for typed Process observation.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "providerRef": {
-          "description": "Selected Process Provider reference for typed Process observation.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resourceRef": {
-          "description": "Optional generic Process identity binding.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resourceUid": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "role": {
-          "$ref": "#/definitions/RunnerRole"
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "runtimeScope": {
-          "description": "Broker-independent commitment to the private runtime scope.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "templateIdentity": {
-          "description": "Template identity commitment for typed Process observation.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        },
-        "zoneUid": {
-          "description": "Immutable Zone identity for typed Process observation.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "ObserveRunnerResponse": {
-      "description": "Verified runner observation returned by the broker.",
-      "type": "object",
-      "required": [
-        "cgroupVerified",
-        "executableVerified",
-        "pid",
-        "present",
-        "roleId",
-        "startTimeTicks",
-        "vmId"
-      ],
-      "properties": {
-        "cgroupVerified": {
-          "type": "boolean"
-        },
-        "executableVerified": {
-          "type": "boolean"
-        },
-        "pid": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "present": {
-          "type": "boolean"
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "startTimeTicks": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "vmId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
     "ObserveSystemdUnitResponse": {
       "description": "Observation response. `present = false` has no identity payload.",
       "type": "object",
@@ -7261,7 +5745,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7284,7 +5767,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7303,7 +5785,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7339,7 +5820,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7381,239 +5861,10 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
           ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "OpenPeerPidfdFromAcceptedSocketRequest": {
-      "description": "A request whose authority is the sole attached accepted Unix socket.",
-      "type": "object",
-      "additionalProperties": false
-    },
-    "OpenPeerPidfdFromAcceptedSocketResponse": {
-      "description": "Response metadata for an accepted-socket-bound peer pidfd handoff.",
-      "type": "object",
-      "required": [
-        "pidfdIndex"
-      ],
-      "properties": {
-        "pidfdIndex": {
-          "description": "The sole SCM_RIGHTS pidfd attachment index.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        }
-      },
-      "additionalProperties": false
-    },
-    "OpenPidfdRequest": {
-      "description": "OpenPidfd daemon-side reconcile-and-adopt support. The daemon's `d2bd_runtime::supervisor::state::reconcile_and_adopt` loop sends this request for every snapshot the classifier returned `Adopt` for. The broker:\n\n1. Calls `pidfd_open(pid)`. 2. Reads `/proc/<pid>/stat` field 22 (start-time ticks). 3. Compares against `expected_start_time_ticks`. 4. On match: returns the pidfd via SCM_RIGHTS + the [`OpenPidfdResponse`] JSON body. 5. On mismatch (pid reuse race): closes the pidfd and surfaces a typed pidfd-race error (audit record carries the observed start-time so the operator can correlate).\n\nThis atomic open-AND-verify closes the critical pid-reuse issue: the daemon could otherwise re-adopt a pidfd that referred to a reused-pid unrelated process.",
-      "type": "object",
-      "required": [
-        "expectedStartTimeTicks",
-        "pid",
-        "roleId",
-        "vmId"
-      ],
-      "properties": {
-        "bundleRunnerIntentRef": {
-          "description": "Exact trusted runner intent for typed Process adoption.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "expectedStartTimeTicks": {
-          "description": "Field-22 start-time ticks from `/proc/<pid>/stat` at the time the snapshot was written. The broker re-reads field 22 AFTER `pidfd_open` and compares; mismatch means the pid was reused.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "generation": {
-          "description": "Desired Process generation for the private runtime scope.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "guestExecution": {
-          "description": "Exact Guest target/session binding for target-local Process adoption.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/GuestExecutionBinding"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "ownerRef": {
-          "description": "Exact semantic owner of a typed Process resource, when present.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pid": {
-          "description": "PID the snapshot recorded.",
-          "type": "integer",
-          "format": "int32"
-        },
-        "providerIdentity": {
-          "description": "Provider identity commitment for typed Process adoption.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "providerRef": {
-          "description": "Selected Process Provider reference for typed Process adoption.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resourceRef": {
-          "description": "Optional generic Process identity binding. Legacy VM runner callers omit these fields and retain the historical VM/role key.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resourceUid": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "roleId": {
-          "description": "Per-VM role identifier (matches the daemon-side `PidfdKey::role_id`).",
-          "type": "string"
-        },
-        "runtimeScope": {
-          "description": "Broker-independent commitment to the private runtime scope.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "templateIdentity": {
-          "description": "Template identity commitment for typed Process adoption.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "description": "Per-VM scope the snapshot belongs to.",
-          "type": "string"
-        },
-        "zoneUid": {
-          "description": "Immutable Zone identity for typed Process adoption.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "OpenPidfdResponse": {
-      "description": "Response body for [`OpenPidfdRequest`] success. The pidfd itself is the first SCM_RIGHTS attachment on the same frame.",
-      "type": "object",
-      "required": [
-        "pid",
-        "pidfdIndex",
-        "roleId",
-        "verifiedStartTimeTicks",
-        "vmId"
-      ],
-      "properties": {
-        "controllerBootstrapFdIndex": {
-          "description": "Broker-retained Provider-controller bootstrap endpoint, when present.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "pid": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "pidfdIndex": {
-          "description": "Always `0` today; reserved for future multi-fd SCM_RIGHTS handoffs.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "verifiedStartTimeTicks": {
-          "description": "Echoed back so the daemon can re-verify the match the broker performed. Equal to `expected_start_time_ticks` from the request.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "vmId": {
-          "type": "string"
         }
       },
       "additionalProperties": false
@@ -7754,7 +6005,6 @@
           "minItems": 32
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7816,7 +6066,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7839,7 +6088,6 @@
       ],
       "properties": {
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -7986,7 +6234,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -8024,46 +6271,6 @@
         },
         "roleId": {
           "type": "string"
-        },
-        "vmId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "PollChildReapedResponse": {
-      "description": "Response to `BrokerRequest::PollChildReaped`. Drains and returns all buffered `ChildReaped` notifications in FIFO order.",
-      "type": "object",
-      "required": [
-        "notifications"
-      ],
-      "properties": {
-        "notifications": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/ChildReapedNotification"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "PrepareDirRequest": {
-      "description": "The concrete `/var/lib/d2b/vms/<vm>` or `/run/d2b/<vm>` path is derived from `vm_id` + `path_class` against the broker-side bundle. The daemon never passes a raw path.",
-      "type": "object",
-      "required": [
-        "pathClass",
-        "vmId"
-      ],
-      "properties": {
-        "pathClass": {
-          "$ref": "#/definitions/PathClass"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "vmId": {
           "type": "string"
@@ -8888,6 +7095,57 @@
       },
       "additionalProperties": false
     },
+    "PublishTrustedContextResponse": {
+      "description": "The broker's acknowledgement of one [`PublishTrustedContextValues`].\n\nThe reply carries the broker-epoch nonce the broker is currently minting with, so the daemon's rendezvous can refuse every context minted before a broker restart: the epoch it observed stops matching the moment the broker reopens its store and starts minting under a fresh nonce.",
+      "type": "object",
+      "required": [
+        "brokerEpoch"
+      ],
+      "properties": {
+        "brokerEpoch": {
+          "description": "The broker-epoch nonce the broker is currently minting with.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "PublishTrustedContextValues": {
+      "description": "The daemon-owned values one publication carries over the established origination leg.\n\nProvider-set revision and the controller/guest generations are daemon state, so the daemon publishes its current values to the broker over the leg its operations already originate on; the broker caches them as durable, monotonically increasing state and refuses to mint a context until it holds a value for the Zone the call names.",
+      "type": "object",
+      "required": [
+        "controllerGeneration",
+        "guestGeneration",
+        "providerSetRevision",
+        "zone"
+      ],
+      "properties": {
+        "controllerGeneration": {
+          "description": "The Zone's current controller generation.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "guestGeneration": {
+          "description": "The Zone's current guest generation.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "providerSetRevision": {
+          "description": "The Zone's current provider-set revision.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "zone": {
+          "description": "The Zone the published values describe.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "QemuMediaBootRequest": {
       "description": "qemu-media boot request keyed by VM id only.\n\nThe broker resolves the VM's declared boot source from the trusted bundle. Physical USB boot sources use the root-only enrollment registry; image-file boot sources use the trusted bundle path. Media fds stay inside the broker until QMP consumes them.",
       "type": "object",
@@ -8896,7 +7154,6 @@
       ],
       "properties": {
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -8924,7 +7181,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -8992,7 +7248,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9071,7 +7326,6 @@
       ],
       "properties": {
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9111,7 +7365,6 @@
           "type": "boolean"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9143,7 +7396,6 @@
       "type": "object",
       "properties": {
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9328,7 +7580,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -9369,16 +7620,6 @@
       },
       "additionalProperties": false
     },
-    "ResourceBundleGenerationId": {
-      "type": "string",
-      "maxLength": 71,
-      "minLength": 71,
-      "pattern": "^sha256:[0-9a-f]{64}$"
-    },
-    "ResourceGeneration": {
-      "type": "integer",
-      "minimum": 1.0
-    },
     "ResourceRef": {
       "oneOf": [
         {
@@ -9400,65 +7641,6 @@
       "maxLength": 36,
       "minLength": 36,
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-    },
-    "RunnerAllocation": {
-      "description": "Per-runner runtime allocation tuple. Each entry pairs a typed slot kind with the daemon-side opaque reference (a stringified file descriptor slot, vsock CID, or socket path the broker validates against the bundle row).",
-      "type": "object",
-      "required": [
-        "kind",
-        "opaqueRef"
-      ],
-      "properties": {
-        "kind": {
-          "$ref": "#/definitions/RunnerAllocationKind"
-        },
-        "opaqueRef": {
-          "description": "Opaque reference; the broker interprets per-kind.",
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "RunnerAllocationKind": {
-      "oneOf": [
-        {
-          "description": "CH `--vsock cid=N` value (the daemon's allocator decided this CID at host-prepare time; the broker cross-checks against the per-VM bundle row).",
-          "type": "string",
-          "enum": [
-            "vsock-cid"
-          ]
-        },
-        {
-          "description": "CH `--net fd=N` value when running under [`crate::broker_wire::CreateTapFdRequest`] - the daemon references the SCM_RIGHTS slot the broker handed back in the matching CreateTapFd response.",
-          "type": "string",
-          "enum": [
-            "tap-fd-slot"
-          ]
-        },
-        {
-          "description": "CH `--api-socket` path the daemon owns; the broker validates the path is under `/run/d2b/<vm>/`.",
-          "type": "string",
-          "enum": [
-            "api-socket-path"
-          ]
-        }
-      ]
-    },
-    "RunnerLaunchArgs": {
-      "description": "Controller-supplied arguments for one typed Process launch.\n\nThe executor never accepts an `argv[0]`: the executable is always the trusted intent's `binary_path`. This type only carries the arguments the owning Process controller appends after it, and only for templates whose trusted bundle row declares that it admits controller arguments. Bounds mirror the spawn preflight so an argument the exec path cannot round-trip is refused at the wire boundary.",
-      "type": "object",
-      "required": [
-        "args"
-      ],
-      "properties": {
-        "args": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "additionalProperties": false
     },
     "RunnerRole": {
       "description": "The daemon never names argv, env, uid/gid, caps, kernel/initrd/cmdline strings, virtiofs sockets, TAP fds, or any other launch authority across the wire. The broker resolves the full role spawn context from `bundle.vms[vm_id].roles[role_id]` anchored by the opaque `bundle_runner_intent_ref`. The wire shape follows the opaque-only contract for every other mutating variant.\n\n`RunnerRole` identifies the bundle-owned runner shape consumed by the broker. Provider-specific argv planning is not performed in this crate. Adding new roles requires a bundle schema bump so downstream bundles can declare the new launch context.",
@@ -9561,15 +7743,6 @@
             "wayland-proxy"
           ]
         }
-      ]
-    },
-    "RunnerSignal": {
-      "description": "Runner-signal broker envelope. The live daemon stop/restart path first delivers signals through `d2bd_runtime::supervisor::pidfd_table` after `SpawnRunner` pidfd registration; on pidfd `EPERM`, d2bd falls back to this broker-owned live caller via `stop_vm_pidfd_role`.",
-      "type": "string",
-      "enum": [
-        "term",
-        "kill",
-        "quit"
       ]
     },
     "RuntimeDisplayCapabilities": {
@@ -9877,7 +8050,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -10270,50 +8442,6 @@
       },
       "additionalProperties": false
     },
-    "SeedDnsmasqLeaseRequest": {
-      "description": "SeedDnsmasqLease request. The broker resolves the per-VM dnsmasq lease intent from the bundle (using `vm_id`) and writes `/var/lib/d2b/dnsmasq/<vm>.leases` with the correct owner / mode.",
-      "type": "object",
-      "required": [
-        "attachmentGeneration",
-        "bundleGeneration",
-        "networkGeneration",
-        "networkUid",
-        "scopeId",
-        "vmId",
-        "zoneUid"
-      ],
-      "properties": {
-        "attachmentGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "bundleGeneration": {
-          "$ref": "#/definitions/ResourceBundleGenerationId"
-        },
-        "networkGeneration": {
-          "$ref": "#/definitions/ResourceGeneration"
-        },
-        "networkUid": {
-          "$ref": "#/definitions/ResourceUid"
-        },
-        "scopeId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        },
-        "zoneUid": {
-          "$ref": "#/definitions/ResourceUid"
-        }
-      },
-      "additionalProperties": false
-    },
     "SemverRange": {
       "description": "Semantic version requirement string, for example `>=0.4.0, <0.5.0`.",
       "type": "string"
@@ -10336,219 +8464,6 @@
           ]
         }
       ]
-    },
-    "SetBridgePortFlagsRequest": {
-      "description": "The broker derives the bridge, port, and flag set from the complete admitted Network identity. Legacy callers without that context are refused before any link mutation.",
-      "type": "object",
-      "required": [
-        "roleId",
-        "vmId"
-      ],
-      "properties": {
-        "networkTapContext": {
-          "description": "Complete admitted Network identity for a Network-owned port.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/NetworkTapContext"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "SignalRunnerRequest": {
-      "type": "object",
-      "required": [
-        "roleId",
-        "signal",
-        "vmId"
-      ],
-      "properties": {
-        "expectedStartTimeTicks": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "generation": {
-          "description": "Desired Process generation for the private runtime scope.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "guestExecution": {
-          "description": "Exact Guest target/session binding for target-local Process control.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/GuestExecutionBinding"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "ownerRef": {
-          "description": "Exact semantic owner of a typed Process resource, when present.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pid": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        },
-        "providerIdentity": {
-          "description": "Provider identity commitment for typed Process cleanup.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "providerRef": {
-          "description": "Selected Process Provider reference for typed Process control.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resourceRef": {
-          "description": "Optional generic Process identity binding.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resourceUid": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "runtimeScope": {
-          "description": "Broker-independent commitment to the private runtime scope.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "signal": {
-          "$ref": "#/definitions/RunnerSignal"
-        },
-        "templateIdentity": {
-          "description": "Template identity commitment for typed Process cleanup.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        },
-        "zoneUid": {
-          "description": "Immutable Zone identity for typed Process control.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "SignalRunnerResponse": {
-      "type": "object",
-      "required": [
-        "roleId",
-        "signaled",
-        "vmId"
-      ],
-      "properties": {
-        "roleId": {
-          "type": "string"
-        },
-        "signaled": {
-          "type": "boolean"
-        },
-        "vmId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
     },
     "SocketReachability": {
       "type": "object",
@@ -10620,476 +8535,6 @@
       },
       "additionalProperties": false
     },
-    "SpawnRunnerRequest": {
-      "type": "object",
-      "required": [
-        "bundleRunnerIntentRef",
-        "role",
-        "roleId",
-        "vmId"
-      ],
-      "properties": {
-        "activationInput": {
-          "description": "Typed stdin input admitted only for the activation-nixos runner role.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ActivationRunnerInput"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "bundleContentIdentity": {
-          "description": "Content identity of the daemon's trusted bundle snapshot.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "bundleRunnerIntentRef": {
-          "description": "Opaque reference into the trusted bundle's runner-intent table. The broker resolves this to the full launch context (binary path, argv inputs, uid/gid, capabilities, seccomp policy ref, cgroup placement, mount namespace, environment) and feeds it to the matching argv generator.",
-          "type": "string"
-        },
-        "executionDomain": {
-          "description": "Canonical execution domain bound by the Process ticket.",
-          "default": null,
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ExecutionDomain"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "executionRef": {
-          "description": "Canonical Host or Guest execution target bound by the Process ticket. Legacy VM runner callers omit this additive field.",
-          "default": null,
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "generation": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "guestExecution": {
-          "description": "Exact Guest target/session binding for target-local Process launches.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/GuestExecutionBinding"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "inheritedFdCount": {
-          "description": "Number of request-side inherited descriptors attached with SCM_RIGHTS.\n\nProvider controller launches carry exactly one bootstrap descriptor; every other runner launch carries zero.",
-          "default": 0,
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0.0
-        },
-        "launchArgs": {
-          "description": "Bounded controller-supplied arguments for a typed Process launch.\n\nThe executable is never supplied here: the broker composes `argv[0]` from the trusted intent's `binary_path` and appends these arguments. Refused unless the resolved intent's template declares that it admits controller arguments.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RunnerLaunchArgs"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "networkTapContext": {
-          "description": "Complete admitted Network context required when this runner opens a VMM TAP through `CreateTapFd`.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/NetworkTapContext"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "ownerRef": {
-          "description": "Exact semantic owner of the Process resource, when one exists.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "ownerUid": {
-          "description": "Immutable semantic-owner UID for owner-scoped runtime bootstrap.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "providerIdentity": {
-          "description": "Provider/template identity expected by the daemon.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "providerRef": {
-          "description": "Selected Process Provider reference for typed Process launch.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resourceRef": {
-          "description": "Optional generic Process identity binding. These fields are part of the registry key and prevent distinct Process resources from colliding on the legacy VM/role tuple.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resourceUid": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "role": {
-          "description": "Role selector - picks the argv generator the broker applies to the bundle row anchored by `bundle_runner_intent_ref`.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/RunnerRole"
-            }
-          ]
-        },
-        "roleId": {
-          "description": "Per-VM role this runner fills. Legacy runners are unique on `(vm_id, role_id)`; typed Process runners are additionally fenced by their private runtime scope and resource incarnation.",
-          "type": "string"
-        },
-        "runtimeAllocations": {
-          "description": "Optional vsock CID / TAP fd slot allocated by the daemon at host-prepare time. The broker validates each entry against the bundle row and refuses any unexpected allocation slot. None for roles that do not need them (virtiofsd / swtpm).",
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/RunnerAllocation"
-          }
-        },
-        "runtimeScope": {
-          "description": "Broker-independent commitment to the private runtime scope.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "sandboxPlan": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SandboxLaunchPlan"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "templateIdentity": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "userRef": {
-          "description": "Canonical User resource bound to a user-domain launch.",
-          "default": null,
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "vmId": {
-          "description": "VM scope the runner belongs to.",
-          "type": "string"
-        },
-        "workloadIdentity": {
-          "description": "Universal workload identity from the realm-native model.\n\nAdditive: present for VMs that are declared as realm workloads; absent (`None`) for VMs that predate realm workload declarations. The broker treats `None` as \"no realm identity available\" and does not reject the request - this field is for audit, observability, and routing purposes only. The backend-specific runtime config (`vm_id`, `role`, `role_id`, `bundle_runner_intent_ref`) is always carried in the existing typed fields, never inside this identity.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/WorkloadIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "zoneUid": {
-          "description": "Immutable Zone identity for typed Process launch.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "SpawnRunnerResponse": {
-      "description": "Response to [`SpawnRunnerRequest`]. The pidfd itself is delivered out-of-band as a `SCM_RIGHTS` attachment on the same broker socket frame; this JSON body carries the metadata the daemon's pidfd table requires to validate / reconcile the handle (`(pid, start_time_ticks)` is the pidfd contract).",
-      "type": "object",
-      "required": [
-        "pid",
-        "pidfdIndex",
-        "role",
-        "roleId",
-        "startTimeTicks",
-        "vmId"
-      ],
-      "properties": {
-        "bundleContentIdentity": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "consoleFdIndex": {
-          "description": "Optional index into the SCM_RIGHTS fd vector for a provider-specific console stream. qemu-media uses this for the daemon-owned peer of the socketpair whose other end was passed to QEMU.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "controllerBootstrapFdIndex": {
-          "description": "Provider-controller bootstrap endpoint created and retained by the broker.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "executionDomain": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ExecutionDomain"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "executionRef": {
-          "description": "Resolved execution binding and content identities echoed by the broker after validating the request against its trusted bundle.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "generation": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "guestExecution": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/GuestExecutionBinding"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "ownerRef": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pid": {
-          "description": "Child PID. The daemon validates this against the pidfd it received and against `/proc/<pid>/stat` field 22 (`start_time`).",
-          "type": "integer",
-          "format": "int32"
-        },
-        "pidfdIndex": {
-          "description": "Index into the SCM_RIGHTS fd vector the daemon should treat as the spawned process's pidfd. Always `0` today - kept explicit so future multi-fd spawn responses (e.g. CH API socket + pidfd) have an existing wire slot.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "providerIdentity": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "resourceRef": {
-          "description": "Exact generic Process identity echoed after broker validation.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resourceUid": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "role": {
-          "$ref": "#/definitions/RunnerRole"
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "runtimeScope": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "startTimeTicks": {
-          "description": "Field-22 `start_time` value the broker captured immediately after `clone()`. Pinned to the pidfd so any restart reconciliation rejects a stale (pid, start_time) tuple.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "templateIdentity": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "userRef": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        },
-        "zoneUid": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
     "SshHostKeyPreflightRequest": {
       "description": "SshHostKeyPreflight request. The broker opens every `/var/lib/d2b/vms/<vm>/sshd-host-keys/ssh_host_*_key` with `O_NOFOLLOW` and refuses if drift from `root:root 0400`.",
       "type": "object",
@@ -11098,7 +8543,6 @@
       ],
       "properties": {
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -11323,7 +8767,6 @@
           "minItems": 32
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -11398,7 +8841,6 @@
           "minimum": 0.0
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -11721,7 +9163,6 @@
           "minItems": 32
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -11742,28 +9183,6 @@
         "vmId": {
           "description": "Execution target represented by the trusted runner intent.",
           "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "TapReadyResponse": {
-      "type": "object",
-      "required": [
-        "tap"
-      ],
-      "properties": {
-        "bridge": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/IfName"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "tap": {
-          "$ref": "#/definitions/IfName"
         }
       },
       "additionalProperties": false
@@ -11794,80 +9213,6 @@
         "stdout",
         "stderr"
       ]
-    },
-    "UpdateHostsFileRequest": {
-      "description": "The managed-block lines come from the bundle's `host::HostsEntry` rows, not the wire. The broker only needs the lookup key.",
-      "type": "object",
-      "required": [
-        "bundleHostsIntentRef"
-      ],
-      "properties": {
-        "attachmentGeneration": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceGeneration"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "bundleGeneration": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceBundleGenerationId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "bundleHostsIntentRef": {
-          "type": "string"
-        },
-        "destroy": {
-          "default": false,
-          "type": "boolean"
-        },
-        "networkGeneration": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceGeneration"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "networkUid": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "zoneUid": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
     },
     "UsbProbeEntryKind": {
       "type": "string",
@@ -11916,7 +9261,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -11936,7 +9280,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -11995,7 +9338,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -12035,7 +9377,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -12320,7 +9661,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -12413,7 +9753,6 @@
           "type": "boolean"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -12465,7 +9804,6 @@
           "type": "string"
         },
         "tracingSpanId": {
-          "default": null,
           "type": [
             "string",
             "null"

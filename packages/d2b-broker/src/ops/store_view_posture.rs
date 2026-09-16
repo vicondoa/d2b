@@ -312,7 +312,12 @@ pub(crate) fn posture_store_view_matrix_paths(
     store_root: &Path,
     vm: &str,
 ) -> Result<(), PostureError> {
-    posture_store_view_matrix_paths_with(store_root, vm, resolve_principals()?, MissingLevel::Refuse)
+    posture_store_view_matrix_paths_with(
+        store_root,
+        vm,
+        resolve_principals()?,
+        MissingLevel::Refuse,
+    )
 }
 
 /// [`posture_store_view_matrix_paths`] for StoreSync's pre-build pass.
@@ -711,9 +716,17 @@ mod tests {
         posture_store_view_matrix_paths(&farm, "acceptance-guest").expect("posture");
 
         assert_eq!(mode_of(&guests_dir), 0o750, "searchable ancestor untouched");
-        assert_eq!(mode_of(&zone_dir), 0o755, "world-searchable ancestor untouched");
+        assert_eq!(
+            mode_of(&zone_dir),
+            0o755,
+            "world-searchable ancestor untouched"
+        );
         assert_eq!(mode_of(&zones_dir), 0o700, "walk stops above world-search");
-        assert_eq!(gid_of(&matrix), matrix_gid, "the matrix root keeps its group");
+        assert_eq!(
+            gid_of(&matrix),
+            matrix_gid,
+            "the matrix root keeps its group"
+        );
         assert_eq!(mode_of(&matrix), 0o3770, "the matrix root keeps `03770`");
     }
 
@@ -779,7 +792,9 @@ mod tests {
         let refusal = posture_store_view_matrix_paths(&farm, "acceptance-guest")
             .expect_err("an absent declared required level is drift");
         assert!(
-            refusal.detail.contains("declared required level is missing"),
+            refusal
+                .detail
+                .contains("declared required level is missing"),
             "{refusal}"
         );
 
@@ -810,15 +825,12 @@ mod tests {
                 PathKind::Dir => std::fs::create_dir_all(&path),
                 PathKind::File => {
                     if let Some(parent) = path.parent() {
-                        std::fs::create_dir_all(parent)
-                            .expect("declared file parent materializes");
+                        std::fs::create_dir_all(parent).expect("declared file parent materializes");
                     }
                     std::fs::write(&path, b"")
                 }
             }
-            .unwrap_or_else(|err| {
-                panic!("materialize declared row {}: {err}", path.display())
-            });
+            .unwrap_or_else(|err| panic!("materialize declared row {}: {err}", path.display()));
         }
 
         posture_store_view_matrix_paths(&farm, "acceptance-guest").expect("posture");

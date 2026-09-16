@@ -336,7 +336,12 @@ impl ZonePlanePort for ProductionPlanePort {
         }
         let resolved = self.state_root.join(root.path);
         if root.provider_owned {
-            if let Err(error) = std::fs::create_dir_all(&resolved) {
+            let create_path = resolved.clone();
+            let created =
+                tokio::task::spawn_blocking(move || std::fs::create_dir_all(&create_path))
+                    .await
+                    .expect("storage root create task panicked");
+            if let Err(error) = created {
                 tracing::warn!(
                     zone = %self.zone.as_str(),
                     provider = provider_ref,
@@ -464,6 +469,7 @@ impl ZonePlanePort for ProductionPlanePort {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_provider_toolkit::ServiceMethod;
 
     const ZONE: &str = "test";
 
@@ -704,7 +710,7 @@ mod tests {
     async fn an_undeclared_service_refuses_named() {
         const SERVICE: ServiceDecl = ServiceDecl {
             id: "d2b.provider.v3",
-            methods: &["start"],
+            methods: &[ServiceMethod::zone_plane("start")],
             attach_kinds: &[],
             streams: &[],
             endpoint_policy: None,

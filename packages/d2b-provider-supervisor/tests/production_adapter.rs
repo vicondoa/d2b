@@ -8,23 +8,23 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use d2b_contracts_broker::broker_wire::SystemdUnitIdentity;
-use d2b_provider_process::{
-    AdoptionCandidate, BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity,
-    ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest, ProcessRequest,
-    ProcessStopClass, StopClass, WaitReapOwner,
-};
 use d2b_process_conformance::suite;
 use d2b_process_conformance::testing::{ScriptedEffectPort, block_on, fixtures};
 use d2b_process_conformance::{
     AdoptionOutcome, ProcessConformanceError, ProcessLaunchEffectPort, ProcessProvider,
 };
+use d2b_provider_process::{
+    AdoptionCandidate, BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity,
+    ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest, ProcessRequest,
+    ProcessStopClass, StopClass, WaitReapOwner,
+};
+use d2b_provider_process_minijail::{MinijailProcessProvider, PROVIDER_NAME as MINIJAIL};
+use d2b_provider_process_systemd::{PROVIDER_NAME as SYSTEMD, SystemdProcessProvider};
 use d2b_provider_supervisor::{
     BrokerLaunchIntent, BrokerLaunchResolver, BrokerObservedProcess, BrokerProcessBackend,
     ProviderSupervisor, SystemdEffectLaunch, SystemdEffectOwner, SystemdInvocationIdentity,
     SystemdProcessBackend,
 };
-use d2b_provider_process_minijail::{MinijailProcessProvider, PROVIDER_NAME as MINIJAIL};
-use d2b_provider_process_systemd::{PROVIDER_NAME as SYSTEMD, SystemdProcessProvider};
 
 fn minijail_bindings() -> Vec<IdentityBinding> {
     vec![
@@ -509,12 +509,13 @@ impl BrokerLaunchResolver for FixedBrokerResolver {
 }
 
 #[test]
-fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
+fn broker_backend_uses_the_production_spawn_envelope_and_pidfd_handoff() {
     use std::io::{IoSlice, IoSliceMut};
 
     use d2b_contracts::types::{BundleOpId, RoleId, VmId};
     use d2b_contracts_broker::broker_wire::{
-        BrokerRequest, BrokerRequestEnvelope, BrokerResponse, RunnerRole, SpawnRunnerResponse,
+        BrokerRequest, BrokerRequestEnvelope, BrokerResponse, EnvelopeInvokeRequest,
+        EnvelopeInvokeResponse, FdKind, RunnerRole, SpawnRunnerRequest, SpawnRunnerResponse,
     };
     use rustix::net::{
         AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
@@ -558,23 +559,40 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
                 request_fd_count += fds.len();
             }
         }
-        assert_eq!(request_fd_count, 1);
+        // The family row admits no request descriptors.
+        assert_eq!(request_fd_count, 0);
         let request: BrokerRequestEnvelope =
             d2b_contracts::decode_frame("BrokerRequestEnvelope", &payload[..received.bytes])
                 .unwrap();
         let (provider_identity, template_identity, generation) = match request.request {
-            BrokerRequest::SpawnRunner(request) => {
+            BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+                operation,
+                zone,
+                payload,
+                chain_root_invocation_id,
+                chain_identities,
+                fd_indexes,
+                fd_kinds,
+            }) => {
+                assert_eq!(operation, "SpawnRunner");
+                assert_eq!(zone, "corp");
+                assert_eq!(chain_root_invocation_id, None);
+                assert_eq!(chain_identities, None);
+                assert!(fd_indexes.is_empty());
+                assert!(fd_kinds.is_empty());
+                let request: SpawnRunnerRequest =
+                    serde_json::from_value(payload).expect("typed spawn payload");
                 assert_eq!(request.vm_id, server_vm);
                 assert_eq!(request.role_id, server_role);
                 assert_eq!(request.role, RunnerRole::ProviderController);
-                assert_eq!(request.inherited_fd_count, 1);
+                assert_eq!(request.inherited_fd_count, 0);
                 (
                     request.provider_identity,
                     request.template_identity,
                     request.generation,
                 )
             }
-            _ => panic!("expected SpawnRunner"),
+            _ => panic!("expected EnvelopeInvoke SpawnRunner"),
         };
 
         let pid = i32::try_from(std::process::id()).unwrap();
@@ -582,7 +600,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         let pid = rustix::process::Pid::from_raw(pid).unwrap();
         let pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
             .expect("open self pidfd");
-        let response = BrokerResponse::SpawnRunner(Box::new(SpawnRunnerResponse {
+        let result = serde_json::to_value(SpawnRunnerResponse {
             vm_id: server_vm,
             role_id: server_role,
             role: RunnerRole::ProviderController,
@@ -608,7 +626,17 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
             template_identity,
             generation,
             bundle_content_identity: Some("bundle-content-test".to_owned()),
-        }));
+        })
+        .expect("typed spawn result");
+        let response = BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+            operation: "SpawnRunner".to_owned(),
+            invocation_id: "invocation-1".to_owned(),
+            result: Some(result),
+            refusal: None,
+            detail: None,
+            fd_indexes: vec![0],
+            fd_kinds: vec![FdKind::Any],
+        });
         let frame = d2b_contracts::encode_frame(&response).unwrap();
         let iov = [IoSlice::new(&frame)];
         let descriptors = [pidfd.as_fd()];
@@ -623,6 +651,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
 
     let intent = BrokerLaunchIntent {
         vm_id,
+        zone: "corp".to_owned(),
         zone_uid: None,
         owner_ref: None,
         owner_uid: None,
@@ -650,6 +679,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         bundle_content_identity: "bundle-content-test".to_owned(),
         sandbox_plan: None,
         accepts_launch_args: false,
+        multi_instance: false,
     };
     let backend = BrokerProcessBackend::with_socket_and_role(
         FixedBrokerResolver { intent },
@@ -662,11 +692,8 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         .selected_provider(MINIJAIL)
         .expected_identity(minijail_bindings())
         .build()
-        .unwrap()
-        .with_inherited_fd_count(1)
         .unwrap();
-    let inherited_fd: std::os::fd::OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
-    let report = block_on(provider.launch_with_inherited_fds(&ticket, vec![inherited_fd])).unwrap();
+    let report = block_on(provider.launch(&ticket)).unwrap();
     assert_eq!(report.wait_reap_owner, WaitReapOwner::Local);
     drop(provider);
     server.join().unwrap();

@@ -211,7 +211,9 @@ fn delete_persistent_tap_pairs_with_create() {
     let create_json = serde_json::to_value(create).unwrap();
     let delete_json = serde_json::to_value(delete).unwrap();
     assert!(create_json.as_object().unwrap().len() >= 8);
-    assert_eq!(delete_json.as_object().unwrap().len(), 7);
+    // The delete request carries its six identity/generation fields; the
+    // optional tracing span is omitted from the payload when absent.
+    assert_eq!(delete_json.as_object().unwrap().len(), 6);
     for forbidden in ["ifname", "path", "ownershipMarker"] {
         assert!(!create_json.as_object().unwrap().contains_key(forbidden));
         assert!(!delete_json.as_object().unwrap().contains_key(forbidden));

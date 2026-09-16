@@ -842,6 +842,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-broker-composition"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-broker",
+ "d2b-broker-fixture-handlers",
+ "d2b-broker-fixture-syscall-surface",
+ "d2b-contracts-resource",
+ "regex",
+ "serde_json",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "d2b-broker-fixture-handlers"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-broker",
+]
+
+[[package]]
+name = "d2b-broker-fixture-syscall-surface"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "d2b-bus"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -888,10 +916,12 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
+ "rustix 0.38.44",
  "schemars",
  "serde",
  "serde_json",
  "sha2",
+ "socket2 0.5.10",
 ]
 
 [[package]]
@@ -1462,9 +1492,11 @@ dependencies = [
  "d2b-resource-runtime",
  "d2b-resource-types",
  "parking_lot",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
  "sha2",
+ "socket2 0.5.10",
  "tempfile",
  "tokio",
  "tracing",
@@ -1512,7 +1544,9 @@ name = "d2b-provider-process"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts-broker",
  "d2b-contracts-resource",
+ "d2b-core",
  "d2b-process-conformance",
  "d2b-provider-process-minijail",
  "d2b-provider-process-systemd",
@@ -1520,7 +1554,10 @@ dependencies = [
  "d2b-resource-runtime",
  "d2b-resource-types",
  "parking_lot",
+ "rustix 0.38.44",
+ "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tracing",
 ]
@@ -2006,7 +2043,9 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "bitflags 2.13.1",
+ "d2b-contracts-broker",
  "d2b-contracts-resource",
+ "d2b-core",
  "d2b-resource-runtime",
  "serde_json",
 ]

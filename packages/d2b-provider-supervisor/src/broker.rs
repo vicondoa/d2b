@@ -3,29 +3,34 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{IoSlice, IoSliceMut};
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
 use d2b_contracts_broker::broker_wire::{
     AuditJoinContext, BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerRequestEnvelope,
     BrokerResponse, CanonicalAuditDigest, DeregisterRunnerPidfdRequest,
-    GuestExecutionBinding as BrokerGuestExecutionBinding, ObserveRunnerRequest, OpenPidfdRequest,
+    DeregisterRunnerPidfdResponse, GuestExecutionBinding as BrokerGuestExecutionBinding,
+    ObserveRunnerRequest, ObserveRunnerResponse, OpenPidfdRequest, OpenPidfdResponse,
     RunnerLaunchArgs, RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest,
-    SpawnRunnerRequest,
+    SignalRunnerResponse, SpawnRunnerRequest, SpawnRunnerResponse,
+};
+use d2b_contracts_broker::kernel_client::{
+    KernelInvocation, KernelInvokeError, KernelReply, envelope_invoke_kernel,
 };
 use d2b_contracts_resource::v3::{ActivationRunnerInput, execution_policy::ExecutionDomain};
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
 use d2b_core::bundle_resolver::{BundleResolver, intent_id_legacy_runner};
 use d2b_core::processes::ProcessRole;
+use d2b_process_conformance::runtime_scope_commitment;
 use d2b_provider_process::{
     BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity, ProcessEffectBackend,
     ProcessEffectError, ProcessIdentityDigest, ProcessLaunchRequest, ProcessRequest,
     ProcessStopClass, WaitReapOwner,
 };
-use d2b_process_conformance::runtime_scope_commitment;
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::net::{
     AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
@@ -42,6 +47,11 @@ const MAX_PENDING_OBSERVATIONS: usize = 1024;
 pub struct BrokerLaunchIntent {
     /// Broker VM scope.
     pub vm_id: VmId,
+    /// The authoritative Zone label the launch belongs to. The envelope's
+    /// per-Zone resolution and the daemon's per-Zone family serving run
+    /// under it, so every family invocation names the Zone whose verified
+    /// bundle declares the launch's VM scope.
+    pub zone: String,
     /// Immutable Zone identity for a typed Process resource.
     pub zone_uid: Option<ResourceUid>,
     /// Exact semantic owner of a typed Process resource, when present.
@@ -87,6 +97,11 @@ pub struct BrokerLaunchIntent {
     /// Whether the resolved template admits controller-supplied launch
     /// arguments (the broker re-checks the same fence before exec).
     pub accepts_launch_args: bool,
+    /// Whether this launch is one of several same-role runners a single VM
+    /// may hold at once (the binding-owned serving worker class): its
+    /// pidfd-table registration keys on the row identity, not the bare role
+    /// id, so two same-template runners never collide.
+    pub multi_instance: bool,
 }
 
 impl std::fmt::Debug for BrokerLaunchIntent {
@@ -368,6 +383,39 @@ impl BundleBackedLaunchResolver {
         digest.update(value.as_bytes());
         digest.finalize().into()
     }
+
+    /// The authoritative Zone label one launch VM scope belongs to.
+    ///
+    /// The envelope's per-Zone resolution and the daemon's per-Zone family
+    /// serving run under the Zone label, so a launch must name the Zone
+    /// whose verified bundle declares its VM scope. The manifest's per-VM
+    /// environment is the same binding the daemon's Zone coordinator
+    /// registers at startup; a scope the manifest does not name (a Host
+    /// execution target) resolves through the verified Zone bundle that
+    /// declares the Host or Guest resource under that name.
+    fn zone_for_launch_vm(&self, vm: &str) -> Option<String> {
+        if let Some(environment) = self
+            .bundle
+            .manifest
+            .vms
+            .get(vm)
+            .and_then(|entry| entry.env.as_deref())
+        {
+            return Some(environment.to_owned());
+        }
+        let zones = self.bundle.zone_resource_bundle_zones().ok()?;
+        for zone in zones {
+            let bytes = self.bundle.zone_resource_bundle_bytes(zone.as_str())?;
+            let bundle = ResourceBundle::from_json(bytes).ok()?;
+            if bundle.resources.iter().any(|resource| {
+                matches!(resource.resource_type().as_str(), "Host" | "Guest")
+                    && resource.metadata().name().as_str() == vm
+            }) {
+                return Some(zone.as_str().to_owned());
+            }
+        }
+        None
+    }
 }
 
 impl std::fmt::Debug for BundleBackedLaunchResolver {
@@ -389,25 +437,59 @@ impl BrokerLaunchResolver for BundleBackedLaunchResolver {
             return Ok(None);
         };
         let intent = self.resolve_intent(request)?;
-        let frame = broker_round_trip(
+        // The retired typed `ObserveRunner` wire variant is served by the
+        // envelope now: the call names the committed family row and carries
+        // the canonical typed payload the row's schema admits, and the
+        // reply's canonical result is the typed response object.
+        let payload = serde_json::to_value(typed_identity_request!(
+            ObserveRunnerRequest {
+                vm_id: intent.vm_id.clone(),
+                role_id: intent.role_id.clone(),
+                role: intent.role,
+                bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
+                guest_execution: intent.guest_execution.clone(),
+                tracing_span_id: None,
+            },
+            intent,
+        ))
+        .map_err(|_| ProcessEffectError::ObserveFailed)?;
+        let reply = envelope_invoke_kernel(
             &observation.socket_path,
             observation.io_timeout,
-            BrokerRequest::ObserveRunner(typed_identity_request!(
-                ObserveRunnerRequest {
-                    vm_id: intent.vm_id.clone(),
-                    role_id: intent.role_id.clone(),
-                    role: intent.role,
-                    bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
-                    guest_execution: intent.guest_execution.clone(),
-                    tracing_span_id: None,
-                },
-                intent,
-            )),
             observation.caller_role.clone(),
-        )?;
-        let BrokerResponse::ObserveRunner(response) = frame.response else {
-            return Err(ProcessEffectError::ObserveFailed);
-        };
+            KernelInvocation {
+                operation: "ObserveRunner",
+                zone: &intent.zone,
+                payload,
+                fds: &[],
+                chain_root_invocation_id: None,
+                chain_identities: None,
+            },
+        )
+        .map_err(|error| {
+            warn!(
+                provider = "supervisor",
+                error = %error,
+                "broker observe invocation failed"
+            );
+            ProcessEffectError::ObserveFailed
+        })?;
+        let response: ObserveRunnerResponse =
+            serde_json::from_value(reply.response.result.ok_or_else(|| {
+                warn!(
+                    provider = "supervisor",
+                    "broker observe reply carried no result"
+                );
+                ProcessEffectError::ObserveFailed
+            })?)
+            .map_err(|error| {
+                warn!(
+                    provider = "supervisor",
+                    error = ?error,
+                    "broker observe reply is not the typed observe response"
+                );
+                ProcessEffectError::ObserveFailed
+            })?;
         if response.vm_id != intent.vm_id || response.role_id != intent.role_id {
             return Err(ProcessEffectError::IdentityChanged);
         }
@@ -486,8 +568,10 @@ impl BundleBackedLaunchResolver {
             .owner_ref()
             .filter(|owner| owner.resource_type().as_str() == "Credential")
             .filter(|_| process_role_id.starts_with("mi-agent-"))
-            .filter(|_| ticket.template().as_str() == "d2b-managed-identity-agent"
-                || ticket.template().as_str().starts_with("mi-agent-"))
+            .filter(|_| {
+                ticket.template().as_str() == "d2b-managed-identity-agent"
+                    || ticket.template().as_str().starts_with("mi-agent-")
+            })
             .and_then(|_| {
                 self.bundle.find_provider_component_intent_for_template(
                     &expected_execution_ref,
@@ -541,7 +625,8 @@ impl BundleBackedLaunchResolver {
             .filter(|owner| owner.resource_type().as_str() == "Guest")
             .filter(|owner| {
                 ticket.process_ref().name().as_str() == format!("{}-vmm", owner.name().as_str())
-            }) {
+            })
+        {
             let Some(zone_uid) = ticket.zone_uid() else {
                 warn!(
                     provider = "supervisor",
@@ -675,22 +760,10 @@ impl BundleBackedLaunchResolver {
                 return Err(ProcessEffectError::ResolutionFailed);
             }
         }
-        let inherited_fd_count = ticket.inherited_fd_table().count();
-        // A binding-owned serving worker is a controller-role launch that
-        // carries no broker escrow descriptors: it receives none and must
-        // request none.
-        let expects_bootstrap_fds =
-            role == RunnerRole::ProviderController && !binding_worker_launch;
-        if (expects_bootstrap_fds && !(1..=2).contains(&inherited_fd_count))
-            || (!expects_bootstrap_fds && inherited_fd_count != 0)
-        {
-            warn!(
-                provider = "supervisor",
-                resource = %ticket.process_ref().to_canonical_string(),
-                "identity-rejection: inherited descriptor table does not match the runner role"
-            );
-            return Err(ProcessEffectError::ResolutionFailed);
-        }
+        // The SpawnRunner family row declares the request-fd facet for the
+        // ProviderController escrow leg; the escrow rides the envelope from
+        // here and the daemon-side family handler enforces the per-posture
+        // shape fail-closed.
         if intent.execution_ref != expected_execution_ref {
             warn!(
                 provider = "supervisor",
@@ -763,8 +836,23 @@ impl BundleBackedLaunchResolver {
                     provider_generation: binding.provider_generation().get(),
                     controller_generation: binding.controller_generation().get(),
                 });
+        // The envelope's per-Zone resolution and the daemon's per-Zone
+        // family serving run under the Zone label, so the launch must name
+        // the Zone whose verified bundle declares its VM scope. A launch
+        // whose scope resolves to no Zone can never be served and is
+        // refused here.
+        let zone = self.zone_for_launch_vm(launch_vm_name).ok_or_else(|| {
+            warn!(
+                provider = "supervisor",
+                resource = %ticket.process_ref().to_canonical_string(),
+                vm = launch_vm_name,
+                "identity-rejection: no authoritative Zone for the launch VM scope"
+            );
+            ProcessEffectError::ResolutionFailed
+        })?;
         Ok(BrokerLaunchIntent {
             vm_id: VmId::new(launch_vm_name),
+            zone,
             zone_uid: ticket.zone_uid().cloned(),
             owner_ref: ticket.owner_ref().cloned(),
             owner_uid: ticket.owner_uid().cloned(),
@@ -788,22 +876,18 @@ impl BundleBackedLaunchResolver {
             generation: ticket.resource_generation().get(),
             resource_ref: ticket.process_ref().clone(),
             resource_uid: ticket.process_uid().clone(),
-            bundle_content_identity: self
-                .bundle
-                .bundle
-                .bundle_hash
-                .clone()
-                .ok_or_else(|| {
-                    warn!(
+            bundle_content_identity: self.bundle.bundle.bundle_hash.clone().ok_or_else(|| {
+                warn!(
                         provider = "supervisor",
                         resource = %ticket.process_ref().to_canonical_string(),
                     "identity-rejection: trusted bundle content identity missing"
                 );
-                    ProcessEffectError::ResolutionFailed
-                })?,
+                ProcessEffectError::ResolutionFailed
+            })?,
             activation_input: ticket.activation_input().cloned(),
             guest_execution,
             accepts_launch_args: intent.accepts_launch_args,
+            multi_instance: d2b_core::bundle_resolver::resolved_intent_is_serving_worker(intent),
             sandbox_plan: ticket.sandbox_plan().map(|plan| {
                 let spec = plan.spec();
                 SandboxLaunchPlan {
@@ -853,13 +937,28 @@ pub fn runner_role_for_process_role(role: &ProcessRole) -> Option<RunnerRole> {
 pub struct BrokerPidfdHandle {
     pidfd: OwnedFd,
     observed: BrokerObservedProcess,
-    controller_bootstrap: Mutex<Option<OwnedFd>>,
+    /// The envelope invocation id the broker minted for the spawn that
+    /// produced this handle: the deregister leg presents it as the chain
+    /// root so the close correlates to the launch (KTD6). Absent for a
+    /// handle opened through adoption, whose deregister is a root call.
+    spawn_invocation_id: Option<String>,
 }
 
 impl std::fmt::Debug for BrokerPidfdHandle {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("BrokerPidfdHandle(<redacted>)")
     }
+}
+
+/// A daemon-wired observer notified with the launch snapshot of every
+/// successfully spawned runner, before the launch's readiness probe runs.
+/// The daemon registers the kernel-spawned runner in its pidfd table there
+/// so the family handlers' runner lookup (ObserveRunner/SignalRunner) sees
+/// it; registration failure never fails the launch.
+pub trait LaunchedObserver: Send + Sync {
+    /// One launched runner's snapshot: `(vm, role, pid, start_time_ticks,
+    /// pidfd duplicate)`.
+    fn launched(&self, vm: &str, role: &str, pid: i32, start_time_ticks: u64, pidfd: OwnedFd);
 }
 
 /// Production process backend for existing broker-managed runner roles.
@@ -872,28 +971,38 @@ pub struct BrokerProcessBackend<R: BrokerLaunchResolver> {
     resolver: R,
     socket_path: PathBuf,
     io_timeout: Duration,
-    profile: BrokerProfile,
     caller_role: BrokerCallerRole,
     observations: Mutex<BTreeMap<ProcessIdentityDigest, BrokerObservedProcess>>,
+    launched_observer: Option<Arc<dyn LaunchedObserver>>,
 }
 
 impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
     /// Build a backend bound to one fixed broker profile and caller identity.
+    ///
+    /// The profile is accepted for caller compatibility; the envelope's own
+    /// admission (the committed rows' grants against the attested caller
+    /// class) replaced the daemon-side catalog gate the typed wire carried.
     pub fn with_socket_profile_and_role(
         resolver: R,
         socket_path: impl Into<PathBuf>,
         io_timeout: Duration,
-        profile: BrokerProfile,
+        _profile: BrokerProfile,
         caller_role: BrokerCallerRole,
     ) -> Self {
         Self {
             resolver,
             socket_path: socket_path.into(),
             io_timeout,
-            profile,
             caller_role,
             observations: Mutex::new(BTreeMap::new()),
+            launched_observer: None,
         }
+    }
+
+    /// Wire the daemon's launched-runner observer (the pidfd-table
+    /// registration) onto this backend.
+    pub fn set_launched_observer(&mut self, observer: Arc<dyn LaunchedObserver>) {
+        self.launched_observer = Some(observer);
     }
 
     /// Build a backend with an authenticated broker caller role.
@@ -912,31 +1021,164 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
         )
     }
 
-    fn request(&self, request: BrokerRequest) -> Result<BrokerFrame, ProcessEffectError> {
-        self.request_with_fds(request, &[])
+    /// Invoke one committed process-family operation over the broker's
+    /// origination socket as an envelope frame.
+    ///
+    /// The family rows are served by the declaring process (the daemon's
+    /// process-family handlers) through the forward seam, so the call names
+    /// the committed row exactly as the catalog declares it and carries the
+    /// canonical typed payload the row's schema admits. The rows admit no
+    /// request descriptors (`max_fds: 0`), so no fds are attached. A nested
+    /// call (the deregister leg of a spawned handle) presents the spawn
+    /// invocation's evidence chain so the in-broker leg records the
+    /// correlation leg (KTD6); every other leg is a root call.
+    fn envelope_call(
+        &self,
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+        chain_root_invocation_id: Option<&str>,
+        chain_identities: Option<&[String]>,
+    ) -> Result<KernelReply, KernelInvokeError> {
+        self.envelope_call_with_fds(
+            operation,
+            zone,
+            payload,
+            chain_root_invocation_id,
+            chain_identities,
+            &[],
+        )
     }
 
-    fn request_with_fds(
+    /// The envelope carrier with request descriptors (the family rows now
+    /// declare the fd facet for the ProviderController escrow leg; every
+    /// other call attaches none).
+    fn envelope_call_with_fds(
         &self,
-        request: BrokerRequest,
-        inherited_fds: &[OwnedFd],
-    ) -> Result<BrokerFrame, ProcessEffectError> {
-        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized)
-            || !request.allowed_by_profile(self.profile)
-        {
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+        chain_root_invocation_id: Option<&str>,
+        chain_identities: Option<&[String]>,
+        fds: &[OwnedFd],
+    ) -> Result<KernelReply, KernelInvokeError> {
+        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized) {
             warn!(
                 provider = "supervisor",
                 "broker request refused: caller not authorized for the broker profile"
             );
-            return Err(ProcessEffectError::LaunchFailed);
+            return Err(KernelInvokeError::Refused {
+                code: "not-authorized".to_owned(),
+                detail: None,
+            });
         }
-        broker_round_trip_with_fds(
+        envelope_invoke_kernel(
             &self.socket_path,
             self.io_timeout,
-            request,
             self.caller_role.clone(),
-            inherited_fds,
+            KernelInvocation {
+                operation,
+                zone,
+                payload,
+                fds,
+                chain_root_invocation_id,
+                chain_identities,
+            },
         )
+    }
+
+    /// The evidence chain the deregister leg of a spawned handle presents:
+    /// the spawn invocation's root id and the caller's own attested class
+    /// identity.
+    ///
+    /// The identity mirrors the broker's `CallerAuthority` classification
+    /// of the same role, so the graft rule authorizes the nested leg
+    /// against exactly the principal the root spawn leg ran under (KTD6).
+    fn deregister_chain<'a>(
+        &self,
+        root_invocation_id: &'a str,
+    ) -> (Option<&'a str>, Option<Vec<String>>) {
+        let identity = match self.caller_role {
+            BrokerCallerRole::AdminUid { .. } | BrokerCallerRole::RootUid { .. } => "admin",
+            BrokerCallerRole::LauncherUid { .. } => "launcher",
+            BrokerCallerRole::HostShutdownUid { .. } => "daemon",
+            BrokerCallerRole::NotAuthorized => "unauthorized",
+        };
+        (Some(root_invocation_id), Some(vec![identity.to_owned()]))
+    }
+
+    /// Deregister one handle's runner pidfd through the envelope family
+    /// row.
+    ///
+    /// A handle spawned through this backend presents the spawn
+    /// invocation's evidence chain (the root id plus the caller's attested
+    /// identity), so the in-broker leg records the deregister as a
+    /// correlation leg under the spawn's root invocation (KTD6); an
+    /// adopted handle's deregister is a root call.
+    fn deregister(&self, handle: &BrokerPidfdHandle) -> Result<(), ProcessEffectError> {
+        let payload = serde_json::to_value(typed_identity_request!(
+            DeregisterRunnerPidfdRequest {
+                vm_id: handle.observed.intent.vm_id.clone(),
+                role_id: handle.observed.intent.role_id.clone(),
+                pid: Some(handle.observed.pid),
+                expected_start_time_ticks: Some(handle.observed.start_time_ticks),
+                guest_execution: handle.observed.intent.guest_execution.clone(),
+                tracing_span_id: None,
+            },
+            handle.observed.intent,
+        ))
+        .map_err(|_| ProcessEffectError::StopFailed)?;
+        let (chain_root_invocation_id, chain_identities) = match &handle.spawn_invocation_id {
+            Some(root) => self.deregister_chain(root),
+            None => (None, None),
+        };
+        let reply = self
+            .envelope_call(
+                "DeregisterRunnerPidfd",
+                &handle.observed.intent.zone,
+                payload,
+                chain_root_invocation_id,
+                chain_identities.as_deref(),
+            )
+            .map_err(|error| {
+                warn!(
+                    provider = "supervisor",
+                    error = %error,
+                    pid = handle.observed.pid,
+                    "broker deregister invocation failed"
+                );
+                ProcessEffectError::StopFailed
+            })?;
+        let response: DeregisterRunnerPidfdResponse =
+            serde_json::from_value(reply.response.result.ok_or_else(|| {
+                warn!(
+                    provider = "supervisor",
+                    pid = handle.observed.pid,
+                    "broker deregister reply carried no result"
+                );
+                ProcessEffectError::StopFailed
+            })?)
+            .map_err(|error| {
+                warn!(
+                    provider = "supervisor",
+                    error = ?error,
+                    pid = handle.observed.pid,
+                    "broker deregister reply is not the typed deregister response"
+                );
+                ProcessEffectError::StopFailed
+            })?;
+        if response.vm_id == handle.observed.intent.vm_id
+            && response.role_id == handle.observed.intent.role_id
+        {
+            Ok(())
+        } else {
+            warn!(
+                provider = "supervisor",
+                pid = handle.observed.pid,
+                "broker deregister response rejected"
+            );
+            Err(ProcessEffectError::StopFailed)
+        }
     }
 
     fn record(&self, observed: BrokerObservedProcess) -> Result<(), ProcessEffectError> {
@@ -1019,7 +1261,10 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
     ) -> Result<BackendLaunch<Self::Handle>, ProcessEffectError> {
         let (request, inherited_fds) = request.into_parts();
         let intent = self.resolver.resolve(&request)?;
-        let inherited_fd_count = request.ticket().inherited_fd_table().count();
+        // The ProviderController escrow rides the envelope's request-fd
+        // leg (the SpawnRunner row declares the fd facet); every other
+        // posture launches with no descriptors and the broker's fence
+        // re-checks the same shape.
         // Controller-supplied arguments are admitted only by the resolved
         // template's own declaration; every other template refuses them here
         // (and the broker re-checks the same fence).
@@ -1037,35 +1282,65 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             );
             return Err(ProcessEffectError::UnsupportedProvider);
         };
-        let frame = self.request_with_fds(
-            BrokerRequest::SpawnRunner(Box::new(typed_identity_request!(
-                SpawnRunnerRequest {
-                    execution_ref: Some(intent.execution_ref.clone()),
-                    execution_domain: Some(intent.domain),
-                    user_ref: intent.user_ref.clone(),
-                    vm_id: intent.vm_id.clone(),
-                    role_id: intent.role_id.clone(),
-                    owner_uid: intent.owner_uid.clone(),
-                    bundle_content_identity: Some(intent.bundle_content_identity.clone()),
-                    sandbox_plan: intent.sandbox_plan.clone(),
-                    activation_input: intent.activation_input.clone(),
-                    guest_execution: intent.guest_execution.clone(),
-                    launch_args,
-                    role: intent.role,
-                    bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
-                    runtime_allocations: Vec::new(),
-                    tracing_span_id: None,
-                    workload_identity: None,
-                    inherited_fd_count,
-                    network_tap_context: None,
-                },
-                intent,
-            ))),
-            &inherited_fds,
-        )?;
-        let BrokerResponse::SpawnRunner(ref response) = frame.response else {
-            return Err(response_error(&frame.response, BrokerOperation::Other));
-        };
+        let payload = serde_json::to_value(typed_identity_request!(
+            SpawnRunnerRequest {
+                execution_ref: Some(intent.execution_ref.clone()),
+                execution_domain: Some(intent.domain),
+                user_ref: intent.user_ref.clone(),
+                vm_id: intent.vm_id.clone(),
+                role_id: intent.role_id.clone(),
+                owner_uid: intent.owner_uid.clone(),
+                bundle_content_identity: Some(intent.bundle_content_identity.clone()),
+                sandbox_plan: intent.sandbox_plan.clone(),
+                activation_input: intent.activation_input.clone(),
+                guest_execution: intent.guest_execution.clone(),
+                launch_args,
+                role: intent.role,
+                bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
+                runtime_allocations: Vec::new(),
+                tracing_span_id: None,
+                workload_identity: None,
+                inherited_fd_count: inherited_fds.len() as u16,
+                network_tap_context: None,
+            },
+            intent,
+        ))
+        .map_err(|_| ProcessEffectError::LaunchFailed)?;
+        let mut reply = self
+            .envelope_call_with_fds(
+                "SpawnRunner",
+                &intent.zone,
+                payload,
+                None,
+                None,
+                &inherited_fds,
+            )
+            .map_err(|error| {
+                warn!(
+                    provider = "supervisor",
+                    error = %error,
+                    fds = inherited_fds.len(),
+                    "broker spawn invocation failed"
+                );
+                response_error(&error, BrokerOperation::Other)
+            })?;
+        let response: SpawnRunnerResponse =
+            serde_json::from_value(reply.response.result.clone().ok_or_else(|| {
+                warn!(
+                    provider = "supervisor",
+                    "broker spawn reply carried no result"
+                );
+                ProcessEffectError::LaunchFailed
+            })?)
+            .map_err(|error| {
+                warn!(
+                    provider = "supervisor",
+                    error = ?error,
+                    "broker spawn reply is not the typed spawn response"
+                );
+                ProcessEffectError::LaunchFailed
+            })?;
+        let spawn_invocation_id = reply.response.invocation_id.clone();
         if response.vm_id != intent.vm_id
             || response.role_id != intent.role_id
             || response.role != intent.role
@@ -1092,17 +1367,31 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             );
             return Err(ProcessEffectError::IdentityChanged);
         }
-        let pidfd = frame.take_fd(response.pidfd_index)?;
-        let controller_bootstrap = response
-            .controller_bootstrap_fd_index
-            .map(|index| frame.take_fd(index))
-            .transpose()?;
+        let pidfd = reply_take_fd(&mut reply, response.pidfd_index)?;
         if let Some(error) = launch_adoption_error(
             response.pid,
             read_proc_start_time(response.pid)?,
             response.start_time_ticks,
         ) {
-            return Err(error);
+            match error {
+                // A one-shot row's whole purpose is to run and exit; the
+                // spawn's reply is the launch's authority even when the
+                // child has already exited by the time this read runs. The
+                // exit outcome itself decides the row (the ephemeral driver
+                // publishes succeeded/failed off the reaper log), so a
+                // vanished one-shot reports the launch instead of failing
+                // it - the pidfd and identity still stand.
+                ProcessEffectError::Vanished
+                    if intent.resource_ref.resource_type().as_str() == "EphemeralProcess" =>
+                {
+                    warn!(
+                        provider = "supervisor",
+                        pid = response.pid,
+                        "one-shot spawn exited before adoption; reporting the launch for its exit outcome"
+                    );
+                }
+                other => return Err(other),
+            }
         }
         let observed = BrokerObservedProcess {
             intent,
@@ -1114,14 +1403,25 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         observed.validate_launch()?;
         self.resolver.record_launched(&request, &observed);
         let observation = observed.observation();
-        Ok(BackendLaunch::new(
-            observation,
-            BrokerPidfdHandle {
-                pidfd,
-                observed,
-                controller_bootstrap: Mutex::new(controller_bootstrap),
-            },
-        ))
+        let handle = BrokerPidfdHandle {
+            pidfd,
+            observed,
+            // The deregister leg of this handle presents the spawn's
+            // invocation id as its chain root, so the close correlates
+            // to the launch (KTD6).
+            spawn_invocation_id: Some(spawn_invocation_id),
+        };
+        // Notify the daemon's launched-runner observer (the pidfd-table
+        // registration) before the readiness probe runs, so the family
+        // handlers' runner lookup sees the kernel-spawned runner. A
+        // snapshot failure never fails the launch.
+        if let Some(observer) = &self.launched_observer
+            && let Some((vm, role, pid, start_time_ticks, pidfd_dup)) =
+                self.launched_runner_snapshot(&handle)?
+        {
+            observer.launched(&vm, &role, pid, start_time_ticks, pidfd_dup);
+        }
+        Ok(BackendLaunch::new(observation, handle))
     }
 
     fn observe(
@@ -1155,7 +1455,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         observation: BackendObservation,
     ) -> Result<Self::Handle, ProcessEffectError> {
         let observed = self.take_observation(&observation.identity())?;
-        let frame = self.request(BrokerRequest::OpenPidfd(typed_identity_request!(
+        let payload = serde_json::to_value(typed_identity_request!(
             OpenPidfdRequest {
                 vm_id: observed.intent.vm_id.clone(),
                 role_id: observed.intent.role_id.clone(),
@@ -1166,13 +1466,27 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                 tracing_span_id: None,
             },
             observed.intent,
-        )))?;
-        let BrokerResponse::OpenPidfd(ref response) = frame.response else {
-            return Err(response_error(
-                &frame.response,
-                BrokerOperation::OpenPidfd(&observed),
-            ));
-        };
+        ))
+        .map_err(|_| ProcessEffectError::PidfdUnavailable)?;
+        let mut reply = self
+            .envelope_call("OpenPidfd", &observed.intent.zone, payload, None, None)
+            .map_err(|error| response_error(&error, BrokerOperation::OpenPidfd(&observed)))?;
+        let response: OpenPidfdResponse =
+            serde_json::from_value(reply.response.result.clone().ok_or_else(|| {
+                warn!(
+                    provider = "supervisor",
+                    "broker pidfd reply carried no result"
+                );
+                ProcessEffectError::PidfdUnavailable
+            })?)
+            .map_err(|error| {
+                warn!(
+                    provider = "supervisor",
+                    error = ?error,
+                    "broker pidfd reply is not the typed pidfd response"
+                );
+                ProcessEffectError::PidfdUnavailable
+            })?;
         if response.vm_id != observed.intent.vm_id
             || response.role_id != observed.intent.role_id
             || response.pid != observed.pid
@@ -1184,11 +1498,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             );
             return Err(ProcessEffectError::IdentityChanged);
         }
-        let pidfd = frame.take_fd(response.pidfd_index)?;
-        let controller_bootstrap = response
-            .controller_bootstrap_fd_index
-            .map(|index| frame.take_fd(index))
-            .transpose()?;
+        let pidfd = reply_take_fd(&mut reply, response.pidfd_index)?;
         if read_proc_start_time(response.pid)? != Some(response.verified_start_time_ticks) {
             warn!(
                 provider = "supervisor",
@@ -1200,33 +1510,96 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         Ok(BrokerPidfdHandle {
             pidfd,
             observed,
-            controller_bootstrap: Mutex::new(controller_bootstrap),
+            // An adopted handle has no spawn invocation to correlate the
+            // close under; its deregister is a root call.
+            spawn_invocation_id: None,
         })
     }
 
-    fn wait(
+    fn wait(&self, handle: &Self::Handle, timeout: Duration) -> Result<(), ProcessEffectError> {
+        wait_pidfd_observer(&handle.pidfd, timeout)
+    }
+
+    fn launched_runner_snapshot(
         &self,
         handle: &Self::Handle,
-        timeout: Duration,
-    ) -> Result<(), ProcessEffectError> {
-        wait_pidfd_observer(&handle.pidfd, timeout)
+    ) -> Result<Option<(String, String, i32, u64, OwnedFd)>, ProcessEffectError> {
+        Ok(Some((
+            handle.observed.intent.vm_id.to_string(),
+            if handle.observed.intent.multi_instance {
+                format!(
+                    "{}@{}",
+                    handle.observed.intent.role_id.as_str(),
+                    handle.observed.intent.resource_uid.as_str()
+                )
+            } else {
+                handle.observed.intent.role_id.to_string()
+            },
+            handle.observed.pid,
+            handle.observed.start_time_ticks,
+            handle.pidfd.try_clone().map_err(|error| {
+                warn!(
+                    provider = "supervisor",
+                    error = %error,
+                    "launched pidfd duplicate failed"
+                );
+                ProcessEffectError::PidfdUnavailable
+            })?,
+        )))
     }
 
     fn take_controller_bootstrap(
         &self,
         handle: &Self::Handle,
     ) -> Result<Option<OwnedFd>, ProcessEffectError> {
-        handle
-            .controller_bootstrap
-            .lock()
-            .map_err(|_| {
+        // The escrow lives in the broker's controller-bootstrap registry
+        // (the spawn-process kernel retained it; a duplicate stopped riding
+        // the answer leg, and the supervisor handle no longer holds one).
+        // A daemon adopting a still-running controller after its own
+        // restart takes the retained escrow so the controller's bootstrap
+        // sends - which have been landing in it - can be consumed.
+        let intent = &handle.observed.intent;
+        let payload = serde_json::json!({
+            "vmId": intent.vm_id.to_string(),
+            "roleId": intent.role_id.to_string(),
+            "resourceRef": intent.resource_ref.to_canonical_string(),
+            "resourceUid": intent.resource_uid.as_str(),
+            "zoneUid": intent.zone_uid.as_ref().map(|uid| uid.as_str()),
+            "runtimeScope": intent.runtime_scope.map(|scope| scope.to_vec()),
+        });
+        let mut reply = self
+            .envelope_call(
+                "take-controller-bootstrap",
+                &handle.observed.intent.zone,
+                payload,
+                None,
+                None,
+            )
+            .map_err(|error| {
                 warn!(
                     provider = "supervisor",
-                    "controller bootstrap endpoint lock poisoned; reporting pidfd-unavailable"
+                    error = %error,
+                    "broker take-controller-bootstrap invocation failed"
                 );
-                ProcessEffectError::PidfdUnavailable
-            })
-            .map(|mut endpoint| endpoint.take())
+                response_error(&error, BrokerOperation::Other)
+            })?;
+        let taken = reply
+            .response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("taken"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !taken {
+            return Ok(None);
+        }
+        reply_take_fd(&mut reply, 0).map(Some).inspect_err(|&error| {
+            warn!(
+                provider = "supervisor",
+                error = %error,
+                "take-controller-bootstrap reply carried no escrow fd"
+            );
+        })
     }
 
     fn stop(
@@ -1238,98 +1611,78 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             ProcessStopClass::Drain => RunnerSignal::Term,
             ProcessStopClass::Terminate => RunnerSignal::Kill,
         };
-        let frame = self.request(BrokerRequest::SignalRunner(typed_identity_request!(
+        let payload = serde_json::to_value(typed_identity_request!(
             SignalRunnerRequest {
                 vm_id: handle.observed.intent.vm_id.clone(),
                 role_id: handle.observed.intent.role_id.clone(),
-                guest_execution: handle.observed.intent.guest_execution.clone(),
+                bundle_runner_intent_ref: Some(
+                    handle.observed.intent.bundle_runner_intent_ref.to_string(),
+                ),
                 signal,
+                guest_execution: handle.observed.intent.guest_execution.clone(),
                 pid: Some(handle.observed.pid),
                 expected_start_time_ticks: Some(handle.observed.start_time_ticks),
                 tracing_span_id: None,
             },
             handle.observed.intent,
-        )))?;
-        match frame.response {
-            BrokerResponse::SignalRunner(response)
-                if response.signaled
-                    && response.vm_id == handle.observed.intent.vm_id
-                    && response.role_id == handle.observed.intent.role_id =>
-            {
-                let _ = handle.pidfd.as_fd();
-            }
-            _ => {
+        ))
+        .map_err(|_| ProcessEffectError::StopFailed)?;
+        let reply = self
+            .envelope_call(
+                "SignalRunner",
+                &handle.observed.intent.zone,
+                payload,
+                None,
+                None,
+            )
+            .map_err(|error| {
+                warn!(
+                    provider = "supervisor",
+                    error = %error,
+                    pid = handle.observed.pid,
+                    "broker signal invocation failed"
+                );
+                ProcessEffectError::StopFailed
+            })?;
+        let response: SignalRunnerResponse =
+            serde_json::from_value(reply.response.result.ok_or_else(|| {
                 warn!(
                     provider = "supervisor",
                     pid = handle.observed.pid,
-                    "broker signal response rejected; stop failed"
+                    "broker signal reply carried no result"
                 );
-                return Err(ProcessEffectError::StopFailed);
-            }
+                ProcessEffectError::StopFailed
+            })?)
+            .map_err(|error| {
+                warn!(
+                    provider = "supervisor",
+                    error = ?error,
+                    pid = handle.observed.pid,
+                    "broker signal reply is not the typed signal response"
+                );
+                ProcessEffectError::StopFailed
+            })?;
+        if !(response.signaled
+            && response.vm_id == handle.observed.intent.vm_id
+            && response.role_id == handle.observed.intent.role_id)
+        {
+            warn!(
+                provider = "supervisor",
+                pid = handle.observed.pid,
+                "broker signal response rejected; stop failed"
+            );
+            return Err(ProcessEffectError::StopFailed);
         }
         if class == ProcessStopClass::Terminate {
             wait_pidfd_exit(&handle.pidfd, self.io_timeout)?;
-            let frame = self.request(BrokerRequest::DeregisterRunnerPidfd(
-                typed_identity_request!(
-                    DeregisterRunnerPidfdRequest {
-                        vm_id: handle.observed.intent.vm_id.clone(),
-                        role_id: handle.observed.intent.role_id.clone(),
-                        pid: Some(handle.observed.pid),
-                        expected_start_time_ticks: Some(handle.observed.start_time_ticks),
-                        guest_execution: handle.observed.intent.guest_execution.clone(),
-                        tracing_span_id: None,
-                    },
-                    handle.observed.intent,
-                ),
-            ))?;
-            match frame.response {
-                BrokerResponse::DeregisterRunnerPidfd(response)
-                    if response.vm_id == handle.observed.intent.vm_id
-                        && response.role_id == handle.observed.intent.role_id => {}
-                _ => {
-                    warn!(
-                        provider = "supervisor",
-                        pid = handle.observed.pid,
-                        "broker deregister response rejected during terminate"
-                    );
-                    return Err(ProcessEffectError::StopFailed);
-                }
-            }
+            self.deregister(handle)?;
             self.resolver.record_stopped(&handle.observed);
         }
         Ok(())
     }
 
     fn finalize(&self, handle: &Self::Handle) -> Result<(), ProcessEffectError> {
-        let frame = self.request(BrokerRequest::DeregisterRunnerPidfd(
-            typed_identity_request!(
-                DeregisterRunnerPidfdRequest {
-                    vm_id: handle.observed.intent.vm_id.clone(),
-                    role_id: handle.observed.intent.role_id.clone(),
-                    pid: Some(handle.observed.pid),
-                    expected_start_time_ticks: Some(handle.observed.start_time_ticks),
-                    guest_execution: handle.observed.intent.guest_execution.clone(),
-                    tracing_span_id: None,
-                },
-                handle.observed.intent,
-            ),
-        ))?;
-        match frame.response {
-            BrokerResponse::DeregisterRunnerPidfd(response)
-                if response.vm_id == handle.observed.intent.vm_id
-                    && response.role_id == handle.observed.intent.role_id =>
-            {
-                Ok(())
-            }
-            _ => {
-                warn!(
-                    provider = "supervisor",
-                    pid = handle.observed.pid,
-                    "broker deregister response rejected during finalize"
-                );
-                Err(ProcessEffectError::StopFailed)
-            }
-        }
+        self.deregister(handle)
     }
 }
 
@@ -1388,13 +1741,15 @@ pub(crate) struct BrokerFrame {
 
 impl BrokerFrame {
     pub(crate) fn take_fd(&self, index: u32) -> Result<OwnedFd, ProcessEffectError> {
-        self.fds.lock().map_err(|_| {
-            warn!(
-                provider = "supervisor",
-                "broker frame descriptor table lock poisoned"
-            );
-            ProcessEffectError::PidfdUnavailable
-        })?
+        self.fds
+            .lock()
+            .map_err(|_| {
+                warn!(
+                    provider = "supervisor",
+                    "broker frame descriptor table lock poisoned"
+                );
+                ProcessEffectError::PidfdUnavailable
+            })?
             .get_mut(usize::try_from(index).map_err(|_| {
                 warn!(
                     provider = "supervisor",
@@ -1458,11 +1813,45 @@ fn launch_adoption_error(
     }
 }
 
-fn response_error(response: &BrokerResponse, operation: BrokerOperation<'_>) -> ProcessEffectError {
-    match response {
-        BrokerResponse::Error(error)
-            if error.kind == "Broker.LiveHandlerFailed"
-                && matches!(operation, BrokerOperation::OpenPidfd(_)) =>
+/// The dispatch-failure refusals of the envelope's closed set: the codes a
+/// served handler's failure surfaces under (KTD7). A refusal outside this
+/// set is an admission refusal (unknown/uncommitted operation, ungranted
+/// caller, invalid payload, stale context, fd leg), which names a caller
+/// or wire defect rather than a failed host effect.
+fn is_dispatch_failure_refusal(code: &str) -> bool {
+    matches!(
+        code,
+        "errored" | "handler-errored" | "handler-refused" | "handler-crashed" | "handler-timed-out"
+    )
+}
+
+/// Take one descriptor a kernel reply's response frame attached, by the
+/// index the typed response declared.
+fn reply_take_fd(reply: &mut KernelReply, index: u32) -> Result<OwnedFd, ProcessEffectError> {
+    let position = usize::try_from(index).map_err(|_| {
+        warn!(
+            provider = "supervisor",
+            index = index,
+            "broker reply descriptor index out of range"
+        );
+        ProcessEffectError::PidfdUnavailable
+    })?;
+    if position >= reply.fds.len() {
+        warn!(
+            provider = "supervisor",
+            index = index,
+            "broker reply descriptor index out of range"
+        );
+        return Err(ProcessEffectError::PidfdUnavailable);
+    }
+    Ok(reply.fds.remove(position))
+}
+
+fn response_error(error: &KernelInvokeError, operation: BrokerOperation<'_>) -> ProcessEffectError {
+    match error {
+        KernelInvokeError::Refused { code, detail }
+            if matches!(operation, BrokerOperation::OpenPidfd(_))
+                && is_dispatch_failure_refusal(code) =>
         {
             let BrokerOperation::OpenPidfd(observed) = operation else {
                 unreachable!("guard requires OpenPidfd")
@@ -1476,19 +1865,20 @@ fn response_error(response: &BrokerResponse, operation: BrokerOperation<'_>) -> 
                 Err(error) => error,
             }
         }
-        BrokerResponse::Error(error) => {
+        KernelInvokeError::Refused { code, detail } => {
             warn!(
                 provider = "supervisor",
-                kind = error.kind.as_str(),
-                reason = error.message.as_str(),
-                "broker returned an error response for a process request"
+                code = code.as_str(),
+                detail = detail.as_deref().unwrap_or(""),
+                "broker refused a process request"
             );
             ProcessEffectError::LaunchFailed
         }
-        _ => {
+        KernelInvokeError::Transport(detail) | KernelInvokeError::Protocol(detail) => {
             warn!(
                 provider = "supervisor",
-                "broker returned an unexpected response for a process request"
+                error = detail.as_str(),
+                "broker transport failed for a process request"
             );
             ProcessEffectError::LaunchFailed
         }
@@ -1499,7 +1889,6 @@ fn response_error(response: &BrokerResponse, operation: BrokerOperation<'_>) -> 
 // Keep focused broker tests beside the response mapping they exercise.
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use d2b_contracts_broker::broker_wire::BrokerErrorResponse;
     use d2b_core::processes::ProcessRole;
 
     use super::*;
@@ -1550,6 +1939,7 @@ mod tests {
         BrokerObservedProcess {
             intent: BrokerLaunchIntent {
                 vm_id: VmId::new("corp-vm"),
+                zone: "corp".to_owned(),
                 zone_uid: None,
                 owner_ref: None,
                 owner_uid: None,
@@ -1575,6 +1965,7 @@ mod tests {
                 activation_input: None,
                 guest_execution: None,
                 accepts_launch_args: false,
+                multi_instance: false,
             },
             pid: i32::from(seed) + 1,
             start_time_ticks: u64::from(seed) + 1,
@@ -1591,26 +1982,16 @@ mod tests {
         }
     }
 
-    fn producer_live_handler_error_kind() -> &'static str {
-        const SOURCE: &str = include_str!("../../d2b-broker/src/runtime.rs");
-        const ARM: &str = "Self::LiveHandler(message) => error_response(";
-        let arm = SOURCE
-            .split_once(ARM)
-            .expect("broker LiveHandler response arm")
-            .1;
-        arm.split('"')
-            .nth(1)
-            .expect("broker LiveHandler error kind")
-    }
-
-    fn live_handler_response() -> BrokerResponse {
-        BrokerResponse::Error(BrokerErrorResponse {
-            kind: producer_live_handler_error_kind().to_owned(),
-            operation: "LiveHandler".to_owned(),
-            target_wave: None,
-            message: "privileged host operation failed".to_owned(),
-            action: "inspect private audit".to_owned(),
-        })
+    /// The envelope refusal a failed pidfd-open dispatch surfaces under: the
+    /// kernel's own `errored` code (the daemon-side family handler
+    /// propagates the kernel's refusal), which is one of the
+    /// dispatch-failure codes the backend classifies against the observed
+    /// process state.
+    fn pidfd_open_refusal() -> KernelInvokeError {
+        KernelInvokeError::Refused {
+            code: "errored".to_owned(),
+            detail: Some("open-pidfd: pidfd_open(123) failed: ESRCH".to_owned()),
+        }
     }
 
     #[test]
@@ -1677,34 +2058,44 @@ mod tests {
     }
 
     #[test]
-    fn open_pidfd_live_handler_failure_is_ambiguous_only_after_identity_drift() {
+    fn open_pidfd_dispatch_failure_is_ambiguous_only_after_identity_drift() {
         const LIVE_HANDLER_SOURCE: &str = include_str!("../../d2b-broker/src/live_handlers.rs");
         for producer_error in ["PidfdRace", "PidfdOpenFailed", "ProcStatReadFailed"] {
             assert!(LIVE_HANDLER_SOURCE.contains(producer_error));
         }
 
-        let response = live_handler_response();
+        let refusal = pidfd_open_refusal();
         let pid = i32::try_from(std::process::id()).unwrap();
         let current_start_time = read_proc_start_time(pid).unwrap().unwrap();
         let drifted = observed_process(pid, current_start_time.saturating_add(1));
         assert_eq!(
-            response_error(&response, BrokerOperation::OpenPidfd(&drifted)),
+            response_error(&refusal, BrokerOperation::OpenPidfd(&drifted)),
             ProcessEffectError::IdentityChanged
         );
 
         let unchanged = observed_process(pid, current_start_time);
         assert_eq!(
-            response_error(&response, BrokerOperation::OpenPidfd(&unchanged)),
+            response_error(&refusal, BrokerOperation::OpenPidfd(&unchanged)),
             ProcessEffectError::PidfdUnavailable
         );
 
         let vanished = observed_process(-1, current_start_time);
         assert_eq!(
-            response_error(&response, BrokerOperation::OpenPidfd(&vanished)),
+            response_error(&refusal, BrokerOperation::OpenPidfd(&vanished)),
             ProcessEffectError::Vanished
         );
         assert_eq!(
-            response_error(&response, BrokerOperation::Other),
+            response_error(&refusal, BrokerOperation::Other),
+            ProcessEffectError::LaunchFailed
+        );
+        // An admission refusal (a caller or wire defect) is never
+        // classified against the observed process state.
+        let admission = KernelInvokeError::Refused {
+            code: "ungranted-caller".to_owned(),
+            detail: None,
+        };
+        assert_eq!(
+            response_error(&admission, BrokerOperation::OpenPidfd(&drifted)),
             ProcessEffectError::LaunchFailed
         );
     }
@@ -1762,8 +2153,7 @@ mod tests {
 
         let zone_name = "dev";
         let zone = ZoneId::parse(zone_name).expect("zone");
-        let provider_ref =
-            ResourceRef::parse("Provider/device-tpm").expect("provider ref");
+        let provider_ref = ResourceRef::parse("Provider/device-tpm").expect("provider ref");
         let device_ref = ResourceRef::parse("Device/tpm").expect("device ref");
         // A second Device declaring the same worker template: the declared
         // row, never the shared template name, is the launch identity.
@@ -1914,7 +2304,9 @@ mod tests {
         // hand-rolled v2 Bundle literal.
         let root = tempfile::tempdir().expect("tempdir for zone-native bundle fixture");
         write_fixture_artifact(
-            &root.path().join(format!("zones/{zone_name}/resource-bundle.json")),
+            &root
+                .path()
+                .join(format!("zones/{zone_name}/resource-bundle.json")),
             &bytes,
         );
         let index_bytes = zone_topology_index_bytes(zone_name);
@@ -1963,7 +2355,10 @@ mod tests {
         let parent_map = BTreeMap::from([(zone_name.to_owned(), None::<String>)]);
         let parent_map_value = serde_json::to_value(&parent_map).expect("parent map value");
         let mut zones = serde_json::Map::new();
-        zones.insert(zone_name.to_owned(), serde_json::Value::Object(Default::default()));
+        zones.insert(
+            zone_name.to_owned(),
+            serde_json::Value::Object(Default::default()),
+        );
         let mut generation_by_zone = serde_json::Map::new();
         generation_by_zone.insert(
             zone_name.to_owned(),
@@ -2051,10 +2446,9 @@ mod tests {
         let process_ref = ResourceRef::parse(process_ref).expect("process ref");
         let execution_ref = ResourceRef::parse("Host/host-system").expect("execution ref");
         let device_ref = ResourceRef::parse(device_ref).expect("device ref");
-        let zone_uid = d2b_contracts_resource::v3::ResourceUid::parse(
-            "223e4567-e89b-42d3-a456-426614174001",
-        )
-        .expect("zone uid");
+        let zone_uid =
+            d2b_contracts_resource::v3::ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
+                .expect("zone uid");
         let process_uid = operation_uid();
         let ticket = LaunchTicket::new(
             process_ref.clone(),
@@ -2088,14 +2482,7 @@ mod tests {
         .with_runtime_identity(
             zone_uid.clone(),
             Some(device_ref),
-            runtime_scope_commitment(
-                &zone_uid,
-                None,
-                &process_ref,
-                &process_uid,
-                scope_role,
-                1,
-            ),
+            runtime_scope_commitment(&zone_uid, None, &process_ref, &process_uid, scope_role, 1),
         )
         .expect("runtime identity");
         ProcessRequest::new(ticket)
@@ -2121,10 +2508,7 @@ mod tests {
         assert!(intent.accepts_launch_args);
         assert_eq!(
             intent.template_identity,
-            BundleBackedLaunchResolver::identity_digest(
-                "swtpm-socket",
-                b"d2b-process-template-v1"
-            )
+            BundleBackedLaunchResolver::identity_digest("swtpm-socket", b"d2b-process-template-v1")
         );
         // A second Device declares the same worker template under its own
         // row: the resolution is the exact declared row, so this row never
@@ -2293,23 +2677,22 @@ pub(crate) fn broker_round_trip_with_fds(
         None,
     )
     .map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?;
+        warn!(
+            provider = "supervisor",
+            transport_error = ?error,
+            "broker transport step failed"
+        );
+        ProcessEffectError::LaunchFailed
+    })?;
     let socket = Socket::from(fd);
-    let address =
-        socket2::SockAddr::unix(socket_path).map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?;
+    let address = socket2::SockAddr::unix(socket_path).map_err(|error| {
+        warn!(
+            provider = "supervisor",
+            transport_error = ?error,
+            "broker transport step failed"
+        );
+        ProcessEffectError::LaunchFailed
+    })?;
     socket
         .connect_timeout(&address, io_timeout)
         .map_err(|error| {
@@ -2320,16 +2703,14 @@ pub(crate) fn broker_round_trip_with_fds(
             );
             ProcessEffectError::LaunchFailed
         })?;
-    socket
-        .set_read_timeout(Some(io_timeout))
-        .map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?;
+    socket.set_read_timeout(Some(io_timeout)).map_err(|error| {
+        warn!(
+            provider = "supervisor",
+            transport_error = ?error,
+            "broker transport step failed"
+        );
+        ProcessEffectError::LaunchFailed
+    })?;
     socket
         .set_write_timeout(Some(io_timeout))
         .map_err(|error| {
@@ -2348,8 +2729,7 @@ pub(crate) fn broker_round_trip_with_fds(
         ProcessEffectError::LaunchFailed
     })?;
     let audit_join = AuditJoinContext {
-        zone_id: CanonicalAuditDigest::parse(zone_id)
-            .map_err(|error| {
+        zone_id: CanonicalAuditDigest::parse(zone_id).map_err(|error| {
             warn!(
                 provider = "supervisor",
                 transport_error = ?error,
@@ -2357,8 +2737,7 @@ pub(crate) fn broker_round_trip_with_fds(
             );
             ProcessEffectError::LaunchFailed
         })?,
-        operation_identity: CanonicalAuditDigest::parse(operation_identity)
-            .map_err(|error| {
+        operation_identity: CanonicalAuditDigest::parse(operation_identity).map_err(|error| {
             warn!(
                 provider = "supervisor",
                 transport_error = ?error,
@@ -2373,15 +2752,14 @@ pub(crate) fn broker_round_trip_with_fds(
         test_peer_uid: None,
         audit_join: Some(audit_join),
     };
-    let frame =
-        d2b_contracts::encode_frame(&envelope).map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?;
+    let frame = d2b_contracts::encode_frame(&envelope).map_err(|error| {
+        warn!(
+            provider = "supervisor",
+            transport_error = ?error,
+            "broker transport step failed"
+        );
+        ProcessEffectError::LaunchFailed
+    })?;
     let written = if inherited_fds.is_empty() {
         send(&socket, &frame, SendFlags::empty()).map_err(|error| {
             warn!(
@@ -2406,8 +2784,7 @@ pub(crate) fn broker_round_trip_with_fds(
             return Err(ProcessEffectError::LaunchFailed);
         }
         let iov = [IoSlice::new(&frame)];
-        sendmsg(&socket, &iov, &mut control, SendFlags::empty())
-            .map_err(|error| {
+        sendmsg(&socket, &iov, &mut control, SendFlags::empty()).map_err(|error| {
             warn!(
                 provider = "supervisor",
                 transport_error = ?error,
@@ -2417,10 +2794,7 @@ pub(crate) fn broker_round_trip_with_fds(
         })?
     };
     if written != frame.len() {
-        warn!(
-            provider = "supervisor",
-            "broker transport short write"
-        );
+        warn!(provider = "supervisor", "broker transport short write");
         return Err(ProcessEffectError::LaunchFailed);
     }
 
@@ -2428,8 +2802,8 @@ pub(crate) fn broker_round_trip_with_fds(
     let mut iov = [IoSliceMut::new(&mut payload)];
     let mut control_bytes = vec![0_u8; rustix::cmsg_space!(ScmRights(256))];
     let mut control = RecvAncillaryBuffer::new(&mut control_bytes);
-    let message = recvmsg(&socket, &mut iov, &mut control, RecvFlags::CMSG_CLOEXEC)
-        .map_err(|error| {
+    let message =
+        recvmsg(&socket, &mut iov, &mut control, RecvFlags::CMSG_CLOEXEC).map_err(|error| {
             warn!(
                 provider = "supervisor",
                 transport_error = ?error,
@@ -2446,8 +2820,8 @@ pub(crate) fn broker_round_trip_with_fds(
             }
         }
     }
-    let response = d2b_contracts::decode_frame("BrokerResponse", &payload[..bytes])
-        .map_err(|error| {
+    let response =
+        d2b_contracts::decode_frame("BrokerResponse", &payload[..bytes]).map_err(|error| {
             warn!(
                 provider = "supervisor",
                 transport_error = ?error,

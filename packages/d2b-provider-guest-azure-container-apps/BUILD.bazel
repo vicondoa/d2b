@@ -7,6 +7,10 @@ load(
     "d2b_rust_doc_test",
 )
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-guest:__pkg__", "//packages/d2bd:__pkg__"])
+
 exports_files(
     ["BUILD.bazel", "nix/default.nix", "nix/tests/default.nix"],
     visibility = ["//visibility:public"],
@@ -23,7 +27,6 @@ d2b_rust_library(
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
-    visibility = ["//visibility:public"],
 )
 
 d2b_rust_library(
@@ -38,7 +41,6 @@ d2b_rust_library(
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
-    visibility = ["//visibility:public"],
 )
 
 d2b_rust_test(
@@ -49,7 +51,6 @@ d2b_rust_test(
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-    visibility = ["//visibility:public"],
 )
 
 d2b_rust_test(
@@ -58,7 +59,6 @@ d2b_rust_test(
         "tests/provider_lifecycle.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_guest_azure_container_apps",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",

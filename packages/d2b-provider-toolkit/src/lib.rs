@@ -108,8 +108,9 @@ pub use d2b_session::{
 };
 pub use declaration::{
     AllowedSources, Cardinality, ChildCreation, ChildCustody, DriverDescriptor, IsolationPosture,
-    OperationDef, OperationHandler, PlaneAdapter, PrincipalName, ProviderDeclaration, SelfBinding,
-    ServiceDecl, StartupStep, StorageRoot, WellKnownType,
+    MethodFdContract, OperationDef, OperationHandler, PlaneAdapter, PrincipalName,
+    ProviderDeclaration, SelfBinding, ServiceDecl, ServiceMethod, StartupStep, StorageRoot,
+    WellKnownType,
 };
 pub use operations::{
     OperationCtx, OperationEnvelope, OperationFailure, OperationResult, ValidatedPayload,

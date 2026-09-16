@@ -7,6 +7,10 @@ load(
     "d2b_rust_doc_test",
 )
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2bd:__pkg__"])
+
 exports_files(
     [
         "BUILD.bazel",
@@ -31,14 +35,12 @@ d2b_rust_library(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, cargo_only = True),
-    visibility = ["//visibility:public"],
 )
 
 d2b_rust_binary(
     name = "d2b-clipd",
     srcs = ["src/bin/d2b-clipd.rs"],
     compile_data = ["Cargo.toml"] + glob(["src/clipd_host/**/*.rs"]),
-    visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_clipboard_wayland",
         "//packages/d2b-contracts:d2b_contracts",
@@ -60,7 +62,6 @@ d2b_rust_library(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
-    visibility = ["//visibility:public"],
 )
 
 d2b_rust_test(
@@ -69,7 +70,6 @@ d2b_rust_test(
         "tests/lifecycle.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -83,7 +83,6 @@ d2b_rust_test(
         "tests/provider_behavior.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -97,7 +96,6 @@ d2b_rust_test(
         "tests/redaction.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -115,7 +113,6 @@ d2b_rust_test(
     data = [":d2b-clipd"],
     env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
-    visibility = ["//visibility:public"],
     deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -127,7 +124,6 @@ d2b_rust_test(
     data = [":d2b-clipd"],
     env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
-    visibility = ["//visibility:public"],
 )
 
 # keep

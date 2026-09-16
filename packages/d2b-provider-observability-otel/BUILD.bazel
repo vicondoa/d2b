@@ -7,6 +7,10 @@ load(
     "d2b_rust_doc_test",
 )
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-telemetry-binding:__pkg__", "//packages/d2bd:__pkg__"])
+
 
 exports_files(
     [
@@ -23,7 +27,6 @@ d2b_rust_library(
     name = "d2b_provider_observability_otel",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -37,7 +40,6 @@ d2b_rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     crate_name = "d2b_provider_observability_otel",
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -50,7 +52,6 @@ d2b_rust_test(
     name = "ingress_metric_policy",
     srcs = ["tests/ingress_metric_policy.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [":d2b_provider_observability_otel",
             "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -61,7 +62,6 @@ d2b_rust_test(
     name = "binding_controller",
     srcs = ["tests/binding_controller.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",

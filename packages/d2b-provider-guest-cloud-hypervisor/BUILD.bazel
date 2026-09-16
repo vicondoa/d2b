@@ -7,6 +7,10 @@ load(
     "d2b_rust_doc_test",
 )
 
+# Provider crates link only from the daemon composition root and the
+# enumerated consumers; broker/shared crates cannot depend on them (U14).
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-guest:__pkg__", "//packages/d2b-provider-network-local:__pkg__", "//packages/d2bd:__pkg__"])
+
 exports_files(
     [
         "BUILD.bazel",
@@ -41,7 +45,6 @@ d2b_rust_library(
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
-    visibility = ["//visibility:public"],
 )
 
 d2b_rust_library(
@@ -66,14 +69,12 @@ d2b_rust_library(
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
-    visibility = ["//visibility:public"],
 )
 
 d2b_rust_binary(
     name = "d2b-cloud-hypervisor-controller",
     srcs = ["controller/main.rs"],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_guest_cloud_hypervisor",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -91,7 +92,6 @@ d2b_rust_test(
         "//packages/d2b-session:d2b_session",
         "//packages/d2b-session-unix:d2b_session_unix",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-    visibility = ["//visibility:public"],
 )
 
 d2b_rust_test(
@@ -100,7 +100,6 @@ d2b_rust_test(
         "tests/finalize_ordering_test.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         ":d2b_provider_guest_cloud_hypervisor",
@@ -114,7 +113,6 @@ d2b_rust_test(
         "tests/common/mod.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -130,7 +128,6 @@ d2b_rust_test(
         "tests/common/mod.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -145,7 +142,6 @@ d2b_rust_test(
         "tests/state_status_test.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -161,7 +157,6 @@ d2b_rust_test(
         "tests/common/mod.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -175,7 +170,6 @@ d2b_rust_test(
         "tests/redaction_test.rs",
     ],
     compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
