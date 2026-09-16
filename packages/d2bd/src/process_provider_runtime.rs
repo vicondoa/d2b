@@ -1246,9 +1246,19 @@ impl ProductionProcessProviders {
         if controller_bootstrap {
             self.forget_controller_bootstrap_for_resource_context(&context);
         }
+        // The daemon keeps its own copy of the escrow daemon end to wait
+        // on: the kernel retains the attached descriptor as custody and
+        // returns no duplicate (a dup of the caller's own descriptor is
+        // refused by the forward carrier's anti-replay fence).
+        let mut escrow_wait = None;
         let controller_endpoints = if controller_bootstrap {
             let (daemon_endpoint, child_endpoint) = prearmed_seqpacket_pair()
                 .map_err(|_| "provider-controller-bootstrap-create".to_owned())?;
+            escrow_wait = Some(
+                daemon_endpoint
+                    .try_clone()
+                    .map_err(|_| "provider-controller-bootstrap-dup".to_owned())?,
+            );
             let (child_fds, delivery_key_handoff, backend_lease) =
                 if ticket.inherited_fd_table().count() == 2 {
                     let supervisor = self.guest_backend_supervisor.as_ref().ok_or_else(|| {
@@ -1319,14 +1329,9 @@ impl ProductionProcessProviders {
             runtime_scope: ticket.runtime_scope(),
         })?;
         if controller_bootstrap {
-            let daemon_endpoint = match self
-                .minijail
-                .port()
-                .take_controller_bootstrap(&report.identity)
-                .await
-            {
-                Ok(Some(endpoint)) => endpoint,
-                Ok(None) => {
+            let daemon_endpoint = match escrow_wait {
+                Some(endpoint) => endpoint,
+                None => {
                     self.cleanup_failed_resource_launch(
                         &context,
                         provider,
@@ -1335,16 +1340,6 @@ impl ProductionProcessProviders {
                     )
                     .await;
                     return Err("provider-controller-bootstrap-missing".to_owned());
-                }
-                Err(error) => {
-                    self.cleanup_failed_resource_launch(
-                        &context,
-                        provider,
-                        report.identity,
-                        spec.execution().execution_ref(),
-                    )
-                    .await;
-                    return Err(provider_error(error));
                 }
             };
             let daemon_endpoint =

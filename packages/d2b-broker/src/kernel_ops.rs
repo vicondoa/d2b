@@ -584,18 +584,23 @@ fn spawn_process(
         role,
         d2b_contracts_broker::broker_wire::RunnerRole::ProviderController
     ) && !serving_worker;
-    let (controller_bootstrap_response, retained_controller_bootstrap) =
-        if posture_is_controller {
-            let retained = request_fds.pop().ok_or_else(|| {
-                errored("spawn-process: ProviderController bootstrap escrow fd is missing".to_owned())
-            })?;
-            let response = retained
-                .try_clone()
-                .map_err(|error| errored(format!("spawn-process: controller bootstrap duplicate: {error}")))?;
-            (Some(response), Some(retained))
-        } else {
-            (None, None)
-        };
+    // The daemon's launch path pre-arms a seqpacket pair per controller,
+    // the child end rides the request to the child and the daemon end is
+    // the escrow this kernel retains for the broker-side controller-
+    // bootstrap registry (custody: the pair stays open until the
+    // controller's bootstrap send). No duplicate rides the answer leg:
+    // a dup of the caller's own descriptor would trip the forward
+    // carrier's anti-replay fence (a peer returning the caller's own
+    // fd is refused with the fd-leg code), and the daemon already keeps
+    // its own copy of the daemon end to wait on.
+    let retained_controller_bootstrap = if posture_is_controller {
+        let retained = request_fds.pop().ok_or_else(|| {
+            errored("spawn-process: ProviderController bootstrap escrow fd is missing".to_owned())
+        })?;
+        Some(retained)
+    } else {
+        None
+    };
     // The USBIP backend device binds (the retired arm's
     // `extend_usbip_backend_device_binds`): the kernel loads the bundle
     // resolver from the captured bundle path - the same per-request
@@ -772,19 +777,13 @@ fn spawn_process(
             .map_err(|_| errored("spawn-process: controller bootstrap registry mutex poisoned".to_owned()))?
             .insert(runner_id.clone(), bootstrap);
     }
-    let mut extra_fds = Vec::new();
-    let mut extra_fd_indexes = Vec::new();
-    if let Some(bootstrap) = controller_bootstrap_response {
-        extra_fd_indexes.push(1 + extra_fds.len() as u32);
-        extra_fds.push(bootstrap);
-    }
     let mut result = serde_json::json!({
         "pid": outcome.pid,
         "startTimeTicks": outcome.start_time_ticks,
         "usedForkFallback": outcome.used_fork_fallback,
         "pidfdIndex": 0,
-        "controllerBootstrapFdIndex": extra_fd_indexes.first().copied(),
-        "extraFdIndexes": extra_fd_indexes.clone(),
+        "controllerBootstrapFdIndex": null,
+        "extraFdIndexes": [],
     });
     // The final plan's device binds (the USBIP backend extension the
     // retired arm applied to the mount policy): observable so the
@@ -797,12 +796,9 @@ fn spawn_process(
         result["swtpmDirAudit"] = serde_json::to_value(audit)
             .map_err(|error| errored(format!("spawn-process swtpm audit: {error}")))?;
     }
-    let mut fds = Vec::with_capacity(1 + extra_fds.len());
-    fds.push(outcome.pidfd);
-    fds.extend(extra_fds);
     Ok(DispatchOutcome {
         result: canonical(result)?,
-        fds,
+        fds: vec![outcome.pidfd],
     })
 }
 

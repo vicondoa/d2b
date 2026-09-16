@@ -2649,11 +2649,12 @@ impl OperationHandler for SpawnRunnerHandler {
                     "spawn-process: result startTimeTicks missing".to_owned(),
                 )
             })? as u64;
-        // The kernel mints the controller-bootstrap duplicate for
-        // ProviderController spawns and returns it as the extra fd the
-        // result's controllerBootstrapFdIndex names; the typed response
-        // hands the index back so the supervisor's handle re-arms the
-        // daemon-side marker.
+        // The kernel retains the controller-bootstrap escrow as custody and
+        // returns no duplicate (a dup of the caller's own descriptor is
+        // refused by the forward carrier's anti-replay fence); the daemon
+        // keeps its own copy of the daemon end to wait on, so the result
+        // carries no controllerBootstrapFdIndex and the reply fd vector
+        // holds the pidfd alone.
         let reply_fds = reply
             .fds
             .iter()

@@ -2629,9 +2629,11 @@ enum LaunchPosture {
     /// Ordinary runner launch: no controller escrow descriptor.
     Standard,
     /// Non-serving `ProviderController` launch: must carry the controller
-    /// bootstrap escrow descriptor (1-2 inherited fds, one extra attached)
-    /// and advertises its broker duplicate at response index 1; the broker
-    /// retains the original as custody.
+    /// bootstrap escrow descriptor (1-2 inherited fds, one extra attached).
+    /// The broker retains the escrow as registry custody and returns no
+    /// duplicate on the response (a dup of the caller's own descriptor is
+    /// refused by the forward carrier's anti-replay fence; the daemon
+    /// keeps its own copy of the daemon end to wait on).
     ControllerEscrow,
     /// Binding-owned serving worker: carries no broker escrow descriptor
     /// (zero-fd exemption) and advertises no bootstrap index. It runs as the
@@ -2663,8 +2665,9 @@ impl LaunchPosture {
     }
 
     /// Whether this launch owns the controller bootstrap escrow descriptor:
-    /// the backend duplicates it onto the response and retains the original
-    /// in the `controller_bootstrap_registry` custody.
+    /// the backend retains the attached descriptor in the
+    /// `controller_bootstrap_registry` custody and returns no duplicate on
+    /// the response.
     fn carries_controller_escrow(self) -> bool {
         matches!(self, Self::ControllerEscrow)
     }
@@ -2721,14 +2724,14 @@ impl LaunchPosture {
     /// Index of the controller-bootstrap escrow fd on a `SpawnRunner`
     /// response.
     ///
-    /// Only a non-serving `ProviderController` launch carries the escrow
-    /// descriptor: the binding-owned serving worker deliberately attaches
-    /// none (`Self::validate_request_fds`), so its response fd vector holds
-    /// the pidfd alone. Advertising index 1 for that launch made the
-    /// supervisor's strict decode reject a spawn that had already succeeded
-    /// (`ProcessEffectError::PidfdUnavailable`), orphaning the worker.
+    /// Always `None`: the escrow descriptor is retained as registry
+    /// custody and no duplicate rides the response (a dup of the caller's
+    /// own descriptor is refused by the forward carrier's anti-replay
+    /// fence with the fd-leg code). The daemon keeps its own copy of the
+    /// daemon end to wait on, so the response fd vector holds the pidfd
+    /// alone for every launch.
     fn bootstrap_response_index(self) -> Option<u32> {
-        self.carries_controller_escrow().then_some(1)
+        None
     }
 
     /// Index of the console-socket descriptor on a `SpawnRunner` response.
@@ -6636,22 +6639,21 @@ impl DispatchBackend for LiveDispatchBackend {
             self.daemon_uid,
             self.daemon_gid,
         )?;
-        let (controller_bootstrap_response, retained_controller_bootstrap) =
-            if posture.carries_controller_escrow() {
-                let retained = request_fds.pop().ok_or_else(|| {
-                    BrokerError::Protocol(
-                        "ProviderController bootstrap escrow fd is missing".to_owned(),
-                    )
-                })?;
-                let response = retained.try_clone().map_err(|error| {
-                    BrokerError::LiveHandler(format!(
-                        "Provider controller bootstrap duplicate: {error}"
-                    ))
-                })?;
-                (Some(response), Some(retained))
-            } else {
-                (None, None)
-            };
+        // The escrow descriptor is retained as registry custody only: no
+        // duplicate rides the answer leg (a dup of the caller's own
+        // descriptor is refused by the forward carrier's anti-replay
+        // fence with the fd-leg code; the daemon keeps its own copy of
+        // the daemon end to wait on).
+        let retained_controller_bootstrap = if posture.carries_controller_escrow() {
+            let retained = request_fds.pop().ok_or_else(|| {
+                BrokerError::Protocol(
+                    "ProviderController bootstrap escrow fd is missing".to_owned(),
+                )
+            })?;
+            Some(retained)
+        } else {
+            None
+        };
         if !request_fds.is_empty() && !preopened.child_fds.is_empty() {
             return Err(BrokerError::Protocol(
                 "request inherited fds cannot combine with broker-preopened fds".to_owned(),
@@ -6689,9 +6691,6 @@ impl DispatchBackend for LiveDispatchBackend {
             }
         })?;
         outcome.extra_response_fds = preopened.response_fds;
-        outcome
-            .extra_response_fds
-            .extend(controller_bootstrap_response);
         register_runner_pidfd(runner_id, &outcome.pidfd).inspect_err(|_err| {
             // Registration failed: the broker is about to drop this
             // just-spawned child's pidfd. Reap it now (targeted,
@@ -13590,8 +13589,8 @@ mod tests {
     }
 
     /// Non-serving ProviderController posture: the whole decision set at once.
-    /// It must carry the bootstrap escrow descriptor (the broker retains its
-    /// duplicate as custody and advertises index 1), keeps the intent
+    /// It must carry the bootstrap escrow descriptor (the broker retains it
+    /// as registry custody and returns no duplicate), keeps the intent
     /// uid/gid, and its owner fence is the bundle owner.
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
@@ -13615,7 +13614,7 @@ mod tests {
         assert_eq!(
             posture_decisions(posture),
             PostureDecisions {
-                bootstrap_response_index: Some(1),
+                bootstrap_response_index: None,
                 console_response_index_with_extras: None,
                 carries_controller_escrow: true,
                 accepts_zero_fds: false,
