@@ -8236,9 +8236,11 @@ impl ZoneResourceRuntime {
         &self,
         state: Arc<crate::ServerState>,
     ) -> Result<(), ResourceRuntimeError> {
-        if !self.readiness.resource_api_ready {
-            return Ok(());
-        }
+        // The waker registration precedes the readiness gate: a controller
+        // launch can complete before the resource API is ready (the launch
+        // path's bootstrap remember wakes the coordinator), so the waker
+        // must be installable from the first startup pass even when session
+        // establishment itself has to wait for the API.
         let providers = state
             .provider_runtime
             .process_providers()
@@ -8280,9 +8282,15 @@ impl ZoneResourceRuntime {
                     }),
                 )
                 .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+            if !self.readiness.resource_api_ready {
+                return Ok(());
+            }
             coordinator
                 .reconcile_controller_sessions_locked(Arc::clone(&providers), false)
                 .await?;
+        }
+        if !self.readiness.resource_api_ready {
+            return Ok(());
         }
         let _guard = self.controller_reconcile_lock.lock().await;
         let resources = self.committed_process_rows().await?;
