@@ -959,6 +959,13 @@ impl BrokerEnvelope {
         fds: &[OwnedFd],
         nested: bool,
     ) -> Result<Invocation, EnvelopeRefusal> {
+        let probe_start = std::time::Instant::now();
+        tracing::info!(
+            operation = operation,
+            zone = zone,
+            nested = nested,
+            "envelope invocation start"
+        );
         // The audit rule needs the executing leg: the envelope writes
         // broker-side records only for in-broker executions, and nothing
         // for forwarded ops - those are the daemon side's records alone
@@ -1090,6 +1097,14 @@ impl BrokerEnvelope {
             Ok((outcome, row.audit_join_identity(&payload)))
         }
         .await;
+        tracing::info!(
+            operation = operation,
+            zone = zone,
+            nested = nested,
+            elapsed_ms = probe_start.elapsed().as_millis(),
+            serving = serves_locally,
+            "envelope invocation settled"
+        );
         if serves_locally {
             // Exactly one record per invocation on the broker side: the
             // root leg writes the root record, a nested leg writes its
