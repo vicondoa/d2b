@@ -5434,12 +5434,26 @@ fn observe_registered_runner(
         // Keep the lock order aligned with deregistration: pidfd registry
         // first, metadata second. This makes the binding update atomic with
         // the live pidfd registration.
-        let mut metadata_registry = runner_metadata_registry().lock().map_err(|_| {
-            BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned())
+let mut metadata_registry = runner_metadata_registry().lock().map_err(|_| {
+            BrokerError::LiveHandler("runner metadata registry mutex poisoned".to_owned())
         })?;
         let registration = match metadata_registry.get(&runner_id).cloned() {
             Some(registration) => registration,
-            None => return Ok(None),
+            None => {
+                tracing::warn!(
+                    runner_id,
+                    registered = metadata_registry.contains_key(&runner_id),
+                    pidfd_registered = runner_pidfds().contains_key(&runner_id),
+                    request_vm = request.vm_id.as_str(),
+                    request_role = request.role_id.as_str(),
+                    request_resource_ref = ?request.resource_ref,
+                    request_resource_uid = ?request.resource_uid,
+                    request_zone_uid = ?request.zone_uid,
+                    request_runtime_scope = ?request.runtime_scope,
+                    "ObserveRunner registry lookup missed",
+                );
+                return Ok(None);
+            }
         };
         let mut observed_registration = registration.clone();
         let rebound = rebind_guest_execution_registration(
@@ -5665,6 +5679,26 @@ fn discover_runner_candidate(
                 .map(|(_, _, verified)| *verified)
                 .collect::<Vec<_>>(),
             "ObserveRunner discovered unregistered cgroup candidates",
+        );
+    }
+    if candidates.is_empty() {
+        tracing::warn!(
+            cgroup_subtree,
+            scanned_pids = ?fs::read_dir("/proc")
+                .map(|entries| {
+                    entries
+                        .filter_map(|entry| entry.ok())
+                        .filter_map(|entry| {
+                            entry
+                                .file_name()
+                                .to_str()
+                                .and_then(|value| value.parse::<i32>().ok())
+                        })
+                        .filter(|pid| proc_cgroup_matches(*pid, cgroup_subtree))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+            "ObserveRunner discovery found no cgroup candidates",
         );
     }
     let Some((pid, start_time_ticks, executable_verified)) = select_runner_candidate(candidates)?
