@@ -1587,6 +1587,11 @@ impl ProductionProcessProviders {
         provider: ManagedProvider,
         identity: ProcessIdentityDigest,
     ) {
+        tracing::info!(
+            provider = ?provider,
+            identity = identity.to_hex(),
+            "register_launched_runner invoked"
+        );
         if provider != ManagedProvider::Minijail {
             return;
         }
