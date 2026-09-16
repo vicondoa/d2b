@@ -1457,13 +1457,22 @@ fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
         return false;
     };
     let expected = expected_subtree.trim_start_matches('/');
-    content.lines().any(|line| {
+    let matched = content.lines().any(|line| {
         let Some((_, path)) = line.split_once("::") else {
             return false;
         };
         let actual = path.trim_start_matches('/');
         actual == expected || actual.ends_with(&format!("/{expected}"))
-    })
+    });
+    if !matched {
+        tracing::warn!(
+            pid,
+            expected_subtree,
+            observed_cgroup = %content,
+            "cgroup probe mismatch"
+        );
+    }
+    matched
 }
 
 /// Whether one observed executable path matches the trusted binary.
