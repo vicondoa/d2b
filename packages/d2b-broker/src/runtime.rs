@@ -5698,12 +5698,15 @@ fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecutableO
         }
         Err(_) => return RunnerExecutableObservation::Mismatch,
     };
-    let Some(expected) = fs::canonicalize(expected).ok() else {
+    let canon_expected = fs::canonicalize(expected);
+    let Some(expected) = canon_expected.as_deref().ok().map(Path::to_path_buf) else {
+        tracing::warn!(?actual, ?expected, "runner executable mismatch: expected path unresolved");
         return RunnerExecutableObservation::Mismatch;
     };
     if actual == expected {
         return RunnerExecutableObservation::Matching;
     }
+    tracing::warn!(?actual, ?expected, "runner executable mismatch: paths differ");
 
     let Ok(script) = fs::read_to_string(&expected) else {
         return RunnerExecutableObservation::Mismatch;
