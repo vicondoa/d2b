@@ -2144,24 +2144,28 @@ impl ProductionProcessProviders {
     }
 
     fn wake_controller_session_reconcile(&self, zone: &ZoneId) -> Result<(), String> {
-        let result = self
+        // A missing waker is not a launch failure: the zone's controller-
+        // session coordinator registers its waker during activation, which
+        // can race a controller launch, and the registration path wakes any
+        // marker already pending for the zone (`set_controller_session_waker`
+        // reconciles pending markers itself).
+        let wake = match self
             .controller_session_wakers
             .lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
             .get(zone)
             .cloned()
-            .ok_or_else(|| "provider-controller-session-wake-unavailable".to_owned())
-            .and_then(|wake| {
-                wake().map_err(|error| format!("provider-controller-session-wake-failed:{error}"))
-            });
-        if let Err(error) = &result {
-            tracing::warn!(
-                zone = %zone.as_str(),
-                error = %error,
-                "controller-session coordinator wake failed",
-            );
-        }
-        result
+        {
+            Some(wake) => wake,
+            None => {
+                tracing::info!(
+                    zone = %zone.as_str(),
+                    "controller-session coordinator wake deferred: waker not registered yet"
+                );
+                return Ok(());
+            }
+        };
+        wake().map_err(|error| format!("provider-controller-session-wake-failed:{error}"))
     }
 
     pub(crate) fn controller_bootstrap_present(
