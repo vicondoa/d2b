@@ -26,6 +26,7 @@
 //! mutate it on every pass), and the launch parameters their templates admit
 //! travel on the Process controller's `launch_args` channel.
 
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use d2b_contracts::types::{BundleOpId, VmId};
@@ -356,15 +357,47 @@ impl LiveTpmResourceEffectPort<'_> {
     /// The retired typed `PrepareStateDir` arm resolved the subject's trusted
     /// state directory from the bundle; the U10 leg resolves the same intent
     /// from the daemon's bundle copy and invokes the prepare-directory kernel
-    /// with the resolved parameters.
+    /// with the resolved parameters. A v3 zone-native Guest carries no
+    /// legacy per-VM state-directory intent, so the retired arm's zone-native
+    /// fallback is preserved: its TPM state directory is the
+    /// controller-created state Volume the trusted `path:swtpm-state:<guest>`
+    /// storage row roots - the same row the worker derivation, the
+    /// spawn-time swtpm-dir fence and the volume-local controller's root all
+    /// agree on.
     fn prepare_state_dir(&self) -> Result<(), TpmResourceEffectError> {
         let resolver = d2bd_runtime::runtime_util::block_on_future(
             crate::load_bundle_resolver_on_worker(self.state),
         )
         .map_err(|_| TpmResourceEffectError::Transient)?;
-        let intent = resolver
+        let (base_dir, owner_uid, owner_gid, mode) = match resolver
             .resolve_prepare_dir_intent(self.vm_id.as_str(), false)
-            .ok_or(TpmResourceEffectError::StateIntegrity)?;
+        {
+            Some(intent) => (
+                intent.base_dir,
+                intent.owner_uid,
+                intent.owner_gid,
+                intent.mode,
+            ),
+            None => {
+                // Zone-native posture (retired-arm parity): no legacy
+                // state-directory intent for this Guest. Prepare the state
+                // root the trusted storage row names, narrowed to the unique
+                // TPM Device's state Volume directory when the verified
+                // bundles name exactly one TPM Device for the Guest - never
+                // an invented one of several.
+                let (spec, state_root) =
+                    zone_native_swtpm_state_row(&resolver, self.vm_id.as_str())
+                        .ok_or(TpmResourceEffectError::StateIntegrity)?;
+                let (owner_uid, owner_gid, mode) = row_posture(spec)
+                    .ok_or(TpmResourceEffectError::StateIntegrity)?;
+                let base_dir = unique_tpm_state_dir(
+                    &tpm_devices_of_guest(&resolver, self.vm_id.as_str()),
+                    &state_root,
+                )
+                .unwrap_or(state_root);
+                (base_dir, owner_uid, owner_gid, mode)
+            }
+        };
         let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
             &self.state.zone_coordinator,
             self.vm_id.as_str(),
@@ -375,11 +408,11 @@ impl LiveTpmResourceEffectPort<'_> {
             zone: zone.as_str(),
             payload: serde_json::json!({
                 "kind": "state",
-                "baseDir": intent.base_dir.display().to_string(),
-                "vmIdOrScope": intent.vm_name,
-                "mode": intent.mode,
-                "ownerUid": intent.owner_uid,
-                "ownerGid": intent.owner_gid,
+                "baseDir": base_dir.display().to_string(),
+                "vmIdOrScope": self.vm_id.as_str(),
+                "mode": mode,
+                "ownerUid": owner_uid,
+                "ownerGid": owner_gid,
                 "createdPaths": [],
             }),
             fds: &[],
@@ -402,6 +435,170 @@ impl LiveTpmResourceEffectPort<'_> {
                 Err(TpmResourceEffectError::StateIntegrity)
             }
         }
+    }
+}
+
+/// The trusted `path:swtpm-state:<guest>` storage row of one zone-native
+/// Guest: the row plus the absolute state root it names. `None` for a
+/// subject no trusted artifact names - the caller keeps failing closed
+/// rather than inventing a directory (retired-arm parity).
+fn zone_native_swtpm_state_row<'a>(
+    resolver: &'a d2b_core::bundle_resolver::BundleResolver,
+    guest: &str,
+) -> Option<(&'a d2b_core::storage::StoragePathSpec, PathBuf)> {
+    let spec = resolver.find_storage_path_spec(&format!("path:swtpm-state:{guest}"))?;
+    let path = PathBuf::from(spec.path_template.as_str());
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    Some((spec, path))
+}
+
+/// The numeric posture one trusted storage row declares for its path -
+/// `(owner_uid, owner_gid, mode)` - resolved against this host. `None` when
+/// the row's principals or mode cannot be resolved here (retired-arm parity:
+/// a caller that must record a posture fails closed instead of inventing
+/// one).
+fn row_posture(spec: &d2b_core::storage::StoragePathSpec) -> Option<(u32, u32, u32)> {
+    use d2b_core::storage::PrincipalKind;
+    let owner_uid = match spec.owner.kind {
+        PrincipalKind::Uid => spec.owner.value.as_str().parse::<u32>().ok()?,
+        PrincipalKind::User => nix::unistd::User::from_name(spec.owner.value.as_str())
+            .ok()?
+            .map(|user| user.uid.as_raw())?,
+        _ => return None,
+    };
+    let owner_gid = match spec.group.kind {
+        PrincipalKind::Gid => spec.group.value.as_str().parse::<u32>().ok()?,
+        PrincipalKind::Group => nix::unistd::Group::from_name(spec.group.value.as_str())
+            .ok()?
+            .map(|group| group.gid.as_raw())?,
+        _ => return None,
+    };
+    let trimmed = spec.mode.trim_start_matches('0');
+    let normalized = if trimmed.is_empty() { "0" } else { trimmed };
+    let mode = u32::from_str_radix(normalized, 8).ok()?;
+    Some((owner_uid, owner_gid, mode))
+}
+
+/// The TPM Devices one Guest's verified bundles name: `Device` rows owned by
+/// `Guest/<guest>` with the TPM provider ref, with the uid each row declares
+/// or the stable digest rendering when the row carries none. A Device
+/// committed through the Resource API is not in any bundle and is therefore
+/// never returned (retired-arm parity).
+fn tpm_devices_of_guest(
+    resolver: &d2b_core::bundle_resolver::BundleResolver,
+    guest: &str,
+) -> Vec<(ResourceRef, ResourceUid)> {
+    let Ok(zones) = resolver.zone_resource_bundle_zones() else {
+        return Vec::new();
+    };
+    let mut devices = Vec::new();
+    for zone in zones {
+        let Some(bytes) = resolver.zone_resource_bundle_bytes(zone.as_str()) else {
+            continue;
+        };
+        let Ok(bundle) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+            continue;
+        };
+        let Some(resources) = bundle.get("resources").and_then(|rows| rows.as_array()) else {
+            continue;
+        };
+        for resource in resources {
+            if resource.get("type").and_then(serde_json::Value::as_str) != Some("Device") {
+                continue;
+            }
+            let Some(metadata) = resource.get("metadata") else {
+                continue;
+            };
+            let expected_owner = format!("Guest/{guest}");
+            if metadata.get("ownerRef").and_then(serde_json::Value::as_str)
+                != Some(expected_owner.as_str())
+            {
+                continue;
+            }
+            if resource
+                .pointer("/spec/providerRef")
+                .and_then(serde_json::Value::as_str)
+                != Some(d2b_provider_device_tpm::PROVIDER_REF)
+            {
+                continue;
+            }
+            let Some(name) = metadata.get("name").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let Some(device_ref) = ResourceRef::parse(&format!("Device/{name}")).ok() else {
+                continue;
+            };
+            let device_uid = metadata
+                .get("uid")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|uid| ResourceUid::parse(uid).ok())
+                .unwrap_or_else(|| deterministic_resource_uid(zone.as_str(), "Device", name));
+            devices.push((device_ref, device_uid));
+        }
+    }
+    devices
+}
+
+/// The stable digest rendering of a resource identity, matching the wire
+/// shape every manager row uses (UUIDv4-shaped bytes of the SHA-256 digest
+/// over the zone/type/name triple).
+fn deterministic_resource_uid(zone: &str, resource_type: &str, name: &str) -> ResourceUid {
+    use sha2::Digest as _;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"d2b-resource-uid/v1\x00");
+    hasher.update(zone.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(resource_type.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(name.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    // The wire identity is the UUIDv4-shaped rendering of the stable digest:
+    // the shape bits are forced so the identity survives the closed
+    // `ResourceUid` contract (the same rendering every manager row uses).
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let text = format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8],
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+    );
+    ResourceUid::parse(text).expect("shaped row uids satisfy the UUIDv4 contract")
+}
+
+/// The TPM Provider's own state Volume naming for one Device
+/// (`device-<32hex>-tpm-state`), so the prepared directory is the exact
+/// directory the controller provisions.
+fn state_volume_name(device_uid: &ResourceUid) -> String {
+    let short: String = device_uid
+        .as_str()
+        .bytes()
+        .filter(|byte| byte.is_ascii_hexdigit())
+        .take(32)
+        .map(char::from)
+        .collect();
+    format!("device-{short}-tpm-state")
+}
+
+/// The state Volume directory of the Guest's own TPM Device, when the
+/// verified bundles name exactly one TPM Device for the Guest: the shared
+/// policy root joined with the TPM Provider's naming. `None` when no or
+/// several Devices are named - the caller keeps the shared policy root
+/// rather than inventing one Device's directory (retired-arm parity).
+fn unique_tpm_state_dir(
+    devices: &[(ResourceRef, ResourceUid)],
+    state_root: &Path,
+) -> Option<PathBuf> {
+    match devices {
+        [(_, device_uid)] => Some(state_root.join(state_volume_name(device_uid))),
+        _ => None,
     }
 }
 
