@@ -255,6 +255,12 @@ impl SocketForwarder {
             .exchange(&request, &raw)
             .await
             .map_err(|error| DispatchFailure::unregistered_handler(error.to_string()))?;
+        tracing::info!(
+            operation = %request.operation,
+            request_fds = raw.len(),
+            received_fds = response_fds.len(),
+            "forward exchange fd probe"
+        );
         match response.outcome {
             ForwardOperationOutcome::Result {
                 result,
