@@ -1097,12 +1097,17 @@ impl BrokerEnvelope {
             Ok((outcome, row.audit_join_identity(&payload)))
         }
         .await;
+        let settled_outcome = match &dispatched {
+            Ok(_) => "ok".to_owned(),
+            Err(refusal) => refusal.code.clone(),
+        };
         tracing::info!(
             operation = operation,
             zone = zone,
             nested = nested,
             elapsed_ms = probe_start.elapsed().as_millis(),
             serving = serves_locally,
+            outcome = settled_outcome.as_str(),
             "envelope invocation settled"
         );
         if serves_locally {

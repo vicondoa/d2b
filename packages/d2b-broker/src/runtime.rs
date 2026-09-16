@@ -6849,7 +6849,12 @@ impl DispatchBackend for LiveDispatchBackend {
 static ENVELOPE_CALL_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
     std::sync::LazyLock::new(|| {
         tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
+            // Bounded parallelism: forwarded legs wait on the daemon's
+            // answer while their nested kernel calls must be dispatched on
+            // other workers; two workers serialized those and every
+            // forward+nest pair stalled for the full io timeout (the
+            // host-integration lane proved it).
+            .worker_threads(8)
             .thread_name("d2b-broker-envelope-call")
             .enable_all()
             .build()
