@@ -414,7 +414,7 @@ impl OperationEnvelope {
         kernel: Option<&d2b_resource_types::KernelCaller>,
     ) -> Result<OperationResult, OperationFailure> {
         let probe_start = std::time::Instant::now();
-        tracing::info!(operation = operation, zone = %self.zone, "family handler invocation start");
+        tracing::info!(operation = ?operation.to_string(), zone = %self.zone.to_string(), "family handler invocation start");
         // The committed rows spell the family operations in the catalog's
         // PascalCase wire names while a `ResourceRef` name is a lowercase
         // label, so the match is case-insensitive (U10): the forwarded wire
@@ -440,8 +440,8 @@ impl OperationEnvelope {
         .await
         .inspect(|_| {
             tracing::info!(
-                operation = operation,
-                zone = %self.zone,
+                operation = ?operation.to_string(),
+                zone = %self.zone.to_string(),
                 elapsed_ms = probe_start.elapsed().as_millis(),
                 "family handler invocation settled"
             );
@@ -479,7 +479,7 @@ impl OperationEnvelope {
             .await;
         if let Err(failure) = &result {
             tracing::info!(
-                operation = operation,
+                operation = ?operation.to_string(),
                 zone = %self.zone.to_string(),
                 code = failure.code(),
                 detail = ?failure.detail(),
