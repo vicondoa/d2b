@@ -1482,22 +1482,13 @@ fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
         return false;
     };
     let expected = expected_subtree.trim_start_matches('/');
-    let matched = content.lines().any(|line| {
+    content.lines().any(|line| {
         let Some((_, path)) = line.split_once("::") else {
             return false;
         };
         let actual = path.trim_start_matches('/');
         actual == expected || actual.ends_with(&format!("/{expected}"))
-    });
-    if !matched {
-        tracing::warn!(
-            pid,
-            expected_subtree,
-            observed_cgroup = %content,
-            "cgroup probe mismatch"
-        );
-    }
-    matched
+    })
 }
 
 /// Whether one observed executable path matches the trusted binary.
@@ -2073,18 +2064,6 @@ impl OperationHandler for ObserveRunnerHandler {
             .map(|path| executable_matches(Some(path), &intent.binary_path))
             .unwrap_or_else(|| executable_matches(executable, &intent.binary_path));
         let cgroup_verified = proc_cgroup_matches(pid, &cgroup_placement.subtree);
-        if present && (!cgroup_verified || !executable_verified) {
-            tracing::warn!(
-                pid,
-                cgroup_verified,
-                executable_verified,
-                actual = executable.unwrap_or("<unreadable>"),
-                registered_binary = registered_binary.unwrap_or("<absent>"),
-                expected_subtree = %cgroup_placement.subtree,
-                expected_binary = %intent.binary_path.display(),
-                "ObserveRunner registered-runner verification incomplete"
-            );
-        }
         let response = ObserveRunnerResponse {
             vm_id: request.vm_id.clone(),
             role_id: request.role_id.clone(),
@@ -2863,13 +2842,6 @@ impl OperationHandler for SpawnRunnerHandler {
                     })?,
             );
         }
-        tracing::info!(
-            invocation_id = ctx.invocation_id,
-            vm = %request.vm_id.as_str(),
-            role = %request.role_id.as_str(),
-            reply_fd_count = fds.len(),
-            "SpawnRunner handler reply fd count"
-        );
         Ok(OperationResult::with_fds(
             typed_result(SPAWN_RUNNER, &response)?,
             fds,

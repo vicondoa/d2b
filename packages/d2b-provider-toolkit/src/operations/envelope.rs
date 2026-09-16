@@ -413,8 +413,6 @@ impl OperationEnvelope {
         chain_identities: &[String],
         kernel: Option<&d2b_resource_types::KernelCaller>,
     ) -> Result<OperationResult, OperationFailure> {
-        let probe_start = std::time::Instant::now();
-        tracing::info!(operation = ?operation.to_string(), zone = %self.zone.to_string(), "family handler invocation start");
         // The committed rows spell the family operations in the catalog's
         // PascalCase wire names while a `ResourceRef` name is a lowercase
         // label, so the match is case-insensitive (U10): the forwarded wire
@@ -438,14 +436,6 @@ impl OperationEnvelope {
             kernel,
         )
         .await
-        .inspect(|_| {
-            tracing::info!(
-                operation = ?operation.to_string(),
-                zone = %self.zone.to_string(),
-                elapsed_ms = probe_start.elapsed().as_millis(),
-                "family handler invocation settled"
-            );
-        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -477,15 +467,6 @@ impl OperationEnvelope {
             .handler
             .execute(ctx, ValidatedPayload::new(payload))
             .await;
-        if let Err(failure) = &result {
-            tracing::info!(
-                operation = ?operation.to_string(),
-                zone = %self.zone.to_string(),
-                code = failure.code(),
-                detail = ?failure.detail(),
-                "family handler refused"
-            );
-        }
         let outcome = match &result {
             Ok(_) => ProviderAgentAuditOutcome::Accepted,
             Err(_) => ProviderAgentAuditOutcome::Failed,

@@ -888,16 +888,9 @@ impl d2b_provider_supervisor::LaunchedObserver for PidfdTableLaunchedObserver {
                         "pidfd table snapshot failed after launched-runner registration"
                     );
                 }
-                tracing::info!(
-                    vm,
-                    role,
-                    pid,
-                    "launched runner registered in pidfd table"
-                );
+                let _ = pid;
             }
-            Err(d2bd_runtime::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }) => {
-                tracing::info!(vm, role, "launched runner already registered in pidfd table");
-            }
+            Err(d2bd_runtime::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }) => {}
             Err(error) => {
                 tracing::warn!(
                     vm,

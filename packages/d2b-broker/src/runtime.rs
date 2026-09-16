@@ -5543,21 +5543,7 @@ let mut metadata_registry = runner_metadata_registry().lock().map_err(|_| {
         })?;
         let registration = match metadata_registry.get(&runner_id).cloned() {
             Some(registration) => registration,
-            None => {
-                tracing::warn!(
-                    runner_id,
-                    registered = metadata_registry.contains_key(&runner_id),
-                    pidfd_registered = runner_pidfds().contains_key(&runner_id),
-                    request_vm = request.vm_id.as_str(),
-                    request_role = request.role_id.as_str(),
-                    request_resource_ref = ?request.resource_ref,
-                    request_resource_uid = ?request.resource_uid,
-                    request_zone_uid = ?request.zone_uid,
-                    request_runtime_scope = ?request.runtime_scope,
-                    "ObserveRunner registry lookup missed",
-                );
-                return Ok(None);
-            }
+            None => return Ok(None),
         };
         let mut observed_registration = registration.clone();
         let rebound = rebind_guest_execution_registration(
@@ -5747,19 +5733,8 @@ fn discover_runner_candidate(
             continue;
         }
         let observed_exe = read_runner_executable(pid);
-        let observed_exe_ref = observed_exe.as_deref().ok().map(Path::to_path_buf);
         let expected_binary = registered_binary.as_deref().unwrap_or(&intent.binary_path);
         let executable_observation = observe_runner_executable(observed_exe, expected_binary)?;
-        if matches!(
-            executable_observation,
-            RunnerExecutableObservation::Mismatch
-        ) {
-            tracing::warn!(
-                observed = ?observed_exe_ref,
-                expected = ?expected_binary,
-                "runner executable mismatch observed",
-            );
-        }
         if executable_observation == RunnerExecutableObservation::Vanished {
             continue;
         }
@@ -5771,41 +5746,6 @@ fn discover_runner_candidate(
         }
         let executable_verified = executable_observation.is_verified_for_discovery();
         candidates.push((pid, start_time_ticks, executable_verified));
-    }
-    if !candidates.is_empty() {
-        tracing::warn!(
-            cgroup_subtree,
-            candidate_count = candidates.len(),
-            candidate_pids = ?candidates
-                .iter()
-                .map(|(pid, _, _)| *pid)
-                .collect::<Vec<_>>(),
-            executable_verified = ?candidates
-                .iter()
-                .map(|(_, _, verified)| *verified)
-                .collect::<Vec<_>>(),
-            "ObserveRunner discovered unregistered cgroup candidates",
-        );
-    }
-    if candidates.is_empty() {
-        tracing::warn!(
-            cgroup_subtree,
-            scanned_pids = ?fs::read_dir("/proc")
-                .map(|entries| {
-                    entries
-                        .filter_map(|entry| entry.ok())
-                        .filter_map(|entry| {
-                            entry
-                                .file_name()
-                                .to_str()
-                                .and_then(|value| value.parse::<i32>().ok())
-                        })
-                        .filter(|pid| proc_cgroup_matches(*pid, cgroup_subtree))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default(),
-            "ObserveRunner discovery found no cgroup candidates",
-        );
     }
     let Some((pid, start_time_ticks, executable_verified)) = select_runner_candidate(candidates)?
     else {
@@ -5878,21 +5818,11 @@ fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecutableO
     };
     let canon_expected = fs::canonicalize(expected);
     let Some(expected) = canon_expected.as_deref().ok().map(Path::to_path_buf) else {
-        tracing::warn!(
-            ?actual,
-            ?expected,
-            "runner executable mismatch: expected path unresolved"
-        );
         return RunnerExecutableObservation::Mismatch;
     };
     if actual == expected {
         return RunnerExecutableObservation::Matching;
     }
-    tracing::warn!(
-        ?actual,
-        ?expected,
-        "runner executable mismatch: paths differ"
-    );
 
     let Ok(script) = fs::read_to_string(&expected) else {
         return RunnerExecutableObservation::Mismatch;

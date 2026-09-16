@@ -228,14 +228,7 @@ impl DeclaredTpmRows<'_> {
                 );
                 TpmResourceEffectError::Transient
             })?;
-        let phase = self.phase(&reference).await?;
-        tracing::warn!(
-            device = %self.device_ref.to_canonical_string(),
-            volume = %reference.to_canonical_string(),
-            phase = ?phase,
-            "tpm state volume phase after ensure"
-        );
-        gate_declared_phase(phase)?;
+        self.wait_ready(&reference).await?;
         Ok(reference)
     }
 }
