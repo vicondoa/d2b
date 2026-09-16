@@ -10,7 +10,23 @@ use std::time::Duration;
 
 use tempfile::{Builder, TempDir};
 
-const BROKER_BIN: &str = env!("CARGO_BIN_EXE_d2b-broker");
+/// Locate the composed `d2b-broker` binary. The bin target lives in the
+/// `d2b-broker-composition` package (the U6 split), so the cargo-provided
+/// `CARGO_BIN_EXE_…` env var is only set when the harness runs from that
+/// package's own tests; standalone runs resolve the workspace build output.
+fn broker_bin() -> std::path::PathBuf {
+    if let Some(bin) = std::env::var_os("CARGO_BIN_EXE_d2b-broker") {
+        return std::path::PathBuf::from(bin);
+    }
+    let candidate = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/debug/d2b-broker");
+    assert!(
+        candidate.exists(),
+        "the d2b-broker binary is not built; run `cargo build -p d2b-broker-composition --bin d2b-broker` first (expected at {})",
+        candidate.display()
+    );
+    candidate
+}
 const O_APPEND: u32 = 0o2000;
 
 pub const D2BD_UID: u32 = 4242;
@@ -71,7 +87,7 @@ impl TestBroker {
         let server_log_err = server_log.try_clone().expect("clone broker server log");
         let current_gid = nix::unistd::Gid::current().as_raw();
 
-        let child = Command::new(BROKER_BIN)
+        let child = Command::new(broker_bin())
             .arg(profile)
             .arg("--authority-id")
             .arg(authority_id)
@@ -246,7 +262,7 @@ impl TestBroker {
         S: AsRef<OsStr>,
     {
         ProbeOutput(
-            Command::new(BROKER_BIN)
+            Command::new(broker_bin())
                 .args(args)
                 .output()
                 .expect("run broker probe command"),

@@ -473,6 +473,7 @@ mod tests {
             owner_uid: nix::unistd::geteuid().as_raw(),
             owner_gid: nix::unistd::getegid().as_raw(),
             created_paths: vec![PathBuf::from("logs"), PathBuf::from("artifacts")],
+            daemon_uid: None,
         };
         let audit = prepare_dir(&req).unwrap();
         assert!(base.is_dir());
@@ -495,6 +496,7 @@ mod tests {
             owner_uid: nix::unistd::geteuid().as_raw(),
             owner_gid: nix::unistd::getegid().as_raw(),
             created_paths: vec![PathBuf::from("logs")],
+            daemon_uid: None,
         };
         let first = prepare_dir(&req).unwrap();
         assert_eq!(
@@ -535,6 +537,7 @@ mod tests {
             owner_uid: nix::unistd::geteuid().as_raw(),
             owner_gid: nix::unistd::getegid().as_raw(),
             created_paths: vec![],
+            daemon_uid: None,
         };
         let audit = prepare_dir(&req).unwrap();
         assert_eq!(
@@ -563,6 +566,7 @@ mod tests {
             owner_uid: nix::unistd::geteuid().as_raw(),
             owner_gid: nix::unistd::getegid().as_raw(),
             created_paths: vec![],
+            daemon_uid: None,
         };
         let audit = prepare_dir(&req).unwrap();
         assert_eq!(
@@ -586,6 +590,7 @@ mod tests {
             owner_uid: nix::unistd::geteuid().as_raw(),
             owner_gid: nix::unistd::getegid().as_raw(),
             created_paths: vec![PathBuf::from("/etc/passwd")],
+            daemon_uid: None,
         };
         let err = prepare_dir(&req).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
@@ -603,6 +608,7 @@ mod tests {
             owner_uid: nix::unistd::geteuid().as_raw(),
             owner_gid: nix::unistd::getegid().as_raw(),
             created_paths: vec![PathBuf::from("../escape")],
+            daemon_uid: None,
         };
         let err = prepare_dir(&req).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);

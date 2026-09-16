@@ -11818,6 +11818,18 @@ mod tests {
                 std::path::PathBuf::from("/nonexistent/d2b-broker.sock"),
                 BrokerCallerRole::AdminUid { uid: 0 },
                 DaemonMode::Host,
+                std::sync::Arc::new(
+                    d2bd_runtime::supervisor::pidfd_table::PidfdTable::new(
+                        std::env::temp_dir().join(format!(
+                            "d2b-test-pidfd-{}-{}",
+                            std::process::id(),
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_nanos()
+                        )),
+                    ),
+                ),
             ),
         )
     }

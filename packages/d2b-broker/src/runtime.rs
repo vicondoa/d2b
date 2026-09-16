@@ -17544,6 +17544,7 @@ mod tests {
             config: Arc::new(config.clone()),
             audit_log: Arc::clone(&log),
             dispatches: DispatchPool::new(2),
+            nested_dispatches: DispatchPool::new(2),
             ipc_rate_limiter: Arc::clone(&limiter),
         };
 
@@ -17672,6 +17673,7 @@ mod tests {
             config: Arc::new(config.clone()),
             audit_log: Arc::clone(&log),
             dispatches: DispatchPool::new(2),
+            nested_dispatches: DispatchPool::new(2),
             ipc_rate_limiter: Arc::clone(&limiter),
         };
 
@@ -17759,6 +17761,7 @@ mod tests {
             config: Arc::new(config.clone()),
             audit_log: Arc::clone(&log),
             dispatches: DispatchPool::new(2),
+            nested_dispatches: DispatchPool::new(2),
             ipc_rate_limiter: Arc::clone(&limiter),
         };
         use d2b_contracts_broker::broker_wire::{
@@ -20062,6 +20065,7 @@ mod tests {
             config: Arc::new(config),
             audit_log,
             dispatches: DispatchPool::new(2),
+            nested_dispatches: DispatchPool::new(2),
             ipc_rate_limiter: Arc::new(Mutex::new(IpcRateLimiter::new(64))),
         });
         let serving = runtime.spawn(serve(server, listener));
