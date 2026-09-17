@@ -2042,6 +2042,7 @@ mod tests {
 
     // -- validate ------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_admits_every_registered_provider() {
         for registration in GUEST_REGISTRATIONS {
@@ -2059,6 +2060,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_refuses_an_unregistered_provider_as_terminal() {
         let manager = RecordingManager::new();
@@ -2082,6 +2084,7 @@ mod tests {
     /// The qemu kind's authored child graph is committed to the manager
     /// before the effect runs, and the Provider's status is published on the
     /// row's in-memory status with its projection.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_ensures_the_qemu_child_graph_and_publishes_the_status() {
         let (mut ctx, effects, manager) = qemu_fixture();
@@ -2118,6 +2121,7 @@ mod tests {
 
     /// The old effect gate: a Provider that reports Ready ahead of its own
     /// children keeps the Guest Pending until every desired child is live.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_pends_the_guest_until_its_children_converge() {
         let (mut ctx, effects, manager) = qemu_fixture();
@@ -2131,6 +2135,7 @@ mod tests {
 
     /// A qemu Guest whose Provider row the manager does not hold refuses
     /// closed (the old fence) and never reaches the effect.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_refuses_a_qemu_guest_without_its_provider_row() {
         let effects = ScriptedEffects::new();
@@ -2158,6 +2163,7 @@ mod tests {
     /// while a present row that cannot be decoded names its terminal evidence
     /// (the closed `guest-spec-invalid` refusal) instead of deferring
     /// forever.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn classified_provider_row_read_defers_absence_and_requires_terminal_evidence() {
         // Absent: the manager answers that it holds no provider row.
@@ -2205,6 +2211,7 @@ mod tests {
     }
 
     /// Dependency edges of the spec are registered exactly once (R12).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_watches_declared_dependencies_once() {
         let (mut ctx, _effects, manager) = qemu_fixture();
@@ -2232,6 +2239,7 @@ mod tests {
 
     /// The Cloud Hypervisor kind commits nothing through the driver: its
     /// child rows are the controller session's (the manager route).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn cloud_hypervisor_guests_commit_no_children_through_the_driver() {
         let effects = ScriptedEffects::new();
@@ -2261,6 +2269,7 @@ mod tests {
 
     /// Adoption for the Cloud Hypervisor kind is the committed VMM child row
     /// (the controller session's evidence), not a driver-owned child set.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_a_cloud_hypervisor_guest_with_a_live_vmm_child() {
         let manager = RecordingManager::new();
@@ -2292,6 +2301,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_a_qemu_guest_with_its_complete_child_set() {
         let (mut ctx, _effects, manager) = qemu_fixture();
@@ -2316,6 +2326,7 @@ mod tests {
 
     // -- finalize / delete ---------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_blocks_while_an_owned_child_is_live() {
         let (mut ctx, _effects, manager) = qemu_fixture();
@@ -2336,6 +2347,7 @@ mod tests {
 
     /// Delete runs the Provider's teardown stage first, then retires the
     /// children the desired set no longer derives (R10 order).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_runs_the_provider_stage_before_retiring_the_children() {
         let manager = RecordingManager::new();
@@ -2371,6 +2383,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_refuses_to_retire_children_while_the_provider_stage_pends() {
         let (mut ctx, effects, manager) = qemu_fixture();
@@ -2394,6 +2407,7 @@ mod tests {
 
     /// The provider projection is published (and taken) on every pass that
     /// carries one, and the last one stays sticky when a later pass does not.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn status_projection_is_sticky_across_passes() {
         let (mut ctx, effects, manager) = qemu_fixture();
