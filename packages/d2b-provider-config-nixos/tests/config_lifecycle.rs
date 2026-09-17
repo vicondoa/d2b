@@ -237,6 +237,7 @@ fn staging_rejects_paths_invalid_views_and_unauthorized_callers() {
 }
 
 #[cfg(unix)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn guest_reader_rejects_hardlinked_config_files() {
     let root = std::env::current_dir()

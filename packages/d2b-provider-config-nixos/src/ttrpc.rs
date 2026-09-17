@@ -3,13 +3,17 @@
 use std::{
     collections::HashMap,
     path::{Component, Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        LazyLock,
+        mpsc::{SyncSender, TrySendError, sync_channel},
+    },
+    thread,
 };
 
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use tokio::sync::Semaphore;
 
 use crate::{
     ConfigCaller, ConfigError, ConfigOperation, ConfigService, ConfigServiceDescriptor,
@@ -215,52 +219,104 @@ impl ConfigNixosClient {
     }
 }
 
-/// Ceiling on concurrent blocking config dispatches.
+/// The bound on admitted-but-unstarted blocking config dispatches, per seat。
 ///
 /// The Guest read walks the working-copy path with `O_NOFOLLOW` and reads the
-/// document through `rustix`; that kernel path has no async form, so a
-/// dispatch runs on the shared blocking pool. This ceiling bounds how many
-/// pool threads the service can occupy at once.
-const MAX_BLOCKING_DISPATCHES: usize = 4;
+/// document through `rustix`;that kernel path has no async form, so a
+/// dispatch must not run on the runtime worker that polls this service: a
+/// blocked worker stalls every other task sharing it. Dispatches run on one
+/// dedicated bounded worker (plan R4) instead of the runtime's shared
+/// blocking pool: the worker admits at most this many queued jobs, and a
+/// full queue refuses the caller (mapped to `Unavailable`) rather than
+/// parking an executor worker or growing a thread per call。
+const MAX_DISPATCH_QUEUE_DEPTH: usize = 16;
 
-/// The process-wide blocking-dispatch ceiling.
-static BLOCKING_DISPATCH_LIMIT: Semaphore = Semaphore::const_new(MAX_BLOCKING_DISPATCHES);
+type DispatchJob = Box<dyn FnOnce() + Send + 'static>;
 
-/// Dispatch one operation on the bounded blocking worker.
+/// One dedicated dispatch worker thread with its own bounded queue。
+
+struct DispatchWorker {
+    sender: SyncSender<DispatchJob>,
+}
+
+/// Start one named worker with its own bounded queue。
+///
+/// `None` records a worker that could not start, so every later call refuses
+/// rather than retrying a failing spawn。
+fn start_dispatch_worker() -> Option<DispatchWorker> {
+    let (sender, receiver) = sync_channel::<DispatchJob>(MAX_DISPATCH_QUEUE_DEPTH);
+    thread::Builder::new()
+        .name("d2b-config-nixos-dispatch".to_owned())
+        .spawn(move || {
+            // The sanctioned R4 channel boundary: a blocking `sync_channel`
+            // recv on the worker's own dedicated thread, with
+            // `tokio::sync::oneshot` replies (plan R4 / KTD3).
+            #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+            while let Ok(job) = receiver.recv() {
+                job();
+            }
+        })
+        .ok()
+        .map(|_| DispatchWorker { sender })
+}
+
+/// The blocking config-dispatch seat, started on first use。
+
+
+static DISPATCH_WORKER: LazyLock<Option<DispatchWorker>> = LazyLock::new(start_dispatch_worker);
+
+/// Dispatch one operation on the dedicated bounded dispatch worker。
 ///
 /// The backend read is a synchronous kernel path, so it must not run on the
 /// runtime worker that polls this service: a blocked worker stalls every other
-/// task sharing it.
+/// task sharing it. Admission is a non-blocking `try_send`, so the caller's
+/// executor is never parked;the outcome is awaited from the worker。
 async fn dispatch_on_blocking_worker(
     backend: Arc<dyn ConfigServiceBackend>,
     operation: ConfigOperation,
     payload: Value,
 ) -> Result<Value, ttrpc::Error> {
-    let permit = BLOCKING_DISPATCH_LIMIT
-        .acquire()
-        .await
-        .map_err(|_| rpc_error(ConfigError::Unavailable))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        backend.dispatch(operation, payload)
-    })
-    .await
-    .map_err(|error| {
-        tracing::warn!(
-            operation = operation.as_str(),
-            %error,
-            "config-nixos service dispatch task failed",
-        );
-        rpc_error(ConfigError::Unavailable)
-    })?
-    .map_err(|error| {
-        tracing::warn!(
-            operation = operation.as_str(),
-            %error,
-            "config-nixos service dispatch failed",
-        );
-        rpc_error(error)
-    })
+    let (reply, outcome) = tokio::sync::oneshot::channel();
+    let admitted = DISPATCH_WORKER
+        .as_ref()
+        .ok_or_else(|| rpc_error(ConfigError::Unavailable))?
+        .sender
+        .try_send(Box::new({
+            let backend = Arc::clone(&backend);
+            move || {
+                // A panicking job drops the reply sender, so the waiter sees
+                // `Unavailable` instead of hanging on a dead worker。
+
+                let _ = reply.send(backend.dispatch(operation, payload));
+            }
+        }));
+    match admitted {
+        Ok(()) => {
+            let dispatched = outcome.await.map_err(|_| {
+                tracing::warn!(operation = operation.as_str(), "config-nixos service dispatch worker died");
+                rpc_error(ConfigError::Unavailable)
+            })?;
+            dispatched.map_err(|error| {
+                tracing::warn!(
+                    operation = operation.as_str(),
+                    %error,
+                    "config-nixos service dispatch failed",
+                );
+                rpc_error(error)
+            })
+        }
+        // A saturated queue refuses instead of growing threads or parking the
+        // caller;the RPC surface maps that refusal to `Unavailable`, matching
+        // the previous semaphore ceiling's error.
+
+        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+            tracing::warn!(
+                operation = operation.as_str(),
+                "config-nixos service dispatch refused: worker busy or gone",
+            );
+            Err(rpc_error(ConfigError::Unavailable))
+        }
+    }
 }
 
 struct ConfigMethod {
@@ -436,6 +492,7 @@ mod tests {
     }
 
     impl ConfigServiceBackend for ParkingBackend {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn dispatch(
             &self,
             _operation: ConfigOperation,
@@ -457,6 +514,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn a_blocking_backend_dispatch_does_not_occupy_the_polling_worker() {
         // Drive the registered service handler, not the helper behind it. On
