@@ -147,6 +147,7 @@ fn an_older_refresh_key_replays_its_original_result() {
     assert_eq!(port.refresh_calls.load(Ordering::SeqCst), 2);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn inspect_persists_terminal_state_for_later_revoke() {
     let (provider, port) = setup(64);
@@ -191,6 +192,7 @@ fn inspect_persists_terminal_state_for_later_revoke() {
     assert_eq!(port.revoke_calls.load(Ordering::SeqCst), 0);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn inspect_unknown_state_is_fenced_and_cannot_restore_active_metadata() {
     let (provider, port) = setup(64);
@@ -237,6 +239,7 @@ fn inspect_unknown_state_is_fenced_and_cannot_restore_active_metadata() {
     assert_eq!(port.inspect_calls.load(Ordering::SeqCst), 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn inspect_cannot_restore_a_revoked_lease() {
     let (provider, port) = setup(64);
@@ -267,6 +270,7 @@ fn inspect_cannot_restore_a_revoked_lease() {
     assert_eq!(port.inspect_calls.load(Ordering::SeqCst), 0);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn refresh_preflight_terminal_state_is_sticky() {
     let (provider, port) = setup(64);
@@ -313,6 +317,7 @@ fn refresh_preflight_terminal_state_is_sticky() {
     assert_eq!(port.inspect_calls.load(Ordering::SeqCst), 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn refresh_rotation_mismatch_fences_the_lease() {
     let (provider, port) = setup(64);
@@ -359,6 +364,7 @@ fn refresh_rotation_mismatch_fences_the_lease() {
     assert_eq!(port.inspect_calls.load(Ordering::SeqCst), 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn concurrent_acquires_issue_once() {
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -400,6 +406,7 @@ fn concurrent_acquires_issue_once() {
     assert_eq!(port.issue_calls.load(Ordering::SeqCst), 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn disconnect_waits_for_inflight_acquire_and_fences_the_session() {
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -478,6 +485,7 @@ fn disconnect_waits_for_inflight_acquire_and_fences_the_session() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn inspect_waits_on_the_lifecycle_gate_before_disconnect() {
     let (inspect_tx, inspect_rx) = mpsc::channel();
@@ -593,6 +601,7 @@ struct BlockingState {
 }
 
 impl BlockingPort {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn new(entered: mpsc::Sender<()>) -> Self {
         Self {
             entered: Mutex::new(Some(entered)),
@@ -605,6 +614,7 @@ impl BlockingPort {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn release(&self) {
         let wakers = {
             let mut state = self.state.lock().unwrap();
@@ -618,10 +628,12 @@ impl BlockingPort {
 }
 
 impl Oo7SecretServicePort for BlockingPort {
+
     fn state(&self) -> SecretServiceFuture<'_, SecretServiceState> {
         Box::pin(async { Ok(SecretServiceState::Unlocked) })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn issue_lease(
         &self,
         request: &SecretServiceLeaseRequest,
@@ -684,6 +696,7 @@ struct InspectBlockingPort {
 }
 
 impl InspectBlockingPort {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn new(entered: mpsc::Sender<()>) -> Self {
         Self {
             entered: Mutex::new(Some(entered)),
@@ -695,6 +708,7 @@ impl InspectBlockingPort {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn release(&self) {
         let wakers = {
             let mut state = self.state.lock().unwrap();
@@ -727,6 +741,7 @@ impl Oo7SecretServicePort for InspectBlockingPort {
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn inspect_lease(
         &self,
         lease: &SecretServiceLeaseRef,

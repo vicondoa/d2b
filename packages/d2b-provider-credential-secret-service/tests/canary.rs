@@ -13,6 +13,7 @@ use d2b_provider_credential_secret_service::SecretServiceController;
 
 use common::{Admission, ProviderHarness, setup};
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn process_unique_secret_service_canaries_are_absent_from_every_rendered_surface() {
     let nonce = format!("{:x}", std::process::id());

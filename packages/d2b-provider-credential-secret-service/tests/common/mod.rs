@@ -60,11 +60,13 @@ impl FakeOo7Port {
 }
 
 impl Oo7SecretServicePort for FakeOo7Port {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn state(&self) -> SecretServiceFuture<'_, SecretServiceState> {
         let state = *self.state.lock().unwrap();
         Box::pin(async move { Ok(state) })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn issue_lease(
         &self,
         request: &SecretServiceLeaseRequest,
@@ -101,6 +103,7 @@ impl Oo7SecretServicePort for FakeOo7Port {
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn inspect_lease(
         &self,
         _lease: &SecretServiceLeaseRef,
@@ -110,6 +113,7 @@ impl Oo7SecretServicePort for FakeOo7Port {
         Box::pin(async move { Ok(inspection) })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn refresh_lease(
         &self,
         lease: &SecretServiceLeaseRef,

@@ -1,5 +1,6 @@
 use std::process::Command;
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn standalone_entrypoint_refuses_without_authenticated_registration() {
     let output = Command::new(env!("CARGO_BIN_EXE_d2b-provider-credential-secret-service"))

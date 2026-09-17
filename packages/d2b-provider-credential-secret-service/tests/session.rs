@@ -48,6 +48,7 @@ struct TwoUserPort {
 }
 
 impl TwoUserPort {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn state_for(&self, user_ref: &ResourceRef) -> CredentialLeaseState {
         self.leases
             .lock()
@@ -63,6 +64,7 @@ impl Oo7SecretServicePort for TwoUserPort {
         Box::pin(async { Ok(SecretServiceState::Unlocked) })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn issue_lease(
         &self,
         request: &SecretServiceLeaseRequest,
@@ -104,6 +106,7 @@ impl Oo7SecretServicePort for TwoUserPort {
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn refresh_lease(
         &self,
         lease: &SecretServiceLeaseRef,
@@ -126,6 +129,7 @@ impl Oo7SecretServicePort for TwoUserPort {
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn revoke_lease(
         &self,
         lease: &SecretServiceLeaseRef,
@@ -659,6 +663,7 @@ fn dynamic_user_scope_isolates_leases_and_revocation() {
     assert_eq!(inspected.metadata.state, CredentialLeaseState::Active);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn current_thread_service_dispatch_drives_preconnected_backend_without_deadlock() {
     let route = provider_route();

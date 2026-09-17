@@ -20,6 +20,7 @@ use d2b_provider_credential_secret_service::{
 
 use common::{Admission, ProviderHarness, request, setup};
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn locked_and_unavailable_map_to_provider_unavailable() {
     for failure in [
@@ -40,6 +41,7 @@ fn locked_and_unavailable_map_to_provider_unavailable() {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn locked_state_is_checked_before_issuing_a_lease() {
     let (provider, port) = setup(64);
@@ -56,6 +58,7 @@ fn locked_state_is_checked_before_issuing_a_lease() {
     assert_eq!(port.issue_calls.load(Ordering::SeqCst), 0);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn completion_unknown_is_not_replayed_with_the_same_idempotency_key() {
     let (provider, port) = setup(64);
@@ -80,6 +83,7 @@ fn completion_unknown_is_not_replayed_with_the_same_idempotency_key() {
     assert_eq!(port.issue_calls.load(Ordering::SeqCst), 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn remembered_ambiguous_acquire_consumes_capacity() {
     let (provider, port) = setup(1);
@@ -115,6 +119,7 @@ fn remembered_ambiguous_acquire_consumes_capacity() {
     assert_eq!(port.issue_calls.load(Ordering::SeqCst), 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn unknown_lease_record_consumes_capacity() {
     let (provider, port) = setup(1);
@@ -150,6 +155,7 @@ fn unknown_lease_record_consumes_capacity() {
     assert_eq!(port.issue_calls.load(Ordering::SeqCst), 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn ambiguous_refresh_uses_adapter_recovery_without_revoking_only_the_old_lease() {
     let (provider, port) = setup(64);
@@ -199,6 +205,7 @@ fn ambiguous_refresh_uses_adapter_recovery_without_revoking_only_the_old_lease()
     assert_eq!(port.revoke_calls.load(Ordering::SeqCst), 0);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn disconnect_recovers_an_ambiguous_acquire_without_replaying_issue() {
     let (provider, port) = setup(64);
@@ -268,6 +275,7 @@ fn cardinality_is_enforced_before_a_second_port_call() {
     assert_eq!(port.issue_calls.load(Ordering::SeqCst), 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn port_call_stops_at_request_deadline() {
     let port = Arc::new(NeverPort {

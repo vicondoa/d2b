@@ -15,8 +15,9 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
+use tokio::sync::{Mutex, MutexGuard};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -893,34 +894,43 @@ impl SessionAuthority {
         })
     }
 
+    /// Capability minting for the synchronous public surface (`issue_session_capability`).
+    ///
+    /// The tokio lock is only ever reached from sync threads: the public sync
+    /// provider factory path and plain test harness threads, never inside a
+    /// runtime worker where `blocking_lock` would panic.
     fn issue(
         &self,
         binding: SessionBinding,
     ) -> Result<SecretServiceSessionCapability, SessionAuthorityError> {
-        if !matches!(binding.workload.resource_type().as_str(), "Host" | "Guest")
-            || binding.subject.resource_type().as_str() != "User"
-            || binding.consumer.resource_type().as_str() != "Provider"
-        {
-            return Err(SessionAuthorityError::InvalidBinding);
-        }
-        let capability_id = next_counter(&self.state.next_capability).map_err(|_| {
-            tracing::warn!(
-                provider = crate::PROVIDER_REF,
-                "secret-service session authority capability id space exhausted",
-            );
-            SessionAuthorityError::Exhausted
-        })?;
-        let presentation = next_counter(&self.state.next_presentation).map_err(|_| {
-            tracing::warn!(
-                provider = crate::PROVIDER_REF,
-                "secret-service session authority presentation id space exhausted",
-            );
-            SessionAuthorityError::Exhausted
-        })?;
+        Self::validate_binding(&binding)?;
+        let (capability_id, presentation) = self.mint_ids()?;
+        self.state.sessions.blocking_lock().insert(
+            capability_id,
+            AuthoritySession {
+                binding: binding.clone(),
+                consumed_presentation: None,
+            },
+        );
+        Ok(SecretServiceSessionCapability {
+            authority: self.clone(),
+            capability_id,
+            presentation,
+            binding,
+        })
+    }
+
+    /// Capability minting for the asynchronous dispatch path.
+    async fn issue_async(
+        &self,
+        binding: SessionBinding,
+    ) -> Result<SecretServiceSessionCapability, SessionAuthorityError> {
+        Self::validate_binding(&binding)?;
+        let (capability_id, presentation) = self.mint_ids()?;
         self.state
             .sessions
             .lock()
-            .map_err(|_| SessionAuthorityError::Invalid)?
+            .await
             .insert(
                 capability_id,
                 AuthoritySession {
@@ -936,7 +946,35 @@ impl SessionAuthority {
         })
     }
 
-    fn consume(
+    fn validate_binding(binding: &SessionBinding) -> Result<(), SessionAuthorityError> {
+        if !matches!(binding.workload.resource_type().as_str(), "Host" | "Guest")
+            || binding.subject.resource_type().as_str() != "User"
+            || binding.consumer.resource_type().as_str() != "Provider"
+        {
+            return Err(SessionAuthorityError::InvalidBinding);
+        }
+        Ok(())
+    }
+
+    fn mint_ids(&self) -> Result<(u64, u64), SessionAuthorityError> {
+        let capability_id = next_counter(&self.state.next_capability).map_err(|_| {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                "secret-service session authority capability id space exhausted",
+            );
+            SessionAuthorityError::Exhausted
+        })?;
+        let presentation = next_counter(&self.state.next_presentation).map_err(|_| {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                "secret-service session authority presentation id space exhausted",
+            );
+            SessionAuthorityError::Exhausted
+        })?;
+        Ok((capability_id, presentation))
+    }
+
+    async fn consume_async(
         &self,
         capability: &SecretServiceSessionCapability,
     ) -> Result<(), SessionAuthorityError> {
@@ -947,7 +985,7 @@ impl SessionAuthority {
             .state
             .sessions
             .lock()
-            .map_err(|_| SessionAuthorityError::Invalid)?;
+            .await;
         let record = sessions
             .get_mut(&capability.capability_id)
             .ok_or(SessionAuthorityError::Released)?;
@@ -965,11 +1003,7 @@ impl SessionAuthority {
         if key.authority != self.identity {
             return Err(SessionAuthorityError::Invalid);
         }
-        let mut sessions = self
-            .state
-            .sessions
-            .lock()
-            .map_err(|_| SessionAuthorityError::Invalid)?;
+        let mut sessions = self.state.sessions.blocking_lock();
         let record = sessions
             .get(&key.capability_id)
             .ok_or(SessionAuthorityError::Released)?;
@@ -984,7 +1018,10 @@ impl SessionAuthority {
         if capability.authority.identity != self.identity {
             return;
         }
-        if let Ok(mut sessions) = self.state.sessions.lock()
+        // Drop must never park: a capability can be dropped on any thread,
+        // including an executor worker, where blocking_lock would panic. A
+        // busy collision (sub-microsecond) skips the discard fail-closed.
+        if let Ok(mut sessions) = self.state.sessions.try_lock()
             && sessions
                 .get(&capability.capability_id)
                 .is_some_and(|record| record.consumed_presentation.is_none())
@@ -994,11 +1031,7 @@ impl SessionAuthority {
     }
 
     fn clear(&self) -> Result<(), SessionAuthorityError> {
-        self.state
-            .sessions
-            .lock()
-            .map_err(|_| SessionAuthorityError::Invalid)?
-            .clear();
+        self.state.sessions.blocking_lock().clear();
         Ok(())
     }
 
@@ -1006,11 +1039,7 @@ impl SessionAuthority {
         if key.authority != self.identity {
             return Err(SessionAuthorityError::Invalid);
         }
-        let mut sessions = self
-            .state
-            .sessions
-            .lock()
-            .map_err(|_| SessionAuthorityError::Invalid)?;
+        let mut sessions = self.state.sessions.blocking_lock();
         let Some(record) = sessions.get(&key.capability_id) else {
             return Ok(());
         };
@@ -1224,9 +1253,7 @@ impl SecretServiceCredentialProvider {
         &self,
         generation: ResourceGeneration,
     ) -> Result<SecretServiceSessionCapability, SecretServiceProviderError> {
-        let _lifecycle = self
-            .blocking_mutation_guard()
-            .map_err(|_| SecretServiceProviderError::AuthorityUnavailable)?;
+        let _lifecycle = self.blocking_mutation_guard();
         if self.finalized.load(Ordering::Acquire) || generation != self.generation {
             return Err(SecretServiceProviderError::InvalidScope);
         }
@@ -1247,6 +1274,7 @@ impl SecretServiceCredentialProvider {
     }
 
     #[cfg(test)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub(crate) fn authorize_session_locked(
         &self,
         authorization: &CredentialAuthorization,
@@ -1258,10 +1286,17 @@ impl SecretServiceCredentialProvider {
             .ok_or_else(|| {
                 CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied)
             })?;
-        self.authorize_session_for_user_locked(authorization, &user_ref)
+        // The (async) admission path must run on a runtime; the plain test
+        // harness drives it synchronously with a per-call current-thread runtime.
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("plain-test admission runtime")
+            .block_on(self.authorize_session_for_user_locked(authorization, &user_ref))
     }
 
-    pub(crate) fn authorize_session_for_user_locked(
+    pub(crate) async fn authorize_session_for_user_locked(
         &self,
         authorization: &CredentialAuthorization,
         user_ref: &ResourceRef,
@@ -1284,42 +1319,34 @@ impl SecretServiceCredentialProvider {
         if let Some(capability) = authorization.session_proof::<SecretServiceSessionCapability>() {
             let key = capability.session_key();
             self.session_capability_for_user(authorization, user_ref)?;
-            let mut sessions = self.sessions.lock().map_err(|_| {
-                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-            })?;
+            let mut sessions = self.sessions.lock().await;
             if sessions.contains_key(&key) {
                 self.user_sessions
                     .lock()
-                    .map_err(|_| {
-                        CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-                    })?
+                    .await
                     .insert(user_ref.clone(), key);
                 return Ok(key);
             }
-            self.authority.consume(capability).map_err(|_| {
+            self.authority.consume_async(capability).await.map_err(|_| {
                 CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied)
             })?;
             sessions.insert(key, ());
             self.user_sessions
                 .lock()
-                .map_err(|_| {
-                    CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-                })?
+                .await
                 .insert(user_ref.clone(), key);
             return Ok(key);
         }
         if let Some(key) = self
             .user_sessions
             .lock()
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .await
             .get(user_ref)
             .copied()
             && self
                 .sessions
                 .lock()
-                .map_err(|_| {
-                    CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-                })?
+                .await
                 .contains_key(&key)
         {
             return Ok(key);
@@ -1331,29 +1358,29 @@ impl SecretServiceCredentialProvider {
         }
         let capability = self
             .authority
-            .issue(SessionBinding {
+            .issue_async(SessionBinding {
                 zone: self.placement.zone().clone(),
                 workload: self.placement.execution_ref().clone(),
                 subject: user_ref.clone(),
                 consumer: self.consumer_ref.clone(),
                 generation: self.generation,
             })
+            .await
             .map_err(|_| {
                 CredentialServiceError::new(CredentialServiceErrorCode::ProviderUnavailable)
             })?;
         let key = capability.session_key();
-        self.authority.consume(&capability).map_err(|_| {
-            CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied)
-        })?;
-        let mut sessions = self.sessions.lock().map_err(|_| {
-            CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-        })?;
+        self.authority
+            .consume_async(&capability)
+            .await
+            .map_err(|_| {
+                CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied)
+            })?;
+        let mut sessions = self.sessions.lock().await;
         sessions.insert(key, ());
         self.user_sessions
             .lock()
-            .map_err(|_| {
-                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-            })?
+            .await
             .insert(user_ref.clone(), key);
         Ok(key)
     }
@@ -1417,21 +1444,19 @@ impl SecretServiceCredentialProvider {
     pub(crate) fn mutation_guard(&self) -> Result<MutexGuard<'_, ()>, CredentialServiceError> {
         match self.mutation_gate.try_lock() {
             Ok(guard) => Ok(guard),
-            Err(TryLockError::WouldBlock) => Err(CredentialServiceError::new(
+            // tokio mutexes do not poison; any failure here is a busy gate.
+            Err(_) => Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
-            )),
-            Err(TryLockError::Poisoned(_)) => Err(CredentialServiceError::new(
-                CredentialServiceErrorCode::InvariantFailure,
             )),
         }
     }
 
-    pub(crate) fn blocking_mutation_guard(
-        &self,
-    ) -> Result<MutexGuard<'_, ()>, CredentialServiceError> {
-        self.mutation_gate
-            .lock()
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))
+    /// Blocking gate for the sync public surface (`issue_session_capability`,
+    /// `disconnect`, `finalize_session`, `drain`). These entry points only run
+    /// on sync caller threads, never on an executor worker, so `blocking_lock`
+    /// (which panics inside a runtime) is safe here.
+    pub(crate) fn blocking_mutation_guard(&self) -> MutexGuard<'_, ()> {
+        self.mutation_gate.blocking_lock()
     }
 
     pub(crate) fn release_session_key(
@@ -1461,10 +1486,7 @@ impl SecretServiceCredentialProvider {
         }
         let user_ref = self
             .user_sessions
-            .lock()
-            .map_err(|_| {
-                CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied)
-            })?
+            .blocking_lock()
             .iter()
             .find_map(|(user_ref, session_key)| {
                 (*session_key == key).then_some(user_ref.clone())
@@ -1578,7 +1600,7 @@ impl SecretServiceCredentialProvider {
         Ok(())
     }
 
-    pub(crate) fn has_ambiguous_credential(
+    pub(crate) async fn has_ambiguous_credential(
         &self,
         session_key: SessionKey,
         credential: &str,
@@ -1586,16 +1608,16 @@ impl SecretServiceCredentialProvider {
         Ok(self
             .ambiguous_operations
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .iter()
             .any(|(key, candidate, _, _)| *key == session_key && candidate == credential))
     }
 
-    pub(crate) fn ambiguous_lease_count(&self) -> Result<usize, CredentialServiceError> {
+    pub(crate) async fn ambiguous_lease_count(&self) -> Result<usize, CredentialServiceError> {
         let tracked = self
             .leases
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .values()
             .filter(|record| {
                 matches!(
@@ -1607,12 +1629,12 @@ impl SecretServiceCredentialProvider {
         let pending = self
             .ambiguous_acquires
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .len();
         Ok(tracked.saturating_add(pending))
     }
 
-    pub(crate) fn mark_ambiguous(
+    pub(crate) async fn mark_ambiguous(
         &self,
         session_key: SessionKey,
         credential: &str,
@@ -1627,7 +1649,7 @@ impl SecretServiceCredentialProvider {
         );
         self.ambiguous_operations
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .insert((
                 session_key,
                 credential.to_owned(),
@@ -1637,7 +1659,7 @@ impl SecretServiceCredentialProvider {
         Ok(())
     }
 
-    pub(crate) fn remember_ambiguous_acquire(
+    pub(crate) async fn remember_ambiguous_acquire(
         &self,
         session_key: SessionKey,
         request: SecretServiceLeaseRequest,
@@ -1648,10 +1670,11 @@ impl SecretServiceCredentialProvider {
             &credential,
             request.idempotency_key(),
             OperationKind::Acquire,
-        )?;
+        )
+        .await?;
         self.ambiguous_acquires
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .insert(
                 (
                     session_key,
@@ -1663,7 +1686,7 @@ impl SecretServiceCredentialProvider {
         Ok(())
     }
 
-    pub(crate) fn remember_ambiguous_refresh(
+    pub(crate) async fn remember_ambiguous_refresh(
         &self,
         session_key: SessionKey,
         request: &d2b_contracts_provider::v3::credential::CredentialRequest,
@@ -1675,10 +1698,11 @@ impl SecretServiceCredentialProvider {
             &credential,
             request.idempotency_key(),
             OperationKind::Refresh,
-        )?;
+        )
+        .await?;
         self.ambiguous_refreshes
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .insert(
                 (
                     session_key,
@@ -1694,14 +1718,16 @@ impl SecretServiceCredentialProvider {
         Ok(())
     }
 
+    // Sync-only helpers: only `close_session_locked` and its callers reach
+    // them, always on a sync caller thread (never an executor worker), so
+    // `blocking_lock` preserves the pre-existing blocking-wait semantics..
     pub(crate) fn ambiguous_acquires(
         &self,
         session_key: SessionKey,
     ) -> Result<Vec<(String, String, SecretServiceLeaseRequest)>, CredentialServiceError> {
         Ok(self
             .ambiguous_acquires
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .iter()
             .filter(|((key, _, _), _)| *key == session_key)
             .map(|((_, credential, idempotency), request)| {
@@ -1716,8 +1742,7 @@ impl SecretServiceCredentialProvider {
     ) -> Result<Vec<(String, String, AmbiguousRefreshRecord)>, CredentialServiceError> {
         Ok(self
             .ambiguous_refreshes
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .iter()
             .filter(|((key, _, _), _)| *key == session_key)
             .map(|((_, credential, idempotency), record)| {
@@ -1734,8 +1759,7 @@ impl SecretServiceCredentialProvider {
         operation: OperationKind,
     ) -> Result<(), CredentialServiceError> {
         self.ambiguous_operations
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .retain(|(key, candidate, candidate_key, candidate_operation)| {
                 *key != session_key
                     || candidate != credential
@@ -1752,8 +1776,7 @@ impl SecretServiceCredentialProvider {
         idempotency_key: &str,
     ) -> Result<(), CredentialServiceError> {
         self.ambiguous_acquires
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .remove(&(
                 session_key,
                 credential.to_owned(),
@@ -1774,8 +1797,7 @@ impl SecretServiceCredentialProvider {
         idempotency_key: &str,
     ) -> Result<(), CredentialServiceError> {
         self.ambiguous_refreshes
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .remove(&(
                 session_key,
                 credential.to_owned(),
@@ -1794,16 +1816,13 @@ impl SecretServiceCredentialProvider {
         session_key: SessionKey,
     ) -> Result<(), CredentialServiceError> {
         self.ambiguous_operations
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .retain(|(key, _, _, _)| *key != session_key);
         self.ambiguous_acquires
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .retain(|(key, _, _), _| *key != session_key);
         self.ambiguous_refreshes
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .retain(|(key, _, _), _| *key != session_key);
         Ok(())
     }
@@ -1814,16 +1833,13 @@ impl SecretServiceCredentialProvider {
         credential: &str,
     ) -> Result<(), CredentialServiceError> {
         self.ambiguous_operations
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .retain(|(key, candidate, _, _)| *key != session_key || candidate != credential);
         self.ambiguous_acquires
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .retain(|(key, candidate, _), _| *key != session_key || candidate != credential);
         self.ambiguous_refreshes
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .retain(|(key, candidate, _), _| *key != session_key || candidate != credential);
         Ok(())
     }
@@ -1834,8 +1850,7 @@ impl SecretServiceCredentialProvider {
     ) -> Result<bool, CredentialServiceError> {
         Ok(self
             .ambiguous_operations
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .iter()
             .any(|(key, _, _, _)| *key == session_key))
     }
@@ -1953,6 +1968,7 @@ mod tests {
         .unwrap()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn runtime_provider_starts_without_controller_user_scope_claim() {
         let route = production_provider_route();
@@ -1968,6 +1984,7 @@ mod tests {
         assert_eq!(provider.placement().zone().as_str(), "dev");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn runtime_provider_accepts_missing_controller_user_scope_claim() {
         let route = production_provider_route();
@@ -2056,6 +2073,7 @@ mod tests {
         assert!(!debug.contains(&marker));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn same_presentation_concurrent_first_admission_is_idempotent() {
         struct NoopPort;

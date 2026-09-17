@@ -35,7 +35,7 @@ impl CredentialProvider for SecretServiceCredentialProvider {
     ) -> Result<CredentialResponse, CredentialServiceError> {
         let _lifecycle = self.async_mutation_gate.lock().await;
         let user_ref = self.request_user_ref(authorization)?;
-        let session_key = self.authorize_session_for_user_locked(authorization, &user_ref)?;
+        let session_key = self.authorize_session_for_user_locked(authorization, &user_ref).await?;
         match method {
             CredentialMethod::AcquireToken => {
                 self.acquire_async(request, authorization, session_key, &user_ref)
@@ -110,12 +110,12 @@ impl SecretServiceCredentialProvider {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_unlocked_async(user_ref, deadline).await?;
-        if self.has_ambiguous_credential(session_key, &key)? {
+        if self.has_ambiguous_credential(session_key, &key).await? {
             return Err(invariant());
         }
         let lease_key = (session_key, key.clone());
         {
-            let mut leases = self.leases.lock().map_err(|_| invariant())?;
+            let mut leases = self.leases.lock().await;
             if let Some(existing) = leases.get(&lease_key) {
                 match existing.metadata.state {
                     CredentialLeaseState::Active => {
@@ -131,7 +131,7 @@ impl SecretServiceCredentialProvider {
                 }
             }
         }
-        if self.ambiguous_lease_count()? >= self.config.max_leases() as usize {
+        if self.ambiguous_lease_count().await? >= self.config.max_leases() as usize {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
             ));
@@ -147,11 +147,11 @@ impl SecretServiceCredentialProvider {
         let grant = match await_port(self.port.issue_lease(&port_request), deadline).await {
             Ok(grant) => grant,
             Err(SecretServicePollError::Port(SecretServicePortError::CompletionUnknown)) => {
-                self.remember_ambiguous_acquire(session_key, port_request)?;
+                self.remember_ambiguous_acquire(session_key, port_request).await?;
                 return Err(invariant());
             }
             Err(SecretServicePollError::Deadline) => {
-                self.remember_ambiguous_acquire(session_key, port_request)?;
+                self.remember_ambiguous_acquire(session_key, port_request).await?;
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::DeadlineExceeded,
                 ));
@@ -162,7 +162,7 @@ impl SecretServiceCredentialProvider {
         {
             Ok(metadata) => metadata,
             Err(error) => {
-                self.leases.lock().map_err(|_| invariant())?.insert(
+                self.leases.lock().await.insert(
                     lease_key,
                     LeaseRecord {
                         refresh_results: BTreeMap::new(),
@@ -174,11 +174,12 @@ impl SecretServiceCredentialProvider {
                     &key,
                     request.idempotency_key(),
                     OperationKind::Acquire,
-                )?;
+                )
+                .await?;
                 return Err(error);
             }
         };
-        self.leases.lock().map_err(|_| invariant())?.insert(
+        self.leases.lock().await.insert(
             lease_key,
             LeaseRecord {
                 refresh_results: BTreeMap::new(),
@@ -206,14 +207,14 @@ impl SecretServiceCredentialProvider {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_unlocked_async(user_ref, deadline).await?;
-        if self.has_ambiguous_credential(session_key, &key)? {
+        if self.has_ambiguous_credential(session_key, &key).await? {
             return Err(invariant());
         }
         let lease_key = (session_key, key.clone());
         let current = self
             .leases
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .get(&lease_key)
             .cloned()
             .ok_or_else(expired)?;
@@ -238,33 +239,37 @@ impl SecretServiceCredentialProvider {
         let inspected = match await_port(self.port.inspect_lease(&lease), deadline).await {
             Ok(inspected) => inspected,
             Err(SecretServicePollError::Port(SecretServicePortError::CompletionUnknown)) => {
-                self.mark_metadata_unknown(&lease_key)?;
+                self.mark_metadata_unknown_async(&lease_key).await?;
                 self.mark_ambiguous(
                     session_key,
                     &key,
                     request.idempotency_key(),
                     OperationKind::Inspect,
-                )?;
+                )
+                .await?;
                 return Err(invariant());
             }
             Err(SecretServicePollError::Deadline) => {
-                self.mark_metadata_unknown(&lease_key)?;
+                self.mark_metadata_unknown_async(&lease_key).await?;
                 self.mark_ambiguous(
                     session_key,
                     &key,
                     request.idempotency_key(),
                     OperationKind::Inspect,
-                )?;
+                )
+                .await?;
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::DeadlineExceeded,
                 ));
             }
             Err(SecretServicePollError::Port(SecretServicePortError::LeaseExpired)) => {
-                self.set_lease_state(&lease_key, CredentialLeaseState::Expired)?;
+                self.set_lease_state_async(&lease_key, CredentialLeaseState::Expired)
+                    .await?;
                 return Err(expired());
             }
             Err(SecretServicePollError::Port(SecretServicePortError::LeaseRevoked)) => {
-                self.set_lease_state(&lease_key, CredentialLeaseState::Revoked)?;
+                self.set_lease_state_async(&lease_key, CredentialLeaseState::Revoked)
+                    .await?;
                 return Err(revoked());
             }
             Err(error) => return Err(map_poll_error(error)),
@@ -277,20 +282,21 @@ impl SecretServiceCredentialProvider {
         match inspected_metadata.state {
             CredentialLeaseState::Active => {
                 if inspected_metadata.rotation_generation != lease.metadata.rotation_generation {
-                    self.mark_metadata_unknown(&lease_key)?;
+                    self.mark_metadata_unknown_async(&lease_key).await?;
                     self.mark_ambiguous(
                         session_key,
                         &key,
                         request.idempotency_key(),
                         OperationKind::Inspect,
-                    )?;
+                    )
+                    .await?;
                     return Err(invariant());
                 }
             }
             CredentialLeaseState::Expired => {
                 self.leases
                     .lock()
-                    .map_err(|_| invariant())?
+                    .await
                     .get_mut(&lease_key)
                     .ok_or_else(expired)?
                     .metadata = inspected_metadata;
@@ -299,7 +305,7 @@ impl SecretServiceCredentialProvider {
             CredentialLeaseState::Revoked => {
                 self.leases
                     .lock()
-                    .map_err(|_| invariant())?
+                    .await
                     .get_mut(&lease_key)
                     .ok_or_else(expired)?
                     .metadata = inspected_metadata;
@@ -308,7 +314,7 @@ impl SecretServiceCredentialProvider {
             CredentialLeaseState::Unknown => {
                 self.leases
                     .lock()
-                    .map_err(|_| invariant())?
+                    .await
                     .get_mut(&lease_key)
                     .ok_or_else(expired)?
                     .metadata = inspected_metadata;
@@ -317,13 +323,14 @@ impl SecretServiceCredentialProvider {
                     &key,
                     request.idempotency_key(),
                     OperationKind::Inspect,
-                )?;
+                )
+                .await?;
                 return Err(invariant());
             }
         }
         self.leases
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .get_mut(&lease_key)
             .ok_or_else(expired)?
             .metadata = inspected_metadata.clone();
@@ -336,23 +343,25 @@ impl SecretServiceCredentialProvider {
         let grant = match await_port(self.port.refresh_lease(&lease), deadline).await {
             Ok(grant) => grant,
             Err(SecretServicePollError::Port(SecretServicePortError::CompletionUnknown)) => {
-                self.mark_metadata_unknown(&lease_key)?;
-                self.remember_ambiguous_refresh(session_key, request, recovery_lease)?;
+                self.mark_metadata_unknown_async(&lease_key).await?;
+                self.remember_ambiguous_refresh(session_key, request, recovery_lease).await?;
                 return Err(invariant());
             }
             Err(SecretServicePollError::Deadline) => {
-                self.mark_metadata_unknown(&lease_key)?;
-                self.remember_ambiguous_refresh(session_key, request, recovery_lease)?;
+                self.mark_metadata_unknown_async(&lease_key).await?;
+                self.remember_ambiguous_refresh(session_key, request, recovery_lease).await?;
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::DeadlineExceeded,
                 ));
             }
             Err(SecretServicePollError::Port(SecretServicePortError::LeaseExpired)) => {
-                self.set_lease_state(&lease_key, CredentialLeaseState::Expired)?;
+                self.set_lease_state_async(&lease_key, CredentialLeaseState::Expired)
+                    .await?;
                 return Err(expired());
             }
             Err(SecretServicePollError::Port(SecretServicePortError::LeaseRevoked)) => {
-                self.set_lease_state(&lease_key, CredentialLeaseState::Revoked)?;
+                self.set_lease_state_async(&lease_key, CredentialLeaseState::Revoked)
+                    .await?;
                 return Err(revoked());
             }
             Err(error) => return Err(map_poll_error(error)),
@@ -361,10 +370,10 @@ impl SecretServiceCredentialProvider {
         {
             Ok(metadata) => metadata,
             Err(error) => {
-                let mut leases = self.leases.lock().map_err(|_| invariant())?;
+                let mut leases = self.leases.lock().await;
                 let record = leases.get_mut(&lease_key).ok_or_else(expired)?;
                 record.metadata = Self::unknown_metadata(&grant);
-                self.remember_ambiguous_refresh(session_key, request, recovery_lease)?;
+                self.remember_ambiguous_refresh(session_key, request, recovery_lease).await?;
                 return Err(error);
             }
         };
@@ -375,7 +384,7 @@ impl SecretServiceCredentialProvider {
             .insert(request.idempotency_key().to_owned(), metadata.clone());
         self.leases
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .insert(lease_key, record);
         Ok(CredentialResponse::RefreshToken(DeliveryResponse {
             metadata,
@@ -392,14 +401,14 @@ impl SecretServiceCredentialProvider {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_unlocked_async(user_ref, deadline).await?;
-        if self.has_ambiguous_credential(session_key, &key)? {
+        if self.has_ambiguous_credential(session_key, &key).await? {
             return Err(invariant());
         }
         let lease_key = (session_key, key.clone());
         let current = self
             .leases
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .get(&lease_key)
             .cloned()
             .ok_or_else(expired)?;
@@ -409,7 +418,7 @@ impl SecretServiceCredentialProvider {
                 metadata.outcome = CredentialOutcomeCode::AlreadyRevoked;
                 self.leases
                     .lock()
-                    .map_err(|_| invariant())?
+                    .await
                     .get_mut(&lease_key)
                     .ok_or_else(expired)?
                     .metadata = metadata.clone();
@@ -427,29 +436,32 @@ impl SecretServiceCredentialProvider {
         let result = match await_port(self.port.revoke_lease(&lease), deadline).await {
             Ok(result) => result,
             Err(SecretServicePollError::Port(SecretServicePortError::CompletionUnknown)) => {
-                self.mark_metadata_unknown(&lease_key)?;
+                self.mark_metadata_unknown_async(&lease_key).await?;
                 self.mark_ambiguous(
                     session_key,
                     &key,
                     request.idempotency_key(),
                     OperationKind::Revoke,
-                )?;
+                )
+                .await?;
                 return Err(invariant());
             }
             Err(SecretServicePollError::Deadline) => {
-                self.mark_metadata_unknown(&lease_key)?;
+                self.mark_metadata_unknown_async(&lease_key).await?;
                 self.mark_ambiguous(
                     session_key,
                     &key,
                     request.idempotency_key(),
                     OperationKind::Revoke,
-                )?;
+                )
+                .await?;
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::DeadlineExceeded,
                 ));
             }
             Err(SecretServicePollError::Port(SecretServicePortError::LeaseExpired)) => {
-                self.set_lease_state(&lease_key, CredentialLeaseState::Expired)?;
+                self.set_lease_state_async(&lease_key, CredentialLeaseState::Expired)
+                    .await?;
                 return Err(expired());
             }
             Err(SecretServicePollError::Port(SecretServicePortError::LeaseRevoked)) => {
@@ -463,7 +475,7 @@ impl SecretServiceCredentialProvider {
                 CredentialOutcomeCode::AlreadyRevoked
             }
         };
-        let mut leases = self.leases.lock().map_err(|_| invariant())?;
+        let mut leases = self.leases.lock().await;
         let record = leases.get_mut(&lease_key).ok_or_else(expired)?;
         record.metadata.state = CredentialLeaseState::Revoked;
         record.metadata.outcome = outcome;
@@ -481,14 +493,14 @@ impl SecretServiceCredentialProvider {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_unlocked_async(user_ref, deadline).await?;
-        if self.has_ambiguous_credential(session_key, &key)? {
+        if self.has_ambiguous_credential(session_key, &key).await? {
             return Err(invariant());
         }
         let lease_key = (session_key, key.clone());
         let record = self
             .leases
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .get(&lease_key)
             .cloned()
             .ok_or_else(expired)?;
@@ -506,31 +518,35 @@ impl SecretServiceCredentialProvider {
         let inspection = match await_port(self.port.inspect_lease(&lease), deadline).await {
             Ok(inspection) => inspection,
             Err(SecretServicePollError::Port(SecretServicePortError::LeaseExpired)) => {
-                self.set_lease_state(&lease_key, CredentialLeaseState::Expired)?;
+                self.set_lease_state_async(&lease_key, CredentialLeaseState::Expired)
+                    .await?;
                 return Err(expired());
             }
             Err(SecretServicePollError::Port(SecretServicePortError::LeaseRevoked)) => {
-                self.set_lease_state(&lease_key, CredentialLeaseState::Revoked)?;
+                self.set_lease_state_async(&lease_key, CredentialLeaseState::Revoked)
+                    .await?;
                 return Err(revoked());
             }
             Err(SecretServicePollError::Port(SecretServicePortError::CompletionUnknown)) => {
-                self.mark_metadata_unknown(&lease_key)?;
+                self.mark_metadata_unknown_async(&lease_key).await?;
                 self.mark_ambiguous(
                     session_key,
                     &key,
                     request.idempotency_key(),
                     OperationKind::Inspect,
-                )?;
+                )
+                .await?;
                 return Err(invariant());
             }
             Err(SecretServicePollError::Deadline) => {
-                self.mark_metadata_unknown(&lease_key)?;
+                self.mark_metadata_unknown_async(&lease_key).await?;
                 self.mark_ambiguous(
                     session_key,
                     &key,
                     request.idempotency_key(),
                     OperationKind::Inspect,
-                )?;
+                )
+                .await?;
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::DeadlineExceeded,
                 ));
@@ -544,7 +560,7 @@ impl SecretServiceCredentialProvider {
         metadata.expires_at_unix_ms = inspection.expires_at_unix_ms;
         self.leases
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .get_mut(&lease_key)
             .ok_or_else(expired)?
             .metadata = metadata.clone();
@@ -554,7 +570,8 @@ impl SecretServiceCredentialProvider {
                 &key,
                 request.idempotency_key(),
                 OperationKind::Inspect,
-            )?;
+            )
+            .await?;
             return Err(invariant());
         }
         Ok(CredentialResponse::InspectMetadata(MetadataResponse {
@@ -569,6 +586,17 @@ impl SecretServiceCredentialProvider {
         self.set_lease_state(lease_key, CredentialLeaseState::Unknown)
     }
 
+    async fn mark_metadata_unknown_async(
+        &self,
+        lease_key: &(SessionKey, String),
+    ) -> Result<(), CredentialServiceError> {
+        self.set_lease_state_async(lease_key, CredentialLeaseState::Unknown)
+            .await
+    }
+
+    /// Synchronous state write used by the sync session-close path
+    /// (`close_session_locked`); its callers run on sync caller threads,
+    /// never on an executor worker, so `blocking_lock` is safe.
     fn set_lease_state(
         &self,
         lease_key: &(SessionKey, String),
@@ -582,8 +610,29 @@ impl SecretServiceCredentialProvider {
             );
         }
         self.leases
+            .blocking_lock()
+            .get_mut(lease_key)
+            .ok_or_else(expired)?
+            .metadata
+            .state = state;
+        Ok(())
+    }
+
+    async fn set_lease_state_async(
+        &self,
+        lease_key: &(SessionKey, String),
+        state: CredentialLeaseState,
+    ) -> Result<(), CredentialServiceError> {
+        if state != CredentialLeaseState::Active {
+            tracing::warn!(
+                resource = %lease_key.1,
+                state = ?state,
+                "secret-service lease state degraded",
+            );
+        }
+        self.leases
             .lock()
-            .map_err(|_| invariant())?
+            .await
             .get_mut(lease_key)
             .ok_or_else(expired)?
             .metadata
@@ -597,12 +646,11 @@ impl SecretServiceCredentialProvider {
         &self,
         authorization: &CredentialAuthorization,
     ) -> Result<(), CredentialServiceError> {
-        let _mutation = self.blocking_mutation_guard()?;
+        let _mutation = self.blocking_mutation_guard();
         let session_key = self.session_capability(authorization)?.session_key();
         if !self
             .sessions
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .contains_key(&session_key)
         {
             self.discard_session_key(session_key)?;
@@ -618,7 +666,7 @@ impl SecretServiceCredentialProvider {
         &self,
         authorization: &CredentialAuthorization,
     ) -> Result<(), CredentialServiceError> {
-        let _mutation = self.blocking_mutation_guard()?;
+        let _mutation = self.blocking_mutation_guard();
         self.session_capability(authorization)?;
         self.finalized
             .store(true, std::sync::atomic::Ordering::Release);
@@ -629,7 +677,7 @@ impl SecretServiceCredentialProvider {
 
     /// Finalize every admitted session and prevent later capability minting.
     pub fn drain(&self) -> Result<(), CredentialServiceError> {
-        let _mutation = self.blocking_mutation_guard()?;
+        let _mutation = self.blocking_mutation_guard();
         self.finalized
             .store(true, std::sync::atomic::Ordering::Release);
         let deadline = Self::operation_deadline(1_000)?;
@@ -644,8 +692,7 @@ impl SecretServiceCredentialProvider {
     ) -> Result<(), CredentialServiceError> {
         let keys = self
             .sessions
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .keys()
             .copied()
             .collect::<Vec<_>>();
@@ -710,8 +757,7 @@ impl SecretServiceCredentialProvider {
                 | Err(SecretServicePollError::Port(SecretServicePortError::LeaseExpired))
                 | Err(SecretServicePollError::Port(SecretServicePortError::LeaseRevoked)) => {
                     self.leases
-                        .lock()
-                        .map_err(|_| invariant())?
+                        .blocking_lock()
                         .remove(&(session_key, credential.clone()));
                     self.clear_ambiguous_refresh(session_key, &credential, &idempotency_key)?;
                 }
@@ -736,8 +782,7 @@ impl SecretServiceCredentialProvider {
 
         let records = self
             .leases
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .iter()
             .filter(|((key, credential), record)| {
                 *key == session_key
@@ -763,8 +808,7 @@ impl SecretServiceCredentialProvider {
                 | Err(SecretServicePollError::Port(SecretServicePortError::LeaseExpired))
                 | Err(SecretServicePollError::Port(SecretServicePortError::LeaseRevoked)) => {
                     self.leases
-                        .lock()
-                        .map_err(|_| invariant())?
+                        .blocking_lock()
                         .remove(&lease_key);
                     self.clear_ambiguous_for_credential(session_key, &credential)?;
                 }
@@ -798,8 +842,7 @@ impl SecretServiceCredentialProvider {
 
         let unresolved_leases =
             self.leases
-                .lock()
-                .map_err(|_| invariant())?
+                .blocking_lock()
                 .iter()
                 .any(|((key, _), record)| {
                     *key == session_key
@@ -820,18 +863,15 @@ impl SecretServiceCredentialProvider {
         }
 
         self.leases
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .retain(|(key, _), _| *key != session_key);
         self.clear_ambiguous_session(session_key)?;
         self.release_session_key(session_key)?;
         self.sessions
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .remove(&session_key);
         self.user_sessions
-            .lock()
-            .map_err(|_| invariant())?
+            .blocking_lock()
             .retain(|_, key| *key != session_key);
         Ok(())
     }
