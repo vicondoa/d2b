@@ -118,7 +118,8 @@ serde_json.workspace = true
 socket2 = "0.5"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "fs"] }
-ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
+# R16 (U14): only the ttrpc async surface is used; the `sync` feature is gone.
+ttrpc = { version = "0.9.0", default-features = false, features = ["async"] }
 
 [dev-dependencies]
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap", features = ["test-support"] }
