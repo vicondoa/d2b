@@ -7,8 +7,9 @@
 
 use std::future::Future;
 use std::pin::pin;
-use std::sync::Mutex;
 use std::task::{Context, Poll, Waker};
+
+use tokio::sync::Mutex;
 
 use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid, ZoneRevision};
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
@@ -124,8 +125,12 @@ impl ScriptedPort {
 
     /// Advance the server-side binding generation: every fence observed
     /// before this call is stale (AE1).
+    ///
+    /// Synchronous surface (consumed from plain `#[test]` fns without a
+    /// runtime): non-blocking `try_lock` per plan U4, failing closed on a
+    /// collision instead of parking the caller's thread.
     pub fn advance_generation(&self) {
-        if let Ok(mut fence) = self.current_fence.lock()
+        if let Ok(mut fence) = self.current_fence.try_lock()
             && let Some((_, generation, revision)) = fence.as_ref()
         {
             *fence = Some((
@@ -138,33 +143,43 @@ impl ScriptedPort {
     }
 
     /// Return every accepted status projection, in write order.
+    ///
+    /// Synchronous surface (consumed from plain `#[test]` fns without a
+    /// runtime): non-blocking `try_lock` per plan U4, failing closed on
+    /// a collision instead of parking the caller's thread.
     pub fn status_writes(&self) -> Vec<VolumeBindingStatusResource> {
         self.status_writes
-            .lock()
+            .try_lock()
             .map(|writes| writes.clone())
             .unwrap_or_default()
     }
 
     /// Return every recorded call in order.
+    ///
+    /// Synchronous surface (consumed from plain `#[test]` fns without a
+    /// runtime): non-blocking `try_lock` per plan U4, failing closed on
+    /// a collision instead of parking the caller's thread.
     pub fn calls(&self) -> Vec<PortCall> {
         self.calls
-            .lock()
+            .try_lock()
             .map(|calls| calls.clone())
             .unwrap_or_default()
     }
 
     /// Return every worker plan the controller asked to launch.
+    ///
+    /// Synchronous surface (consumed from plain `#[test]` fns without a
+    /// runtime): non-blocking `try_lock` per plan U4, failing closed on
+    /// a collision instead of parking the caller's thread.
     pub fn launched_plans(&self) -> Vec<VirtiofsdWorkerPlan> {
         self.launched_plans
-            .lock()
+            .try_lock()
             .map(|plans| plans.clone())
             .unwrap_or_default()
     }
 
-    fn record(&self, call: PortCall) {
-        if let Ok(mut calls) = self.calls.lock() {
-            calls.push(call);
-        }
+    async fn record(&self, call: PortCall) {
+        self.calls.lock().await.push(call);
     }
 
     fn deleted(&self) -> bool {
@@ -178,10 +193,8 @@ impl VirtiofsBindingEffectPort for &ScriptedPort {
         binding: &StoredBinding,
         plan: &VirtiofsdWorkerPlan,
     ) -> Result<LaunchedWorker, VirtiofsBindingError> {
-        self.record(PortCall::LaunchWorker);
-        if let Ok(mut plans) = self.launched_plans.lock() {
-            plans.push(plan.clone());
-        }
+        self.record(PortCall::LaunchWorker).await;
+        self.launched_plans.lock().await.push(plan.clone());
         if let Some(error) = self.launch_error {
             return Err(error);
         }
@@ -193,7 +206,7 @@ impl VirtiofsBindingEffectPort for &ScriptedPort {
     }
 
     async fn observe_socket(&self, _worker: &LaunchedWorker) -> Result<bool, VirtiofsBindingError> {
-        self.record(PortCall::ObserveSocket);
+        self.record(PortCall::ObserveSocket).await;
         Ok(self.socket_ready)
     }
 
@@ -201,7 +214,7 @@ impl VirtiofsBindingEffectPort for &ScriptedPort {
         &self,
         _binding: &StoredBinding,
     ) -> Result<bool, VirtiofsBindingError> {
-        self.record(PortCall::ObserveGuestMount);
+        self.record(PortCall::ObserveGuestMount).await;
         if self.deleted() {
             return Ok(self.guest_mount_after_delete);
         }
@@ -212,12 +225,12 @@ impl VirtiofsBindingEffectPort for &ScriptedPort {
         &self,
         _binding: &StoredBinding,
     ) -> Result<bool, VirtiofsBindingError> {
-        self.record(PortCall::ObserveStoreViewMarker);
+        self.record(PortCall::ObserveStoreViewMarker).await;
         Ok(self.store_view_marker)
     }
 
     async fn delete_worker(&self, _worker: &LaunchedWorker) -> Result<(), VirtiofsBindingError> {
-        self.record(PortCall::DeleteWorker);
+        self.record(PortCall::DeleteWorker).await;
         Ok(())
     }
 
@@ -227,24 +240,18 @@ impl VirtiofsBindingEffectPort for &ScriptedPort {
         binding: &StoredBinding,
         projection: &VolumeBindingStatusResource,
     ) -> Result<(), VirtiofsBindingError> {
-        self.record(PortCall::WriteStatus);
+        self.record(PortCall::WriteStatus).await;
         if writer.as_str() != "volume-virtiofs" {
             return Err(VirtiofsBindingError::UnauthorizedWriter);
         }
-        let current = self
-            .current_fence
-            .lock()
-            .map(|fence| fence.clone())
-            .unwrap_or_default();
+        let current = self.current_fence.lock().await.clone();
         let Some((uid, generation, revision)) = current else {
             return Err(VirtiofsBindingError::StaleFence);
         };
         if !binding.fence().matches(&uid, generation, revision) {
             return Err(VirtiofsBindingError::StaleFence);
         }
-        if let Ok(mut writes) = self.status_writes.lock() {
-            writes.push(projection.clone());
-        }
+        self.status_writes.lock().await.push(projection.clone());
         Ok(())
     }
 }
