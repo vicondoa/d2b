@@ -92,6 +92,7 @@ pub struct DaemonFixture {
 }
 
 impl DaemonFixture {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn new(prefix: &str) -> Self {
         let tmp = Builder::new()
             .prefix(prefix)
@@ -128,6 +129,7 @@ impl DaemonFixture {
         &self.root_dir
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn reset_runtime_endpoints(&self) {
         remove_file_if_present(&self.socket_path);
         remove_file_if_present(&self.state_lock_path);
@@ -139,6 +141,7 @@ impl DaemonFixture {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn remove_file_if_present(path: &Path) {
     match fs::remove_file(path) {
         Ok(()) => {}
@@ -176,6 +179,7 @@ pub fn write_daemon_config(fixture: &DaemonFixture, launcher_users: &[&str], adm
     write_daemon_config_with_artifacts(fixture, launcher_users, admin_users, None);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub fn write_daemon_config_with_artifacts(
     fixture: &DaemonFixture,
     launcher_users: &[&str],
@@ -213,6 +217,7 @@ pub fn write_daemon_config_with_artifacts(
     .expect("write daemon config");
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub fn set_public_socket_group(fixture: &DaemonFixture, group: &str) {
     let bytes = fs::read(&fixture.config_path).expect("read daemon config");
     let mut config: serde_json::Value =
@@ -242,6 +247,7 @@ impl SpawnedProcess {
         self.child.as_ref().expect("process is live").id()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn wait(mut self) -> ExitStatus {
         self.child
             .take()
@@ -250,6 +256,7 @@ impl SpawnedProcess {
             .expect("wait for process")
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn kill_and_wait(mut self) {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
@@ -260,6 +267,7 @@ impl SpawnedProcess {
 }
 
 impl Drop for SpawnedProcess {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn drop(&mut self) {
         if let Some(child) = self.child.as_mut() {
             let _ = child.kill();
@@ -286,6 +294,7 @@ pub fn spawn_d2bd_serve_with_forged_peer_env(
     spawn_d2bd_serve_inner(fixture, peer, once, state_restore_report, false)
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn spawn_d2bd_serve_inner(
     fixture: &DaemonFixture,
     peer: &TestPeer,
@@ -335,6 +344,7 @@ fn spawn_d2bd_serve_inner(
     SpawnedProcess::from_child(child)
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn configure_real_peer(fixture: &DaemonFixture, peer: &TestPeer) {
     let bytes = fs::read(&fixture.config_path).expect("read daemon config");
     let mut config: serde_json::Value =
@@ -381,6 +391,7 @@ fn configure_real_peer(fixture: &DaemonFixture, peer: &TestPeer) {
     .expect("write daemon config");
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub fn spawn_lock_only(config: &Path, state_lock: &Path, hold_seconds: u64) -> SpawnedProcess {
     let child = Command::new(d2bd_bin())
         .arg("lock-only")
@@ -399,6 +410,7 @@ pub fn spawn_lock_only(config: &Path, state_lock: &Path, hold_seconds: u64) -> S
     SpawnedProcess::from_child(child)
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub fn test_client(socket: &Path, frames: &[&str]) -> (i32, String) {
     let mut command = Command::new(d2bd_bin());
     command.arg("test-client").arg("--socket").arg(socket);
@@ -409,6 +421,7 @@ pub fn test_client(socket: &Path, frames: &[&str]) -> (i32, String) {
     (status_code(&output.status), combined_output(&output))
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub fn run_lock_only(config: &Path, state_lock: &Path, _locks_dir: &Path) -> (i32, String) {
     let output = Command::new(d2bd_bin())
         .arg("lock-only")
@@ -425,10 +438,12 @@ pub fn run_lock_only(config: &Path, state_lock: &Path, _locks_dir: &Path) -> (i3
     (status_code(&output.status), combined_output(&output))
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn status_code(status: &ExitStatus) -> i32 {
     status.code().unwrap_or(-1)
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn combined_output(output: &std::process::Output) -> String {
     let mut combined = String::new();
     combined.push_str(&String::from_utf8_lossy(&output.stdout));
@@ -436,6 +451,7 @@ fn combined_output(output: &std::process::Output) -> String {
     combined
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub fn wait_for_socket(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -450,6 +466,7 @@ pub fn wait_for_socket(path: &Path, timeout: Duration) {
     panic!("timed out waiting for socket: {}", path.display());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub fn wait_for_file(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {

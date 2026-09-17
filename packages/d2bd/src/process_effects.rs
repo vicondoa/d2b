@@ -800,6 +800,7 @@ mod tests {
     /// ticket forms instead of refusing with
     /// `provider-controller-provider-identity-missing`.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn controller_provider_identity_binds_the_committed_provider_row() {
         let identity = controller_identity();
         let registry = PlaneResourceRegistry::new();
@@ -829,6 +830,7 @@ mod tests {
     /// production effects value - leaves the identity unbound, so the ticket
     /// path still refuses closed instead of inventing an identity.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn controller_provider_identity_stays_unbound_without_a_committed_row() {
         let identity = controller_identity();
         let empty = PlaneResourceRegistry::new();
@@ -860,6 +862,7 @@ mod tests {
     /// (`Guest` stays on the pre-v3 plane), so the process effects resolve the
     /// same durable uid from that plane.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn guest_vmm_ticket_carries_the_old_descriptor_owner_identity() {
         let guest_ref = ResourceRef::parse("Guest/acceptance-guest").expect("guest ref");
         let guest_uid = ResourceUid::parse(GUEST_UID).expect("guest uid");
@@ -884,6 +887,7 @@ mod tests {
     /// (`provider-ticket:guest-descriptor-unbound`), so the descriptor must
     /// reach the provider context.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn guest_owned_row_binds_the_catalog_guest_descriptor_digest() {
         let identity = guest_vmm_identity();
         let digest = guest_descriptor_digest();
@@ -904,6 +908,7 @@ mod tests {
     /// Non-guest rows never consult the bundle descriptor source, so the
     /// context keeps the descriptor slot unbound.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn non_guest_rows_keep_the_guest_descriptor_digest_unbound() {
         let identity = controller_identity();
         let context = super::process_resource_context(&identity, None, None, |_, _| {
@@ -915,6 +920,7 @@ mod tests {
     /// A Guest the bundle retains no descriptor for stays unbound - the
     /// ticket path still refuses closed instead of inventing a digest.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn missing_catalog_descriptor_keeps_the_guest_digest_unbound() {
         let identity = guest_vmm_identity();
         let context = super::process_resource_context(&identity, None, None, |_, _| None);

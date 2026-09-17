@@ -35,6 +35,7 @@ fn current_user_policy() -> BundleVerifyPolicy {
 }
 
 /// Write `content` to `path` with Unix mode `mode`.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn write_with_mode(path: &std::path::Path, content: &[u8], mode: u32) {
     fs::OpenOptions::new()
         .write(true)
@@ -224,6 +225,7 @@ fn bundle_tampered_to_envelope_round_trip() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn daemon_vm_start_returns_bundle_tampered_envelope() {
     let fixture = common::DaemonFixture::new("bundle-tampered-daemon.");
     fixture.write_config(&["admin-user"], &["admin-user"]);

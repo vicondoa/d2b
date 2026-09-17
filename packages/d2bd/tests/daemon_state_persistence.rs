@@ -10,6 +10,7 @@ mod daemon_state_persistence {
     use super::common::{DaemonFixture, TestPeer, spawn_d2bd_serve};
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn restores_pidfd_table_from_disk_on_startup() {
         let fixture = DaemonFixture::new("daemon-state-persistence.");
         fixture.write_config(&["launcher-user"], &["admin-user", "launcher-user"]);
@@ -76,6 +77,7 @@ mod daemon_state_persistence {
     }
 
     impl OrphanProcess {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn spawn_sleep() -> Self {
             let scrubber = std::env::var_os("D2B_TEST_SCRUB_SHELL_ENVIRONMENT")
                 .map(PathBuf::from)
@@ -112,6 +114,7 @@ mod daemon_state_persistence {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_json(path: &std::path::Path, value: &Value) {
         fs::write(
             path,
@@ -120,12 +123,14 @@ mod daemon_state_persistence {
         .unwrap_or_else(|err| panic!("write {}: {err}", path.display()));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn read_json(path: &std::path::Path) -> Value {
         let bytes = fs::read(path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
         serde_json::from_slice(&bytes)
             .unwrap_or_else(|err| panic!("parse {}: {err}", path.display()))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn process_start_time_ticks(pid: u32) -> u64 {
         let stat = fs::read_to_string(format!("/proc/{pid}/stat")).expect("read runner /proc stat");
         stat.split_whitespace()

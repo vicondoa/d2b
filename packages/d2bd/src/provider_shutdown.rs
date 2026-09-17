@@ -124,6 +124,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn cloud_hypervisor_provider_fails_closed_without_api_socket() {
         let provider = CloudHypervisorShutdown::default();
         let target = ProviderShutdownTarget {

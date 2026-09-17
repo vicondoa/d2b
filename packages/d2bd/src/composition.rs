@@ -11335,6 +11335,7 @@ mod guest_target_session_tests {
     /// reconnect, and the KTD6 gate reads the target-local realization the
     /// Guest actually reports instead of a default.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_reconnect_rebinds_the_assignment_and_the_gate_reads_target_evidence() {
         let directory = Arc::new(TargetDirectory::new());
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
@@ -12871,6 +12872,13 @@ fn spawn_typed_shell_owner(
         })
 }
 
+// R11 inventory note: genuinely synchronous path - the sync
+// `exec_session::ExecGuestClient` request/response loop runs on the
+// daemon's dedicated `d2b-process-owner` thread, which owns the
+// current-thread runtime it drives through the borrowed handle; the
+// `ExecGuestClient` trait is defined outside this unit's scope, so the
+// boundary cannot be made async here.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn process_stream_response(
     runtime: &tokio::runtime::Handle,
     client: &dyn exec_session::ExecGuestClient,
@@ -13017,6 +13025,12 @@ fn process_stream_response(
     }
 }
 
+// R11 inventory note: genuinely synchronous path - this owner runs on the
+// daemon's dedicated `d2b-process-owner` thread (spawned by the conn
+// handler) and builds the current-thread runtime it drives with
+// `block_on`; the process-resource exec protocol is a sync
+// request/response loop by contract (U13 sync trait boundary).
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn run_process_resource_owner(
     stream: Socket,
     state: ServerState,
@@ -13182,6 +13196,12 @@ fn run_process_resource_owner(
         rt.block_on(client.cancel(control_sequence.saturating_add(1), SHELL_MANAGEMENT_TIMEOUT));
 }
 
+// R11 inventory note: genuinely synchronous path - this owner runs on the
+// daemon's dedicated `d2b-typed-shell-owner` thread (spawned by
+// `spawn_typed_shell_owner`) and drives the shell-session establishment
+// future on the current-thread runtime it builds; the typed-shell
+// protocol is a sync request/response loop by contract.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn run_typed_shell_owner(
     stream: Socket,
     state: ServerState,
@@ -15166,6 +15186,12 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
     Ok(())
 }
 
+// R11 inventory note: genuinely synchronous path - the vm-start lock is a
+// short exclusive `flock` taken by the sync `dispatch_broker_vm_start_inner`
+// dispatch (itself a sanctioned synchronous path) before the DAG runs; the
+// lock file must be opened with `std::fs::OpenOptions` because the flock
+// rides on the raw fd, and the sync call graph has no async form.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn acquire_vm_start_lock(state: &ServerState, vm: &str) -> Result<Flock<File>, TypedError> {
     let path = state.config.locks_dir.join(format!("vm-start-{vm}.lock"));
     let file = OpenOptions::new()
@@ -21303,6 +21329,7 @@ mod public_status_tests {
 
     /// Write a self-hashed v3 zone-native bundle; the zone-resource-bundle
     /// hash the loader verifies for `schemaVersion >= 2`.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_v3_native_bundle(bundle_path: &Path, privileges_path: &Path, generator: &str) {
         let mut bundle = json!({
             "bundleVersion": 1,
@@ -21372,6 +21399,7 @@ mod public_status_tests {
         assert!(!json.contains("\"role\":\"AdminUid\""));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_public_status_artifacts_with_state_dir(
         root: &Path,
         vm_a_state_dir: Option<&Path>,
@@ -21606,6 +21634,7 @@ mod public_status_tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn make_generation_links(root: &Path, current: &str, booted: &str) -> PathBuf {
         let state_dir = root.join("vm-a-state");
         fs::create_dir_all(&state_dir).expect("state dir");
@@ -21837,6 +21866,7 @@ mod public_status_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn public_lifecycle_status_probe_does_not_use_shutdown_timeout() {
         let (state, _dir) = test_state();
         state
@@ -22545,6 +22575,7 @@ mod public_status_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn provider_lifecycle_reconciliation_refuses_nonterminal_states() {
         use std::io::{Read, Write};
 
@@ -23033,6 +23064,7 @@ pub(crate) mod detached_exec_routing_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn process_resource_create_denies_launcher_before_resource_port() {
         let _env = PeerOverrideEnv::launcher();
         let mut state = test_state(exec_session::ExecSessionCaps::default());
@@ -23138,6 +23170,7 @@ pub(crate) mod detached_exec_routing_tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub(crate) fn test_state(caps: exec_session::ExecSessionCaps) -> ServerState {
         let broker_reap_log = BrokerReapLog::new();
         let temp_root = tempfile::Builder::new()
@@ -23493,6 +23526,7 @@ mod accept_loop_concurrency_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn workload_request_without_negotiated_features_is_typed_unsupported() {
         let (state, _state_dir) = admin_exec_state();
         let (server, client) = seqpacket_pair();
@@ -23689,6 +23723,7 @@ mod accept_loop_concurrency_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn typed_shell_owner_keeps_admission_permit_until_owner_exits() {
         use std::sync::Mutex;
 
@@ -23704,6 +23739,7 @@ mod accept_loop_concurrency_tests {
 
         struct HookGuard;
         impl Drop for HookGuard {
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
             fn drop(&mut self) {
                 owner_connection_test_hook::clear();
             }
@@ -23761,6 +23797,7 @@ mod accept_loop_concurrency_tests {
     /// be rejected promptly (it cannot stall a handler waiting on a read), and
     /// the rejection is the typed `AuthzNotALauncher` envelope.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn unauthorized_peer_is_rejected_before_reading_hello() {
         let _env = PeerOverrideEnv::denied();
         let (state, _state_dir) = admin_exec_state();
@@ -24024,12 +24061,14 @@ mod broker_dispatch_tests {
             &self.child
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn wait(mut self) -> std::process::ExitStatus {
             self.child.wait().expect("wait child")
         }
     }
 
     impl Drop for ChildGuard {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             if let Ok(None) = self.child.try_wait() {
                 let _ = self.child.kill();
@@ -24038,6 +24077,7 @@ mod broker_dispatch_tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn test_daemon_state_dir(test_name: &str) -> PathBuf {
         let dir = crate::test_scratch_root().join("d2bd-state");
         fs::create_dir_all(&dir).expect("create broker dispatch scratch dir");
@@ -24181,6 +24221,7 @@ mod broker_dispatch_tests {
             })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_json_file(path: &Path, value: &serde_json::Value) {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create json parent");
@@ -24263,6 +24304,7 @@ mod broker_dispatch_tests {
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_minimal_vm_start_bundle_artifacts(root: &Path) -> ArtifactPaths {
         let bundle_dir = root.join("bundle-fixture");
         fs::create_dir_all(&bundle_dir).expect("create bundle fixture dir");
@@ -24388,6 +24430,7 @@ mod broker_dispatch_tests {
 
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn vm_start_store_sync_resolves_bare_vm_name() {
         let root = test_daemon_state_dir("store-sync-resolves-bare-vm");
         let artifacts = write_minimal_vm_start_bundle_artifacts(&root);
@@ -24417,6 +24460,7 @@ mod broker_dispatch_tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_custom_vm_start_bundle_artifacts(
         root: &Path,
         api_socket: &Path,
@@ -24516,6 +24560,7 @@ mod broker_dispatch_tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn read_test_frame(fd: RawFd) -> io::Result<Vec<u8>> {
         let mut buffer = vec![0_u8; d2bd_runtime::wire::MAX_FRAME_SIZE + 4];
         let received = recv(fd, &mut buffer, MsgFlags::empty())
@@ -24536,6 +24581,7 @@ mod broker_dispatch_tests {
         Ok(buffer[4..4 + expected].to_vec())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_test_json_frame_with_fds<T: Serialize>(
         fd: RawFd,
         message: &T,
@@ -24573,6 +24619,7 @@ mod broker_dispatch_tests {
         write_test_json_frame_with_fds(fd, message, &[])
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn start_test_broker_server<F>(
         test_name: &str,
         requests: usize,
@@ -24653,6 +24700,7 @@ mod broker_dispatch_tests {
     /// serving of the ownership-matrix preflight with an Ack drives the DAG
     /// step to success over the established origination-leg carrier.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_preflight_caller_answers_through_the_broker_so_the_dag_step_passes() {
         use d2b_contracts_broker::broker_wire::{AckResponse, BrokerResponse};
 
@@ -24692,6 +24740,7 @@ mod broker_dispatch_tests {
     /// with the documented unknown outcome, not a synthesized handler
     /// verdict.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_stalled_broker_maps_the_caller_timeout_to_the_unknown_outcome_code() {
         let (socket_path, broker) =
             start_test_broker_server("preflight-envelope-timeout", 1, |_index, envelope, _fd| {
@@ -24725,6 +24774,7 @@ mod broker_dispatch_tests {
         broker.join().expect("the test broker completes");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn read_child_start_time(child: &Child) -> u64 {
         let path = format!("/proc/{}/stat", child.id());
         let content = fs::read_to_string(&path).expect("read child stat");
@@ -24739,6 +24789,7 @@ mod broker_dispatch_tests {
         .expect("pidfd_open child")
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn spawn_term_ignoring_child() -> Child {
         let helper_dir = test_daemon_state_dir("term-ignore-helper");
         let source = helper_dir.join("term-ignore.c");
@@ -24761,6 +24812,7 @@ mod broker_dispatch_tests {
             .expect("spawn term-ignoring helper")
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn register_sleep_runner_for_role(
         state: &ServerState,
         vm: &str,
@@ -25338,6 +25390,7 @@ mod broker_dispatch_tests {
         not(test_root),
         ignore = "P2fu1 software-r2 (longstanding pre-existing): same root/owner requirement as vm_start_broker_unreachable_returns_broker_error."
     )]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn vm_start_registers_pidfd_table_entry_from_broker_fd() {
         use d2b_contracts_broker::broker_wire::{BrokerRequest, RunnerRole};
 
@@ -25519,6 +25572,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[ignore = "flaky on shared hosts; Unix socket reuse races"]
     fn vm_start_drives_supervisor_dag_in_topo_order() {
         use d2b_contracts_broker::broker_wire::{BrokerRequest, RunnerRole};
@@ -25917,6 +25971,7 @@ mod broker_dispatch_tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn startup_adoption_quarantines_without_authoritative_lifecycle_identity() {
         let daemon_state_dir = test_daemon_state_dir("startup-adoption");
         let store = FilesystemSnapshotStore::new(&daemon_state_dir);
@@ -26141,6 +26196,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn vm_stop_skips_usbip_degradation_when_bundle_missing_and_no_claim_locks() {
         let mut state =
             test_state_with_broker_socket(unreachable_broker_socket_path("vm-stop-no-usbip"));
@@ -26177,6 +26233,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn vm_stop_does_not_run_legacy_usbip_cleanup_when_claim_lock_matches() {
         let mut state =
             test_state_with_broker_socket(unreachable_broker_socket_path("vm-stop-usbip-lock"));
@@ -26286,6 +26343,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn live_activation_timeout_uses_daemon_default_and_manifest_override() {
         let mut state = test_state_with_broker_socket(unreachable_broker_socket_path(
             "activation-timeout-policy",
@@ -26382,6 +26440,7 @@ mod broker_dispatch_tests {
             provider_shutdown::ProviderRequestOutcome::Requested
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn poll_state(
             &self,
             _target: &provider_shutdown::ProviderShutdownTarget,
@@ -26403,6 +26462,7 @@ mod broker_dispatch_tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn provider_graceful_shutdown_observes_concurrent_force_request() {
         let state = test_state_with_broker_socket(unreachable_broker_socket_path(
@@ -26468,6 +26528,7 @@ mod broker_dispatch_tests {
         assert!(!status.success());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn start_raw_value_broker_server<F>(
         test_name: &str,
         requests: usize,
@@ -26508,6 +26569,7 @@ mod broker_dispatch_tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn qemu_broker_shutdown_provider_drives_powerdown_status_and_quit() {
         let (socket_path, broker) = start_raw_value_broker_server(
             "qemu-shutdown-state-machine",
@@ -26603,6 +26665,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn populated_runner_cgroup_requests_broker_cgroup_kill_before_restart() {
         let root = test_daemon_state_dir("cgroup-kill-escalation");
         let cgroup = root.join("cgroup");
@@ -26704,6 +26767,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_lease_caller_consumes_and_completes_through_the_cell_kernels() {
         // The migrated lease caller (U11): the daemon's convenience shim
         // invokes the generic consume-cell and complete-cell kernels as two
@@ -26777,6 +26841,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_lease_caller_refuses_when_a_cell_kernel_refuses() {
         // The consumed+completed pair is the admission: a refused
         // consume-cell (the lease is already granted - AE2 replay) fails
@@ -26824,6 +26889,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_lease_caller_applies_the_fence_before_invoking() {
         // The caller-side fence (U11): invalid identity fields and
         // stop_only/host-shutdown mismatches are refused without any
@@ -27024,6 +27090,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stop_vm_pidfd_role_falls_back_to_broker_on_sigterm_eperm() {
         let vm = "vm-eperm-term";
         let role = VM_RUNNER_ROLE_ID;
@@ -27134,6 +27201,7 @@ mod broker_dispatch_tests {
 
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stop_vm_pidfd_role_falls_back_to_broker_on_sigkill_eperm() {
         let vm = "vm-eperm-kill";
         let role = VM_RUNNER_ROLE_ID;
@@ -27276,6 +27344,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stop_vm_pidfd_role_multi_role_one_eperm() {
         let vm = "vm-eperm-multi";
         let eperm_role = "virtiofsd-ro-store";
@@ -27406,6 +27475,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stop_vm_pidfd_role_idempotent_after_deregistration() {
         let vm = "vm-eperm-idempotent";
         let role = VM_RUNNER_ROLE_ID;
@@ -27562,6 +27632,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stop_vm_pidfd_role_broker_signaled_false_is_daemon_failure() {
         let vm = "vm-eperm-false";
         let role = VM_RUNNER_ROLE_ID;
@@ -27617,6 +27688,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stop_vm_pidfd_role_broker_accepts_then_eof_preserves_eperm() {
         let vm = "vm-eperm-eof";
         let role = VM_RUNNER_ROLE_ID;
@@ -27653,6 +27725,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stop_vm_pidfd_role_broker_accepts_then_short_frame_preserves_eperm() {
         let vm = "vm-eperm-short";
         let role = VM_RUNNER_ROLE_ID;
@@ -27691,6 +27764,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stop_vm_pidfd_role_broker_wrong_response_variant_preserves_eperm() {
         let vm = "vm-eperm-wrong";
         let role = VM_RUNNER_ROLE_ID;
@@ -27748,6 +27822,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stop_vm_pidfd_role_broker_dereg_removed_false_is_idempotent_cleanup() {
         let vm = "vm-eperm-dereg-false";
         let role = VM_RUNNER_ROLE_ID;
@@ -27855,6 +27930,7 @@ mod broker_dispatch_tests {
         let _ = child.wait();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn register_echild_wait_entry(state: &ServerState, vm: &str, role: &str) -> ChildGuard {
         let child = Command::new("sleep")
             .arg("600")
@@ -27883,6 +27959,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn wait_terminated_with_broker_poll_echild_polls_reap_log() {
         // The U10 per-entry reap probe walks the pidfd table of the VMs the
         // process-Provider composition tracks, so this test attaches the
@@ -28081,6 +28158,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn host_destroy_removes_only_host_owned_network_state() {
         use d2b_contracts_broker::broker_wire::{
             BrokerRequest, BrokerRequestEnvelope, BrokerResponse, EnvelopeInvokeResponse,
@@ -28096,6 +28174,7 @@ mod broker_dispatch_tests {
         use std::os::fd::{AsRawFd, RawFd};
         use std::thread;
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn read_test_frame(fd: RawFd) -> io::Result<Vec<u8>> {
             let mut buffer = vec![0_u8; d2bd_runtime::wire::MAX_FRAME_SIZE + 4];
             let received = recv(fd, &mut buffer, MsgFlags::empty())
@@ -28117,6 +28196,7 @@ mod broker_dispatch_tests {
             Ok(buffer[4..4 + expected].to_vec())
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_test_json_frame<T: Serialize>(fd: RawFd, message: &T) -> io::Result<()> {
             let payload = serde_json::to_vec(message)
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
@@ -28270,6 +28350,7 @@ mod broker_dispatch_tests {
     /// asserting that the `ServerState` construction and the `DaemonEvent` fields
     /// match what `dispatch_broker_vm_start` actually writes at the timeout site.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn api_ready_timeout_audit_event_captured_via_server_state() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let broker_reap_log = BrokerReapLog::new();
@@ -28479,6 +28560,7 @@ mod broker_dispatch_tests {
     }
 
     impl d2bd_runtime::supervisor::readiness_liveness::LivenessProbe for ScriptedLivenessProbe {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn probe(&self) -> d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness {
             let mut guard = self.inner.lock().expect("scripted liveness mutex");
             if let Some(verdict) = guard.0.pop_front() {
@@ -29248,6 +29330,7 @@ mod broker_dispatch_tests {
     /// succeeds immediately without a broker connection. The bundle is wired
     /// with `_observability.enabled=true` and `vmName="obs"` so
     /// `dispatch_broker_vm_start` reaches the OtelHostBridge readiness gate.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_obs_enabled_bundle_artifacts(root: &Path) -> ArtifactPaths {
         let bundle_dir = root.join("bundle-fixture-obs");
         fs::create_dir_all(&bundle_dir).expect("create obs bundle fixture dir");
@@ -29391,6 +29474,7 @@ mod broker_dispatch_tests {
     /// VM starts that were explicitly requested without the API-readiness wait
     /// (e.g., CLI `--no-wait-api` flag).
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn vm_start_non_obs_vm_has_no_degraded_field_in_envelope() {
         use d2b_contracts_control::public_wire::{MutationFlags, VmLifecycleRequest};
 
@@ -29512,6 +29596,7 @@ mod g5_provider_identity_seed_tests {
     /// `IdentityAmbiguous` -> Terminal by the Process driver on its first
     /// pass.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn late_provider_row_is_seeded_before_the_plane_opens() {
         let refs = BTreeSet::from([
             provider("runtime-cloud-hypervisor"),
@@ -29566,6 +29651,7 @@ mod g5_provider_identity_seed_tests {
     /// A ref that never appears stays loud, and it must not void the
     /// identities that did resolve (no empty-map laundering).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn absent_provider_row_keeps_resolved_identities_and_stays_unresolved() {
         let refs = BTreeSet::from([
             provider("runtime-cloud-hypervisor"),
@@ -29607,6 +29693,7 @@ mod g5_provider_identity_seed_tests {
 
     /// A complete snapshot costs one evaluation per ref and no waiting.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn complete_snapshot_resolves_without_retrying() {
         let refs = BTreeSet::from([provider("volume-local")]);
         let mut calls = 0_usize;
@@ -29658,6 +29745,7 @@ mod loader_worker_refusal_tests {
     /// so one test's full queue cannot refuse another test's admission.
     static SEAT_LOCK: Mutex<()> = Mutex::new(());
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn seat_lock() -> std::sync::MutexGuard<'static, ()> {
         SEAT_LOCK
             .lock()
@@ -29709,6 +29797,7 @@ mod loader_worker_refusal_tests {
     struct ReleaseOnDrop(mpsc::Sender<()>);
 
     impl Drop for ReleaseOnDrop {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             let _ = self.0.send(());
         }
@@ -29717,6 +29806,7 @@ mod loader_worker_refusal_tests {
     /// Park `seat` inside one job and fill its queue to the bound, so the next
     /// admission is refused `Busy`. The parked job resumes when the returned
     /// guard drops.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn saturate(seat: Seat) -> (ReleaseOnDrop, SeatJob, Vec<SeatJob>) {
         let (started_sender, started) = mpsc::channel();
         let (release_sender, release) = mpsc::channel();
@@ -29761,6 +29851,7 @@ mod loader_worker_refusal_tests {
     /// A saturated load seat refuses the daemon's own bundle load, and the
     /// operator sees the worker's named `bundle-loader-busy` refusal.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn busy_load_seat_surfaces_bundle_loader_busy_to_the_daemon() {
         let state = refusal_state();
         let (_release, _parked, _queued) = {
@@ -29780,6 +29871,7 @@ mod loader_worker_refusal_tests {
     /// process on purpose - the seat is process-wide - and is inert unless
     /// the parent spawned this binary for it.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn seat_death_child_load() {
         if std::env::var_os(SEAT_DEATH_CHILD_ENV).is_none() {
             return;
@@ -29801,6 +29893,7 @@ mod loader_worker_refusal_tests {
     /// The seat death runs out of process so a killed seat costs the child,
     /// and this parent proves the daemon names each `Unavailable` refusal.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn seat_death_surfaces_both_loader_unavailable_refusals_to_the_daemon() {
         {
             let child = "seat_death_child_load";

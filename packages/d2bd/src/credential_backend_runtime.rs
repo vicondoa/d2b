@@ -1452,6 +1452,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn guest_sources_call_injected_provider_boundaries_and_zeroize_bytes() {
         let secret_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1494,6 +1495,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn guest_source_without_a_bound_guest_endpoint_fails_closed() {
         let source = GuestLocalCredentialBackend {
@@ -1510,6 +1512,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn supervisor_serves_bound_guest_backend_and_cancels_it() {
         let zone = ZoneId::parse("dev").expect("zone");
@@ -1657,6 +1660,7 @@ mod tests {
         negative.lease.cancel();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn production_secret_service_port_round_trips_zeroizing_lease() {
         let zone = ZoneId::parse("dev").expect("zone");

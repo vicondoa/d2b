@@ -16,6 +16,7 @@ mod daemon_state_lock {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn lock_file_created_with_current_user_0640() {
         let fixture = fixture();
         let first = spawn_lock_only(&fixture.config_path, &fixture.state_lock_path, 20);
@@ -59,6 +60,7 @@ mod daemon_state_lock {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn symlink_lock_parent_is_rejected() {
         let fixture = fixture();
         let real_parent = fixture.root().join("real-parent");

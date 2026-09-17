@@ -1335,6 +1335,12 @@ impl AsyncSeqpacket {
     }
 
     /// One datagram read, awaited for readiness.
+    // R11 inventory note: genuinely synchronous path - the `nix::sys::socket`
+    // recv runs inside the `AsyncFd::async_io` readiness closure on a
+    // non-blocking descriptor (the clippy.toml replacement vocabulary names
+    // this exact AsyncFd-over-raw-socket shape as the sanctioned seam); the
+    // syscall never blocks because readiness was already observed.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     async fn recv_datagram(&self, datagram: &mut [u8]) -> io::Result<usize> {
         self.io
             .async_io(Interest::READABLE, |socket| {
@@ -1345,6 +1351,12 @@ impl AsyncSeqpacket {
     }
 
     /// One datagram write, awaited for readiness.
+    // R11 inventory note: genuinely synchronous path - the `nix::sys::socket`
+    // send runs inside the `AsyncFd::async_io` readiness closure on a
+    // non-blocking descriptor (the clippy.toml replacement vocabulary names
+    // this exact AsyncFd-over-raw-socket shape as the sanctioned seam); the
+    // syscall never blocks because readiness was already observed.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     async fn send_datagram(&self, frame: &[u8]) -> io::Result<usize> {
         self.io
             .async_io(Interest::WRITABLE, |socket| {
@@ -2378,6 +2390,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// answers it:the result carries the family's own declaration, the Zone,
     /// and the invocation identifier the caller forwarded. A carrier that
     /// never reached the handler could not produce these values.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_forwarded_call_crosses_the_socket_and_the_declared_handler_answers() {
         let serving = ServingRendezvous::start().await;
@@ -2422,6 +2435,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
     /// An operation no started provider declares is refused by name, and so is
     /// a call naming a Zone this process has no providers for.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_undeclared_operation_is_refused_by_name() {
         let serving = ServingRendezvous::start().await;
@@ -2448,6 +2462,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// A refusal the handler itself decided crosses the socket under its own
     /// code, so the peer's record and the passed-through detail keep the
     /// family's vocabulary rather than a carrier-level one.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_handler_refusal_crosses_back_under_its_own_code() {
         let serving = ServingRendezvous::start().await;
@@ -2469,6 +2484,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// they do not queue behind one another, and calls in flight do not add a
     /// thread each - before this the serving path owned one thread per call,
     /// so four stalled calls added four.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_calls_are_held_on_the_runtime_without_a_thread_each() {
         const CALLS: usize = 4;
@@ -2527,6 +2543,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// deadline - by name, while the caller is still listening - and the slot
     /// it held is free again, so the call that follows is served rather than
     /// refused at the cap.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_stalled_handler_is_refused_by_name_and_frees_its_slot() {
         const HANDLER_DEADLINE: Duration = Duration::from_millis(200);
@@ -2581,6 +2598,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// while the broker is still listening - not a dropped socket the broker
     /// would read as a round-trip timeout - and the accept loop (and its
     /// capacity slot) survives to serve the next call.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_crashing_handler_is_refused_by_name_and_the_rendezvous_keeps_serving() {
         const HANDLER_DEADLINE: Duration = Duration::from_secs(5);
@@ -2634,6 +2652,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// A handler that ran and failed crosses its own code back to the
     /// caller: the rendezvous relays the provider's failure code, so
     /// handler-errored is never flattened into the missing-handler refusal.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_erroring_handler_crosses_back_under_its_own_code() {
         let serving = ServingRendezvous::start().await;
@@ -2668,6 +2687,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// process-wide two-worker handler set for the duration of the suite,
     /// so the real 25 s+ run lives on this leg, where the handler is an
     /// async task on its own runtime.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_row_with_a_large_deadline_tier_runs_past_twenty_five_seconds_on_the_forwarded_leg() {
         let (rendezvous, socket_path, _scratch, _providers) = ServingRendezvous::fixture().await;
@@ -2714,6 +2734,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// A call the rendezvous is at its cap for is answered with the daemon's
     /// own capacity code - a named refusal, not a silent close - and the
     /// calls already in flight are undisturbed.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_call_over_the_in_flight_cap_is_refused_by_name() {
         let serving = ServingRendezvous::start_with(posture(1, Duration::from_secs(10))).await;
@@ -2756,6 +2777,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// only way to exercise the refusal from inside one process. The root arm
     /// cannot be moved - root is the privileged broker and is always
     /// accepted - so a run as root has nothing to refuse here.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_peer_that_is_not_the_broker_is_refused_by_name() {
         if nix::unistd::geteuid().is_root() {
@@ -2782,6 +2804,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_fd_carrying_request_crosses_the_socket_and_the_declared_handler_reads_it_back() {
         use nix::unistd::{pipe, write};
@@ -2806,6 +2829,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_request_whose_fd_count_mismatches_is_refused_with_the_fd_leg_code() {
         use nix::unistd::{pipe, write};
@@ -2827,6 +2851,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_request_whose_fd_kind_mismatches_is_refused_with_the_fd_leg_code() {
         use nix::unistd::pipe;
@@ -2847,6 +2872,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_request_whose_fd_declarations_exceed_the_frame_ceiling_is_refused_with_the_fd_leg_code() {
         let serving = ServingRendezvous::start().await;
@@ -2960,6 +2986,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// A freshly minted context passes the field-wise freshness check: the
     /// epoch is the daemon's observed one, the Zone binds to the call, and
     /// the revision and generations match the daemon's current values.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_fresh_context_passes_the_rendezvous() {
         let serving = ServingRendezvous::start_attesting().await;
@@ -2980,6 +3007,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// verified: the attestation's epoch half is uncheckable, so every
     /// attested call refuses fail-closed - the receiving side of the rule
     /// that the broker refuses to mint until it holds a value.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn contexts_refuse_until_the_daemon_observes_a_broker_epoch() {
         let serving = ServingRendezvous::start().await;
@@ -3001,6 +3029,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
     /// A context minted against an older provider-set revision refuses: the
     /// daemon republished its provider set since the broker minted.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_context_minted_against_an_older_provider_set_revision_is_refused() {
         let serving = ServingRendezvous::start_attesting().await;
@@ -3022,6 +3051,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
     /// A context minted against a lower guest generation refuses: the
     /// daemon's current guest generation moved past the minted one.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_context_minted_against_a_lower_guest_generation_is_refused() {
         let serving = ServingRendezvous::start_attesting().await;
@@ -3043,6 +3073,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
     /// A context whose Zone is not the call's Zone is not bound to the
     /// connection: the attestation names another Zone, so the call refuses.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_context_minted_against_another_zone_is_refused() {
         let serving = ServingRendezvous::start_attesting().await;
@@ -3065,6 +3096,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// A mutated context refuses even when every field it touched moved the
     /// "right" way: the broker is the sole minter, so any difference from
     /// the daemon's current values is tampering, never a fresher truth.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_mutated_context_is_refused() {
         let serving = ServingRendezvous::start_attesting().await;
@@ -3090,6 +3122,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// refuses regardless of generation equality, and once the daemon
     /// observes the fresh nonce only contexts minted under it pass - a
     /// pre-restart context cannot be re-minted into validity.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_broker_restart_invalidates_every_previous_context_via_the_epoch() {
         let (rendezvous, socket_path, _scratch, _providers) = ServingRendezvous::fixture().await;
@@ -3152,6 +3185,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// The context's deadline budget is the per-call handler deadline: a
     /// handler that never finishes is refused by the budget the context
     /// declares, not by the posture's fixed constant.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn the_context_deadline_budget_bounds_the_handler() {
         const BUDGET: Duration = Duration::from_millis(150);
@@ -3196,6 +3230,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// A deadline budget outside the shared ceiling is a block the broker
     /// did not mint: zero or oversized budgets refuse with the stale-context
     /// code rather than serving an unbounded handler grant.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_context_whose_budget_escapes_the_ceiling_is_refused() {
         let serving = ServingRendezvous::start_attesting().await;
@@ -3507,6 +3542,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// A broker that never answers the publication leaves the rendezvous
     /// fail-closed too: the transport failure is the same refusal boundary,
     /// observed before any epoch could be acknowledged.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_unreachable_broker_leaves_the_rendezvous_fail_closed() {
         let zone = ZoneId::parse("test").expect("the test zone label is canonical");
@@ -3581,6 +3617,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// hosted actor answers with the canonical payload round-tripping
     /// untouched - the effect service rides the normal forward carrier, no
     /// second transport.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_forwarded_effect_service_call_is_answered_by_the_hosted_actor() {
         let serving = ServingRendezvous::start_with_effect_service().await;
@@ -3601,6 +3638,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// a provider's handler table names it. A `service/method` spelling
     /// works for no operation - the wire names the committed operation, and
     /// the declaration's operation facet resolves it to the service (KD6).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_operation_no_effect_service_or_provider_declares_is_refused_by_name() {
         let serving = ServingRendezvous::start_with_effect_service().await;
@@ -3623,6 +3661,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// semantics: killing the actor mid-supervision respawns the service
     /// from its durable row and bumps the generational revision; the next
     /// forwarded call succeeds against the fresh generation.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn killing_a_hosted_effect_service_respawns_and_the_next_forwarded_call_succeeds() {
         let serving = ServingRendezvous::start_with_effect_service().await;
@@ -3676,6 +3715,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// U8 edge through the rendezvous: an in-flight forwarded call whose
     /// actor dies is refused with the dedicated stale-revision code, never
     /// hung, and the service still respawns from its durable row.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_in_flight_effect_service_call_refuses_with_the_stale_revision_code_when_the_actor_dies()
     {
@@ -3730,6 +3770,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// U8 republish through the hosting seam keeps the rendezvous serving:
     /// the republish bumps the generational revision and a fresh resolve
     /// dispatches to the rebuilt actor (provider-set republish, KTD5).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_republished_effect_service_keeps_answering_through_the_rendezvous() {
         let serving = ServingRendezvous::start_with_effect_service().await;
@@ -3759,6 +3800,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// A declined effect-service call crosses back under the taxonomy's
     /// handler-refused code (KTD7), not a carrier-level or uncommitted
     /// refusal.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_declining_effect_service_refuses_under_the_handler_refused_code() {
         let declining: Arc<dyn EffectService> = Arc::new(DecliningService);
@@ -3833,6 +3875,7 @@ assert_eq!(
     /// A forwarded root invocation is recorded by the daemon-side leg
     /// exactly once, whatever its outcome (KTD6): the leg executing the
     /// root operation writes one root record per root invocation.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_forwarded_root_writes_exactly_one_daemon_side_root_record_per_outcome() {
         let serving = ServingRendezvous::start().await;
@@ -3908,6 +3951,7 @@ assert_eq!(
     /// One nested leg writes one correlation record keyed on the root
     /// invocation id and its own depth - and never a second root record
     /// for the invocation, which is the mixed-leg invariant (KTD6).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_nested_leg_writes_one_correlation_record_and_never_a_second_root() {
         let serving = ServingRendezvous::start().await;
@@ -3977,6 +4021,7 @@ assert_eq!(
     /// A nested chain past the depth cap is refused with the dedicated
     /// loop-refusal code before any dispatch, and the refusing leg still
     /// writes its correlation record with the code (KTD6).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_nested_chain_past_the_depth_cap_is_refused_with_the_loop_code() {
         let serving = ServingRendezvous::start().await;
@@ -4015,6 +4060,7 @@ assert_eq!(
     /// An attested forwarded root is recorded under the identity the
     /// broker attested, never the daemon class the socket peer re-presents:
     /// the record names the initiating provider (KTD6).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_attested_forwarded_root_is_recorded_under_the_initiating_identity() {
         let serving = ServingRendezvous::start_attesting().await;

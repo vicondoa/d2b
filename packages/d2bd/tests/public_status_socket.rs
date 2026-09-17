@@ -12,6 +12,7 @@ mod public_status_socket {
         write_daemon_config_with_artifacts,
     };
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_status_artifacts(root: &Path) -> Value {
         let public_manifest_path = root.join("vms.json");
         let bundle_path = root.join("bundle.json");

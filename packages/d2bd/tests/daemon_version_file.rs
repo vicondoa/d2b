@@ -12,6 +12,7 @@ mod daemon_version_file {
     };
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn startup_writes_version_file_next_to_public_socket() {
         let fixture = DaemonFixture::new("daemon-version-file.");
         fixture.write_config(&["launcher-user"], &["admin-user"]);

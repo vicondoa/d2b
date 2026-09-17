@@ -523,6 +523,7 @@ mod tests {
 
     /// A provider claims exactly the root it declared, and the plane creates
     /// it under the zone's own state directory.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_declared_root_is_claimed_under_the_zone_state_directory() {
         const ROOTS: &[StorageRoot] = &[StorageRoot {
@@ -547,6 +548,7 @@ mod tests {
 
     /// An action outside the declaration refuses, naming the provider, the
     /// row, and the reason.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn an_undeclared_action_refuses_named() {
         const ROOTS: &[StorageRoot] = &[root("state")];
@@ -566,6 +568,7 @@ mod tests {
     }
 
     /// A provider the plane does not start has no declaration to act on.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn an_undeclared_provider_refuses_named() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -580,6 +583,7 @@ mod tests {
     }
 
     /// Two providers may not claim overlapping subtrees.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn overlapping_declared_roots_refuse_named() {
         const ROOTS: &[StorageRoot] = &[root("state")];
@@ -602,6 +606,7 @@ mod tests {
     }
 
     /// A declaration cannot escape the zone's state directory.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn an_escaping_declared_root_refuses_named() {
         const ROOTS: &[StorageRoot] = &[root("state/../../escape")];
@@ -617,6 +622,7 @@ mod tests {
     }
 
     /// A root the plane provisions rather than the provider must exist.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_missing_provisioned_root_refuses_named() {
         const ROOTS: &[StorageRoot] = &[StorageRoot {
@@ -636,6 +642,7 @@ mod tests {
 
     /// Adapters deploy in declared dependency order, and a dependency that
     /// has not deployed refuses.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn adapters_deploy_in_declared_dependency_order() {
         const ADAPTERS: &[PlaneAdapter] = &[
@@ -677,6 +684,7 @@ mod tests {
     /// the plane. The claim runs on its own thread so that a regression fails
     /// the test with a message instead of wedging the suite.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_duplicate_claim_refuses_instead_of_re_entering_the_ledger() {
         const ROOTS: &[StorageRoot] = &[root("state")];
         let dir = tempfile::tempdir().expect("tempdir");
@@ -716,6 +724,7 @@ mod tests {
     }
 
     /// A service no driver declared is refused rather than published.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn an_undeclared_service_refuses_named() {
         const SERVICE: ServiceDecl = ServiceDecl {
@@ -738,6 +747,7 @@ mod tests {
     }
 
     /// Releasing one provider drops exactly what it claimed.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn release_drops_one_providers_claims() {
         const VOLUMES: &[StorageRoot] = &[root("volumes")];

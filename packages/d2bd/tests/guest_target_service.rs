@@ -53,31 +53,37 @@ impl RecordingEffect {
         Arc::new(Self { present: StdMutex::new(true), ..Self::default() })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn absent() -> Arc<Self> {
         let effect = Self::new();
         *effect.present.lock().expect("present") = false;
         effect
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn failing(error: GuestTargetEffectError) -> Arc<Self> {
         let effect = Self::new();
         *effect.outcome.lock().expect("outcome") = Some(error);
         effect
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn realized(&self) -> Vec<(ResourceKey, Vec<u8>, String)> {
         self.realized.lock().expect("realized").clone()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn deleted(&self) -> Vec<ResourceKey> {
         self.deleted.lock().expect("deleted").clone()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn adopted(&self) -> Vec<ResourceKey> {
         self.adopted.lock().expect("adopted").clone()
     }
 }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[async_trait]
 impl GuestTargetEffect for RecordingEffect {
     async fn realize(
@@ -95,11 +101,13 @@ impl GuestTargetEffect for RecordingEffect {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn delete(&self, source: &ResourceKey) -> Result<(), GuestTargetEffectError> {
         self.deleted.lock().expect("deleted").push(source.clone());
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn adopt(&self, source: &ResourceKey) -> Result<bool, GuestTargetEffectError> {
         self.adopted.lock().expect("adopted").push(source.clone());
         if let Some(error) = *self.discovery.lock().expect("discovery") {
@@ -201,6 +209,7 @@ fn realize_request(name: &str, generation: u64, spec: Vec<u8>) -> GuestRealizeRe
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn realize_records_once_applies_the_exact_spec_and_reports_ready() {
     let f = Fixture::recording(1);
     let request = realize_request("relay", 1, spec());
@@ -229,6 +238,7 @@ async fn realize_records_once_applies_the_exact_spec_and_reports_ready() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn a_stale_generation_performs_no_effect_and_answers_session_unavailable() {
     let f = Fixture::recording(2);
 
@@ -249,6 +259,7 @@ async fn a_stale_generation_performs_no_effect_and_answers_session_unavailable()
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn a_live_realization_survives_the_reconnect_and_the_old_generation_stops_working() {
     let f = Fixture::recording(1);
     f.realize(realize_request("relay", 1, spec())).await;
@@ -273,6 +284,7 @@ async fn a_live_realization_survives_the_reconnect_and_the_old_generation_stops_
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn delete_removes_only_its_own_instance_and_its_own_effect() {
     let f = Fixture::recording(1);
     f.realize(realize_request("relay", 1, spec())).await;
@@ -290,6 +302,7 @@ async fn delete_removes_only_its_own_instance_and_its_own_effect() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn a_foreign_zone_key_is_refused_without_creating_state() {
     let f = Fixture::recording(1);
     let foreign = GuestRealizeRequest::new(
@@ -312,6 +325,7 @@ async fn a_foreign_zone_key_is_refused_without_creating_state() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn a_key_with_no_target_local_effect_is_refused_without_creating_state() {
     let f = Fixture::recording(1);
     let unknown = GuestRealizeRequest::new(
@@ -333,6 +347,7 @@ async fn a_key_with_no_target_local_effect_is_refused_without_creating_state() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn a_substituted_spec_is_refused_before_the_effect_sees_it() {
     let f = Fixture::recording(1);
     let request = realize_request("relay", 1, spec());
@@ -359,6 +374,7 @@ async fn a_substituted_spec_is_refused_before_the_effect_sees_it() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn a_failed_effect_leaves_the_realization_realizing_instead_of_ready() {
     let f = Fixture::new(RecordingEffect::failing(GuestTargetEffectError::Unavailable), 1);
     let response = f.realize(realize_request("relay", 1, spec())).await;
@@ -373,6 +389,7 @@ async fn a_failed_effect_leaves_the_realization_realizing_instead_of_ready() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn adoption_rebinds_and_recovers_the_target_local_effect() {
     let f = Fixture::recording(1);
     f.realize(realize_request("relay", 1, spec())).await;
@@ -389,6 +406,7 @@ async fn adoption_rebinds_and_recovers_the_target_local_effect() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn adoption_reports_missing_when_the_target_local_effect_is_gone() {
     let f = Fixture::new(RecordingEffect::absent(), 1);
     f.realize(realize_request("relay", 1, spec())).await;
@@ -403,6 +421,7 @@ async fn adoption_reports_missing_when_the_target_local_effect_is_gone() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn adoption_reports_missing_when_the_effect_cannot_confirm_the_realization() {
     let effect = RecordingEffect::new();
     *effect.discovery.lock().expect("discovery") = Some(GuestTargetEffectError::Unavailable);
@@ -433,6 +452,7 @@ fn the_registered_service_publishes_exactly_the_protocol_method() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn frames_round_trip_over_a_real_authenticated_session() {
     let guest_runtime = GuestRuntime::new(
         guest_identity(1),

@@ -756,6 +756,7 @@ mod tests {
     /// provider-set republish bumps the generational revision while the
     /// service keeps answering from the fresh instance (KTD5).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn bound_service_answers_calls_through_its_supervisor() {
         let supervisor = spawn_supervisor("z", Vec::new(), Duration::from_secs(60)).await;
         let builds = Arc::new(AtomicU64::new(0));
@@ -781,6 +782,7 @@ mod tests {
     /// durable row; the next call succeeds and the revision bumped. The
     /// pre-crash binding refuses as stale (KTD5).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn killed_actor_respawns_from_its_durable_row_and_bumps_revision() {
         let supervisor = spawn_supervisor("z", Vec::new(), Duration::from_secs(60)).await;
         let builds = Arc::new(AtomicU64::new(0));
@@ -827,6 +829,7 @@ mod tests {
     /// Edge: an in-flight call when the actor dies sees a refusal, not a
     /// hang, and the supervisor still respawns the service.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn in_flight_call_against_a_killed_actor_refuses_instead_of_hanging() {
         let supervisor = spawn_supervisor("z", Vec::new(), Duration::from_secs(60)).await;
         let entered = Arc::new(Notify::new());
@@ -870,6 +873,7 @@ mod tests {
     /// poll before the delay, polls arrive afterwards, and the handler
     /// reschedules the next tick (ractor::time timers, never threads).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn requeue_timer_schedules_the_next_poll_after_a_timeout() {
         let polls = Arc::new(AtomicU64::new(0));
         let interval = Duration::from_millis(50);
@@ -896,6 +900,7 @@ mod tests {
     /// actor per row (mirrors `manager.rs::ensure_commits_before_spawn_and_
     /// restart_recovers`).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn durable_rows_recover_on_supervisor_start() {
         let builds = Arc::new(AtomicU64::new(0));
         let supervisor =

@@ -923,6 +923,7 @@ mod tests {
 
     /// The base starts every provider in the order the set declares and
     /// drains them in the mirror of it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn providers_start_in_order_and_drain_in_reverse() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -941,6 +942,7 @@ mod tests {
 
     /// A declaration the plane cannot satisfy refuses at startup, naming the
     /// provider and the row: here two providers claim overlapping subtrees.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn an_unsatisfied_declaration_refuses_named() {
         const ROOTS: &[StorageRoot] = &[StorageRoot {
@@ -981,6 +983,7 @@ mod tests {
     }
 
     /// A provider whose declaration names no identity does not start.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_declaration_without_an_identity_refuses_named() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -994,6 +997,7 @@ mod tests {
     }
 
     /// One reference, one provider: a repeated declaration does not start.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_repeated_declaration_refuses_named() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1117,6 +1121,7 @@ mod tests {
     /// U8 happy path: a declared effect service is hosted as a linked actor
     /// under the zone supervisor at the composition point, answers through
     /// the hosting API, and its durable-row binding starts at revision 1.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn declared_effect_service_is_hosted_and_answers_through_the_hosting_api() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1150,6 +1155,7 @@ mod tests {
     /// mid-supervision respawns the service from its durable row, the next
     /// call succeeds, and the generational revision bumped. The pre-crash
     /// binding refuses as stale (KTD5).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn killing_a_hosted_effect_service_respawns_it_from_the_durable_row() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1212,6 +1218,7 @@ mod tests {
     /// U8 edge: a republish through the hosting API bumps the generational
     /// revision and rebuilds the actor from the new row (provider-set
     /// republish, KTD5).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn republishing_a_declared_effect_service_bumps_its_revision() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1250,6 +1257,7 @@ mod tests {
     /// A declared service identity repeated across providers refuses
     /// startup: the session layer resolves a service to its one declaring
     /// driver, so the zone cannot host two actors for one id.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_service_declared_twice_refuses_named() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1274,6 +1282,7 @@ mod tests {
 
     /// A provider that declares a service without a hosting factory refuses
     /// startup: the zone cannot host what it cannot build (fail-closed).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_declared_service_without_a_factory_refuses_named() {
         let dir = tempfile::tempdir().expect("tempdir");

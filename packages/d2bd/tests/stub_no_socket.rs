@@ -8,6 +8,7 @@ use tempfile::tempdir;
 // different crates whose Bazel rust_test rules compile a single source file each, so a
 // cross-crate #[path] share would need exports_files/srcs wiring in both packages for
 // one std-only helper.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn snapshot_directory(path: &Path) -> BTreeSet<PathBuf> {
     let Ok(entries) = std::fs::read_dir(path) else {
         return BTreeSet::new();
@@ -19,6 +20,7 @@ fn snapshot_directory(path: &Path) -> BTreeSet<PathBuf> {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn d2bd_stub_does_not_create_socket_or_runtime_state() {
     let scratch = tempdir().expect("stub scratch directory");
     let home = scratch.path().join("home");

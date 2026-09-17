@@ -11770,6 +11770,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn readable_pending_controller_bootstrap_wakes_coordinator_to_active() {
         let zone = ZoneId::parse("work").unwrap();
         let providers = test_controller_session_providers();
@@ -12169,6 +12170,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn controller_bootstrap_receiver_accepts_one_authenticated_endpoint() {
         let (sender_fd, receiver_fd) = prearmed_seqpacket_pair().unwrap();
@@ -12212,6 +12214,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn controller_bootstrap_receiver_rejects_extra_packets() {
         let (sender_fd, receiver_fd) = prearmed_seqpacket_pair().unwrap();
@@ -12333,12 +12336,14 @@ mod tests {
     /// Provider lane binds `[0x34; 32]`, so the constant `[0x22; 32]` the
     /// daemon used before admitted no credential session at all, and the
     /// controller lane keeps admitting exactly its own policy binding.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn credential_provider_evidence_comes_from_the_admitted_policy() {
         use d2b_contracts_resource::v3::identity::BindingDigest;
         use d2b_contracts_zone_session::v3::component_session::SessionErrorCode;
         use d2b_session_unix::UnixSeqpacketTransport;
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn engines(
             policy: &d2b_contracts_zone_session::v3::component_session::EndpointPolicy,
         ) -> (
@@ -12409,6 +12414,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn provider_ready_survives_a_fragment_that_precedes_the_session_driver() {
         let (initiator_fd, responder_fd) = prearmed_seqpacket_pair().unwrap();
@@ -12972,6 +12978,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn host_network_admission_serializes_replacement_and_sibling_conflicts() {
         let first = network_admission_intent(
             "123e4567-e89b-42d3-a456-426614174000",

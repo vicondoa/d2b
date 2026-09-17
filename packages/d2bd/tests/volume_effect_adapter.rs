@@ -85,6 +85,7 @@ fn adapter_root(
     adapter_root_with_options(name, false)
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn adapter_root_with_options(
     name: &str,
     preexisting_state: bool,
@@ -110,6 +111,7 @@ fn adapter_root_with_options(
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn production_controller_materializes_and_adopts_a_marker_bound_root() {
     let (base, adapter) = adapter_root("production");
     let controller = VolumeLocalController::new(VolumeLocalProfile::shipped(), &adapter, &adapter);
@@ -136,6 +138,7 @@ fn production_controller_materializes_and_adopts_a_marker_bound_root() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn production_content_status_is_published_only_after_full_readback() {
     let (base, adapter) = adapter_root("content");
     let controller = VolumeLocalController::new(VolumeLocalProfile::shipped(), &adapter, &adapter);
@@ -188,6 +191,7 @@ fn production_content_status_is_published_only_after_full_readback() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn production_network_content_materializes_and_preserves_a_foreign_marker() {
     let (base, adapter) = adapter_root("network-content");
     let controller =
@@ -319,6 +323,7 @@ fn production_network_content_materializes_and_preserves_a_foreign_marker() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn production_store_view_marker_evidence_requires_a_zero_length_file() {
     let (base, adapter) = adapter_root("store-view-marker");
     let uid = volume_uid();
@@ -359,6 +364,7 @@ fn production_store_view_marker_evidence_requires_a_zero_length_file() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn broker_owned_final_symlink_is_observed_without_metadata_repair() {
     let base = std::path::PathBuf::from(
         std::env::var_os("CARGO_TARGET_TMPDIR").unwrap_or_else(|| "target/u7-volume-tests".into()),
@@ -403,6 +409,7 @@ fn broker_owned_final_symlink_is_observed_without_metadata_repair() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn production_nix_closure_store_view_materializes_without_a_source_policy() {
     let (base, adapter) = adapter_root_with_options("nix-closure-store-view", true);
     let controller = VolumeLocalController::new(VolumeLocalProfile::shipped(), &adapter, &adapter);
@@ -436,6 +443,7 @@ fn production_nix_closure_store_view_materializes_without_a_source_policy() {
 /// broker's lock present the layout converges to `Ready`; without adopting
 /// it the Volume would stay Degraded and its attachment Pending.
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn broker_owned_sync_lock_record_converges_the_store_view_layout() {
     let (base, adapter) = adapter_root_with_options("broker-sync-lock", true);
     let record = d2b_host::hardlink_farm::SyncLockOwnerRecord::for_current_process()
@@ -470,6 +478,7 @@ fn broker_owned_sync_lock_record_converges_the_store_view_layout() {
 /// unknown payload, and a record naming a process that is gone, are both
 /// ambiguity and neither is adopted, repaired, or removed.
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn unprovable_sync_lock_owner_still_quarantines_the_store_view_layout() {
     let (base, adapter) = adapter_root_with_options("foreign-sync-lock", true);
     let mut stale = d2b_host::hardlink_farm::SyncLockOwnerRecord::for_current_process()
@@ -510,6 +519,7 @@ fn unprovable_sync_lock_owner_still_quarantines_the_store_view_layout() {
 /// The same quarantine holds for a lock that carries no record at all: the
 /// daemon-created file is adopted only because its creator recorded itself.
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn unrecorded_sync_lock_owner_still_quarantines_the_store_view_layout() {
     let (base, adapter) = adapter_root_with_options("unrecorded-sync-lock", true);
     let lock = base.join("sync.lock");
@@ -541,6 +551,7 @@ fn unrecorded_sync_lock_owner_still_quarantines_the_store_view_layout() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn foreign_marker_is_preserved_and_blocks_the_controller() {
     let (base, adapter) = adapter_root("foreign-marker");
     std::fs::write(base.join(".d2b-volume-marker"), b"foreign-marker").expect("foreign marker");

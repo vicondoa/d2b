@@ -903,6 +903,7 @@ mod tests {
     /// Only the controller-owned state Volume is ensured; the declared
     /// Process/EphemeralProcess/Endpoint rows are the bundle's.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn only_the_state_volume_is_ensured() {
         let children = RecordingChildSurface::for_device(&ResourceRef::parse(DEVICE_REF).unwrap());
         children.publish(STATE_VOLUME, ResourceStatus::Ready);
@@ -922,6 +923,7 @@ mod tests {
     /// A declared row that has not converged is retryable, a failed one is
     /// terminal.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn declared_row_phases_gate_the_effects() {
         let children = RecordingChildSurface::for_device(&ResourceRef::parse(DEVICE_REF).unwrap());
         let rows = rows(&children);
@@ -952,6 +954,7 @@ mod tests {
     /// A row owned by another Device is never read as this Device's evidence
     /// (the owner fence the durable adoption classification carried).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_foreign_owned_row_fails_closed() {
         let children = RecordingChildSurface::for_device(&ResourceRef::parse(DEVICE_REF).unwrap());
         children.publish("Process/swtpm-tpm-0", ResourceStatus::Ready);
@@ -973,6 +976,7 @@ mod tests {
     /// so a flush that failed must still fail the device path (the exact
     /// regression the phase-only gate carried).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn the_flush_gate_reads_the_one_shot_outcome_not_only_the_phase() {
         let children = RecordingChildSurface::for_device(&ResourceRef::parse(DEVICE_REF).unwrap());
         let rows = rows(&children);
@@ -1025,6 +1029,7 @@ mod tests {
     /// Removal rides the manager: both declared worker rows are retired by
     /// reference through the same child surface.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn deletion_targets_the_declared_rows() {
         let children = RecordingChildSurface::for_device(&ResourceRef::parse(DEVICE_REF).unwrap());
         let rows = rows(&children);

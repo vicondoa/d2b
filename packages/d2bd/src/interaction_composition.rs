@@ -6762,6 +6762,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn listener_stop_removes_daemon_owned_socket_paths() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("interaction.sock");
@@ -6787,6 +6788,7 @@ mod tests {
         assert!(!path.exists());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawned_listener_set_admits_through_the_reactor_and_stops() {
         let directory = tempfile::tempdir().unwrap();
@@ -6873,6 +6875,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn process_session_lookup_owns_named_stream_and_disconnects_fail_closed() {
         let directory = tempfile::tempdir().unwrap();
@@ -7045,6 +7048,7 @@ mod tests {
         drop(process_listener);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn process_session_lookup_waits_for_runtime_contention() {
         let directory = tempfile::tempdir().unwrap();
@@ -7320,6 +7324,7 @@ mod tests {
         runtimes
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn vm_start_display_reconcile_uses_the_committed_session_route() {
         let directory = tempfile::tempdir().expect("display reconciliation directory");
@@ -7620,6 +7625,7 @@ mod tests {
         TtrpcResponse::parse_from_bytes(&response[ttrpc::proto::MESSAGE_HEADER_LENGTH..]).unwrap()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn hermetic_production_composition_dispatches_committed_interactions_and_ordered_shutdown()
      {
@@ -7958,6 +7964,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn picker_materialize_rejects_guest_or_zone_without_consuming_receipt() {
         let directory = tempfile::tempdir().unwrap();
@@ -8136,6 +8143,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn provider_transport_authorizes_each_committed_guest_and_preserves_display() {
         let directory = tempfile::tempdir().unwrap();
@@ -8374,6 +8382,7 @@ mod tests {
         assert_ne!(wrong.subject_uid(), &wrong_uid);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn display_only_composition_is_ready_from_committed_wayland_identity() {
         let directory = tempfile::tempdir().unwrap();
@@ -8514,6 +8523,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn listener_handler_reservations_are_bounded() {
         let active_handlers = Arc::new(AtomicUsize::new(0));
         let mut reservations = Vec::with_capacity(MAX_INTERACTION_HANDLERS + 16);
@@ -8542,6 +8552,7 @@ mod tests {
     ///
     /// `run_effect` drives the effect on the ambient daemon runtime (U13),
     /// so the released-slot call needs a runtime context.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn effects_past_the_admission_cap_are_refused() {
         let held: Vec<_> = (0..MAX_INFLIGHT_EFFECTS)
@@ -8561,6 +8572,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn completed_listener_handlers_are_reaped() {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let handler = tokio::spawn(async move {
@@ -8577,6 +8589,7 @@ mod tests {
         assert!(handlers.lock().await.is_empty());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn hermetic_listener_authenticates_dispatches_finalizes_and_refuses_replay() {
         let directory = tempfile::tempdir().unwrap();
@@ -8703,6 +8716,7 @@ mod tests {
         assert!(!path.exists());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn unix_listener_observes_real_peer_credentials_before_session_admission() {
         let directory = tempfile::tempdir().unwrap();

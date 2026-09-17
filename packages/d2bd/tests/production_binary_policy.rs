@@ -1,5 +1,6 @@
 use std::{env, fs, path::PathBuf};
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn read_required_d2bd_source(relative: &str) -> String {
     let manifest_root =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()));
@@ -19,6 +20,7 @@ fn read_required_d2bd_source(relative: &str) -> String {
 
 /// Read one source file from a sibling package: the family crates now own the
 /// drivers, so a policy assertion about a moved driver reads it there.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn read_required_package_source(relative_to_packages: &str) -> String {
     let manifest_root =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()));
@@ -37,6 +39,7 @@ fn read_required_package_source(relative_to_packages: &str) -> String {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn production_binary_contains_no_peer_override_surface() {
     let binary = fs::read(env!("CARGO_BIN_EXE_d2bd")).expect("read production d2bd binary");
     let rendered = String::from_utf8_lossy(&binary);

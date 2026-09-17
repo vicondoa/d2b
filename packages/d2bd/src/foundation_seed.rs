@@ -1323,6 +1323,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn the_seed_commits_the_policy_rows_in_declaration_order() {
         let fixture = make_fixture();
         let commands = vec![command("virtiofsd-worker", "Role/operation-publisher")];
@@ -1377,6 +1378,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn an_unresolved_command_role_ref_is_refused() {
         let fixture = make_fixture();
         let error = run(
@@ -1396,6 +1398,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn unresolved_seccomp_and_principal_refs_are_refused() {
         let fixture = make_fixture();
         let commands = vec![command("virtiofsd-worker", "Role/operation-publisher")];
@@ -1439,6 +1442,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn materialization_requires_the_controller_self_binding() {
         let fixture = make_fixture();
         let commands = vec![command("virtiofsd-worker", "Role/operation-publisher")];
@@ -1474,6 +1478,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn materialization_is_not_authorized_by_an_operator_binding() {
         let fixture = make_fixture();
         let mut declarations = make_declarations(
@@ -1507,6 +1512,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn undeclared_verbs_and_unknown_types_are_refused() {
         let fixture = make_fixture();
         let mut declarations =
@@ -1568,6 +1574,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn self_binding_scope_escapes_and_scope_outside_the_role_are_refused() {
         let fixture = make_fixture();
         let mut declarations = make_declarations(

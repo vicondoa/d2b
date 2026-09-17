@@ -1600,6 +1600,7 @@ mod tests {
     /// The ACA framework control/lease ports drive the controller through
     /// one progressing pass to `Ready` and converge its finalizer.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn aca_controller_contract_invokes_controller_and_finalizes() {
         let profile = aca_runtime::AcaSandboxProfile::new(
             aca_runtime::AcaProfileId::parse("default").unwrap(),
@@ -1675,6 +1676,7 @@ mod tests {
     /// The AzureVM framework effect/credential ports drive the controller to
     /// `Ready` and converge its finalizer through the bounded poll loop.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn azure_vm_controller_contract_invokes_controller_and_finalizes() {
         let opaque = |value: &str| d2b_contracts::OpaqueAzureRef::parse(value).unwrap();
         let config = azure_vm_runtime::AzureVmConfig {

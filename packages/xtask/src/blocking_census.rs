@@ -984,7 +984,7 @@ pub fn run(
             }
         }
         if reported == 0 {
-            println!("{:72} {:>4} {:>4} {:>6}  {}", "(no uses of any denied API)", 0, 0, 0, "-");
+            println!("{:72} {:>4} {:>4} {:>6}  -", "(no uses of any denied API)", 0, 0, 0);
         }
         println!(
             "suppressions: {blanket} blanket allow(s), {per_site} per-site allow(s)/expect(s) of banned-API lints"
@@ -1263,7 +1263,7 @@ pub fn other() {}
             .iter()
             .find(|site| site.expect && site.reason.as_deref() == Some("cfg(test) helper"))
             .expect("expect with reason");
-        assert!(helper.blanket == false);
+        assert!(!helper.blanket);
         let hold = per_site
             .iter()
             .find(|site| site.lint == "clippy::await_holding_lock")

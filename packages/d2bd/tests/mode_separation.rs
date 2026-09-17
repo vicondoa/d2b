@@ -7,6 +7,7 @@ use d2bd_runtime::{
 };
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn host_and_guest_modes_are_process_start_surfaces() {
     let host = Command::new(env!("CARGO_BIN_EXE_d2bd"))
         .args(["host", "--help"])
@@ -47,6 +48,7 @@ fn host_and_guest_compositions_share_the_artifact_family_but_not_effect_profile(
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn guest_identity_validation_uses_kernel_boot_id_not_writable_guest_state() {
     let root = std::env::current_dir()
         .expect("current directory")

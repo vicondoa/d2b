@@ -2801,6 +2801,7 @@ mod tests {
     /// authority list: no listed type is missing a driver, no driver serves a
     /// type outside the list, and every provider drains through the base in
     /// the reverse of the order it started.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn started_providers_cover_the_converted_type_authority() {
         let (_dir, inputs, _readiness) = test_inputs();
@@ -2816,6 +2817,7 @@ mod tests {
 
     /// The committed startup order is the order the registry has been
     /// assembled in since the family moves landed; drain is its mirror.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn providers_start_in_the_committed_order_and_drain_in_reverse() {
         let (_dir, inputs, _readiness) = test_inputs();
@@ -2866,6 +2868,7 @@ mod tests {
 
     /// A plane's providers drain in the mirror of their startup order, and
     /// the plane reports the same sequence it ran.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn the_plane_drains_its_providers() {
         let (_dir, inputs, _readiness) = test_inputs();
@@ -2903,6 +2906,7 @@ mod tests {
     /// published into the registry the production Process effects consult
     /// before the manager spawns any resource actor; a Provider the authority
     /// did not retain stays unpublished so its controller rows refuse closed.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn committed_provider_identities_publish_before_the_manager_starts() {
         let (_dir, mut inputs, _readiness) = test_inputs();
@@ -2934,6 +2938,7 @@ mod tests {
 
     /// Assembly constructs with fake effects and the readiness gate opens
     /// only when the initial load completes.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn assembly_constructs_and_readiness_follows_the_checklist() {
         let (_dir, inputs, readiness) = test_inputs();
@@ -2956,6 +2961,7 @@ mod tests {
     /// belongs to a derived child committed after the plane's durable loads
     /// (the manager mints the VolumeBinding) still resolves, by identity and
     /// by producer ref, through the store on a lookup miss.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn socket_target_lookup_loads_derived_binding_rows_from_the_store() {
         let (_dir, inputs, _readiness) = test_inputs();
@@ -3026,6 +3032,7 @@ mod tests {
 
     /// U10: every bundle row routes through the manager with provenance Nix;
     /// the retired Phase A partition leaves no row behind for a second plane.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn bundle_ingest_applies_every_row_to_the_manager() {
         let (_dir, inputs, _readiness) = test_inputs();
@@ -3073,6 +3080,7 @@ mod tests {
     /// no registered driver still commits durably through the manager (its
     /// F1 durability boundary) but fails the ingest, where the deleted Phase A
     /// partition used to pass the row through to the redb store.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn bundle_ingest_refuses_a_row_without_a_registered_driver() {
         let (_dir, inputs, _readiness) = test_inputs();
@@ -3101,6 +3109,7 @@ mod tests {
 
     /// Nix applies never clobber API-provenance rows (R26): the partition
     /// leaves them alone and the durable row keeps its provenance and spec.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn api_provenance_rows_survive_a_nix_re_apply() {
         let (_dir, inputs, _readiness) = test_inputs();
@@ -3142,6 +3151,7 @@ mod tests {
     }
 
     /// Configuration changes mark removed Nix resources deleting (R26).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn removed_nix_rows_are_marked_deleting() {
         let (_dir, inputs, _readiness) = test_inputs();
@@ -3184,6 +3194,7 @@ mod tests {
     /// wrote this row to the pre-v3 store, where no actor exists - the
     /// committed row now reaches the driver's launch effect, which is what
     /// the fixture's nested-VMM socket wait stands on.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn controller_committed_process_child_reaches_the_process_driver() {
         let (_dir, mut inputs, _readiness) = test_inputs();
@@ -3287,6 +3298,7 @@ mod tests {
     /// where the union of every guest's Process/Endpoint/Volume rows crossed
     /// 256 - must still answer exactly this session owner's children, and
     /// another owner's rows must never appear in (or bound) the answer.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn session_child_rows_are_owner_scoped() {
         let (_dir, inputs, _readiness) = test_inputs();
@@ -3382,6 +3394,7 @@ mod tests {
     /// `Ready` from. The plane's probe reads that row through the published
     /// plane table, so the Endpoint actor publishes the same evidence the
     /// guest's provider controller gates its Guest readiness on.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn guest_control_endpoints_are_realized_with_the_committed_vmm_process() {
         let (_dir, mut inputs, _readiness) = test_inputs();
@@ -3469,6 +3482,7 @@ mod tests {
     /// search permission on the ancestors (the chain is deliberately
     /// traversal-only for the daemon) and must still hand back the leaf.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn anchored_walk_needs_only_search_on_ancestors() {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
         let dir = tempfile::tempdir().expect("tempdir");
@@ -3571,6 +3585,7 @@ mod tests {
 
     /// A zone-local plane is not the foundation plane: a system-homed row is
     /// refused terminally, naming the type and the caller.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_zone_local_plane_refuses_a_system_homed_row() {
         let (_dir, inputs, _readiness) = test_inputs();
@@ -3604,6 +3619,7 @@ mod tests {
 
     /// The foundation plane commits the seeded policy rows before its manager
     /// starts, and admits the writes only it may make.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn the_foundation_plane_commits_the_seed_and_admits_the_system_rows() {
         let (_dir, mut inputs, _readiness) = test_inputs();
@@ -3753,6 +3769,7 @@ mod tests {
     /// none of them, so this pins that the committed policy compile and the
     /// row reads reach the system Zone - and that the grant the chain exists
     /// for (the controller creating its operations) is installed.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn the_seeded_system_vocabulary_resolves_through_the_policy_read_path() {
         use d2b_resource_api::authz::{

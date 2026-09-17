@@ -94,6 +94,7 @@ async fn rejected_parent_handshake(
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn guest_resource_runtime_is_target_local() {
     let runtime = GuestResourceRuntime::new(identity(1))
         .expect("Guest resource runtime");
@@ -101,6 +102,7 @@ async fn guest_resource_runtime_is_target_local() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn guest_runtime_owns_one_target_local_resource_runtime() {
     let (runtime, _state_dir) = runtime().await;
     assert!(runtime.resource_runtime().is_target_local());
@@ -157,6 +159,7 @@ fn old_component_session_prelude_is_rejected() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn reconnect_revokes_stale_assignments_and_drops_the_new_lease() {
     let (runtime, _state_dir) = runtime().await;
     let first = runtime
@@ -190,6 +193,7 @@ async fn reconnect_revokes_stale_assignments_and_drops_the_new_lease() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn disconnected_generation_cannot_be_reused() {
     let (runtime, _state_dir) = runtime().await;
     let lease = runtime
@@ -203,6 +207,7 @@ async fn disconnected_generation_cannot_be_reused() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn wrong_component_session_purpose_role_and_service_fail_closed() {
     for mismatch in ["purpose", "role", "service"] {
         let (runtime, _state_dir) = runtime().await;
@@ -219,6 +224,7 @@ async fn wrong_component_session_purpose_role_and_service_fail_closed() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn peer_and_zone_binding_substitution_fail_closed() {
     let (first_runtime, _state_dir) = runtime().await;
     let policy = identity(1).endpoint_policy();
@@ -234,6 +240,7 @@ async fn peer_and_zone_binding_substitution_fail_closed() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn authenticated_guest_session_binds_readiness_and_stale_binding_fails_closed() {
     let (runtime, _state_dir) = runtime().await;
     let previous = runtime

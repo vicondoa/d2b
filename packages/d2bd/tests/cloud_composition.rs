@@ -56,6 +56,7 @@ impl AcaCredentialLeaseClient for FakeAcaLease {
         ))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn revoke(&self, _: &AcaCredentialLease) -> Result<(), AcaControlError> {
         self.state.lock().unwrap().revoked += 1;
         Ok(())
@@ -66,6 +67,7 @@ struct FakeAcaControl {
     state: Arc<Mutex<AcaState>>,
 }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[async_trait]
 impl AcaControl for FakeAcaControl {
     async fn health(
@@ -82,6 +84,7 @@ impl AcaControl for FakeAcaControl {
             .unwrap_or(AcaControlHealth::Ready))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn find_sandboxes(
         &self,
         _: &AcaCredentialLease,
@@ -454,6 +457,7 @@ fn cloud_controller(
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn cloud_composition_reaches_ready_through_production_controllers() {
     let mut cloud = cloud_controller(CloudMode::Ready);
     cloud.register().await.unwrap();
@@ -490,6 +494,7 @@ async fn cloud_composition_reaches_ready_through_production_controllers() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn cloud_composition_fails_closed_on_ambiguous_or_failed_effects() {
     let mut cloud = cloud_controller(CloudMode::Failed);
     cloud.register().await.unwrap();
@@ -527,6 +532,7 @@ async fn cloud_composition_fails_closed_on_ambiguous_or_failed_effects() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn cloud_composition_requires_process_provider_liveness_for_ready() {
     let mut cloud = cloud_controller(CloudMode::ProcessAbsent);
     cloud.register().await.unwrap();

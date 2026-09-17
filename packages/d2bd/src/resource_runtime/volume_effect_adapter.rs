@@ -1907,6 +1907,7 @@ mod tests {
     /// capability is needed, and the encoded access/default ACLs must be what
     /// the kernel stores (mask = the group-class union, mirrored in the mode).
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn declared_acls_are_applied_to_the_owned_entry() {
         let dir = tempfile::tempdir().expect("volume root");
         let root = File::open(dir.path()).expect("open root");
@@ -1984,6 +1985,7 @@ mod tests {
     /// Entries without declared grants are a no-op, and an unresolvable
     /// principal is a spec failure rather than a silent skip.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn acl_application_fails_closed_on_unresolved_principals() {
         let dir = tempfile::tempdir().expect("volume root");
         let root = File::open(dir.path()).expect("open root");

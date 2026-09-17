@@ -312,6 +312,7 @@ mod tests {
     use d2b_provider_system_core::{HostCapabilityClass, HostProbeEffectPort};
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn production_host_probe_returns_bounded_host_observations() {
         let probe = super::HostProbe::current();
         let metadata = probe

@@ -110,6 +110,7 @@ impl FilesystemVolume {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn ensure_parent(path: &Path) -> io::Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -117,6 +118,7 @@ impl FilesystemVolume {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn provision(&self, entry: &d2b_provider_volume_local::EntryRequest) -> io::Result<()> {
         let path = self.entry_path(entry.declared().path());
         Self::ensure_parent(&path)?;
@@ -131,6 +133,7 @@ impl FilesystemVolume {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn remove(&self, entry: &d2b_provider_volume_local::EntryRequest) -> io::Result<()> {
         let path = self.entry_path(entry.declared().path());
         if !path.exists() {
@@ -142,6 +145,7 @@ impl FilesystemVolume {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn matches_type(path: &Path, entry_type: EntryType) -> io::Result<bool> {
         let metadata = fs::symlink_metadata(path)?;
         Ok(match entry_type {
@@ -357,6 +361,7 @@ impl FilesystemNetworkBoundary {
         file.sync_all().map_err(|_| NetworkEffectError::Transient)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn events(&self) -> Vec<String> {
         fs::read_to_string(self.root.join("events.log"))
             .unwrap_or_default()
@@ -823,6 +828,7 @@ impl Drop for FilesystemTpm {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn device_tpm_zone_activation_ready_and_state_preserving_removal() {
     let directory = tempfile::tempdir().expect("TPM state directory");
     let effects = FilesystemTpm::new(directory.path());
@@ -957,6 +963,7 @@ struct RealCloudHypervisorResourceSession {
 }
 
 impl RealCloudHypervisorResourceSession {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         fs::create_dir_all(&root).expect("create Cloud Hypervisor Resource API root");
@@ -976,6 +983,7 @@ impl RealCloudHypervisorResourceSession {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn set_guest(&self, resource: &Wave6Resource) -> Result<(), CloudHypervisorResourceApiError> {
         let guest = cloud_guest(
             resource.resource_ref.clone(),
@@ -989,6 +997,7 @@ impl RealCloudHypervisorResourceSession {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn set_dependencies_ready(&self, ready: bool) -> Result<(), CloudHypervisorResourceApiError> {
         *self
             .dependencies_ready
@@ -997,6 +1006,7 @@ impl RealCloudHypervisorResourceSession {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn start_process(&self) -> Result<(), CloudHypervisorResourceApiError> {
         let mut process = self
             .process
@@ -1023,6 +1033,7 @@ impl RealCloudHypervisorResourceSession {
             .map_err(|_| CloudHypervisorResourceApiError::Transport)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stop_process(&self) -> Result<(), CloudHypervisorResourceApiError> {
         let mut process = self
             .process
@@ -1043,6 +1054,7 @@ impl RealCloudHypervisorResourceSession {
             .map_err(|_| CloudHypervisorResourceApiError::Transport)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn process_running(&self) -> Result<bool, CloudHypervisorResourceApiError> {
         let mut process = self
             .process
@@ -1062,6 +1074,7 @@ impl RealCloudHypervisorResourceSession {
         Ok(true)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn remove_guest(&self) -> Result<(), CloudHypervisorResourceApiError> {
         self.stop_process()?;
         self.children
@@ -1072,6 +1085,7 @@ impl RealCloudHypervisorResourceSession {
             .map_err(|_| CloudHypervisorResourceApiError::Transport)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn lifecycle_updates(&self) -> Result<Vec<DesiredLifecycle>, CloudHypervisorResourceApiError> {
         Ok(self
             .lifecycle_updates
@@ -1376,6 +1390,7 @@ fn cloud_controller(session: Arc<RealCloudHypervisorResourceSession>) -> CloudCo
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn cloud_hypervisor_zone_waits_dependencies_reaches_ready_and_adopts_process() {
     let directory = tempfile::tempdir().expect("Cloud Hypervisor Resource API state directory");
     let session = Arc::new(RealCloudHypervisorResourceSession::new(directory.path()));
@@ -1436,6 +1451,7 @@ pub struct Wave6RealBoundary {
 }
 
 impl Wave6RealBoundary {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         fs::create_dir_all(&root).expect("create Wave 6 provider effect root");
@@ -1509,6 +1525,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn reconcile_device_tpm(
         &self,
         _resource: &Wave6Resource,
@@ -1531,6 +1548,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         Ok(Wave6ReconcileResult::Ready)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn reconcile_cloud_hypervisor_guest(
         &self,
         resource: &Wave6Resource,
@@ -1575,6 +1593,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn adopt_after_restart(
         &self,
         resources: &Wave6ResourceSet,
@@ -1643,6 +1662,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn remove_cloud_hypervisor_guest(
         &self,
         _resource: &Wave6Resource,
@@ -1732,6 +1752,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn remove_device_tpm(
         &self,
         _resource: &Wave6Resource,

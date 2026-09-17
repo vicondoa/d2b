@@ -593,6 +593,7 @@ mod tests {
     const FRAME_LIMIT_BYTES: usize = 64 * 1024;
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_guest_enrolls_over_the_bound_endpoint() {
         let root =
             std::env::temp_dir().join(format!("d2b-zone-enrollment-serve-{}", std::process::id()));
@@ -678,6 +679,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_stale_endpoint_socket_is_replaced_and_a_live_one_is_left_alone() {
         let root = std::env::temp_dir().join(format!("d2b-zone-enrollment-{}", std::process::id()));
         tokio::fs::create_dir_all(&root).await.expect("a temporary root");
@@ -700,6 +702,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_non_socket_endpoint_path_is_refused_rather_than_removed() {
         let root =
             std::env::temp_dir().join(format!("d2b-zone-enrollment-file-{}", std::process::id()));

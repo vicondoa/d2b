@@ -4847,6 +4847,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn controller_bootstrap_wait_rearms_on_endpoint_readiness() {
         use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
 
@@ -4871,6 +4872,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn controller_bootstrap_wait_fails_without_endpoint_readiness() {
         use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
 

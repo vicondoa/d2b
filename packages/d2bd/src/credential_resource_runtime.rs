@@ -481,6 +481,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn provider_route_generation_mismatch_is_uncertain() {
         let provider_ref = ResourceRef::parse(MI_PROVIDER).unwrap();
         let driver = Arc::new(FakeCredentialDriver::new(9));
@@ -502,6 +503,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn component_session_revocation_rebinds_on_rejoin_with_the_same_durable_identity() {
         let provider_ref = ResourceRef::parse(MI_PROVIDER).unwrap();
         let registry = CredentialSessionRegistry::default();
@@ -615,6 +617,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn scoped_resource_client_rejects_wrong_guest_or_reconnect_before_resource_read() {
         let zone = ZoneId::parse("dev").unwrap();
         let route = d2b_session::AuthenticatedSessionRouteBinding::for_test(

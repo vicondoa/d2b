@@ -1,5 +1,6 @@
 use std::{fs, path::{Path, PathBuf}, process::Command};
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn scratch(name: &str) -> PathBuf {
     let root = std::env::current_dir()
         .expect("current directory")
@@ -32,6 +33,7 @@ fn guest_args(root: &Path) -> Vec<String> {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn guest_validation_never_materializes_host_store_public_or_realm_surfaces() {
     let root = scratch("surfaces");
     fs::write(root.join("boot-id"), "boot-id-u3\n").expect("write boot identity");
@@ -53,6 +55,7 @@ fn guest_validation_never_materializes_host_store_public_or_realm_surfaces() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn guest_mode_rejects_host_style_config_flags_at_process_start() {
     let output = Command::new(env!("CARGO_BIN_EXE_d2bd"))
         .args([
