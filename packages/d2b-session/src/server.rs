@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use async_trait::async_trait;
@@ -27,7 +27,7 @@ struct ActiveInboundCall {
     cancellation: Cancellation,
 }
 
-type ActiveInboundCalls = Arc<Mutex<BTreeMap<u32, ActiveInboundCall>>>;
+type ActiveInboundCalls = Arc<tokio::sync::Mutex<BTreeMap<u32, ActiveInboundCall>>>;
 
 struct CancellableMethodHandler {
     inner: Box<dyn MethodHandler + Send + Sync>,
@@ -40,7 +40,7 @@ impl MethodHandler for CancellableMethodHandler {
         let cancellation = self
             .active
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .await
             .get(&context.mh.stream_id)
             .map(|active| active.cancellation.clone())
             .ok_or_else(|| ttrpc::Error::Others("component-session-call-inactive".to_owned()))?;
@@ -65,7 +65,7 @@ impl StreamHandler for CancellableStreamHandler {
         let cancellation = self
             .active
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .await
             .get(&context.mh.stream_id)
             .map(|active| active.cancellation.clone())
             .ok_or_else(|| ttrpc::Error::Others("component-session-call-inactive".to_owned()))?;
@@ -221,7 +221,7 @@ async fn serve_ttrpc_services_inner(
         ttrpc::r#async::transport::Listener::new(futures_util::stream::once(async move {
             Ok::<_, std::io::Error>(server_transport)
         }));
-    let active = Arc::new(Mutex::new(BTreeMap::<u32, ActiveInboundCall>::new()));
+    let active = Arc::new(tokio::sync::Mutex::new(BTreeMap::<u32, ActiveInboundCall>::new()));
     let mut server = ttrpc::r#async::Server::new()
         .add_listener(listener)
         .register_service(with_cancellation_context(services, &active));
@@ -247,7 +247,7 @@ async fn serve_ttrpc_services_inner(
                 .map_err(|_| SessionServerError::Session)?;
             receive_active
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .await
                 .insert(
                     header.stream_id,
                     ActiveInboundCall {
@@ -264,7 +264,7 @@ async fn serve_ttrpc_services_inner(
             {
                 receive_active
                     .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .await
                     .remove(&header.stream_id);
                 let _ = receive_driver.remove_inbound_call(request_id).await;
                 tracing::warn!(
@@ -305,7 +305,7 @@ async fn serve_ttrpc_services_inner(
                 .map_err(|_| SessionServerError::Transport)?;
             let active_call = send_active
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .await
                 .remove(&header.stream_id);
             let Some(active_call) = active_call else {
                 return Err(SessionServerError::Frame);
@@ -341,9 +341,7 @@ async fn serve_ttrpc_services_inner(
         result = send => result,
     };
     let terminal = {
-        let mut active = active
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut active = active.lock().await;
         std::mem::take(&mut *active)
     };
     if !terminal.is_empty() {
@@ -417,13 +415,10 @@ pub fn rewrite_ttrpc_stream_id(frame: &mut [u8], stream_id: u32) -> Result<(), S
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex as StdMutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use protobuf::Message;
-    use tokio::sync::Notify;
+    use tokio::sync::{Mutex, Notify};
     use ttrpc::proto::Request;
 
     use super::*;
@@ -474,9 +469,9 @@ mod tests {
     }
 
     struct BlockingDriver {
-        frame: StdMutex<Option<Vec<u8>>>,
-        registry: StdMutex<RequestRegistry>,
-        cancellation: StdMutex<Option<Cancellation>>,
+        frame: Mutex<Option<Vec<u8>>>,
+        registry: Mutex<RequestRegistry>,
+        cancellation: Mutex<Option<Cancellation>>,
         sends: AtomicUsize,
         completed: Notify,
     }
@@ -484,25 +479,25 @@ mod tests {
     impl BlockingDriver {
         fn new(frame: Vec<u8>) -> Self {
             Self {
-                frame: StdMutex::new(Some(frame)),
-                registry: StdMutex::new(RequestRegistry::new(1).unwrap()),
-                cancellation: StdMutex::new(None),
+                frame: Mutex::new(Some(frame)),
+                registry: Mutex::new(RequestRegistry::new(1).unwrap()),
+                cancellation: Mutex::new(None),
                 sends: AtomicUsize::new(0),
                 completed: Notify::new(),
             }
         }
 
-        fn cancel_handler(&self) {
+        async fn cancel_handler(&self) {
             self.cancellation
                 .lock()
-                .unwrap()
+                .await
                 .as_ref()
                 .expect("inbound call registered")
                 .cancel();
         }
 
-        fn active_requests(&self) -> usize {
-            self.registry.lock().unwrap().active()
+        async fn active_requests(&self) -> usize {
+            self.registry.lock().await.active()
         }
     }
 
@@ -513,7 +508,7 @@ mod tests {
         }
 
         async fn receive_ttrpc(&self) -> SessionResult<Vec<u8>> {
-            if let Some(frame) = self.frame.lock().unwrap().take() {
+            if let Some(frame) = self.frame.lock().await.take() {
                 return Ok(frame);
             }
             std::future::pending().await
@@ -528,23 +523,23 @@ mod tests {
             &self,
             request_id: RequestId,
         ) -> SessionResult<Cancellation> {
-            let cancellation = self.registry.lock().unwrap().register(request_id)?;
-            *self.cancellation.lock().unwrap() = Some(cancellation.clone());
+            let cancellation = self.registry.lock().await.register(request_id)?;
+            *self.cancellation.lock().await = Some(cancellation.clone());
             Ok(cancellation)
         }
 
         async fn mark_inbound_dispatched(&self, request_id: RequestId) -> SessionResult<()> {
-            self.registry.lock().unwrap().mark_dispatched(&request_id)
+            self.registry.lock().await.mark_dispatched(&request_id)
         }
 
         async fn complete_inbound_call(&self, request_id: RequestId) -> SessionResult<bool> {
-            let completed = self.registry.lock().unwrap().complete(&request_id);
+            let completed = self.registry.lock().await.complete(&request_id);
             self.completed.notify_one();
             Ok(completed)
         }
 
         async fn remove_inbound_call(&self, request_id: RequestId) -> SessionResult<bool> {
-            Ok(self.registry.lock().unwrap().remove(&request_id))
+            Ok(self.registry.lock().await.remove(&request_id))
         }
     }
 
@@ -617,6 +612,9 @@ mod tests {
         (driver, serving)
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn service_cancellation_reaches_handler_and_suppresses_late_response() {
         let started = Arc::new(Notify::new());
@@ -636,7 +634,7 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
             .await
             .expect("handler starts");
-        driver.cancel_handler();
+        driver.cancel_handler().await;
         tokio::time::timeout(std::time::Duration::from_secs(1), observed.notified())
             .await
             .expect("handler observes cancellation");
@@ -652,6 +650,9 @@ mod tests {
         let error = serving.await.unwrap_err();
         assert!(error.is_cancelled());
     }
+
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
     #[tokio::test]
     async fn stream_cancellation_reaches_handler_suppresses_response_and_cleans_up() {
@@ -674,7 +675,7 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
             .await
             .expect("stream handler starts");
-        driver.cancel_handler();
+        driver.cancel_handler().await;
         tokio::time::timeout(std::time::Duration::from_secs(1), observed.notified())
             .await
             .expect("stream handler observes cancellation");
@@ -686,7 +687,7 @@ mod tests {
         .await
         .expect("cancelled stream response is completed locally");
         assert_eq!(driver.sends.load(Ordering::Acquire), 0);
-        assert_eq!(driver.active_requests(), 0);
+        assert_eq!(driver.active_requests().await, 0);
 
         serving.abort();
         let error = serving.await.unwrap_err();

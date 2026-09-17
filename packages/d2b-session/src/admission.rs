@@ -1919,6 +1919,9 @@ mod tests {
         RequestId::new(vec![9; 16]).unwrap()
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn cancellation_schedules_local_completion_before_delivery() {
         let driver = Arc::new(MockCancellationDriver {
@@ -1933,6 +1936,9 @@ mod tests {
         handle.cancel(request_id()).await.unwrap();
         assert_eq!(driver.local_complete_calls.load(Ordering::Acquire), 1);
     }
+
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
     #[tokio::test]
     async fn cancellation_propagates_delivery_failure_after_local_cleanup() {

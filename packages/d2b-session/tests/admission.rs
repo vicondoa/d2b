@@ -40,6 +40,9 @@ impl SessionRegistrationCapability<()> for TestRegistrationCapability {
     }
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn unpolled_cancellation_on_real_driver_reclaims_request_for_reuse() {
     let zone = ZoneId::parse("work").unwrap();
@@ -95,6 +98,9 @@ async fn unpolled_cancellation_on_real_driver_reclaims_request_for_reuse() {
     assert!(reused, "unpolled cancellation did not reclaim the request");
     assert!(ttrpc.complete(replacement_id).await.unwrap());
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn failed_cancellation_delivery_on_real_driver_reclaims_request_for_reuse() {
@@ -590,6 +596,9 @@ fn session_acceptor_for_subject(
     .unwrap()
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn native_rbac_connect_and_invoke_are_executed() {
     let zone = ZoneId::parse("work").unwrap();
@@ -616,6 +625,9 @@ async fn native_rbac_connect_and_invoke_are_executed() {
     assert_eq!(permit.request().verb(), SessionVerb::Invoke);
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn authenticated_route_binding_retains_purpose_class_and_endpoint_roles() {
     let zone = ZoneId::parse("work").unwrap();
@@ -637,6 +649,9 @@ async fn authenticated_route_binding_retains_purpose_class_and_endpoint_roles() 
         policy.transport_binding.transport
     );
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn admitted_session_retains_transport_and_consumes_send_permits() {
@@ -735,6 +750,9 @@ async fn admitted_session_retains_transport_and_consumes_send_permits() {
     assert_eq!(session.receive_ttrpc().await.unwrap(), b"inbound-frame");
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn cross_zone_subject_fails_before_connect_mint() {
     let expected_zone = ZoneId::parse("work").unwrap();
@@ -750,6 +768,9 @@ async fn cross_zone_subject_fails_before_connect_mint() {
     .unwrap_err();
     assert_eq!(error.code(), SessionErrorCode::SubjectMismatch);
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn bootstrap_identity_is_consumed_through_handshake_and_session_admission() {
@@ -791,6 +812,9 @@ async fn bootstrap_identity_is_consumed_through_handshake_and_session_admission(
     );
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn policy_revision_change_revokes_new_work() {
     let zone = ZoneId::parse("work").unwrap();
@@ -812,6 +836,9 @@ async fn policy_revision_change_revokes_new_work() {
         SessionErrorCode::PolicyDenied
     );
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn native_rbac_relay_mints_only_for_a_distinct_next_zone() {
@@ -853,6 +880,9 @@ async fn native_rbac_relay_mints_only_for_a_distinct_next_zone() {
         SessionVerb::Relay
     );
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn forged_evidence_class_is_rejected_before_authority() {

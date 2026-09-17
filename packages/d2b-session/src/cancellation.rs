@@ -3,8 +3,8 @@ use std::{
     fmt,
     future::Future,
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -18,15 +18,15 @@ use crate::{Result, SessionError};
 struct CancellationInner {
     cancelled: AtomicBool,
     notify: Notify,
-    admission: Mutex<AdmissionState>,
+    /// Admission state as lock-free atomics (plan U19): the admission counter
+    /// must be touchable from `WriteAdmission::drop` (synchronous by
+    /// construction), so a lock has no async form there. `revoked` and
+    /// `ordered_revocation` are set once at revocation; `active` counts
+    /// writer admissions that have not yet dropped.
+    revoked: AtomicBool,
+    ordered_revocation: AtomicBool,
+    active: AtomicUsize,
     drained: Notify,
-}
-
-#[derive(Default)]
-struct AdmissionState {
-    revoked: bool,
-    ordered_revocation: bool,
-    active: usize,
 }
 
 #[derive(Clone)]
@@ -40,7 +40,9 @@ impl Cancellation {
             inner: Arc::new(CancellationInner {
                 cancelled: AtomicBool::new(false),
                 notify: Notify::new(),
-                admission: Mutex::new(AdmissionState::default()),
+                revoked: AtomicBool::new(false),
+                ordered_revocation: AtomicBool::new(false),
+                active: AtomicUsize::new(0),
                 drained: Notify::new(),
             }),
         }
@@ -51,20 +53,12 @@ impl Cancellation {
     }
 
     fn cancel_with_order(&self, ordered_revocation: bool) -> bool {
-        let first = {
-            let mut admission = self
-                .inner
-                .admission
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            admission.revoked = true;
-            let first = !self.inner.cancelled.swap(true, Ordering::AcqRel);
-            if first {
-                admission.ordered_revocation = ordered_revocation;
-            }
-            first
-        };
+        self.inner.revoked.store(true, Ordering::Release);
+        let first = !self.inner.cancelled.swap(true, Ordering::AcqRel);
         if first {
+            self.inner
+                .ordered_revocation
+                .store(ordered_revocation, Ordering::Release);
             self.inner.notify.notify_waiters();
         }
         first
@@ -80,14 +74,7 @@ impl Cancellation {
                 let drained = cancellation.inner.drained.notified();
                 tokio::pin!(drained);
                 drained.as_mut().enable();
-                if cancellation
-                    .inner
-                    .admission
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .active
-                    == 0
-                {
+                if cancellation.inner.active.load(Ordering::Acquire) == 0 {
                     return first;
                 }
                 drained.as_mut().await;
@@ -110,29 +97,17 @@ impl Cancellation {
     }
 
     pub(crate) fn admit_write(&self) -> Option<WriteAdmission> {
-        let mut admission = self
-            .inner
-            .admission
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if admission.revoked {
+        if self.inner.revoked.load(Ordering::Acquire) {
             return None;
         }
-        admission.active = admission
-            .active
-            .checked_add(1)
-            .expect("bounded writer admission count cannot overflow");
+        let _ = self.inner.active.fetch_add(1, Ordering::AcqRel);
         Some(WriteAdmission {
             inner: Arc::clone(&self.inner),
         })
     }
 
     pub(crate) fn preserves_admitted_write(&self) -> bool {
-        self.inner
-            .admission
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .ordered_revocation
+        self.inner.ordered_revocation.load(Ordering::Acquire)
     }
 }
 
@@ -142,16 +117,8 @@ pub(crate) struct WriteAdmission {
 
 impl Drop for WriteAdmission {
     fn drop(&mut self) {
-        let drained = {
-            let mut admission = self
-                .inner
-                .admission
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            admission.active -= 1;
-            admission.active == 0 && admission.revoked
-        };
-        if drained {
+        let active = self.inner.active.fetch_sub(1, Ordering::AcqRel) - 1;
+        if active == 0 && self.inner.revoked.load(Ordering::Acquire) {
             self.inner.drained.notify_waiters();
         }
     }

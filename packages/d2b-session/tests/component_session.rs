@@ -2,7 +2,7 @@ use std::{
     any::Any,
     collections::VecDeque,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -686,6 +686,9 @@ fn deadline_intersects_wall_monotonic_and_ttrpc_budgets() {
     );
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn cancellation_is_generation_bound_and_shared() {
     let id = RequestId::new(vec![0x61; 16]).unwrap();
@@ -967,6 +970,9 @@ impl OwnedTransport for MemoryTransport {
     }
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn owned_transport_is_portable_and_payload_debug_is_redacted() {
     let mut transport = MemoryTransport::default();
@@ -984,6 +990,9 @@ async fn owned_transport_is_portable_and_payload_debug_is_redacted() {
     assert!(transport.closed);
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn typed_owned_transport_handle_exposes_only_observe_and_close() {
     let handle = OwnedTransportHandle::new(MemoryTransport::default());
@@ -991,6 +1000,9 @@ async fn typed_owned_transport_handle_exposes_only_observe_and_close() {
     assert_eq!(format!("{handle:?}"), "OwnedTransportHandle(<redacted>)");
     handle.close().await.unwrap();
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn per_stream_receive_preserves_order_and_terminal_events() {
@@ -1068,6 +1080,9 @@ async fn per_stream_receive_preserves_order_and_terminal_events() {
         StreamEvent::RemoteClosed { stream } if stream == second
     ));
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn per_stream_credit_and_backpressure_do_not_cross_streams() {
@@ -1155,6 +1170,9 @@ async fn per_stream_credit_and_backpressure_do_not_cross_streams() {
     ));
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn local_reset_completes_a_parked_per_stream_receive() {
     let (initiator, responder, _) = engine_pair().await;
@@ -1181,13 +1199,18 @@ async fn local_reset_completes_a_parked_per_stream_receive() {
 }
 
 #[derive(Default)]
-struct CapturingMetrics(Mutex<Vec<(MetricEvent, MetricLabels, u64)>>);
+struct CapturingMetrics(tokio::sync::Mutex<Vec<(MetricEvent, MetricLabels, u64)>>);
 
 impl MetricsSink for CapturingMetrics {
     fn record(&self, event: MetricEvent, labels: MetricLabels, value: u64) {
-        self.0.lock().unwrap().push((event, labels, value));
+        // Sync trait surface: non-blocking try_lock fails closed (plan U4
+        // sync-consumer pattern); single-threaded tests see no contention.
+        self.0.try_lock().unwrap().push((event, labels, value));
     }
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn metrics_are_emitted_by_a_real_driver_failure_path() {
@@ -1203,12 +1226,15 @@ async fn metrics_are_emitted_by_a_real_driver_failure_path() {
             .code(),
         SessionErrorCode::InvalidChannel
     );
-    let events = sink.0.lock().unwrap();
+    let events = sink.0.lock().await;
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].0, MetricEvent::RejectedRecord);
     assert_eq!(events[0].1.result, MetricResult::Rejected);
     assert_eq!(events[0].1.reason, MetricReason::Malformed);
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn handshake_failure_is_emitted_by_the_pre_establishment_sink() {
@@ -1224,7 +1250,7 @@ async fn handshake_failure_is_emitted_by_the_pre_establishment_sink() {
     .await
     .unwrap_err();
     assert_eq!(error.code(), SessionErrorCode::AuthenticationFailed);
-    let events = sink.0.lock().unwrap();
+    let events = sink.0.lock().await;
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].0, MetricEvent::Handshake);
     assert_eq!(events[0].1.result, MetricResult::Rejected);
@@ -1482,6 +1508,9 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
     )
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn established_write_deadline_fails_closed() {
     let (initiator_transport, responder_transport, handles) = fake_transport_pair();
@@ -1545,6 +1574,9 @@ async fn engine_pair() -> (
     (initiator.unwrap(), responder.unwrap(), handles)
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test(flavor = "current_thread")]
 async fn local_generation_discovery_establishes_the_authenticated_generation() {
     let (initiator_transport, responder_transport, _) = fake_transport_pair();
@@ -1569,6 +1601,9 @@ async fn local_generation_discovery_establishes_the_authenticated_generation() {
     assert_eq!(initiator.unwrap().generation(), 41);
     assert_eq!(responder.unwrap().generation(), 41);
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test(flavor = "current_thread")]
 async fn local_generation_discovery_rejects_endpoint_identity_mismatch() {
@@ -1718,6 +1753,9 @@ fn engine_attachment_with_payload(payload: Box<dyn AttachmentPayload>) -> OwnedA
     )
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn engine_drives_fragmented_ttrpc_and_request_cancellation() {
     let (mut initiator, mut responder, _) = engine_pair().await;
@@ -1749,6 +1787,9 @@ async fn engine_drives_fragmented_ttrpc_and_request_cancellation() {
     ));
     assert!(cancelled.is_cancelled());
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn driver_handle_is_clonable_object_safe_and_leaves_ttrpc_correlation_to_adapters() {
@@ -1951,6 +1992,9 @@ async fn driver_handle_is_clonable_object_safe_and_leaves_ttrpc_correlation_to_a
     assert_eq!(closes.load(Ordering::Acquire), 1);
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn driver_reads_and_delivers_cancellation_while_its_writer_is_blocked() {
     let (initiator, responder, handles) = engine_pair().await;
@@ -1994,6 +2038,9 @@ async fn driver_reads_and_delivers_cancellation_while_its_writer_is_blocked() {
     handles.send_release_a.notify_waiters();
     blocked_send.await.unwrap().unwrap();
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn cancelled_reply_is_removed_from_the_blocked_writer_queue() {
@@ -2046,6 +2093,9 @@ async fn cancelled_reply_is_removed_from_the_blocked_writer_queue() {
     }
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn cancellation_aborts_an_in_progress_guarded_write() {
     let (initiator, responder, handles) = engine_pair().await;
@@ -2086,6 +2136,9 @@ async fn cancellation_aborts_an_in_progress_guarded_write() {
         panic!("cancelled in-progress response reached the peer");
     }
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn outbound_cancel_fails_closed_before_a_queued_call_dispatch() {
@@ -2132,6 +2185,9 @@ async fn outbound_cancel_fails_closed_before_a_queued_call_dispatch() {
     }
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn driver_accepts_the_advertised_named_stream_boundary() {
     let (initiator, responder, _) = engine_pair().await;
@@ -2160,6 +2216,9 @@ async fn driver_accepts_the_advertised_named_stream_boundary() {
     initiator.send_named_stream(stream, payload).await.unwrap();
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn driver_rejects_above_the_advertised_named_stream_boundary() {
     let (initiator, _responder, _) = engine_pair().await;
@@ -2185,6 +2244,9 @@ async fn driver_rejects_above_the_advertised_named_stream_boundary() {
         SessionErrorCode::QueueBackpressure
     );
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn driver_withholds_logical_delivery_credit_until_grant() {
@@ -2230,6 +2292,9 @@ async fn driver_withholds_logical_delivery_credit_until_grant() {
         event => panic!("unexpected event {event:?}"),
     }
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn driver_progresses_bidirectional_credit_control_under_backpressure() {
@@ -2285,6 +2350,9 @@ async fn driver_progresses_bidirectional_credit_control_under_backpressure() {
     right.await.unwrap().unwrap();
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn engine_binds_acknowledges_and_releases_owned_attachments() {
     let (mut initiator, mut responder, _) = engine_pair().await;
@@ -2310,6 +2378,9 @@ async fn engine_binds_acknowledges_and_releases_owned_attachments() {
     assert_eq!(initiator.outstanding_attachment_credits(), 0);
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn invalid_protected_attachment_drops_payload_once_and_closes_session() {
     let (mut initiator, mut responder, handles) = engine_pair().await;
@@ -2328,6 +2399,9 @@ async fn invalid_protected_attachment_drops_payload_once_and_closes_session() {
     assert!(!handles.closed_a.load(Ordering::Acquire));
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn authenticated_descriptor_mismatch_drops_prebound_payload_once() {
     let (mut initiator, mut responder, handles) = engine_pair().await;
@@ -2344,6 +2418,9 @@ async fn authenticated_descriptor_mismatch_drops_prebound_payload_once() {
     assert_eq!(closes.load(Ordering::Acquire), 1);
     assert!(handles.closed_b.load(Ordering::Acquire));
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn exact_prebound_descriptor_is_accepted_after_authentication() {
@@ -2364,6 +2441,9 @@ async fn exact_prebound_descriptor_is_accepted_after_authentication() {
     assert_eq!(closes.load(Ordering::Acquire), 1);
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn payload_validator_failure_drops_unbound_payload_once() {
     let (mut initiator, mut responder, handles) = engine_pair().await;
@@ -2378,6 +2458,9 @@ async fn payload_validator_failure_drops_unbound_payload_once() {
     assert_eq!(closes.load(Ordering::Acquire), 1);
     assert!(handles.closed_b.load(Ordering::Acquire));
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn attachment_local_validation_and_explicit_close_are_exactly_once() {
@@ -2451,6 +2534,9 @@ async fn attachment_local_validation_and_explicit_close_are_exactly_once() {
     assert_eq!(rejected.load(Ordering::Acquire), 1);
     assert_eq!(initiator.outstanding_attachment_credits(), 0);
 }
+
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn engine_reconnect_rehandshakes_with_the_next_generation() {

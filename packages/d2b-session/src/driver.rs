@@ -1697,9 +1697,9 @@ fn backpressure() -> SessionError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, atomic::AtomicBool};
+    use std::sync::atomic::AtomicBool;
 
-    use tokio::sync::Notify;
+    use tokio::sync::{Mutex, Notify};
 
     use super::*;
 
@@ -1765,19 +1765,11 @@ mod tests {
             &mut self,
             packet: TransportPacket,
         ) -> std::result::Result<(), TransportError> {
-            if self
-                .packets
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .is_empty()
-            {
+            if self.packets.lock().await.is_empty() {
                 self.entered.notify_one();
                 self.release.notified().await;
             }
-            self.packets
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(packet.as_bytes().to_vec());
+            self.packets.lock().await.push(packet.as_bytes().to_vec());
             Ok(())
         }
 
@@ -1827,7 +1819,9 @@ mod tests {
             operation_class: OperationClass,
             error: SessionError,
         ) {
-            self.0.lock().unwrap().push((
+            // Sync trait surface: non-blocking try_lock fails closed (plan U4
+            // sync-consumer pattern); single-threaded tests see no contention.
+            self.0.try_lock().unwrap().push((
                 event,
                 channel_class,
                 operation_class,
@@ -1841,6 +1835,9 @@ mod tests {
             self.0.take()
         }
     }
+
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
     #[tokio::test]
     async fn writer_closes_transport_before_reporting_packet_failure() {
@@ -1873,6 +1870,9 @@ mod tests {
         assert!(closed.load(Ordering::Acquire));
         task.await.unwrap();
     }
+
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
     #[tokio::test]
     async fn revocation_waits_for_writer_admission_before_returning() {
@@ -1925,6 +1925,9 @@ mod tests {
         task.await.unwrap();
         assert!(closed.load(Ordering::Acquire));
     }
+
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
     #[tokio::test]
     async fn generation_revocation_rejects_queued_control_after_admitted_request() {
@@ -1985,7 +1988,7 @@ mod tests {
                 let metrics = CapturingWriterFailure::default();
                 record_writer_failure(&metrics, error);
                 assert_eq!(
-                    *metrics.0.lock().unwrap(),
+                    *metrics.0.lock().await,
                     vec![(
                         MetricEvent::RejectedRecord,
                         ChannelClass::SessionControl,
@@ -1999,15 +2002,16 @@ mod tests {
         );
         task.await.unwrap();
         assert_eq!(
-            *packets
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            *packets.lock().await,
             vec![vec![1]]
         );
         assert!(closed.load(Ordering::Acquire));
         drop(writes);
         drop(priority);
     }
+
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
     #[tokio::test]
     async fn post_protection_error_closes_writer_before_reply() {
@@ -2089,6 +2093,9 @@ mod tests {
         (transport, writes, priority, receiver)
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn unbatched_writes_preserve_the_cancellation_slot() {
         let (mut transport, writes, priority, mut receiver) = unix_descriptor(2);
@@ -2119,6 +2126,9 @@ mod tests {
         };
         assert_eq!(packets[0].as_bytes(), &[2]);
     }
+
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
     #[tokio::test]
     async fn driver_transport_enqueues_a_logical_packet_batch_atomically() {
@@ -2207,6 +2217,9 @@ mod tests {
         assert_eq!(receiver.try_recv().unwrap().unwrap(), 7);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn named_stream_waiters_are_delivered_only_their_stream_events() {
         let first = StreamId::new(0x0100).unwrap();
@@ -2235,6 +2248,9 @@ mod tests {
                 if stream == second && bytes == b"second"
         ));
     }
+
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
     #[tokio::test]
     async fn closed_waiters_on_one_stream_do_not_consume_another_streams_capacity() {

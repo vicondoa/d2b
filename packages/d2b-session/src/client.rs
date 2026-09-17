@@ -259,6 +259,9 @@ mod tests {
         );
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn read_frame_preserves_exact_ttrpc_boundaries() {
         let (mut writer, mut reader) = tokio::io::duplex(128);
