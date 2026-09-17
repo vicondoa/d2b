@@ -580,8 +580,7 @@ fn reserve_declared_blocks_after_mkfs(file: &File, spec: &ResolvedDiskInitOp) ->
     Ok(())
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn run_mkfs_ext4_on_fd_with(file: &File, display_path: &Path, tool: &MkfsTool) -> io::Result<()> {
+async fn run_mkfs_ext4_on_fd_with(file: &File, display_path: &Path, tool: &MkfsTool) -> io::Result<()> {
     let target = fd_target_path(file);
     let mut last_spawn_error = None;
     let mut mkfs_output = None;
@@ -593,14 +592,14 @@ fn run_mkfs_ext4_on_fd_with(file: &File, display_path: &Path, tool: &MkfsTool) -
         target.as_os_str(),
     ];
     for attempt in 0..5 {
-        match crate::sys::path_safe::command_output_inheriting_fd(&tool.path, &args, file.as_fd()) {
+        match command_output_inheriting_fd_async(&tool.path, &args, file.as_fd()).await {
             Ok(output) => {
                 mkfs_output = Some(output);
                 break;
             }
             Err(error) if error.raw_os_error() == Some(nix::libc::ETXTBSY) && attempt < 4 => {
                 last_spawn_error = Some(error);
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
             Err(error) => {
                 return Err(DiskInitError::formatter(format!(
@@ -652,12 +651,47 @@ fn bounded_lossy(bytes: &[u8], limit: usize) -> String {
     text
 }
 
-fn create_and_format(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
-    let tool = resolve_mkfs_ext4_binary()?;
-    create_and_format_with(spec, &tool)
+/// Async twin of `path_safe::command_output_inheriting_fd`: run
+/// `program args...` while inheriting `fd` only in the child process.
+/// The broker parent keeps FD_CLOEXEC set the entire time; `pre_exec`
+/// clears it after fork and before exec so no concurrent spawn in
+/// another thread can inherit the descriptor. Runs on
+/// `tokio::process` so the mkfs wait never parks an executor worker.
+#[allow(unsafe_code)]
+async fn command_output_inheriting_fd_async(
+    program: &Path,
+    args: &[&std::ffi::OsStr],
+    fd: impl AsFd,
+) -> io::Result<std::process::Output> {
+    let raw_fd = fd.as_fd().as_raw_fd();
+    let mut command = tokio::process::Command::new(program);
+    command.args(args);
+    command.env_remove("NOTIFY_SOCKET");
+    // SAFETY: `pre_exec` runs in the child after fork and before exec.
+    // The closure uses only async-signal-safe libc fcntl operations and
+    // returns an io::Error directly on failure.
+    unsafe {
+        command.pre_exec(move || {
+            let flags = nix::libc::fcntl(raw_fd, nix::libc::F_GETFD);
+            if flags < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let ret = nix::libc::fcntl(raw_fd, nix::libc::F_SETFD, flags & !nix::libc::FD_CLOEXEC);
+            if ret < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command.output().await
 }
 
-fn create_and_format_with(
+async fn create_and_format(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
+    let tool = resolve_mkfs_ext4_binary()?;
+    create_and_format_with(spec, &tool).await
+}
+
+async fn create_and_format_with(
     spec: &ResolvedDiskInitOp,
     tool: &MkfsTool,
 ) -> io::Result<DiskInitOutcome> {
@@ -678,7 +712,7 @@ fn create_and_format_with(
 
     set_declared_len(&file, spec, "create")?;
     let _lock = lock_existing_image(&file, &spec.target_path)?;
-    run_mkfs_ext4_on_fd_with(&file, &spec.target_path, tool)?;
+    run_mkfs_ext4_on_fd_with(&file, &spec.target_path, tool).await?;
     if !has_ext4_superblock(&file, &spec.target_path)? {
         return Err(DiskInitError::formatter(format!(
             "mkfs.ext4 did not leave a valid ext4 superblock on {}",
@@ -692,12 +726,12 @@ fn create_and_format_with(
     Ok(DiskInitOutcome::Created)
 }
 
-fn validate_or_repair_existing(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
+async fn validate_or_repair_existing(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
     let tool = resolve_mkfs_ext4_binary()?;
-    validate_or_repair_existing_with(spec, &tool)
+    validate_or_repair_existing_with(spec, &tool).await
 }
 
-fn validate_or_repair_existing_with(
+async fn validate_or_repair_existing_with(
     spec: &ResolvedDiskInitOp,
     tool: &MkfsTool,
 ) -> io::Result<DiskInitOutcome> {
@@ -757,7 +791,7 @@ fn validate_or_repair_existing_with(
         let posture_repaired = !posture_matches(&meta, spec);
         quarantine_existing_for_mkfs(&file, spec)?;
         drop(lease);
-        run_mkfs_ext4_on_fd_with(&file, &spec.target_path, tool)?;
+        run_mkfs_ext4_on_fd_with(&file, &spec.target_path, tool).await?;
         if !has_ext4_superblock(&file, &spec.target_path)? {
             return Err(DiskInitError::formatter(format!(
                 "mkfs.ext4 did not leave a valid ext4 superblock on {}",
@@ -786,12 +820,11 @@ fn validate_or_repair_existing_with(
 /// and ext4/proven-empty validation.
 ///
 /// Returns an `io::Error` on any failure.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn disk_init_one(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
+pub async fn disk_init_one(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
     validate_target_path(&spec.target_path)?;
     if spec.if_absent {
-        match std::fs::symlink_metadata(&spec.target_path) {
-            Ok(_) => return validate_or_repair_existing(spec),
+        match tokio::fs::symlink_metadata(&spec.target_path).await {
+            Ok(_) => return validate_or_repair_existing(spec).await,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => {
                 return Err(io::Error::new(
@@ -804,7 +837,7 @@ pub fn disk_init_one(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
             }
         }
     }
-    create_and_format(spec)
+    create_and_format(spec).await
 }
 
 /// Execute all `DiskInit` plan-ops for `vm_id` from the trusted bundle.
@@ -812,7 +845,7 @@ pub fn disk_init_one(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
 /// Called from `runtime::dispatch_request_with_backend` for
 /// `BrokerRequest::DiskInit`. Returns a [`DiskInitSummary`] for
 /// the audit record or the first I/O error encountered.
-pub fn live_disk_init(resolver: &BundleResolver, vm_id: &str) -> io::Result<DiskInitSummary> {
+pub async fn live_disk_init(resolver: &BundleResolver, vm_id: &str) -> io::Result<DiskInitSummary> {
     let ops = resolver.resolve_disk_init_ops(vm_id);
     let ops_total = ops.len() as u32;
     let mut ops_created = 0u32;
@@ -824,7 +857,7 @@ pub fn live_disk_init(resolver: &BundleResolver, vm_id: &str) -> io::Result<Disk
     for op in &ops {
         paths_concat.push_str(&op.target_path.display().to_string());
         paths_concat.push('\n');
-        match disk_init_one(op)? {
+        match disk_init_one(op).await? {
             DiskInitOutcome::Created => ops_created += 1,
             DiskInitOutcome::Skipped => ops_skipped += 1,
             DiskInitOutcome::Repaired => ops_repaired += 1,
@@ -983,19 +1016,21 @@ mod tests {
     }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn retry_on_transient_lease_contention<T>(
-        mut f: impl FnMut() -> io::Result<T>,
-    ) -> io::Result<T> {
+    async fn retry_on_transient_lease_contention<T, F, Fut>(mut f: F) -> io::Result<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = io::Result<T>>,
+    {
         let mut last_err = None;
         for _ in 0..20 {
-            match f() {
+            match f().await {
                 Ok(value) => return Ok(value),
                 Err(err)
                     if err.kind() == io::ErrorKind::InvalidData
                         && err.to_string().contains("Resource temporarily unavailable") =>
                 {
                     last_err = Some(err);
-                    std::thread::sleep(std::time::Duration::from_millis(25));
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                 }
                 Err(err) => return Err(err),
             }
@@ -1003,9 +1038,9 @@ mod tests {
         Err(last_err.expect("retry loop records transient lease error"))
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn create_and_format_creates_ext4_image_when_absent() {
+    async fn create_and_format_creates_ext4_image_when_absent() {
         let scratch = scratch_root();
         let target = scratch
             .join("vms")
@@ -1015,7 +1050,9 @@ mod tests {
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
-        let outcome = create_and_format_with(&spec, &tool).expect("create and format succeeds");
+        let outcome = create_and_format_with(&spec, &tool)
+            .await
+            .expect("create and format succeeds");
         assert_eq!(outcome, DiskInitOutcome::Created);
 
         assert!(target.exists(), "file must exist after creation");
@@ -1040,9 +1077,9 @@ mod tests {
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn existing_valid_ext4_image_skips() {
+    async fn existing_valid_ext4_image_skips() {
         let scratch = scratch_root();
         let target = scratch.join("store-overlay.img");
         let file = create_regular_image(&target, 4096, 0o600);
@@ -1051,9 +1088,11 @@ mod tests {
 
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
-        let outcome =
-            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
-                .expect("existing image validates");
+        let outcome = retry_on_transient_lease_contention(|| {
+            validate_or_repair_existing_with(&spec, &tool)
+        })
+        .await
+        .expect("existing image validates");
         assert_eq!(outcome, DiskInitOutcome::Skipped);
 
         let meta = fs::metadata(&target).expect("stat file");
@@ -1062,9 +1101,9 @@ mod tests {
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn existing_sparse_unformatted_image_is_repaired() {
+    async fn existing_sparse_unformatted_image_is_repaired() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
         let file = create_regular_image(&target, 4096, 0o600);
@@ -1072,18 +1111,20 @@ mod tests {
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
-        let outcome =
-            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
-                .expect("sparse image repairs");
+        let outcome = retry_on_transient_lease_contention(|| {
+            validate_or_repair_existing_with(&spec, &tool)
+        })
+        .await
+        .expect("sparse image repairs");
         assert_eq!(outcome, DiskInitOutcome::Repaired);
         assert!(has_ext4_superblock(&fs::File::open(&target).unwrap(), &target).unwrap());
 
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn existing_zero_length_unformatted_image_is_resized_and_repaired() {
+    async fn existing_zero_length_unformatted_image_is_resized_and_repaired() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
         let file = create_regular_image(&target, 0, 0o600);
@@ -1091,9 +1132,11 @@ mod tests {
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
-        let outcome =
-            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
-                .expect("zero-length image repairs");
+        let outcome = retry_on_transient_lease_contention(|| {
+            validate_or_repair_existing_with(&spec, &tool)
+        })
+        .await
+        .expect("zero-length image repairs");
         assert_eq!(outcome, DiskInitOutcome::Repaired);
         let meta = fs::metadata(&target).expect("stat repaired image");
         assert_eq!(meta.len(), 4096);
@@ -1102,9 +1145,9 @@ mod tests {
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn existing_non_ext4_with_data_fails_closed() {
+    async fn existing_non_ext4_with_data_fails_closed() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
         fs::write(&target, vec![0xAA; 4096]).unwrap();
@@ -1113,6 +1156,7 @@ mod tests {
         let tool = fake_mkfs_tool(&scratch);
 
         let err = validate_or_repair_existing_with(&spec, &tool)
+            .await
             .expect_err("non-ext4 data must fail closed");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         let message = err.to_string();
@@ -1127,9 +1171,9 @@ mod tests {
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn existing_ext4_wrong_mode_is_repaired() {
+    async fn existing_ext4_wrong_mode_is_repaired() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
         let file = create_regular_image(&target, 4096, 0o644);
@@ -1143,9 +1187,11 @@ mod tests {
         // shared test process. Production cannot skip the lease, and the
         // lease helper itself is still covered by integration through the
         // normal non-skipped paths.
-        let outcome =
-            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
-                .expect("safe stale posture repairs automatically");
+        let outcome = retry_on_transient_lease_contention(|| {
+            validate_or_repair_existing_with(&spec, &tool)
+        })
+        .await
+        .expect("safe stale posture repairs automatically");
         assert_eq!(outcome, DiskInitOutcome::PostureRepaired);
         let mode = fs::metadata(&target).unwrap().mode() & 0o777;
         assert_eq!(mode, 0o600);
@@ -1153,9 +1199,9 @@ mod tests {
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn existing_sparse_wrong_mode_repairs_posture_then_formats() {
+    async fn existing_sparse_wrong_mode_repairs_posture_then_formats() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
         let file = create_regular_image(&target, 4096, 0o644);
@@ -1163,9 +1209,11 @@ mod tests {
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
-        let outcome =
-            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
-                .expect("sparse stale posture repairs and formats");
+        let outcome = retry_on_transient_lease_contention(|| {
+            validate_or_repair_existing_with(&spec, &tool)
+        })
+        .await
+        .expect("sparse stale posture repairs and formats");
         assert_eq!(outcome, DiskInitOutcome::RepairedWithPosture);
         let meta = fs::metadata(&target).unwrap();
         assert_eq!(meta.mode() & 0o777, 0o600);
@@ -1174,9 +1222,9 @@ mod tests {
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn existing_hardlinked_image_fails_closed_before_posture_repair() {
+    async fn existing_hardlinked_image_fails_closed_before_posture_repair() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
         let alias = scratch.join("alias.img");
@@ -1188,6 +1236,7 @@ mod tests {
         let tool = fake_mkfs_tool(&scratch);
 
         let err = validate_or_repair_existing_with(&spec, &tool)
+            .await
             .expect_err("multiply-linked image must fail closed");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("link count"));
@@ -1222,9 +1271,9 @@ mod tests {
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn mkfs_failure_includes_bounded_stderr() {
+    async fn mkfs_failure_includes_bounded_stderr() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
         let file = create_regular_image(&target, 4096, 0o600);
@@ -1232,6 +1281,7 @@ mod tests {
         let tool = failing_mkfs_tool(&scratch, &stderr);
 
         let err = run_mkfs_ext4_on_fd_with(&file, &target, &tool)
+            .await
             .expect_err("failing mkfs must surface stderr");
         let rendered = err.to_string();
         assert!(rendered.contains("exit=Some(9)"));
@@ -1246,9 +1296,9 @@ mod tests {
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn existing_symlink_fails_closed_at_open() {
+    async fn existing_symlink_fails_closed_at_open() {
         let scratch = scratch_root();
         let real = scratch.join("real.img");
         let link = scratch.join("link.img");
@@ -1257,16 +1307,17 @@ mod tests {
         let spec = test_spec(link, 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
-        let err =
-            validate_or_repair_existing_with(&spec, &tool).expect_err("symlink must fail closed");
+        let err = validate_or_repair_existing_with(&spec, &tool)
+            .await
+            .expect_err("symlink must fail closed");
         assert!(err.to_string().contains("O_NOFOLLOW"));
 
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn parent_symlink_component_fails_closed() {
+    async fn parent_symlink_component_fails_closed() {
         let scratch = scratch_root();
         let real_dir = scratch.join("real");
         let link_dir = scratch.join("link");
@@ -1281,15 +1332,16 @@ mod tests {
         let tool = fake_mkfs_tool(&scratch);
 
         let err = validate_or_repair_existing_with(&spec, &tool)
+            .await
             .expect_err("intermediate symlink must fail closed");
         assert!(err.to_string().contains("open parent directory"));
 
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn fifo_target_fails_closed_without_blocking() {
+    async fn fifo_target_fails_closed_without_blocking() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
         nix::unistd::mkfifo(&target, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
@@ -1297,6 +1349,7 @@ mod tests {
         let tool = fake_mkfs_tool(&scratch);
 
         let err = validate_or_repair_existing_with(&spec, &tool)
+            .await
             .expect_err("fifo must fail closed without blocking");
         assert!(
             err.to_string().contains("expected regular file")
@@ -1388,8 +1441,8 @@ mod tests {
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    #[test]
-    fn disk_init_rejects_path_outside_permitted_root() {
+    #[tokio::test]
+    async fn disk_init_rejects_path_outside_permitted_root() {
         let spec = ResolvedDiskInitOp {
             target_path: PathBuf::from("/etc/d2b/evil.img"),
             size_bytes: 4096,
@@ -1398,7 +1451,9 @@ mod tests {
             owner_gid: 1000,
             if_absent: true,
         };
-        let err = disk_init_one(&spec).expect_err("must reject path outside permitted root");
+        let err = disk_init_one(&spec)
+            .await
+            .expect_err("must reject path outside permitted root");
         assert_eq!(
             err.kind(),
             io::ErrorKind::PermissionDenied,

@@ -22,12 +22,8 @@ use d2b_host::nftables::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256 as Sha256Hasher};
 use std::env;
-use std::fs;
-use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Audit-event payload for `ApplyNftables`. Combined with the broker
 /// common header at write time. Sensitive identifiers go through the
@@ -149,30 +145,33 @@ pub struct NftHashSidecar {
     pub table_hash_after_apply: String,
 }
 
-pub fn read_persisted_nft_hash(path: &Path) -> Result<Option<String>, ReconcileExecError> {
+pub async fn read_persisted_nft_hash(path: &Path) -> Result<Option<String>, ReconcileExecError> {
     let host_runtime_path = canonical_host_runtime_path(path);
-    if let Some(hash) = crate::live_handlers::read_host_runtime_nft_hash(&host_runtime_path)? {
+    if let Some(hash) =
+        crate::live_handlers::read_host_runtime_nft_hash(&host_runtime_path).await?
+    {
         return Ok(Some(hash));
     }
     if host_runtime_path != path {
-        return read_legacy_nft_hash_sidecar(path);
+        return read_legacy_nft_hash_sidecar(path).await;
     }
     Ok(None)
 }
 
-pub fn persist_live_nft_hash(
+pub async fn persist_live_nft_hash(
     _executor: &dyn ReconcileExecutor,
     nft_binary: &Path,
     family: &str,
     table: &str,
     sidecar_path: &Path,
 ) -> Result<String, ReconcileExecError> {
-    let live_json = read_live_table_json_required(nft_binary, family, table)?;
+    let live_json = read_live_table_json_required(nft_binary, family, table).await?;
     let live_hash = hash_inet_d2b_table(&live_json).to_string();
     crate::live_handlers::update_host_runtime_nft_hash(
         &canonical_host_runtime_path(sidecar_path),
         Some(live_hash.as_str()),
-    )?;
+    )
+    .await?;
     Ok(live_hash)
 }
 
@@ -189,9 +188,8 @@ fn canonical_host_runtime_path(path: &Path) -> PathBuf {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_legacy_nft_hash_sidecar(path: &Path) -> Result<Option<String>, ReconcileExecError> {
-    match fs::read(path) {
+async fn read_legacy_nft_hash_sidecar(path: &Path) -> Result<Option<String>, ReconcileExecError> {
+    match tokio::fs::read(path).await {
         Ok(bytes) => {
             let sidecar = serde_json::from_slice::<NftHashSidecar>(&bytes).map_err(|err| {
                 ReconcileExecError::InvalidInput {
@@ -293,7 +291,7 @@ impl std::error::Error for ApplyWithCoexistenceError {}
 /// manager must not coexist, then parses the emitted script back into a
 /// structured batch so carve-out ordering and canonical drift hashing are
 /// re-asserted immediately before the live `nft -f -` apply.
-pub fn apply_with_coexistence(
+pub async fn apply_with_coexistence(
     executor: &dyn ReconcileExecutor,
     nft_binary: &Path,
     script_body: &str,
@@ -304,9 +302,11 @@ pub fn apply_with_coexistence(
     let batch = NftBatch::parse(script_body).map_err(ApplyWithCoexistenceError::ParseFailed)?;
     let canonical = batch.canonical_hash().to_string();
     let persisted_hash = read_persisted_nft_hash(&persisted_nft_hash_path())
+        .await
         .map_err(ApplyWithCoexistenceError::ReconcileExec)?;
     let live_table_json =
         read_live_table_json_optional(nft_binary, batch.table_family, batch.table_name)
+            .await
             .map_err(ApplyWithCoexistenceError::ReconcileExec)?;
     if let Some(live_table_json) = live_table_json.as_deref()
         && live_table_has_foreign_entries(live_table_json, ownership_id, &batch)
@@ -334,9 +334,10 @@ pub fn apply_with_coexistence(
         drift_expected_hash.as_deref(),
         observed_table_hash.as_deref(),
     )
+    .await
 }
 
-fn apply_with_coexistence_inner(
+async fn apply_with_coexistence_inner(
     executor: &dyn ReconcileExecutor,
     nft_binary: &Path,
     script_body: &str,
@@ -368,6 +369,7 @@ fn apply_with_coexistence_inner(
     }
     let replace_script = render_owned_table_replace_script(&batch, script_body);
     crate::live_handlers::live_apply_nftables(executor, nft_binary, &replace_script)
+        .await
         .map_err(map_live_nft_error)?;
     Ok(canonical.as_str().to_owned())
 }
@@ -470,7 +472,7 @@ struct ProjectionRuleHandle {
 /// Apply or remove one trusted ownership projection without replacing the
 /// shared table. The generation comparison happens before lock acquisition,
 /// live-state reads, or mutation and never advances a counter.
-pub fn apply_nftables_projection(
+pub async fn apply_nftables_projection(
     executor: &dyn ReconcileExecutor,
     nft_binary: &Path,
     script_body: &str,
@@ -489,8 +491,9 @@ pub fn apply_nftables_projection(
     }
     let expected_comment = validate_projection_marker(marker)?;
     let chains = parse_projection_script(script_body, &expected_comment)?;
-    let _lock = acquire_projection_lock()?;
+    let _lock = acquire_projection_lock().await?;
     let live_json = read_live_table_json_optional(nft_binary, "inet", "d2b")
+        .await
         .map_err(|_| ProjectionMutationError::Backend)?;
     if live_json.is_none()
         && matches!(
@@ -508,6 +511,7 @@ pub fn apply_nftables_projection(
     if !mutation_script.is_empty() {
         executor
             .apply_nft_script(nft_binary, &mutation_script)
+            .await
             .map_err(|_| ProjectionMutationError::Backend)?;
     }
     let projection_digest = match action {
@@ -794,20 +798,31 @@ impl std::fmt::Debug for ProjectionLock {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn acquire_projection_lock() -> Result<ProjectionLock, ProjectionMutationError> {
+/// Acquire the projection OFD lock asynchronously.
+///
+/// The lock is an fd-based OFD write lock on the persisted-hash file
+/// (multi-process exclusion via the kernel). The blocking `F_OFD_SETLKW`
+/// form would park an executor worker, so the acquisition polls
+/// non-blocking `F_OFD_SETLK` and sleeps on the async timer until the
+/// lock is free - same eventual exclusion, no worker stall (R13:
+/// admission becomes a 25ms poll instead of a blocking wait).
+async fn acquire_projection_lock() -> Result<ProjectionLock, ProjectionMutationError> {
     let path = persisted_nft_hash_path();
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|_| ProjectionMutationError::LockUnavailable)?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|_| ProjectionMutationError::LockUnavailable)?;
     }
-    let file = OpenOptions::new()
+    let file = tokio::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .mode(0o640)
         .custom_flags(nix::libc::O_CLOEXEC)
-        .open(path)
+        .open(&path)
+        .await
         .map_err(|_| ProjectionMutationError::LockUnavailable)?;
+    let file = file.into_std().await;
     let lock = nix::libc::flock {
         l_type: nix::libc::F_WRLCK as _,
         l_whence: nix::libc::SEEK_SET as _,
@@ -815,13 +830,18 @@ fn acquire_projection_lock() -> Result<ProjectionLock, ProjectionMutationError> 
         l_len: 0,
         l_pid: 0,
     };
-    nix::fcntl::fcntl(file.as_raw_fd(), nix::fcntl::FcntlArg::F_OFD_SETLKW(&lock))
-        .map_err(|_| ProjectionMutationError::LockUnavailable)?;
-    Ok(ProjectionLock(file))
+    loop {
+        match nix::fcntl::fcntl(file.as_raw_fd(), nix::fcntl::FcntlArg::F_OFD_SETLK(&lock)) {
+            Ok(_) => return Ok(ProjectionLock(file)),
+            Err(errno) if errno == nix::errno::Errno::EAGAIN || errno == nix::errno::Errno::EACCES => {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            Err(_) => return Err(ProjectionMutationError::LockUnavailable),
+        }
+    }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn read_live_table_json_optional(
+pub async fn read_live_table_json_optional(
     nft_binary: &Path,
     family: &str,
     table: &str,
@@ -838,10 +858,11 @@ pub fn read_live_table_json_optional(
             ),
         });
     }
-    let output = Command::new(nft_binary)
+    let output = tokio::process::Command::new(nft_binary)
         .args(["-j", "list", "table", family, table])
         .env_remove("NOTIFY_SOCKET")
         .output()
+        .await
         .map_err(|err| ReconcileExecError::BinaryMissing {
             which: "nft".to_owned(),
             detail: err.to_string(),
@@ -860,17 +881,19 @@ pub fn read_live_table_json_optional(
     })
 }
 
-fn read_live_table_json_required(
+async fn read_live_table_json_required(
     nft_binary: &Path,
     family: &str,
     table: &str,
 ) -> Result<Vec<u8>, ReconcileExecError> {
-    read_live_table_json_optional(nft_binary, family, table)?.ok_or_else(|| {
-        ReconcileExecError::Io {
-            path: format!("nft:{family}:{table}"),
-            detail: "live nft table missing after successful apply".to_owned(),
-        }
-    })
+    read_live_table_json_optional(nft_binary, family, table)
+        .await?
+        .ok_or_else(|| {
+            ReconcileExecError::Io {
+                path: format!("nft:{family}:{table}"),
+                detail: "live nft table missing after successful apply".to_owned(),
+            }
+        })
 }
 
 #[cfg(test)]
@@ -1182,8 +1205,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn projection_stale_generation_refuses_before_any_mutation() {
+    #[tokio::test]
+    async fn projection_stale_generation_refuses_before_any_mutation() {
         let exec = FakeReconcileExecutor::new();
         let script = projection_script("network-a", "forward-a", "ip saddr 10.20.0.0/24 accept");
         let hash = projection_digest(script.as_bytes());
@@ -1198,7 +1221,8 @@ mod tests {
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply,
-            ),
+            )
+            .await,
             Err(ProjectionMutationError::StaleGeneration)
         );
         assert!(exec.take_log().is_empty());
@@ -1279,8 +1303,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn apply_with_coexistence_drives_executor_when_policy_allows() {
+    #[tokio::test]
+    async fn apply_with_coexistence_drives_executor_when_policy_allows() {
         let exec = FakeReconcileExecutor::new();
         let (script, expected_hash) = parseable_script();
         let applied_hash = apply_with_coexistence_inner(
@@ -1292,6 +1316,7 @@ mod tests {
             Some(expected_hash.as_str()),
             Some(expected_hash.as_str()),
         )
+        .await
         .unwrap();
         assert_eq!(applied_hash, expected_hash);
         let log = exec.take_log();
@@ -1306,8 +1331,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn apply_with_coexistence_refuses_on_drift() {
+    #[tokio::test]
+    async fn apply_with_coexistence_refuses_on_drift() {
         let exec = FakeReconcileExecutor::new();
         let (script, expected_hash) = parseable_script();
         let err = apply_with_coexistence_inner(
@@ -1319,6 +1344,7 @@ mod tests {
             Some(expected_hash.as_str()),
             Some("wrong-hash"),
         )
+        .await
         .unwrap_err();
         assert!(matches!(
             err,
@@ -1330,8 +1356,8 @@ mod tests {
         assert!(exec.take_log().is_empty());
     }
 
-    #[test]
-    fn apply_with_coexistence_refuses_on_carveout_misorder() {
+    #[tokio::test]
+    async fn apply_with_coexistence_refuses_on_carveout_misorder() {
         let exec = FakeReconcileExecutor::new();
         let script = concat!(
             "table inet d2b {\n",
@@ -1351,6 +1377,7 @@ mod tests {
             None,
             None,
         )
+        .await
         .unwrap_err();
         assert!(matches!(
             err,
@@ -1361,8 +1388,8 @@ mod tests {
         assert!(exec.take_log().is_empty());
     }
 
-    #[test]
-    fn apply_with_coexistence_accepts_first_apply_no_drift_check() {
+    #[tokio::test]
+    async fn apply_with_coexistence_accepts_first_apply_no_drift_check() {
         let exec = FakeReconcileExecutor::new();
         let (script, expected_hash) = parseable_script();
         let applied_hash = apply_with_coexistence_inner(
@@ -1374,13 +1401,14 @@ mod tests {
             None,
             None,
         )
+        .await
         .unwrap();
         assert_eq!(applied_hash, expected_hash);
         assert_eq!(exec.take_log().len(), 1);
     }
 
-    #[test]
-    fn apply_with_coexistence_refuses_when_policy_is_refuse() {
+    #[tokio::test]
+    async fn apply_with_coexistence_refuses_when_policy_is_refuse() {
         let exec = FakeReconcileExecutor::new();
         let (script, _) = parseable_script();
         let err = apply_with_coexistence_inner(
@@ -1395,6 +1423,7 @@ mod tests {
             None,
             None,
         )
+        .await
         .unwrap_err();
         assert!(matches!(
             err,
@@ -1406,8 +1435,8 @@ mod tests {
         assert!(exec.take_log().is_empty());
     }
 
-    #[test]
-    fn usbip_batch_can_apply_against_matching_prior_live_hash() {
+    #[tokio::test]
+    async fn usbip_batch_can_apply_against_matching_prior_live_hash() {
         let exec = FakeReconcileExecutor::new();
         let (_base_script, base_hash) = parseable_script();
         let (usbip_script, usbip_hash) = usbip_script();
@@ -1420,13 +1449,14 @@ mod tests {
             Some(base_hash.as_str()),
             Some(base_hash.as_str()),
         )
+        .await
         .unwrap();
         assert_eq!(applied_hash, usbip_hash);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn read_persisted_nft_hash_reads_host_runtime_hash() {
+    async fn read_persisted_nft_hash_reads_host_runtime_hash() {
         let root = TestDir::new("nft-host-runtime");
         let runtime_path = root.join("host-runtime.json");
         std::fs::write(
@@ -1443,14 +1473,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            read_persisted_nft_hash(&runtime_path).unwrap(),
+            read_persisted_nft_hash(&runtime_path).await.unwrap(),
             Some("0123456789abcdef".to_owned())
         );
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn read_persisted_nft_hash_falls_back_to_legacy_sidecar() {
+    async fn read_persisted_nft_hash_falls_back_to_legacy_sidecar() {
         let root = TestDir::new("nft-sidecar-fallback");
         let runtime_path = root.join("host-runtime.json");
         std::fs::write(
@@ -1476,7 +1506,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            read_persisted_nft_hash(&sidecar_path).unwrap(),
+            read_persisted_nft_hash(&sidecar_path).await.unwrap(),
             Some("feedfacefeedface".to_owned())
         );
     }

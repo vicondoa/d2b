@@ -1,9 +1,8 @@
 //! Trusted bridge lifecycle and opaque persistent-TAP deletion operations.
 
-use std::fs;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use d2b_contracts_broker::broker_wire::{CreatePersistentTapRequest, DeletePersistentTapRequest};
 use d2b_contracts_resource::v3::IfName;
@@ -83,26 +82,27 @@ pub struct BridgeReadback {
 }
 
 /// Injected bridge kernel adapter.
+#[allow(async_fn_in_trait)]
 pub trait BridgeBackend {
     /// Read current bridge parameters without exposing the interface in errors.
-    fn read_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<BridgeReadback, NetworkOpError>;
+    async fn read_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<BridgeReadback, NetworkOpError>;
     /// Create a down bridge.
-    fn create_bridge_down(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError>;
+    async fn create_bridge_down(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError>;
     /// Apply all trusted parameters while the bridge remains down.
-    fn configure_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError>;
+    async fn configure_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError>;
     /// Bring the configured bridge up.
-    fn set_bridge_up(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError>;
+    async fn set_bridge_up(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError>;
     /// Delete an empty bridge.
-    fn delete_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError>;
+    async fn delete_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError>;
 }
 
 /// Ensure one trusted bridge, applying IPv6 suppression before link-up.
-pub fn create_bridge<B: BridgeBackend>(
+pub async fn create_bridge<B: BridgeBackend>(
     backend: &B,
     intent: &ResolvedBridgeIntent,
 ) -> Result<String, NetworkOpError> {
     let expected_marker = expected_bridge_marker(intent)?;
-    let observed = backend.read_bridge(intent)?;
+    let observed = backend.read_bridge(intent).await?;
     if observed.present {
         if observed.ownership_marker.as_deref() != Some(expected_marker.as_str()) {
             return Err(NetworkOpError::ForeignOwnership);
@@ -112,26 +112,26 @@ pub fn create_bridge<B: BridgeBackend>(
         }
         return Err(NetworkOpError::BridgeParameterMismatch);
     }
-    backend.create_bridge_down(intent)?;
-    if backend.configure_bridge(intent).is_err() || backend.set_bridge_up(intent).is_err() {
-        delete_created_bridge_if_owned(backend, intent, &expected_marker);
+    backend.create_bridge_down(intent).await?;
+    if backend.configure_bridge(intent).await.is_err() || backend.set_bridge_up(intent).await.is_err() {
+        delete_created_bridge_if_owned(backend, intent, &expected_marker).await;
         return Err(NetworkOpError::BridgeBackend);
     }
-    let observed = backend.read_bridge(intent)?;
+    let observed = backend.read_bridge(intent).await?;
     if !bridge_matches(intent, &observed, &expected_marker) {
-        delete_created_bridge_if_owned(backend, intent, &expected_marker);
+        delete_created_bridge_if_owned(backend, intent, &expected_marker).await;
         return Err(NetworkOpError::BridgeParameterMismatch);
     }
     Ok(bridge_intent_digest(intent))
 }
 
 /// Delete one trusted bridge without cascading into attached links.
-pub fn delete_bridge<B: BridgeBackend>(
+pub async fn delete_bridge<B: BridgeBackend>(
     backend: &B,
     intent: &ResolvedBridgeIntent,
 ) -> Result<String, NetworkOpError> {
     let expected_marker = expected_bridge_marker(intent)?;
-    let observed = backend.read_bridge(intent)?;
+    let observed = backend.read_bridge(intent).await?;
     if !observed.present {
         return Ok(bridge_intent_digest(intent));
     }
@@ -144,7 +144,7 @@ pub fn delete_bridge<B: BridgeBackend>(
     if observed.attached_links != 0 {
         return Err(NetworkOpError::BridgeNotEmpty);
     }
-    backend.delete_bridge(intent)?;
+    backend.delete_bridge(intent).await?;
     Ok(bridge_intent_digest(intent))
 }
 
@@ -186,16 +186,16 @@ fn bridge_matches(
         && observed.ownership_marker.as_deref() == Some(expected_marker)
 }
 
-fn delete_created_bridge_if_owned<B: BridgeBackend>(
+async fn delete_created_bridge_if_owned<B: BridgeBackend>(
     backend: &B,
     intent: &ResolvedBridgeIntent,
     expected_marker: &str,
 ) {
-    let Ok(observed) = backend.read_bridge(intent) else {
+    let Ok(observed) = backend.read_bridge(intent).await else {
         return;
     };
     if observed.present && observed.ownership_marker.as_deref() == Some(expected_marker) {
-        let _ = backend.delete_bridge(intent);
+        let _ = backend.delete_bridge(intent).await;
     }
 }
 
@@ -221,8 +221,7 @@ impl core::fmt::Debug for SystemBridgeBackend {
 }
 
 impl BridgeBackend for SystemBridgeBackend {
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn read_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<BridgeReadback, NetworkOpError> {
+    async fn read_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<BridgeReadback, NetworkOpError> {
         let output = ip_command(&[
             "-d",
             "-j",
@@ -230,7 +229,8 @@ impl BridgeBackend for SystemBridgeBackend {
             "show",
             "dev",
             intent.bridge_ifname.as_str(),
-        ])?;
+        ])
+        .await?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if stderr.contains("does not exist") || stderr.contains("Cannot find device") {
@@ -260,25 +260,29 @@ impl BridgeBackend for SystemBridgeBackend {
             .and_then(serde_json::Value::as_str)
             == Some("bridge");
         let root = PathBuf::from("/sys/class/net").join(intent.bridge_ifname.as_str());
-        let ownership_marker = fs::read_to_string(root.join("ifalias"))
+        let ownership_marker = tokio::fs::read_to_string(root.join("ifalias"))
+            .await
             .ok()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
-        let stp_disabled = read_trimmed(&root.join("bridge/stp_state"))? == "0";
+        let stp_disabled = read_trimmed(&root.join("bridge/stp_state")).await? == "0";
         let multicast_snooping_disabled =
-            read_trimmed(&root.join("bridge/multicast_snooping"))? == "0";
+            read_trimmed(&root.join("bridge/multicast_snooping")).await? == "0";
         let ipv6_suppressed = read_trimmed(
             &PathBuf::from("/proc/sys/net/ipv6/conf")
                 .join(intent.bridge_ifname.as_str())
                 .join("disable_ipv6"),
-        )? == "1";
+        )
+        .await?
+            == "1";
         let attached = ip_command(&[
             "-j",
             "link",
             "show",
             "master",
             intent.bridge_ifname.as_str(),
-        ])?;
+        ])
+        .await?;
         let attached_links = if attached.status.success() {
             serde_json::from_slice::<Vec<serde_json::Value>>(&attached.stdout)
                 .map_err(|_| NetworkOpError::BridgeBackend)?
@@ -298,7 +302,7 @@ impl BridgeBackend for SystemBridgeBackend {
         })
     }
 
-    fn create_bridge_down(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+    async fn create_bridge_down(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
         run_ip(&[
             "link",
             "add",
@@ -307,9 +311,10 @@ impl BridgeBackend for SystemBridgeBackend {
             "type",
             "bridge",
         ])
+        .await
     }
 
-    fn configure_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+    async fn configure_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
         run_ip(&[
             "link",
             "set",
@@ -317,7 +322,8 @@ impl BridgeBackend for SystemBridgeBackend {
             intent.bridge_ifname.as_str(),
             "mtu",
             &intent.mtu.to_string(),
-        ])?;
+        ])
+        .await?;
         let marker = expected_bridge_marker(intent)?;
         run_ip(&[
             "link",
@@ -326,37 +332,38 @@ impl BridgeBackend for SystemBridgeBackend {
             intent.bridge_ifname.as_str(),
             "alias",
             &marker,
-        ])?;
+        ])
+        .await?;
         let root = PathBuf::from("/sys/class/net").join(intent.bridge_ifname.as_str());
-        write_fixed(&root.join("bridge/stp_state"), "0")?;
-        write_fixed(&root.join("bridge/multicast_snooping"), "0")?;
+        write_fixed(&root.join("bridge/stp_state"), "0").await?;
+        write_fixed(&root.join("bridge/multicast_snooping"), "0").await?;
         let ipv6 = PathBuf::from("/proc/sys/net/ipv6/conf").join(intent.bridge_ifname.as_str());
-        write_fixed(&ipv6.join("disable_ipv6"), "1")?;
-        write_fixed(&ipv6.join("accept_ra"), "0")?;
-        write_fixed(&ipv6.join("autoconf"), "0")
+        write_fixed(&ipv6.join("disable_ipv6"), "1").await?;
+        write_fixed(&ipv6.join("accept_ra"), "0").await?;
+        write_fixed(&ipv6.join("autoconf"), "0").await
     }
 
-    fn set_bridge_up(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
-        run_ip(&["link", "set", "dev", intent.bridge_ifname.as_str(), "up"])
+    async fn set_bridge_up(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+        run_ip(&["link", "set", "dev", intent.bridge_ifname.as_str(), "up"]).await
     }
 
-    fn delete_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
-        run_ip(&["link", "delete", "dev", intent.bridge_ifname.as_str()])
+    async fn delete_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+        run_ip(&["link", "delete", "dev", intent.bridge_ifname.as_str()]).await
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn ip_command(args: &[&str]) -> Result<std::process::Output, NetworkOpError> {
-    Command::new("/run/current-system/sw/bin/ip")
+async fn ip_command(args: &[&str]) -> Result<std::process::Output, NetworkOpError> {
+    tokio::process::Command::new("/run/current-system/sw/bin/ip")
         .args(args)
         .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::null())
         .output()
+        .await
         .map_err(|_| NetworkOpError::BridgeBackend)
 }
 
-fn run_ip(args: &[&str]) -> Result<(), NetworkOpError> {
-    let output = ip_command(args)?;
+async fn run_ip(args: &[&str]) -> Result<(), NetworkOpError> {
+    let output = ip_command(args).await?;
     if output.status.success() {
         Ok(())
     } else {
@@ -364,16 +371,17 @@ fn run_ip(args: &[&str]) -> Result<(), NetworkOpError> {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_trimmed(path: &Path) -> Result<String, NetworkOpError> {
-    fs::read_to_string(path)
+async fn read_trimmed(path: &Path) -> Result<String, NetworkOpError> {
+    tokio::fs::read_to_string(path)
+        .await
         .map(|value| value.trim().to_owned())
         .map_err(|_| NetworkOpError::BridgeBackend)
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn write_fixed(path: &Path, value: &str) -> Result<(), NetworkOpError> {
-    fs::write(path, value).map_err(|_| NetworkOpError::BridgeBackend)
+async fn write_fixed(path: &Path, value: &str) -> Result<(), NetworkOpError> {
+    tokio::fs::write(path, value)
+        .await
+        .map_err(|_| NetworkOpError::BridgeBackend)
 }
 
 /// Trusted broker-owned attachment realization record.
@@ -401,17 +409,19 @@ pub struct PersistentTapRealization {
     pub deleted: bool,
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn realization_root(state_dir: &Path) -> Result<PathBuf, NetworkOpError> {
+async fn realization_root(state_dir: &Path) -> Result<PathBuf, NetworkOpError> {
     let root = state_dir.join("network-attachments");
-    let metadata = match fs::symlink_metadata(&root) {
+    let metadata = match tokio::fs::symlink_metadata(&root).await {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::DirBuilder::new()
+            tokio::fs::DirBuilder::new()
                 .mode(0o750)
                 .create(&root)
+                .await
                 .map_err(|_| NetworkOpError::RealizationUnavailable)?;
-            fs::symlink_metadata(&root).map_err(|_| NetworkOpError::RealizationUnavailable)?
+            tokio::fs::symlink_metadata(&root)
+                .await
+                .map_err(|_| NetworkOpError::RealizationUnavailable)?
         }
         Err(_) => return Err(NetworkOpError::RealizationUnavailable),
     };
@@ -422,14 +432,13 @@ fn realization_root(state_dir: &Path) -> Result<PathBuf, NetworkOpError> {
 }
 
 /// Persist one v3 TAP realization after the kernel link is created.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn persist_persistent_tap_realization(
+pub async fn persist_persistent_tap_realization(
     state_dir: &Path,
     request: &CreatePersistentTapRequest,
     tap_ifname: &IfName,
 ) -> Result<(), NetworkOpError> {
     validate_persistent_tap_identity(request, tap_ifname)?;
-    let root = realization_root(state_dir)?;
+    let root = realization_root(state_dir).await?;
     let row_path = root.join(format!("{}.json", request.attachment_id.as_str()));
     let realization = PersistentTapRealization {
         attachment_id: request.attachment_id.as_str().to_owned(),
@@ -449,15 +458,19 @@ pub fn persist_persistent_tap_realization(
         ),
         deleted: false,
     };
-    if let Ok(existing) = fs::OpenOptions::new()
+    if let Ok(existing) = tokio::fs::OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(&row_path)
+        .await
     {
+        let existing = existing.into_std().await;
         let current: PersistentTapRealization =
             serde_json::from_reader(existing).map_err(|_| NetworkOpError::RealizationConflict)?;
         if current.deleted {
-            fs::remove_file(&row_path).map_err(|_| NetworkOpError::RealizationConflict)?;
+            tokio::fs::remove_file(&row_path)
+                .await
+                .map_err(|_| NetworkOpError::RealizationConflict)?;
         } else if current == realization {
             return Ok(());
         } else {
@@ -465,38 +478,45 @@ pub fn persist_persistent_tap_realization(
         }
     }
     let temp_path = root.join(format!(".{}.json.tmp", request.attachment_id.as_str()));
-    match fs::symlink_metadata(&temp_path) {
+    match tokio::fs::symlink_metadata(&temp_path).await {
         Ok(metadata) if metadata.file_type().is_symlink() || metadata.mode() & 0o022 != 0 => {
             return Err(NetworkOpError::RealizationUnavailable);
         }
         Ok(_) => {
-            fs::remove_file(&temp_path).map_err(|_| NetworkOpError::RealizationUnavailable)?;
+            tokio::fs::remove_file(&temp_path)
+                .await
+                .map_err(|_| NetworkOpError::RealizationUnavailable)?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err(NetworkOpError::RealizationUnavailable),
     }
     let bytes =
         serde_json::to_vec(&realization).map_err(|_| NetworkOpError::RealizationUnavailable)?;
-    let mut file = fs::OpenOptions::new()
+    let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .mode(0o640)
         .open(&temp_path)
+        .await
         .map_err(|_| NetworkOpError::RealizationUnavailable)?;
-    use std::io::Write as _;
-    if file.write_all(&bytes).is_err() || file.sync_data().is_err() {
+    use tokio::io::AsyncWriteExt;
+    if file.write_all(&bytes).await.is_err() || file.sync_data().await.is_err() {
         drop(file);
-        let _ = fs::remove_file(&temp_path);
+        let _ = tokio::fs::remove_file(&temp_path).await;
         return Err(NetworkOpError::RealizationUnavailable);
     }
     drop(file);
-    fs::rename(&temp_path, &row_path).map_err(|_| {
-        let _ = fs::remove_file(&temp_path);
+    tokio::fs::rename(&temp_path, &row_path).await.map_err(|_| {
+        let _ = tokio::fs::remove_file(&temp_path);
         NetworkOpError::RealizationUnavailable
     })?;
-    fs::File::open(&root)
-        .and_then(|directory| directory.sync_all())
+    let directory = tokio::fs::File::open(&root)
+        .await
+        .map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    directory
+        .sync_all()
+        .await
         .map_err(|_| NetworkOpError::RealizationUnavailable)
 }
 
@@ -550,19 +570,19 @@ fn validate_persistent_tap_identity(
 }
 
 /// Remove a v3 realization after the broker confirms TAP deletion.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn remove_persistent_tap_realization(
+pub async fn remove_persistent_tap_realization(
     state_dir: &Path,
     attachment_id: &ResourceUid,
 ) -> Result<(), NetworkOpError> {
-    let root = realization_root(state_dir)?;
+    let root = realization_root(state_dir).await?;
     let row_path = root.join(format!("{}.json", attachment_id.as_str()));
-    let row = match fs::OpenOptions::new()
+    let row = match tokio::fs::OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(&row_path)
+        .await
     {
-        Ok(file) => file,
+        Ok(file) => file.into_std().await,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(_) => return Err(NetworkOpError::RealizationUnavailable),
     };
@@ -573,32 +593,37 @@ pub fn remove_persistent_tap_realization(
     {
         return Err(NetworkOpError::ForeignOwnership);
     }
-    match fs::remove_file(&row_path) {
+    match tokio::fs::remove_file(&row_path).await {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(_) => return Err(NetworkOpError::RealizationUnavailable),
     }
-    fs::File::open(&root)
-        .and_then(|directory| directory.sync_all())
+    let directory = tokio::fs::File::open(&root)
+        .await
+        .map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    directory
+        .sync_all()
+        .await
         .map_err(|_| NetworkOpError::RealizationUnavailable)
 }
 
 /// Retain a deletion tombstone so duplicate or lost-response cleanup remains
 /// idempotent after the kernel TAP has already been removed.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn mark_persistent_tap_realization_deleted(
+pub async fn mark_persistent_tap_realization_deleted(
     state_dir: &Path,
     attachment_id: &ResourceUid,
 ) -> Result<(), NetworkOpError> {
-    let root = realization_root(state_dir)?;
+    let root = realization_root(state_dir).await?;
     let row_path = root.join(format!("{}.json", attachment_id.as_str()));
-    let row = fs::OpenOptions::new()
+    let row = tokio::fs::OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(&row_path)
+        .await
         .map_err(|_| NetworkOpError::RealizationUnavailable)?;
     let mut realization: PersistentTapRealization =
-        serde_json::from_reader(row).map_err(|_| NetworkOpError::RealizationUnavailable)?;
+        serde_json::from_reader(row.into_std().await)
+            .map_err(|_| NetworkOpError::RealizationUnavailable)?;
     if realization.attachment_id != attachment_id.as_str()
         || !realization_marker_matches(&realization)
     {
@@ -611,36 +636,43 @@ pub fn mark_persistent_tap_realization_deleted(
     let bytes =
         serde_json::to_vec(&realization).map_err(|_| NetworkOpError::RealizationUnavailable)?;
     let temp_path = root.join(format!(".{}.json.deleted.tmp", attachment_id.as_str()));
-    match fs::symlink_metadata(&temp_path) {
+    match tokio::fs::symlink_metadata(&temp_path).await {
         Ok(metadata) if metadata.file_type().is_symlink() || metadata.mode() & 0o022 != 0 => {
             return Err(NetworkOpError::RealizationUnavailable);
         }
         Ok(_) => {
-            fs::remove_file(&temp_path).map_err(|_| NetworkOpError::RealizationUnavailable)?;
+            tokio::fs::remove_file(&temp_path)
+                .await
+                .map_err(|_| NetworkOpError::RealizationUnavailable)?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err(NetworkOpError::RealizationUnavailable),
     }
-    let mut file = fs::OpenOptions::new()
+    let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .mode(0o640)
         .open(&temp_path)
+        .await
         .map_err(|_| NetworkOpError::RealizationUnavailable)?;
-    use std::io::Write as _;
-    if file.write_all(&bytes).is_err() || file.sync_data().is_err() {
+    use tokio::io::AsyncWriteExt;
+    if file.write_all(&bytes).await.is_err() || file.sync_data().await.is_err() {
         drop(file);
-        let _ = fs::remove_file(&temp_path);
+        let _ = tokio::fs::remove_file(&temp_path).await;
         return Err(NetworkOpError::RealizationUnavailable);
     }
     drop(file);
-    fs::rename(&temp_path, &row_path).map_err(|_| {
-        let _ = fs::remove_file(&temp_path);
+    tokio::fs::rename(&temp_path, &row_path).await.map_err(|_| {
+        let _ = tokio::fs::remove_file(&temp_path);
         NetworkOpError::RealizationUnavailable
     })?;
-    fs::File::open(&root)
-        .and_then(|directory| directory.sync_all())
+    let directory = tokio::fs::File::open(&root)
+        .await
+        .map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    directory
+        .sync_all()
+        .await
         .map_err(|_| NetworkOpError::RealizationUnavailable)
 }
 
@@ -651,17 +683,18 @@ impl core::fmt::Debug for PersistentTapRealization {
 }
 
 /// Injected persistent-TAP kernel adapter.
+#[allow(async_fn_in_trait)]
 pub trait PersistentTapBackend {
     /// Whether the trusted interface exists.
-    fn tap_exists(&self, ifname: &str) -> Result<bool, NetworkOpError>;
+    async fn tap_exists(&self, ifname: &str) -> Result<bool, NetworkOpError>;
     /// Read the observable ownership marker from the trusted interface.
-    fn tap_ownership_marker(&self, ifname: &str) -> Result<Option<String>, NetworkOpError>;
+    async fn tap_ownership_marker(&self, ifname: &str) -> Result<Option<String>, NetworkOpError>;
     /// Delete only the trusted persistent TAP.
-    fn delete_tap(&self, ifname: &str) -> Result<(), NetworkOpError>;
+    async fn delete_tap(&self, ifname: &str) -> Result<(), NetworkOpError>;
 }
 
 /// Delete one generation-fenced opaque realization.
-pub fn delete_persistent_tap<B: PersistentTapBackend>(
+pub async fn delete_persistent_tap<B: PersistentTapBackend>(
     backend: &B,
     realization: &PersistentTapRealization,
     request: &DeletePersistentTapRequest,
@@ -694,15 +727,16 @@ pub fn delete_persistent_tap<B: PersistentTapBackend>(
     if realization.deleted {
         return Ok(attachment_digest(&realization.attachment_id));
     }
-    if backend.tap_exists(&realization.ifname)? {
+    if backend.tap_exists(&realization.ifname).await? {
         if backend
-            .tap_ownership_marker(&realization.ifname)?
+            .tap_ownership_marker(&realization.ifname)
+            .await?
             .as_deref()
             != Some(realization.ownership_marker.as_str())
         {
             return Err(NetworkOpError::ForeignOwnership);
         }
-        backend.delete_tap(&realization.ifname)?;
+        backend.delete_tap(&realization.ifname).await?;
     }
     Ok(attachment_digest(&realization.attachment_id))
 }
@@ -733,23 +767,25 @@ fn realization_marker_matches(realization: &PersistentTapRealization) -> bool {
 }
 
 /// Load a realization from a broker-owned, fd-safe state row.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn load_persistent_tap_realization(
+pub async fn load_persistent_tap_realization(
     state_dir: &Path,
     request: &DeletePersistentTapRequest,
 ) -> Result<PersistentTapRealization, NetworkOpError> {
     let root = state_dir.join("network-attachments");
-    let metadata =
-        fs::symlink_metadata(&root).map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    let metadata = tokio::fs::symlink_metadata(&root)
+        .await
+        .map_err(|_| NetworkOpError::RealizationUnavailable)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() || metadata.mode() & 0o022 != 0 {
         return Err(NetworkOpError::RealizationUnavailable);
     }
     let row = root.join(format!("{}.json", request.attachment_id.as_str()));
-    let file = fs::OpenOptions::new()
+    let file = tokio::fs::OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(row)
+        .await
         .map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    let file = file.into_std().await;
     let metadata = file
         .metadata()
         .map_err(|_| NetworkOpError::RealizationUnavailable)?;
@@ -763,8 +799,8 @@ pub fn load_persistent_tap_realization(
 pub struct SystemPersistentTapBackend;
 
 impl PersistentTapBackend for SystemPersistentTapBackend {
-    fn tap_exists(&self, ifname: &str) -> Result<bool, NetworkOpError> {
-        let output = ip_command(&["-j", "link", "show", "dev", ifname])?;
+    async fn tap_exists(&self, ifname: &str) -> Result<bool, NetworkOpError> {
+        let output = ip_command(&["-j", "link", "show", "dev", ifname]).await?;
         if output.status.success() {
             Ok(true)
         } else {
@@ -777,18 +813,18 @@ impl PersistentTapBackend for SystemPersistentTapBackend {
         }
     }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn tap_ownership_marker(&self, ifname: &str) -> Result<Option<String>, NetworkOpError> {
+    async fn tap_ownership_marker(&self, ifname: &str) -> Result<Option<String>, NetworkOpError> {
         Ok(
-            std::fs::read_to_string(PathBuf::from("/sys/class/net").join(ifname).join("ifalias"))
+            tokio::fs::read_to_string(PathBuf::from("/sys/class/net").join(ifname).join("ifalias"))
+                .await
                 .ok()
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
         )
     }
 
-    fn delete_tap(&self, ifname: &str) -> Result<(), NetworkOpError> {
-        let output = ip_command(&["link", "delete", "dev", ifname])?;
+    async fn delete_tap(&self, ifname: &str) -> Result<(), NetworkOpError> {
+        let output = ip_command(&["link", "delete", "dev", ifname]).await?;
         if output.status.success() {
             Ok(())
         } else {
@@ -821,8 +857,10 @@ fn digest_parts(parts: &[&[u8]]) -> String {
 mod tests {
     use super::*;
     use d2b_contracts_resource::v3::IfName;
+    use std::fs;
     use d2b_contracts_resource::v3::{ResourceBundleGenerationId, ResourceGeneration, ResourceUid};
     use std::cell::{Cell, RefCell};
+    use std::os::unix::fs::DirBuilderExt;
 
     struct FakeBridge {
         state: RefCell<BridgeReadback>,
@@ -831,19 +869,19 @@ mod tests {
     }
 
     impl BridgeBackend for FakeBridge {
-        fn read_bridge(
+        async fn read_bridge(
             &self,
             _intent: &ResolvedBridgeIntent,
         ) -> Result<BridgeReadback, NetworkOpError> {
             Ok(self.state.borrow().clone())
         }
 
-        fn create_bridge_down(&self, _intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+        async fn create_bridge_down(&self, _intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
             self.creates.set(self.creates.get() + 1);
             Ok(())
         }
 
-        fn configure_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+        async fn configure_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
             self.state.replace(BridgeReadback {
                 present: true,
                 is_bridge: true,
@@ -860,11 +898,11 @@ mod tests {
             Ok(())
         }
 
-        fn set_bridge_up(&self, _intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+        async fn set_bridge_up(&self, _intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
             Ok(())
         }
 
-        fn delete_bridge(&self, _intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+        async fn delete_bridge(&self, _intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
             self.deletes.set(self.deletes.get() + 1);
             self.state.replace(BridgeReadback {
                 present: false,
@@ -904,8 +942,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn create_bridge_configures_before_success_and_delete_refuses_attached_links() {
+    #[tokio::test]
+    async fn create_bridge_configures_before_success_and_delete_refuses_attached_links() {
         let absent = BridgeReadback {
             present: false,
             is_bridge: false,
@@ -921,13 +959,13 @@ mod tests {
             creates: Cell::new(0),
             deletes: Cell::new(0),
         };
-        create_bridge(&backend, &bridge_intent()).unwrap();
+        create_bridge(&backend, &bridge_intent()).await.unwrap();
         assert_eq!(backend.creates.get(), 1);
         let mut attached = backend.state.borrow().clone();
         attached.attached_links = 1;
         backend.state.replace(attached);
         assert_eq!(
-            delete_bridge(&backend, &bridge_intent()),
+            delete_bridge(&backend, &bridge_intent()).await,
             Err(NetworkOpError::BridgeNotEmpty)
         );
         assert_eq!(backend.deletes.get(), 0);
@@ -939,15 +977,15 @@ mod tests {
     }
 
     impl PersistentTapBackend for FakeTap {
-        fn tap_exists(&self, _ifname: &str) -> Result<bool, NetworkOpError> {
+        async fn tap_exists(&self, _ifname: &str) -> Result<bool, NetworkOpError> {
             Ok(self.present.get())
         }
 
-        fn tap_ownership_marker(&self, _ifname: &str) -> Result<Option<String>, NetworkOpError> {
+        async fn tap_ownership_marker(&self, _ifname: &str) -> Result<Option<String>, NetworkOpError> {
             Ok(self.present.get().then(|| realization().ownership_marker))
         }
 
-        fn delete_tap(&self, _ifname: &str) -> Result<(), NetworkOpError> {
+        async fn delete_tap(&self, _ifname: &str) -> Result<(), NetworkOpError> {
             self.deletes.set(self.deletes.get() + 1);
             self.present.set(false);
             Ok(())
@@ -995,35 +1033,37 @@ mod tests {
         }
     }
 
-    #[test]
-    fn delete_persistent_tap_checks_both_fences_before_mutation() {
+    #[tokio::test]
+    async fn delete_persistent_tap_checks_both_fences_before_mutation() {
         let backend = FakeTap {
             present: Cell::new(true),
             deletes: Cell::new(0),
         };
         assert_eq!(
-            delete_persistent_tap(&backend, &realization(), &request(3, 7)),
+            delete_persistent_tap(&backend, &realization(), &request(3, 7))
+                .await,
             Err(NetworkOpError::StaleNetworkGeneration)
         );
         assert_eq!(
-            delete_persistent_tap(&backend, &realization(), &request(4, 6)),
+            delete_persistent_tap(&backend, &realization(), &request(4, 6))
+                .await,
             Err(NetworkOpError::StaleAttachmentGeneration)
         );
         assert_eq!(backend.deletes.get(), 0);
     }
 
-    #[test]
-    fn delete_persistent_tap_validated_absence_is_idempotent() {
+    #[tokio::test]
+    async fn delete_persistent_tap_validated_absence_is_idempotent() {
         let backend = FakeTap {
             present: Cell::new(false),
             deletes: Cell::new(0),
         };
-        assert!(delete_persistent_tap(&backend, &realization(), &request(4, 7)).is_ok());
+        assert!(delete_persistent_tap(&backend, &realization(), &request(4, 7)).await.is_ok());
         assert_eq!(backend.deletes.get(), 0);
     }
 
-    #[test]
-    fn delete_persistent_tap_foreign_marker_fails_without_deletion() {
+    #[tokio::test]
+    async fn delete_persistent_tap_foreign_marker_fails_without_deletion() {
         let backend = FakeTap {
             present: Cell::new(true),
             deletes: Cell::new(0),
@@ -1031,7 +1071,8 @@ mod tests {
         let mut foreign = realization();
         foreign.ownership_marker = "foreign marker".to_owned();
         assert_eq!(
-            delete_persistent_tap(&backend, &foreign, &request(4, 7)),
+            delete_persistent_tap(&backend, &foreign, &request(4, 7))
+                .await,
             Err(NetworkOpError::ForeignOwnership)
         );
         assert_eq!(backend.deletes.get(), 0);
@@ -1049,9 +1090,9 @@ mod tests {
         assert!(digest.starts_with("sha256:"));
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn v3_realization_persists_and_removes_after_fenced_cleanup() {
+    async fn v3_realization_persists_and_removes_after_fenced_cleanup() {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -1094,7 +1135,7 @@ mod tests {
             Some(&create.attachment_id),
         )
         .unwrap();
-        persist_persistent_tap_realization(&root, &create, &ifname).unwrap();
+        persist_persistent_tap_realization(&root, &create, &ifname).await.unwrap();
         let loaded = load_persistent_tap_realization(
             &root,
             &DeletePersistentTapRequest {
@@ -1109,9 +1150,10 @@ mod tests {
                 tracing_span_id: None,
             },
         )
+        .await
         .unwrap();
         assert_eq!(loaded.ifname, ifname.as_str());
-        remove_persistent_tap_realization(&root, &attachment_id).unwrap();
+        remove_persistent_tap_realization(&root, &attachment_id).await.unwrap();
         assert_eq!(
             load_persistent_tap_realization(
                 &root,
@@ -1128,15 +1170,16 @@ mod tests {
                     expected_bundle_generation: bundle_generation(),
                     tracing_span_id: None,
                 },
-            ),
+            )
+            .await,
             Err(NetworkOpError::RealizationUnavailable)
         );
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn v3_realization_reclaims_stale_temp_and_rejects_conflicting_row() {
+    async fn v3_realization_reclaims_stale_temp_and_rejects_conflicting_row() {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -1189,21 +1232,22 @@ mod tests {
             Some(&create.attachment_id),
         )
         .unwrap();
-        persist_persistent_tap_realization(&root, &create, &ifname).unwrap();
+        persist_persistent_tap_realization(&root, &create, &ifname).await.unwrap();
         let conflicting = CreatePersistentTapRequest {
             attachment_generation: ResourceGeneration::new(8).unwrap(),
             ..create
         };
         assert_eq!(
-            persist_persistent_tap_realization(&root, &conflicting, &ifname),
+            persist_persistent_tap_realization(&root, &conflicting, &ifname)
+                .await,
             Err(NetworkOpError::RealizationConflict)
         );
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn deleted_realization_tombstone_makes_duplicate_cleanup_idempotent() {
+    async fn deleted_realization_tombstone_makes_duplicate_cleanup_idempotent() {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -1249,8 +1293,8 @@ mod tests {
             Some(&create.attachment_id),
         )
         .unwrap();
-        persist_persistent_tap_realization(&root, &create, &ifname).unwrap();
-        mark_persistent_tap_realization_deleted(&root, &attachment_id).unwrap();
+        persist_persistent_tap_realization(&root, &create, &ifname).await.unwrap();
+        mark_persistent_tap_realization_deleted(&root, &attachment_id).await.unwrap();
         let request = DeletePersistentTapRequest {
             attachment_id,
             expected_zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
@@ -1268,9 +1312,10 @@ mod tests {
         assert!(
             delete_persistent_tap(
                 &backend,
-                &load_persistent_tap_realization(&root, &request).unwrap(),
+                &load_persistent_tap_realization(&root, &request).await.unwrap(),
                 &request
             )
+            .await
             .is_ok()
         );
         assert_eq!(backend.deletes.get(), 0);

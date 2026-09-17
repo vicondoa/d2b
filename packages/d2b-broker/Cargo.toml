@@ -60,7 +60,7 @@ nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "
 rustix = { version = "0.38", features = ["fs", "process", "net"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "net", "time", "fs", "process"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "net", "time", "fs", "process", "io-util"] }
 sha2 = "0.10"
 zbus = { version = "5.16", features = ["blocking-api"] }
 

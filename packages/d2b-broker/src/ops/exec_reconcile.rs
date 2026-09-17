@@ -24,20 +24,18 @@ use d2b_core::bundle_resolver::ResolvedStoreViewIntent;
 use d2b_host::hardlink_farm::{self, GenerationMarker, HardlinkFarmError};
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::io::{self, Read};
+use std::io;
 use std::os::fd::AsFd;
 use std::os::unix::fs::MetadataExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::pin::Pin;
+use std::process::Stdio;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const USBIP_DRIVER_HELPER_TIMEOUT: Duration = Duration::from_secs(10);
 const USBIP_DRIVER_MAX_ATTEMPTS: usize = 4;
 const USBIP_DRIVER_RETRY_BASE: Duration = Duration::from_millis(40);
 const USBIP_DRIVER_STDERR_LIMIT: usize = 8 * 1024;
-const USBIP_DRIVER_STDERR_DRAIN_GRACE: Duration = Duration::from_millis(250);
 const USBIP_STREAM_FD_RELEASE_GRACE: Duration = Duration::from_millis(750);
 const USBIP_STATUS_USED: &str = "2";
 
@@ -134,31 +132,51 @@ pub struct GeneratedSshKey {
 
 /// Trait the broker dispatch consumes. Production daemon wires the
 /// [`SystemReconcileExecutor`]; tests use [`FakeReconcileExecutor`].
+///
+/// Every method is async (returning a boxed future so the trait stays
+/// dyn-compatible with `&dyn ReconcileExecutor`); the production impl
+/// drives `tokio::process` / `tokio::fs` and never blocks an executor
+/// worker.
 pub trait ReconcileExecutor: Send + Sync {
     /// Run `nft -f -` with the supplied script. Atomic per nft(8):
     /// the kernel applies the whole batch or nothing.
-    fn apply_nft_script(&self, nft_binary: &Path, script: &str) -> Result<(), ReconcileExecError>;
+    fn apply_nft_script<'a>(
+        &'a self,
+        nft_binary: &'a Path,
+        script: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>>;
 
     /// Write `value` to `/proc/sys/<key>` (key without the
     /// `/proc/sys/` prefix). Validates the key to refuse absolute
     /// paths / `..` traversal.
-    fn write_sysctl(&self, key: &str, value: &str) -> Result<(), ReconcileExecError>;
+    fn write_sysctl<'a>(
+        &'a self,
+        key: &'a str,
+        value: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>>;
 
     /// Atomically write `contents` to `path` via tmp+rename+fsync.
     /// Used for /etc/hosts updates.
-    fn write_atomic_file(
-        &self,
-        path: &Path,
-        contents: &[u8],
+    fn write_atomic_file<'a>(
+        &'a self,
+        path: &'a Path,
+        contents: &'a [u8],
         mode: u32,
-    ) -> Result<(), ReconcileExecError>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>>;
 
     /// Path-safe direct write used for sysfs/procfs-style attribute
     /// files that do not support temp-file + rename semantics.
-    fn write_path_value(&self, path: &Path, value: &str) -> Result<(), ReconcileExecError>;
+    fn write_path_value<'a>(
+        &'a self,
+        path: &'a Path,
+        value: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>>;
 
     /// Path-safe direct read used for live readback verification.
-    fn read_path_value(&self, path: &Path) -> Result<String, ReconcileExecError>;
+    fn read_path_value<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<String, ReconcileExecError>> + Send + 'a>>;
 
     /// Best-effort host-side USBIP stream abort before driver unbind.
     ///
@@ -166,12 +184,12 @@ pub trait ReconcileExecutor: Send + Sync {
     /// control surface (`<sysfs_root>/<bus_id>/usbip_sockfd`) and MUST NOT
     /// claim or implement a generic sysfs revoke primitive. The default no-op
     /// exists for narrow tests; production overrides it.
-    fn shutdown_usbip_streams(
-        &self,
-        _sysfs_root: &Path,
-        _bus_id: &str,
-    ) -> Result<(), ReconcileExecError> {
-        Ok(())
+    fn shutdown_usbip_streams<'a>(
+        &'a self,
+        _sysfs_root: &'a Path,
+        _bus_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
     }
 
     /// Wait for the usbip-host per-device stream fd to be released after
@@ -180,49 +198,53 @@ pub trait ReconcileExecutor: Send + Sync {
     /// Production polls the kernel-owned `usbip_status` liveness surface before
     /// the sysfs driver-unbind helper runs. Tests may use the default no-op when
     /// exercising unrelated executor paths.
-    fn wait_usbip_stream_fd_release(
-        &self,
-        _sysfs_root: &Path,
-        _bus_id: &str,
-    ) -> Result<(), ReconcileExecError> {
-        Ok(())
+    fn wait_usbip_stream_fd_release<'a>(
+        &'a self,
+        _sysfs_root: &'a Path,
+        _bus_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
     }
 
     /// Run `ip route <verb> <route_spec>` (verb = "add" / "del" /
     /// "replace"). Refuses non-absolute `ip_binary`.
-    fn ip_route(
-        &self,
-        ip_binary: &Path,
+    fn ip_route<'a>(
+        &'a self,
+        ip_binary: &'a Path,
         verb: IpRouteVerb,
-        route_spec: &str,
-    ) -> Result<(), ReconcileExecError>;
+        route_spec: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>>;
 
     /// Run `usbip <subcommand> --busid <bus_id>`. Refuses non-absolute
     /// `usbip_binary`. Bus id is validated by the caller via
     /// `d2b_contracts::usbip::validate_bus_id`.
-    fn run_usbip(
-        &self,
-        usbip_binary: &Path,
+    fn run_usbip<'a>(
+        &'a self,
+        usbip_binary: &'a Path,
         subcommand: UsbipSubcommand,
-        bus_id: &str,
-    ) -> Result<(), ReconcileExecError>;
+        bus_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>>;
 
     /// Build or reconcile a store-view generation for in-guest activation
     /// without publishing generation metadata as current.
-    fn prepare_activation_store_view(
-        &self,
-        intent: &ResolvedStoreViewIntent,
-    ) -> Result<(), ReconcileExecError> {
-        materialize_store_view(intent)
+    ///
+    /// The underlying hardlink-farm primitive is a synchronous d2b-host
+    /// dependency (out of the broker's async conversion scope); the
+    /// subprocess fallback it drives is async.
+    fn prepare_activation_store_view<'a>(
+        &'a self,
+        intent: &'a ResolvedStoreViewIntent,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move { materialize_store_view(intent).await })
     }
 
     /// Generate a replacement ed25519 keypair and atomically publish it
     /// at `key_path` + `key_path.pub`.
-    fn run_ssh_keygen(
-        &self,
-        key_path: &Path,
-        comment: &str,
-    ) -> Result<GeneratedSshKey, ReconcileExecError>;
+    fn run_ssh_keygen<'a>(
+        &'a self,
+        key_path: &'a Path,
+        comment: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<GeneratedSshKey, ReconcileExecError>> + Send + 'a>>;
 }
 
 /// USBIP subcommand selector mirrored from
@@ -269,7 +291,7 @@ impl IpRouteVerb {
 /// Production executor. Shells out via `std::process::Command`.
 pub struct SystemReconcileExecutor;
 
-fn materialize_store_view(intent: &ResolvedStoreViewIntent) -> Result<(), ReconcileExecError> {
+async fn materialize_store_view(intent: &ResolvedStoreViewIntent) -> Result<(), ReconcileExecError> {
     if intent.vm.is_empty() {
         return Err(ReconcileExecError::InvalidInput {
             detail: "store-view vm is empty".to_owned(),
@@ -296,23 +318,25 @@ fn materialize_store_view(intent: &ResolvedStoreViewIntent) -> Result<(), Reconc
         vm: intent.vm.clone(),
         generation_number,
     };
-    let generation_dir = crate::ops::store_view_farm::build_farm_cross_mount_safe(
+    let generation_dir = crate::ops::store_view_farm::build_farm_cross_mount_safe_async(
         &intent.hardlink_farm_path,
         intent.generation,
         &intent.closure_paths,
         &marker,
     )
+    .await
     .map_err(map_hardlink_farm_error)?;
     let generation_id = hardlink_farm::generation_id(
         &intent.closure_paths,
         hardlink_farm::system_store_path(&intent.closure_paths),
     );
-    crate::ops::store_view_farm::build_store_view_cross_mount_safe(
+    crate::ops::store_view_farm::build_store_view_cross_mount_safe_async(
         &intent.hardlink_farm_path,
         &generation_id,
         &intent.closure_paths,
         &marker,
     )
+    .await
     .map_err(map_hardlink_farm_error)?;
     let _ =
         hardlink_farm::read_generation_marker(&generation_dir).map_err(map_hardlink_farm_error)?;
@@ -345,460 +369,506 @@ impl SystemLiveExec {
         self.d2bd_gid
     }
 
-    pub fn run_modprobe(&self, module: &str) -> Result<(), ReconcileExecError> {
-        run_modprobe(module)
+    pub async fn run_modprobe(&self, module: &str) -> Result<(), ReconcileExecError> {
+        run_modprobe(module).await
     }
 }
 
 impl ReconcileExecutor for SystemReconcileExecutor {
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn apply_nft_script(&self, nft_binary: &Path, script: &str) -> Result<(), ReconcileExecError> {
-        if !nft_binary
-            .to_str()
-            .map(|s| s.starts_with('/'))
-            .unwrap_or(false)
-        {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!(
-                    "nft binary path must be absolute, got {:?}",
-                    nft_binary.display().to_string()
-                ),
-            });
-        }
-        if script.is_empty() {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: "nft script is empty".to_owned(),
-            });
-        }
-        use std::io::Write;
-        let mut child = Command::new(nft_binary)
-            .arg("-f")
-            .arg("-")
-            .env_remove("NOTIFY_SOCKET")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| ReconcileExecError::BinaryMissing {
-                which: "nft".to_owned(),
-                detail: e.to_string(),
-            })?;
-        if let Some(stdin) = child.stdin.as_mut() {
-            stdin
-                .write_all(script.as_bytes())
-                .map_err(|e| ReconcileExecError::Io {
-                    path: "<nft stdin>".to_owned(),
-                    detail: e.to_string(),
-                })?;
-        }
-        let output = child
-            .wait_with_output()
-            .map_err(|e| ReconcileExecError::Io {
-                path: "<nft wait>".to_owned(),
-                detail: e.to_string(),
-            })?;
-        if !output.status.success() {
-            return Err(ReconcileExecError::NonZeroExit {
-                which: "nft".to_owned(),
-                exit_code: output.status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            });
-        }
-        Ok(())
-    }
-
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn write_sysctl(&self, key: &str, value: &str) -> Result<(), ReconcileExecError> {
-        if key.is_empty() {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: "sysctl key is empty".to_owned(),
-            });
-        }
-        if key.starts_with('/') {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!("sysctl key must NOT be absolute (no leading /): {key:?}"),
-            });
-        }
-        if key.contains("..") {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!("sysctl key contains traversal: {key:?}"),
-            });
-        }
-        for c in key.chars() {
-            if !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/')) {
+    fn apply_nft_script<'a>(
+        &'a self,
+        nft_binary: &'a Path,
+        script: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move {
+            if !nft_binary
+                .to_str()
+                .map(|s| s.starts_with('/'))
+                .unwrap_or(false)
+            {
                 return Err(ReconcileExecError::InvalidInput {
-                    detail: format!("sysctl key contains unsafe char {c:?}: {key:?}"),
+                    detail: format!(
+                        "nft binary path must be absolute, got {:?}",
+                        nft_binary.display().to_string()
+                    ),
                 });
             }
-        }
-        if value.contains('\n') {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!("sysctl value contains newline: {value:?}"),
-            });
-        }
-        let path = PathBuf::from("/proc/sys").join(key.replace('.', "/"));
-        std::fs::write(&path, value).map_err(|e| ReconcileExecError::Io {
-            path: path.display().to_string(),
-            detail: e.to_string(),
-        })?;
-        Ok(())
-    }
-
-    fn write_atomic_file(
-        &self,
-        path: &Path,
-        contents: &[u8],
-        mode: u32,
-    ) -> Result<(), ReconcileExecError> {
-        if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!("path must be absolute: {:?}", path.display().to_string()),
-            });
-        }
-        let parent = path
-            .parent()
-            .ok_or_else(|| ReconcileExecError::InvalidInput {
-                detail: format!("path has no parent: {:?}", path.display().to_string()),
-            })?;
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| ReconcileExecError::InvalidInput {
-                detail: format!(
-                    "path has no UTF-8 basename: {:?}",
-                    path.display().to_string()
-                ),
-            })?;
-        let dir_fd = crate::sys::path_safe::open_dir_path_safe(parent).map_err(|e| {
-            ReconcileExecError::Io {
-                path: parent.display().to_string(),
-                detail: e.to_string(),
+            if script.is_empty() {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: "nft script is empty".to_owned(),
+                });
             }
-        })?;
-        crate::sys::path_safe::atomic_replace_fd(&dir_fd, name, contents, mode).map_err(|e| {
-            ReconcileExecError::Io {
-                path: path.display().to_string(),
-                detail: e.to_string(),
-            }
-        })?;
-        Ok(())
-    }
-
-    fn write_path_value(&self, path: &Path, value: &str) -> Result<(), ReconcileExecError> {
-        if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!("path must be absolute: {:?}", path.display().to_string()),
-            });
-        }
-        if value.contains('\n') {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!("path value contains newline: {value:?}"),
-            });
-        }
-        crate::sys::path_safe::write_nofollow(path, value.as_bytes()).map_err(|e| {
-            ReconcileExecError::Io {
-                path: path.display().to_string(),
-                detail: e.to_string(),
-            }
-        })
-    }
-
-    fn read_path_value(&self, path: &Path) -> Result<String, ReconcileExecError> {
-        if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!("path must be absolute: {:?}", path.display().to_string()),
-            });
-        }
-        crate::sys::path_safe::read_to_string_nofollow(path).map_err(|e| ReconcileExecError::Io {
-            path: path.display().to_string(),
-            detail: e.to_string(),
-        })
-    }
-
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn ip_route(
-        &self,
-        ip_binary: &Path,
-        verb: IpRouteVerb,
-        route_spec: &str,
-    ) -> Result<(), ReconcileExecError> {
-        if !ip_binary
-            .to_str()
-            .map(|s| s.starts_with('/'))
-            .unwrap_or(false)
-        {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!(
-                    "ip binary path must be absolute, got {:?}",
-                    ip_binary.display().to_string()
-                ),
-            });
-        }
-        if route_spec.is_empty() {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: "route spec is empty".to_owned(),
-            });
-        }
-        // Split the route spec on whitespace to build the argv;
-        // any embedded shell metacharacter is safe because we
-        // never feed this to a shell.
-        let mut args = vec!["route".to_owned(), verb.as_str().to_owned()];
-        for part in route_spec.split_whitespace() {
-            args.push(part.to_owned());
-        }
-        let output = Command::new(ip_binary)
-            .args(&args)
-            .env_remove("NOTIFY_SOCKET")
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| ReconcileExecError::BinaryMissing {
-                which: "ip".to_owned(),
-                detail: e.to_string(),
-            })?;
-        if !output.status.success() {
-            // `ip route del` on a route that doesn't exist returns
-            // non-zero; the broker callers tolerate this via the
-            // typed error.
-            return Err(ReconcileExecError::NonZeroExit {
-                which: "ip route".to_owned(),
-                exit_code: output.status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            });
-        }
-        Ok(())
-    }
-
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn run_usbip(
-        &self,
-        usbip_binary: &Path,
-        subcommand: UsbipSubcommand,
-        bus_id: &str,
-    ) -> Result<(), ReconcileExecError> {
-        if !usbip_binary
-            .to_str()
-            .map(|s| s.starts_with('/'))
-            .unwrap_or(false)
-        {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!(
-                    "usbip binary path must be absolute, got {:?}",
-                    usbip_binary.display().to_string()
-                ),
-            });
-        }
-        if bus_id.is_empty() {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: "usbip bus_id is empty".to_owned(),
-            });
-        }
-        d2b_contracts::usbip::validate_bus_id(bus_id).map_err(|err| {
-            ReconcileExecError::InvalidInput {
-                detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
-            }
-        })?;
-        if matches!(subcommand, UsbipSubcommand::Bind | UsbipSubcommand::Unbind) {
-            return run_usbip_driver_isolated(usbip_binary, subcommand, bus_id);
-        }
-        let output = Command::new(usbip_binary)
-            .arg(subcommand.as_str())
-            .arg("--busid")
-            .arg(bus_id)
-            .env_remove("NOTIFY_SOCKET")
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| ReconcileExecError::BinaryMissing {
-                which: "usbip".to_owned(),
-                detail: e.to_string(),
-            })?;
-        if !output.status.success() {
-            return Err(ReconcileExecError::NonZeroExit {
-                which: format!("usbip {}", subcommand.as_str()),
-                exit_code: output.status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            });
-        }
-        Ok(())
-    }
-
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn shutdown_usbip_streams(
-        &self,
-        sysfs_root: &Path,
-        bus_id: &str,
-    ) -> Result<(), ReconcileExecError> {
-        d2b_contracts::usbip::validate_bus_id(bus_id).map_err(|err| {
-            ReconcileExecError::InvalidInput {
-                detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
-            }
-        })?;
-        let device_dir = sysfs_root.join(bus_id);
-        let status_path = device_dir.join("usbip_status");
-        let sockfd_path = device_dir.join("usbip_sockfd");
-        let status = read_usbip_status(&status_path)?;
-        if status != USBIP_STATUS_USED {
-            return Ok(());
-        }
-
-        match std::fs::write(&sockfd_path, b"-1\n") {
-            Ok(()) => Ok(()),
-            Err(error) if usbip_stream_shutdown_error_is_ignorable(&error) => Ok(()),
-            Err(error) => {
-                if read_usbip_status(&status_path).is_ok_and(|latest| latest != USBIP_STATUS_USED) {
-                    return Ok(());
-                }
-                Err(ReconcileExecError::Io {
-                    path: sockfd_path.display().to_string(),
-                    detail: format!(
-                        "usbip-host stream shutdown before driver unbind failed: {error}; operator must detach or recover the USBIP stream manually before retrying"
-                    ),
-                })
-            }
-        }
-    }
-
-    fn wait_usbip_stream_fd_release(
-        &self,
-        sysfs_root: &Path,
-        bus_id: &str,
-    ) -> Result<(), ReconcileExecError> {
-        d2b_contracts::usbip::validate_bus_id(bus_id).map_err(|err| {
-            ReconcileExecError::InvalidInput {
-                detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
-            }
-        })?;
-        wait_usbip_stream_fd_release(sysfs_root, bus_id, USBIP_STREAM_FD_RELEASE_GRACE)
-    }
-
-    fn prepare_activation_store_view(
-        &self,
-        intent: &ResolvedStoreViewIntent,
-    ) -> Result<(), ReconcileExecError> {
-        materialize_store_view(intent)
-    }
-
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn run_ssh_keygen(
-        &self,
-        key_path: &Path,
-        comment: &str,
-    ) -> Result<GeneratedSshKey, ReconcileExecError> {
-        if !key_path.is_absolute() {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!(
-                    "ssh-keygen path must be absolute, got {:?}",
-                    key_path.display().to_string()
-                ),
-            });
-        }
-        if comment.contains('\n') {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: "ssh-keygen comment must be single-line".to_owned(),
-            });
-        }
-        let parent = key_path
-            .parent()
-            .ok_or_else(|| ReconcileExecError::InvalidInput {
-                detail: format!(
-                    "key path has no parent: {:?}",
-                    key_path.display().to_string()
-                ),
-            })?;
-        let basename = key_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| ReconcileExecError::InvalidInput {
-                detail: format!(
-                    "key path has no UTF-8 basename: {:?}",
-                    key_path.display().to_string()
-                ),
-            })?;
-        let staging = parent.join(format!(".{basename}.rotate.{}", std::process::id()));
-        let staging_pub = PathBuf::from(format!("{}.pub", staging.display()));
-        let pub_path = PathBuf::from(format!("{}.pub", key_path.display()));
-        let existing_owner = file_owner(key_path);
-        let existing_pub_owner = file_owner(&pub_path).or(existing_owner);
-        let result = (|| {
-            let output = Command::new("/run/current-system/sw/bin/ssh-keygen")
-                .arg("-q")
-                .arg("-t")
-                .arg("ed25519")
-                .arg("-N")
-                .arg("")
-                .arg("-C")
-                .arg(comment)
+            use tokio::io::AsyncWriteExt;
+            let mut child = tokio::process::Command::new(nft_binary)
                 .arg("-f")
-                .arg(&staging)
+                .arg("-")
                 .env_remove("NOTIFY_SOCKET")
-                .stdin(Stdio::null())
-                .output()
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
                 .map_err(|e| ReconcileExecError::BinaryMissing {
-                    which: "ssh-keygen".to_owned(),
+                    which: "nft".to_owned(),
+                    detail: e.to_string(),
+                })?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(script.as_bytes())
+                    .await
+                    .map_err(|e| ReconcileExecError::Io {
+                        path: "<nft stdin>".to_owned(),
+                        detail: e.to_string(),
+                    })?;
+            }
+            let output = child
+                .wait_with_output()
+                .await
+                .map_err(|e| ReconcileExecError::Io {
+                    path: "<nft wait>".to_owned(),
                     detail: e.to_string(),
                 })?;
             if !output.status.success() {
                 return Err(ReconcileExecError::NonZeroExit {
-                    which: "ssh-keygen".to_owned(),
+                    which: "nft".to_owned(),
                     exit_code: output.status.code().unwrap_or(-1),
                     stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
                 });
             }
-            let fingerprint_output = Command::new("/run/current-system/sw/bin/ssh-keygen")
-                .arg("-lf")
-                .arg(&staging_pub)
+            Ok(())
+        })
+    }
+
+    fn write_sysctl<'a>(
+        &'a self,
+        key: &'a str,
+        value: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move {
+            if key.is_empty() {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: "sysctl key is empty".to_owned(),
+                });
+            }
+            if key.starts_with('/') {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: format!("sysctl key must NOT be absolute (no leading /): {key:?}"),
+                });
+            }
+            if key.contains("..") {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: format!("sysctl key contains traversal: {key:?}"),
+                });
+            }
+            for c in key.chars() {
+                if !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/')) {
+                    return Err(ReconcileExecError::InvalidInput {
+                        detail: format!("sysctl key contains unsafe char {c:?}: {key:?}"),
+                    });
+                }
+            }
+            if value.contains('\n') {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: format!("sysctl value contains newline: {value:?}"),
+                });
+            }
+            let path = PathBuf::from("/proc/sys").join(key.replace('.', "/"));
+            tokio::fs::write(&path, value)
+                .await
+                .map_err(|e| ReconcileExecError::Io {
+                    path: path.display().to_string(),
+                    detail: e.to_string(),
+                })?;
+            Ok(())
+        })
+    }
+
+    fn write_atomic_file<'a>(
+        &'a self,
+        path: &'a Path,
+        contents: &'a [u8],
+        mode: u32,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move {
+            if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: format!("path must be absolute: {:?}", path.display().to_string()),
+                });
+            }
+            let parent = path
+                .parent()
+                .ok_or_else(|| ReconcileExecError::InvalidInput {
+                    detail: format!("path has no parent: {:?}", path.display().to_string()),
+                })?;
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| ReconcileExecError::InvalidInput {
+                    detail: format!(
+                        "path has no UTF-8 basename: {:?}",
+                        path.display().to_string()
+                    ),
+                })?;
+            let dir_fd = crate::sys::path_safe::open_dir_path_safe(parent).map_err(|e| {
+                ReconcileExecError::Io {
+                    path: parent.display().to_string(),
+                    detail: e.to_string(),
+                }
+            })?;
+            crate::sys::path_safe::atomic_replace_fd(&dir_fd, name, contents, mode).map_err(
+                |e| ReconcileExecError::Io {
+                    path: path.display().to_string(),
+                    detail: e.to_string(),
+                },
+            )?;
+            Ok(())
+        })
+    }
+
+    fn write_path_value<'a>(
+        &'a self,
+        path: &'a Path,
+        value: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move {
+            if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: format!("path must be absolute: {:?}", path.display().to_string()),
+                });
+            }
+            if value.contains('\n') {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: format!("path value contains newline: {value:?}"),
+                });
+            }
+            crate::sys::path_safe::write_nofollow(path, value.as_bytes()).map_err(|e| {
+                ReconcileExecError::Io {
+                    path: path.display().to_string(),
+                    detail: e.to_string(),
+                }
+            })
+        })
+    }
+
+    fn read_path_value<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<String, ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move {
+            if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: format!("path must be absolute: {:?}", path.display().to_string()),
+                });
+            }
+            crate::sys::path_safe::read_to_string_nofollow(path).map_err(|e| {
+                ReconcileExecError::Io {
+                    path: path.display().to_string(),
+                    detail: e.to_string(),
+                }
+            })
+        })
+    }
+
+    fn ip_route<'a>(
+        &'a self,
+        ip_binary: &'a Path,
+        verb: IpRouteVerb,
+        route_spec: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move {
+            if !ip_binary
+                .to_str()
+                .map(|s| s.starts_with('/'))
+                .unwrap_or(false)
+            {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: format!(
+                        "ip binary path must be absolute, got {:?}",
+                        ip_binary.display().to_string()
+                    ),
+                });
+            }
+            if route_spec.is_empty() {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: "route spec is empty".to_owned(),
+                });
+            }
+            // Split the route spec on whitespace to build the argv;
+            // any embedded shell metacharacter is safe because we
+            // never feed this to a shell.
+            let mut args = vec!["route".to_owned(), verb.as_str().to_owned()];
+            for part in route_spec.split_whitespace() {
+                args.push(part.to_owned());
+            }
+            let output = tokio::process::Command::new(ip_binary)
+                .args(&args)
                 .env_remove("NOTIFY_SOCKET")
                 .stdin(Stdio::null())
                 .output()
+                .await
                 .map_err(|e| ReconcileExecError::BinaryMissing {
-                    which: "ssh-keygen".to_owned(),
+                    which: "ip".to_owned(),
                     detail: e.to_string(),
                 })?;
-            if !fingerprint_output.status.success() {
+            if !output.status.success() {
+                // `ip route del` on a route that doesn't exist returns
+                // non-zero; the broker callers tolerate this via the
+                // typed error.
                 return Err(ReconcileExecError::NonZeroExit {
-                    which: "ssh-keygen -lf".to_owned(),
-                    exit_code: fingerprint_output.status.code().unwrap_or(-1),
-                    stderr: String::from_utf8_lossy(&fingerprint_output.stderr)
-                        .trim()
-                        .to_owned(),
+                    which: "ip route".to_owned(),
+                    exit_code: output.status.code().unwrap_or(-1),
+                    stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
                 });
             }
-            let private_key = std::fs::read(&staging).map_err(|e| ReconcileExecError::Io {
-                path: staging.display().to_string(),
-                detail: e.to_string(),
-            })?;
-            let public_key = std::fs::read(&staging_pub).map_err(|e| ReconcileExecError::Io {
-                path: staging_pub.display().to_string(),
-                detail: e.to_string(),
-            })?;
-            let fingerprint = parse_fingerprint(&fingerprint_output.stdout)?;
-            self.write_atomic_file(key_path, &private_key, 0o640)?;
-            self.write_atomic_file(&pub_path, &public_key, 0o644)?;
-            if let Some((uid, gid)) = existing_owner {
-                chown_atomic_target(key_path, uid, gid)?;
+            Ok(())
+        })
+    }
+
+    fn run_usbip<'a>(
+        &'a self,
+        usbip_binary: &'a Path,
+        subcommand: UsbipSubcommand,
+        bus_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move {
+            if !usbip_binary
+                .to_str()
+                .map(|s| s.starts_with('/'))
+                .unwrap_or(false)
+            {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: format!(
+                        "usbip binary path must be absolute, got {:?}",
+                        usbip_binary.display().to_string()
+                    ),
+                });
             }
-            if let Some((uid, gid)) = existing_pub_owner {
-                chown_atomic_target(&pub_path, uid, gid)?;
+            if bus_id.is_empty() {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: "usbip bus_id is empty".to_owned(),
+                });
             }
-            Ok(GeneratedSshKey {
-                public_key_fingerprint: fingerprint,
-            })
-        })();
-        let _ = crate::sys::path_safe::remove_nofollow(&staging);
-        let _ = crate::sys::path_safe::remove_nofollow(&staging_pub);
-        result
+            d2b_contracts::usbip::validate_bus_id(bus_id).map_err(|err| {
+                ReconcileExecError::InvalidInput {
+                    detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
+                }
+            })?;
+            if matches!(subcommand, UsbipSubcommand::Bind | UsbipSubcommand::Unbind) {
+                return run_usbip_driver_isolated(usbip_binary, subcommand, bus_id).await;
+            }
+            let output = tokio::process::Command::new(usbip_binary)
+                .arg(subcommand.as_str())
+                .arg("--busid")
+                .arg(bus_id)
+                .env_remove("NOTIFY_SOCKET")
+                .stdin(Stdio::null())
+                .output()
+                .await
+                .map_err(|e| ReconcileExecError::BinaryMissing {
+                    which: "usbip".to_owned(),
+                    detail: e.to_string(),
+                })?;
+            if !output.status.success() {
+                return Err(ReconcileExecError::NonZeroExit {
+                    which: format!("usbip {}", subcommand.as_str()),
+                    exit_code: output.status.code().unwrap_or(-1),
+                    stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+                });
+            }
+            Ok(())
+        })
+    }
+
+    fn shutdown_usbip_streams<'a>(
+        &'a self,
+        sysfs_root: &'a Path,
+        bus_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move {
+            d2b_contracts::usbip::validate_bus_id(bus_id).map_err(|err| {
+                ReconcileExecError::InvalidInput {
+                    detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
+                }
+            })?;
+            let device_dir = sysfs_root.join(bus_id);
+            let status_path = device_dir.join("usbip_status");
+            let sockfd_path = device_dir.join("usbip_sockfd");
+            let status = read_usbip_status(&status_path).await?;
+            if status != USBIP_STATUS_USED {
+                return Ok(());
+            }
+
+            match tokio::fs::write(&sockfd_path, b"-1\n").await {
+                Ok(()) => Ok(()),
+                Err(error) if usbip_stream_shutdown_error_is_ignorable(&error) => Ok(()),
+                Err(error) => {
+                    if read_usbip_status(&status_path)
+                        .await
+                        .is_ok_and(|latest| latest != USBIP_STATUS_USED)
+                    {
+                        return Ok(());
+                    }
+                    Err(ReconcileExecError::Io {
+                        path: sockfd_path.display().to_string(),
+                        detail: format!(
+                            "usbip-host stream shutdown before driver unbind failed: {error}; operator must detach or recover the USBIP stream manually before retrying"
+                        ),
+                    })
+                }
+            }
+        })
+    }
+
+    fn wait_usbip_stream_fd_release<'a>(
+        &'a self,
+        sysfs_root: &'a Path,
+        bus_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move {
+            d2b_contracts::usbip::validate_bus_id(bus_id).map_err(|err| {
+                ReconcileExecError::InvalidInput {
+                    detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
+                }
+            })?;
+            wait_usbip_stream_fd_release(sysfs_root, bus_id, USBIP_STREAM_FD_RELEASE_GRACE).await
+        })
+    }
+
+    fn prepare_activation_store_view<'a>(
+        &'a self,
+        intent: &'a ResolvedStoreViewIntent,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move { materialize_store_view(intent).await })
+    }
+
+    fn run_ssh_keygen<'a>(
+        &'a self,
+        key_path: &'a Path,
+        comment: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<GeneratedSshKey, ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move {
+            if !key_path.is_absolute() {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: format!(
+                        "ssh-keygen path must be absolute, got {:?}",
+                        key_path.display().to_string()
+                    ),
+                });
+            }
+            if comment.contains('\n') {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: "ssh-keygen comment must be single-line".to_owned(),
+                });
+            }
+            let parent = key_path
+                .parent()
+                .ok_or_else(|| ReconcileExecError::InvalidInput {
+                    detail: format!(
+                        "key path has no parent: {:?}",
+                        key_path.display().to_string()
+                    ),
+                })?;
+            let basename = key_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| ReconcileExecError::InvalidInput {
+                    detail: format!(
+                        "key path has no UTF-8 basename: {:?}",
+                        key_path.display().to_string()
+                    ),
+                })?;
+            let staging = parent.join(format!(".{basename}.rotate.{}", std::process::id()));
+            let staging_pub = PathBuf::from(format!("{}.pub", staging.display()));
+            let pub_path = PathBuf::from(format!("{}.pub", key_path.display()));
+            let existing_owner = file_owner(key_path).await;
+            let existing_pub_owner = file_owner(&pub_path).await.or(existing_owner);
+            let result = async {
+                let output = tokio::process::Command::new("/run/current-system/sw/bin/ssh-keygen")
+                    .arg("-q")
+                    .arg("-t")
+                    .arg("ed25519")
+                    .arg("-N")
+                    .arg("")
+                    .arg("-C")
+                    .arg(comment)
+                    .arg("-f")
+                    .arg(&staging)
+                    .env_remove("NOTIFY_SOCKET")
+                    .stdin(Stdio::null())
+                    .output()
+                    .await
+                    .map_err(|e| ReconcileExecError::BinaryMissing {
+                        which: "ssh-keygen".to_owned(),
+                        detail: e.to_string(),
+                    })?;
+                if !output.status.success() {
+                    return Err(ReconcileExecError::NonZeroExit {
+                        which: "ssh-keygen".to_owned(),
+                        exit_code: output.status.code().unwrap_or(-1),
+                        stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+                    });
+                }
+                let fingerprint_output =
+                    tokio::process::Command::new("/run/current-system/sw/bin/ssh-keygen")
+                        .arg("-lf")
+                        .arg(&staging_pub)
+                        .env_remove("NOTIFY_SOCKET")
+                        .stdin(Stdio::null())
+                        .output()
+                        .await
+                        .map_err(|e| ReconcileExecError::BinaryMissing {
+                            which: "ssh-keygen".to_owned(),
+                            detail: e.to_string(),
+                        })?;
+                if !fingerprint_output.status.success() {
+                    return Err(ReconcileExecError::NonZeroExit {
+                        which: "ssh-keygen -lf".to_owned(),
+                        exit_code: fingerprint_output.status.code().unwrap_or(-1),
+                        stderr: String::from_utf8_lossy(&fingerprint_output.stderr)
+                            .trim()
+                            .to_owned(),
+                    });
+                }
+                let private_key =
+                    tokio::fs::read(&staging).await.map_err(|e| ReconcileExecError::Io {
+                        path: staging.display().to_string(),
+                        detail: e.to_string(),
+                    })?;
+                let public_key =
+                    tokio::fs::read(&staging_pub).await.map_err(|e| ReconcileExecError::Io {
+                        path: staging_pub.display().to_string(),
+                        detail: e.to_string(),
+                    })?;
+                let fingerprint = parse_fingerprint(&fingerprint_output.stdout)?;
+                self.write_atomic_file(key_path, &private_key, 0o640).await?;
+                self.write_atomic_file(&pub_path, &public_key, 0o644).await?;
+                if let Some((uid, gid)) = existing_owner {
+                    chown_atomic_target(key_path, uid, gid)?;
+                }
+                if let Some((uid, gid)) = existing_pub_owner {
+                    chown_atomic_target(&pub_path, uid, gid)?;
+                }
+                Ok(GeneratedSshKey {
+                    public_key_fingerprint: fingerprint,
+                })
+            }
+            .await;
+            let _ = crate::sys::path_safe::remove_nofollow(&staging);
+            let _ = crate::sys::path_safe::remove_nofollow(&staging_pub);
+            result
+        })
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn run_modprobe(module: &str) -> Result<(), ReconcileExecError> {
+async fn run_modprobe(module: &str) -> Result<(), ReconcileExecError> {
     let modprobe = env::var("D2B_MODPROBE_PATH")
         .unwrap_or_else(|_| "/run/current-system/sw/bin/modprobe".to_owned());
-    let output = Command::new(&modprobe)
+    let output = tokio::process::Command::new(&modprobe)
         .arg(module)
         .env_remove("NOTIFY_SOCKET")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
+        .await
         .map_err(|err| match err.kind() {
             std::io::ErrorKind::NotFound => ReconcileExecError::BinaryMissing {
                 which: modprobe.clone(),
@@ -857,21 +927,20 @@ fn map_hardlink_farm_error(error: HardlinkFarmError) -> ReconcileExecError {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn run_usbip_driver_isolated(
+async fn run_usbip_driver_isolated(
     usbip_binary: &Path,
     subcommand: UsbipSubcommand,
     bus_id: &str,
 ) -> Result<(), ReconcileExecError> {
-    let deadline = Instant::now() + USBIP_DRIVER_HELPER_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + USBIP_DRIVER_HELPER_TIMEOUT;
     let mut last_error = None;
 
     for attempt in 0..USBIP_DRIVER_MAX_ATTEMPTS {
-        let attempt_started = Instant::now();
-        let result = run_usbip_driver_helper_once(usbip_binary, subcommand, bus_id, deadline);
+        let attempt_started = tokio::time::Instant::now();
+        let result = run_usbip_driver_helper_once(usbip_binary, subcommand, bus_id, deadline).await;
         let elapsed_ms = attempt_started.elapsed().as_millis() as u64;
         let remaining_ms = deadline
-            .checked_duration_since(Instant::now())
+            .checked_duration_since(tokio::time::Instant::now())
             .map(|duration| duration.as_millis() as u64)
             .unwrap_or_default();
         match result {
@@ -899,11 +968,11 @@ fn run_usbip_driver_isolated(
                 );
                 last_error = Some(error);
                 let delay = usbip_unbind_retry_delay(bus_id, attempt);
-                let now = Instant::now();
+                let now = tokio::time::Instant::now();
                 if now + delay >= deadline {
                     break;
                 }
-                std::thread::sleep(delay);
+                tokio::time::sleep(delay).await;
             }
             Err(error) => {
                 tracing::debug!(
@@ -929,14 +998,13 @@ fn run_usbip_driver_isolated(
     }))
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn run_usbip_driver_helper_once(
+async fn run_usbip_driver_helper_once(
     usbip_binary: &Path,
     subcommand: UsbipSubcommand,
     bus_id: &str,
-    deadline: Instant,
+    deadline: tokio::time::Instant,
 ) -> Result<(), ReconcileExecError> {
-    let mut child = Command::new(usbip_binary)
+    let mut child = tokio::process::Command::new(usbip_binary)
         .arg(subcommand.as_str())
         .arg("--busid")
         .arg(bus_id)
@@ -950,50 +1018,85 @@ fn run_usbip_driver_helper_once(
             which: "usbip".to_owned(),
             detail: e.to_string(),
         })?;
-    let stderr_rx = child.stderr.take().map(spawn_bounded_stderr_reader);
+    let stderr_task = child
+        .stderr
+        .take()
+        .map(|stderr| tokio::spawn(async move { read_bounded_stderr(stderr).await }));
 
-    loop {
-        match child.try_wait().map_err(|e| ReconcileExecError::Io {
+    let wait_result = tokio::time::timeout_at(deadline, child.wait()).await;
+    match wait_result {
+        Ok(Ok(status)) => {
+            let stderr = match stderr_task {
+                Some(task) => task.await.unwrap_or_default(),
+                None => String::new(),
+            };
+            if !status.success() {
+                return Err(ReconcileExecError::NonZeroExit {
+                    which: format!("usbip {}", subcommand.as_str()),
+                    exit_code: status.code().unwrap_or(-1),
+                    stderr,
+                });
+            }
+            Ok(())
+        }
+        Ok(Err(e)) => Err(ReconcileExecError::Io {
             path: format!("<usbip {} wait>", subcommand.as_str()),
             detail: e.to_string(),
-        })? {
-            Some(status) => {
-                let stderr = collect_bounded_child_stderr(stderr_rx);
-                if !status.success() {
-                    return Err(ReconcileExecError::NonZeroExit {
-                        which: format!("usbip {}", subcommand.as_str()),
-                        exit_code: status.code().unwrap_or(-1),
-                        stderr,
-                    });
-                }
-                return Ok(());
-            }
-            None if Instant::now() >= deadline => {
-                tracing::warn!(
-                    usbip_subcommand = subcommand.as_str(),
-                    timeout_ms = USBIP_DRIVER_HELPER_TIMEOUT.as_millis() as u64,
-                    "usbip driver helper deadline expired"
+        }),
+        Err(_elapsed) => {
+            tracing::warn!(
+                usbip_subcommand = subcommand.as_str(),
+                timeout_ms = USBIP_DRIVER_HELPER_TIMEOUT.as_millis() as u64,
+                "usbip driver helper deadline expired"
+            );
+            if let Some(pid) = child.id().and_then(|pid| i32::try_from(pid).ok()) {
+                let _ = nix::sys::signal::killpg(
+                    nix::unistd::Pid::from_raw(pid),
+                    nix::sys::signal::Signal::SIGKILL,
                 );
-                if let Ok(pid) = i32::try_from(child.id()) {
-                    let _ = nix::sys::signal::killpg(
-                        nix::unistd::Pid::from_raw(pid),
-                        nix::sys::signal::Signal::SIGKILL,
-                    );
-                } else {
-                    let _ = child.kill();
-                }
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
-                return Err(ReconcileExecError::TimedOut {
-                    which: format!("usbip {}", subcommand.as_str()),
-                    timeout_ms: USBIP_DRIVER_HELPER_TIMEOUT.as_millis() as u64,
-                    remediation: usbip_driver_timeout_remediation(subcommand, true),
-                });
+            } else {
+                let _ = child.kill().await;
             }
-            None => std::thread::sleep(Duration::from_millis(25)),
+            // Reap the child so no zombie remains; tokio::process owns
+            // the SIGCHLD reaping for this child (never registered in
+            // the pidfd path).
+            let _ = child.wait().await;
+            if let Some(task) = stderr_task {
+                let _ = task.await;
+            }
+            Err(ReconcileExecError::TimedOut {
+                which: format!("usbip {}", subcommand.as_str()),
+                timeout_ms: USBIP_DRIVER_HELPER_TIMEOUT.as_millis() as u64,
+                remediation: usbip_driver_timeout_remediation(subcommand, true),
+            })
         }
     }
+}
+
+/// Read a child's stderr pipe to EOF, capturing at most
+/// [`USBIP_DRIVER_STDERR_LIMIT`] bytes. Replaces the old
+/// thread+channel bounded reader; EOF is guaranteed once the child
+/// exits and the pipe closes, so no drain grace is needed.
+async fn read_bounded_stderr(
+    mut pipe: impl tokio::io::AsyncRead + Unpin,
+) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut captured = Vec::with_capacity(USBIP_DRIVER_STDERR_LIMIT.min(4096));
+    let mut buf = [0u8; 4096];
+    loop {
+        match pipe.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => {
+                let remaining = USBIP_DRIVER_STDERR_LIMIT.saturating_sub(captured.len());
+                if remaining > 0 {
+                    captured.extend_from_slice(&buf[..n.min(remaining)]);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&captured).trim().to_owned()
 }
 
 fn usbip_driver_timeout_remediation(subcommand: UsbipSubcommand, killed: bool) -> String {
@@ -1013,40 +1116,8 @@ fn usbip_driver_timeout_remediation(subcommand: UsbipSubcommand, killed: bool) -
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn spawn_bounded_stderr_reader(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<String> {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut captured = Vec::with_capacity(USBIP_DRIVER_STDERR_LIMIT.min(4096));
-        let mut buf = [0u8; 4096];
-        loop {
-            match pipe.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    let remaining = USBIP_DRIVER_STDERR_LIMIT.saturating_sub(captured.len());
-                    if remaining > 0 {
-                        captured.extend_from_slice(&buf[..n.min(remaining)]);
-                    }
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            }
-        }
-        let _ = tx.send(String::from_utf8_lossy(&captured).trim().to_owned());
-    });
-    rx
-}
-
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn collect_bounded_child_stderr(stderr_rx: Option<mpsc::Receiver<String>>) -> String {
-    stderr_rx
-        .and_then(|rx| rx.recv_timeout(USBIP_DRIVER_STDERR_DRAIN_GRACE).ok())
-        .unwrap_or_default()
-}
-
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_usbip_status(path: &Path) -> Result<String, ReconcileExecError> {
-    match std::fs::read_to_string(path) {
+async fn read_usbip_status(path: &Path) -> Result<String, ReconcileExecError> {
+    match tokio::fs::read_to_string(path).await {
         Ok(raw) => Ok(raw.trim().to_owned()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             Err(ReconcileExecError::InvalidInput {
@@ -1063,20 +1134,19 @@ fn read_usbip_status(path: &Path) -> Result<String, ReconcileExecError> {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn wait_usbip_stream_fd_release(
+async fn wait_usbip_stream_fd_release(
     sysfs_root: &Path,
     bus_id: &str,
     grace: Duration,
 ) -> Result<(), ReconcileExecError> {
     let status_path = sysfs_root.join(bus_id).join("usbip_status");
-    let deadline = Instant::now() + grace;
+    let deadline = tokio::time::Instant::now() + grace;
     loop {
-        let status = read_usbip_status(&status_path)?;
+        let status = read_usbip_status(&status_path).await?;
         if status != USBIP_STATUS_USED {
             return Ok(());
         }
-        if Instant::now() >= deadline {
+        if tokio::time::Instant::now() >= deadline {
             return Err(ReconcileExecError::TimedOut {
                 which: "usbip stream fd release".to_owned(),
                 timeout_ms: grace.as_millis() as u64,
@@ -1085,7 +1155,7 @@ fn wait_usbip_stream_fd_release(
                         .to_owned(),
             });
         }
-        std::thread::sleep(Duration::from_millis(25));
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 
@@ -1165,9 +1235,9 @@ fn parse_fingerprint(stdout: &[u8]) -> Result<String, ReconcileExecError> {
         })
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn file_owner(path: &Path) -> Option<(u32, u32)> {
-    std::fs::metadata(path)
+async fn file_owner(path: &Path) -> Option<(u32, u32)> {
+    tokio::fs::metadata(path)
+        .await
         .ok()
         .map(|metadata| (metadata.uid(), metadata.gid()))
 }
@@ -1293,178 +1363,211 @@ mod fake {
 
     impl ReconcileExecutor for FakeReconcileExecutor {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn apply_nft_script(
-            &self,
-            nft_binary: &Path,
-            script: &str,
-        ) -> Result<(), ReconcileExecError> {
-            self.log.lock().unwrap().push(ReconcileOp::ApplyNftScript {
-                binary: nft_binary.to_path_buf(),
-                script: script.to_owned(),
-            });
-            Ok(())
-        }
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn write_sysctl(&self, key: &str, value: &str) -> Result<(), ReconcileExecError> {
-            self.log.lock().unwrap().push(ReconcileOp::WriteSysctl {
-                key: key.to_owned(),
-                value: value.to_owned(),
-            });
-            Ok(())
-        }
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn write_atomic_file(
-            &self,
-            path: &Path,
-            contents: &[u8],
-            mode: u32,
-        ) -> Result<(), ReconcileExecError> {
-            self.log.lock().unwrap().push(ReconcileOp::WriteAtomicFile {
-                path: path.to_path_buf(),
-                contents: contents.to_vec(),
-                mode,
-            });
-            self.file_values
-                .lock()
-                .unwrap()
-                .insert(path.to_path_buf(), contents.to_vec());
-            Ok(())
-        }
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn write_path_value(&self, path: &Path, value: &str) -> Result<(), ReconcileExecError> {
-            self.log.lock().unwrap().push(ReconcileOp::WritePathValue {
-                path: path.to_path_buf(),
-                value: value.to_owned(),
-            });
-            self.file_values
-                .lock()
-                .unwrap()
-                .insert(path.to_path_buf(), value.as_bytes().to_vec());
-            Ok(())
-        }
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn read_path_value(&self, path: &Path) -> Result<String, ReconcileExecError> {
-            let bytes = self
-                .file_values
-                .lock()
-                .unwrap()
-                .get(path)
-                .cloned()
-                .ok_or_else(|| ReconcileExecError::Io {
-                    path: path.display().to_string(),
-                    detail: "fake path not found".to_owned(),
-                })?;
-            String::from_utf8(bytes).map_err(|err| ReconcileExecError::Io {
-                path: path.display().to_string(),
-                detail: err.to_string(),
+        fn apply_nft_script<'a>(
+            &'a self,
+            nft_binary: &'a Path,
+            script: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.log.lock().unwrap().push(ReconcileOp::ApplyNftScript {
+                    binary: nft_binary.to_path_buf(),
+                    script: script.to_owned(),
+                });
+                Ok(())
             })
         }
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn shutdown_usbip_streams(
-            &self,
-            sysfs_root: &Path,
-            bus_id: &str,
-        ) -> Result<(), ReconcileExecError> {
-            self.log
-                .lock()
-                .unwrap()
-                .push(ReconcileOp::ShutdownUsbipStreams {
-                    sysfs_root: sysfs_root.to_path_buf(),
-                    bus_id: bus_id.to_owned(),
+        fn write_sysctl<'a>(
+            &'a self,
+            key: &'a str,
+            value: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.log.lock().unwrap().push(ReconcileOp::WriteSysctl {
+                    key: key.to_owned(),
+                    value: value.to_owned(),
                 });
-            Ok(())
+                Ok(())
+            })
         }
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn wait_usbip_stream_fd_release(
-            &self,
-            sysfs_root: &Path,
-            bus_id: &str,
-        ) -> Result<(), ReconcileExecError> {
-            self.log
-                .lock()
-                .unwrap()
-                .push(ReconcileOp::WaitUsbipStreamFdRelease {
-                    sysfs_root: sysfs_root.to_path_buf(),
-                    bus_id: bus_id.to_owned(),
+        fn write_atomic_file<'a>(
+            &'a self,
+            path: &'a Path,
+            contents: &'a [u8],
+            mode: u32,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.log.lock().unwrap().push(ReconcileOp::WriteAtomicFile {
+                    path: path.to_path_buf(),
+                    contents: contents.to_vec(),
+                    mode,
                 });
-            if let Some(error) = self
-                .wait_usbip_stream_fd_release_error
-                .lock()
-                .unwrap()
-                .clone()
-            {
-                return Err(error);
-            }
-            Ok(())
+                self.file_values
+                    .lock()
+                    .unwrap()
+                    .insert(path.to_path_buf(), contents.to_vec());
+                Ok(())
+            })
         }
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn ip_route(
-            &self,
-            ip_binary: &Path,
-            verb: IpRouteVerb,
-            route_spec: &str,
-        ) -> Result<(), ReconcileExecError> {
-            self.log.lock().unwrap().push(ReconcileOp::IpRoute {
-                binary: ip_binary.to_path_buf(),
-                verb,
-                route_spec: route_spec.to_owned(),
-            });
-            Ok(())
+        fn write_path_value<'a>(
+            &'a self,
+            path: &'a Path,
+            value: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.log.lock().unwrap().push(ReconcileOp::WritePathValue {
+                    path: path.to_path_buf(),
+                    value: value.to_owned(),
+                });
+                self.file_values
+                    .lock()
+                    .unwrap()
+                    .insert(path.to_path_buf(), value.as_bytes().to_vec());
+                Ok(())
+            })
         }
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn run_usbip(
-            &self,
-            usbip_binary: &Path,
-            subcommand: UsbipSubcommand,
-            bus_id: &str,
-        ) -> Result<(), ReconcileExecError> {
-            if subcommand == UsbipSubcommand::Bind
-                && let Some((sysfs_root, expected_bus_id)) =
-                    self.bind_creates_regular_driver.lock().unwrap().clone()
-                && expected_bus_id == bus_id
-            {
-                let _ = std::fs::write(sysfs_root.join(bus_id).join("driver"), b"not-a-symlink");
-            }
-            if subcommand == UsbipSubcommand::Unbind {
-                let prior = self.log.lock().unwrap();
-                if let Some(ReconcileOp::WaitUsbipStreamFdRelease { sysfs_root, .. }) =
-                    prior.iter().rev().find(|op| {
-                        matches!(
-                            op,
-                            ReconcileOp::WaitUsbipStreamFdRelease {
-                                bus_id: recorded,
-                                ..
-                            } if recorded == bus_id
-                        )
-                    })
+        fn read_path_value<'a>(
+            &'a self,
+            path: &'a Path,
+        ) -> Pin<Box<dyn Future<Output = Result<String, ReconcileExecError>> + Send + 'a>> {
+            Box::pin(async move {
+                let bytes = self
+                    .file_values
+                    .lock()
+                    .unwrap()
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| ReconcileExecError::Io {
+                        path: path.display().to_string(),
+                        detail: "fake path not found".to_owned(),
+                    })?;
+                String::from_utf8(bytes).map_err(|err| ReconcileExecError::Io {
+                    path: path.display().to_string(),
+                    detail: err.to_string(),
+                })
+            })
+        }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn shutdown_usbip_streams<'a>(
+            &'a self,
+            sysfs_root: &'a Path,
+            bus_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(ReconcileOp::ShutdownUsbipStreams {
+                        sysfs_root: sysfs_root.to_path_buf(),
+                        bus_id: bus_id.to_owned(),
+                    });
+                Ok(())
+            })
+        }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn wait_usbip_stream_fd_release<'a>(
+            &'a self,
+            sysfs_root: &'a Path,
+            bus_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(ReconcileOp::WaitUsbipStreamFdRelease {
+                        sysfs_root: sysfs_root.to_path_buf(),
+                        bus_id: bus_id.to_owned(),
+                    });
+                if let Some(error) = self
+                    .wait_usbip_stream_fd_release_error
+                    .lock()
+                    .unwrap()
+                    .clone()
                 {
-                    let _ = std::fs::remove_file(sysfs_root.join(bus_id).join("driver"));
+                    return Err(error);
                 }
-                drop(prior);
-            }
-            self.log.lock().unwrap().push(ReconcileOp::RunUsbip {
-                binary: usbip_binary.to_path_buf(),
-                subcommand,
-                bus_id: bus_id.to_owned(),
-            });
-            if let Some(error) = self.run_usbip_error.lock().unwrap().clone() {
-                return Err(error);
-            }
-            Ok(())
+                Ok(())
+            })
+        }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn ip_route<'a>(
+            &'a self,
+            ip_binary: &'a Path,
+            verb: IpRouteVerb,
+            route_spec: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.log.lock().unwrap().push(ReconcileOp::IpRoute {
+                    binary: ip_binary.to_path_buf(),
+                    verb,
+                    route_spec: route_spec.to_owned(),
+                });
+                Ok(())
+            })
+        }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn run_usbip<'a>(
+            &'a self,
+            usbip_binary: &'a Path,
+            subcommand: UsbipSubcommand,
+            bus_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+            Box::pin(async move {
+                if subcommand == UsbipSubcommand::Bind
+                    && let Some((sysfs_root, expected_bus_id)) =
+                        self.bind_creates_regular_driver.lock().unwrap().clone()
+                    && expected_bus_id == bus_id
+                {
+                    let _ =
+                        std::fs::write(sysfs_root.join(bus_id).join("driver"), b"not-a-symlink");
+                }
+                if subcommand == UsbipSubcommand::Unbind {
+                    let prior = self.log.lock().unwrap();
+                    if let Some(ReconcileOp::WaitUsbipStreamFdRelease { sysfs_root, .. }) =
+                        prior.iter().rev().find(|op| {
+                            matches!(
+                                op,
+                                ReconcileOp::WaitUsbipStreamFdRelease {
+                                    bus_id: recorded,
+                                    ..
+                                } if recorded == bus_id
+                            )
+                        })
+                    {
+                        let _ = std::fs::remove_file(sysfs_root.join(bus_id).join("driver"));
+                    }
+                    drop(prior);
+                }
+                self.log.lock().unwrap().push(ReconcileOp::RunUsbip {
+                    binary: usbip_binary.to_path_buf(),
+                    subcommand,
+                    bus_id: bus_id.to_owned(),
+                });
+                if let Some(error) = self.run_usbip_error.lock().unwrap().clone() {
+                    return Err(error);
+                }
+                Ok(())
+            })
         }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn run_ssh_keygen(
-            &self,
-            key_path: &Path,
-            comment: &str,
-        ) -> Result<GeneratedSshKey, ReconcileExecError> {
-            self.log.lock().unwrap().push(ReconcileOp::RunSshKeygen {
-                key_path: key_path.to_path_buf(),
-                comment: comment.to_owned(),
-            });
-            Ok(GeneratedSshKey {
-                public_key_fingerprint: format!("SHA256:fake:{}", key_path.display()),
+        fn run_ssh_keygen<'a>(
+            &'a self,
+            key_path: &'a Path,
+            comment: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<GeneratedSshKey, ReconcileExecError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.log.lock().unwrap().push(ReconcileOp::RunSshKeygen {
+                    key_path: key_path.to_path_buf(),
+                    comment: comment.to_owned(),
+                });
+                Ok(GeneratedSshKey {
+                    public_key_fingerprint: format!("SHA256:fake:{}", key_path.display()),
+                })
             })
         }
     }
@@ -1485,102 +1588,112 @@ mod tests {
     /// (`net.ipv4.ip_forward`); the executor translates dots to
     /// slashes for the /proc/sys path. Rejects absolute paths,
     /// traversal, and unsafe characters.
-    #[test]
-    fn system_write_sysctl_rejects_absolute_key() {
+    #[tokio::test]
+    async fn system_write_sysctl_rejects_absolute_key() {
         let exec = SystemReconcileExecutor;
         let err = exec
             .write_sysctl("/proc/sys/net/ipv4/ip_forward", "1")
+            .await
             .unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
     }
 
-    #[test]
-    fn system_write_sysctl_rejects_traversal() {
+    #[tokio::test]
+    async fn system_write_sysctl_rejects_traversal() {
         let exec = SystemReconcileExecutor;
         let err = exec
             .write_sysctl("net.ipv4/../../../etc/passwd", "x")
+            .await
             .unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
     }
 
-    #[test]
-    fn system_write_sysctl_rejects_unsafe_char() {
+    #[tokio::test]
+    async fn system_write_sysctl_rejects_unsafe_char() {
         let exec = SystemReconcileExecutor;
         let err = exec
             .write_sysctl("net.ipv4.ip_forward;rm -rf /", "1")
+            .await
             .unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
     }
 
-    #[test]
-    fn system_write_sysctl_rejects_empty_key() {
+    #[tokio::test]
+    async fn system_write_sysctl_rejects_empty_key() {
         let exec = SystemReconcileExecutor;
-        let err = exec.write_sysctl("", "1").unwrap_err();
+        let err = exec.write_sysctl("", "1").await.unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
     }
 
-    #[test]
-    fn system_write_sysctl_rejects_newline_in_value() {
+    #[tokio::test]
+    async fn system_write_sysctl_rejects_newline_in_value() {
         let exec = SystemReconcileExecutor;
         let err = exec
             .write_sysctl("net.ipv4.ip_forward", "1\necho pwned")
+            .await
             .unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
     }
 
-    #[test]
-    fn system_apply_nft_rejects_non_absolute_binary() {
+    #[tokio::test]
+    async fn system_apply_nft_rejects_non_absolute_binary() {
         let exec = SystemReconcileExecutor;
         let err = exec
             .apply_nft_script(Path::new("nft"), "table inet d2b {}")
+            .await
             .unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
     }
 
-    #[test]
-    fn system_apply_nft_rejects_empty_script() {
+    #[tokio::test]
+    async fn system_apply_nft_rejects_empty_script() {
         let exec = SystemReconcileExecutor;
         let err = exec
             .apply_nft_script(Path::new("/usr/sbin/nft"), "")
+            .await
             .unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
     }
 
-    #[test]
-    fn system_ip_route_rejects_non_absolute_binary() {
+    #[tokio::test]
+    async fn system_ip_route_rejects_non_absolute_binary() {
         let exec = SystemReconcileExecutor;
         let err = exec
             .ip_route(Path::new("ip"), IpRouteVerb::Add, "1.2.3.4 dev eth0")
+            .await
             .unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
     }
 
-    #[test]
-    fn system_ip_route_rejects_empty_spec() {
+    #[tokio::test]
+    async fn system_ip_route_rejects_empty_spec() {
         let exec = SystemReconcileExecutor;
         let err = exec
             .ip_route(Path::new("/usr/sbin/ip"), IpRouteVerb::Add, "")
+            .await
             .unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
     }
 
-    #[test]
-    fn system_write_atomic_file_rejects_non_absolute_path() {
+    #[tokio::test]
+    async fn system_write_atomic_file_rejects_non_absolute_path() {
         let exec = SystemReconcileExecutor;
         let err = exec
             .write_atomic_file(Path::new("etc/hosts"), b"x", 0o644)
+            .await
             .unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn system_write_atomic_file_round_trip_in_tempdir() {
+    async fn system_write_atomic_file_round_trip_in_tempdir() {
         use tempfile::tempdir;
         let dir = tempdir().unwrap();
         let target = dir.path().join("hosts");
         let exec = SystemReconcileExecutor;
         exec.write_atomic_file(&target, b"127.0.0.1 localhost\n", 0o644)
+            .await
             .unwrap();
         let read = std::fs::read_to_string(&target).unwrap();
         assert_eq!(read, "127.0.0.1 localhost\n");
@@ -1634,26 +1747,26 @@ mod tests {
     }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn run_usbip_helper_once_retry_text_busy(
+    async fn run_usbip_helper_once_retry_text_busy(
         helper: &Path,
         subcommand: UsbipSubcommand,
         bus_id: &str,
-        deadline: Instant,
+        deadline: tokio::time::Instant,
     ) -> Result<(), ReconcileExecError> {
-        match run_usbip_driver_helper_once(helper, subcommand, bus_id, deadline) {
+        match run_usbip_driver_helper_once(helper, subcommand, bus_id, deadline).await {
             Err(ReconcileExecError::BinaryMissing { detail, .. })
                 if detail.contains("Text file busy") =>
             {
-                std::thread::sleep(Duration::from_millis(25));
-                run_usbip_driver_helper_once(helper, subcommand, bus_id, deadline)
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                run_usbip_driver_helper_once(helper, subcommand, bus_id, deadline).await
             }
             result => result,
         }
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn system_shutdown_usbip_streams_writes_sockfd_down_when_used() {
+    async fn system_shutdown_usbip_streams_writes_sockfd_down_when_used() {
         let root = usbip_stream_test_root("used");
         let device = root.join("1-2");
         std::fs::create_dir_all(&device).expect("device");
@@ -1662,6 +1775,7 @@ mod tests {
 
         SystemReconcileExecutor
             .shutdown_usbip_streams(&root, "1-2")
+            .await
             .expect("shutdown succeeds");
 
         assert_eq!(
@@ -1671,9 +1785,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn system_shutdown_usbip_streams_skips_available_device() {
+    async fn system_shutdown_usbip_streams_skips_available_device() {
         let root = usbip_stream_test_root("available");
         let device = root.join("1-2");
         std::fs::create_dir_all(&device).expect("device");
@@ -1682,6 +1796,7 @@ mod tests {
 
         SystemReconcileExecutor
             .shutdown_usbip_streams(&root, "1-2")
+            .await
             .expect("available has no stream");
 
         assert_eq!(
@@ -1691,9 +1806,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn system_waits_for_usbip_stream_fd_release_before_unbind() {
+    async fn system_waits_for_usbip_stream_fd_release_before_unbind() {
         let root = usbip_stream_test_root("release");
         let device = root.join("1-2");
         std::fs::create_dir_all(&device).expect("device");
@@ -1701,21 +1816,24 @@ mod tests {
 
         SystemReconcileExecutor
             .wait_usbip_stream_fd_release(&root, "1-2")
+            .await
             .expect("available status proves fd release");
 
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn usbip_stream_fd_release_timeout_is_fail_closed() {
+    async fn usbip_stream_fd_release_timeout_is_fail_closed() {
         let root = usbip_stream_test_root("release-timeout");
         let device = root.join("1-2");
         std::fs::create_dir_all(&device).expect("device");
         std::fs::write(device.join("usbip_status"), b"2\n").expect("status");
 
-        let err = super::wait_usbip_stream_fd_release(&root, "1-2", Duration::from_millis(1))
-            .expect_err("still-used stream must time out");
+        let err =
+            super::wait_usbip_stream_fd_release(&root, "1-2", Duration::from_millis(1))
+                .await
+                .expect_err("still-used stream must time out");
         match err {
             ReconcileExecError::TimedOut {
                 which, remediation, ..
@@ -1781,9 +1899,9 @@ mod tests {
         assert!(first < Duration::from_millis(100));
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn usbip_unbind_helper_drains_large_stderr_without_timeout() {
+    async fn usbip_unbind_helper_drains_large_stderr_without_timeout() {
         let helper = usbip_unbind_helper_script(
             "large-stderr",
             r#"#!/bin/sh
@@ -1800,8 +1918,9 @@ exit 7
             &helper,
             UsbipSubcommand::Unbind,
             "1-2",
-            Instant::now() + Duration::from_secs(2),
+            tokio::time::Instant::now() + Duration::from_secs(2),
         )
+        .await
         .expect_err("large stderr should drain and preserve helper exit status");
         match err {
             ReconcileExecError::NonZeroExit {
@@ -1826,9 +1945,9 @@ exit 7
         }
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn usbip_bind_uses_bounded_driver_helper() {
+    async fn usbip_bind_uses_bounded_driver_helper() {
         let helper = usbip_unbind_helper_script(
             "bind-ok",
             r#"#!/bin/sh
@@ -1843,8 +1962,9 @@ exit 0
             &helper,
             UsbipSubcommand::Bind,
             "1-2",
-            Instant::now() + Duration::from_secs(2),
+            tokio::time::Instant::now() + Duration::from_secs(2),
         )
+        .await
         .expect("bind helper should succeed");
 
         if let Some(root) = helper.parent() {
@@ -1852,21 +1972,23 @@ exit 0
         }
     }
 
-    #[test]
-    fn system_run_ssh_keygen_rejects_relative_path() {
+    #[tokio::test]
+    async fn system_run_ssh_keygen_rejects_relative_path() {
         let exec = SystemReconcileExecutor;
         let err = exec
             .run_ssh_keygen(Path::new("vm_ed25519"), "d2b:vm-a")
+            .await
             .unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
     }
 
     // ---- Fake executor regression tests ----
 
-    #[test]
-    fn fake_records_nft_apply() {
+    #[tokio::test]
+    async fn fake_records_nft_apply() {
         let f = FakeReconcileExecutor::new();
         f.apply_nft_script(Path::new("/usr/sbin/nft"), "table inet d2b {}")
+            .await
             .unwrap();
         let log = f.take_log();
         assert_eq!(log.len(), 1);
@@ -1879,10 +2001,10 @@ exit 0
         }
     }
 
-    #[test]
-    fn fake_records_sysctl_write() {
+    #[tokio::test]
+    async fn fake_records_sysctl_write() {
         let f = FakeReconcileExecutor::new();
-        f.write_sysctl("net.ipv4.ip_forward", "1").unwrap();
+        f.write_sysctl("net.ipv4.ip_forward", "1").await.unwrap();
         let log = f.take_log();
         assert!(matches!(
             &log[0],
@@ -1891,10 +2013,11 @@ exit 0
         ));
     }
 
-    #[test]
-    fn fake_records_atomic_write() {
+    #[tokio::test]
+    async fn fake_records_atomic_write() {
         let f = FakeReconcileExecutor::new();
         f.write_atomic_file(Path::new("/etc/hosts"), b"127.0.0.1 host\n", 0o644)
+            .await
             .unwrap();
         let log = f.take_log();
         assert!(matches!(
@@ -1903,14 +2026,15 @@ exit 0
         ));
     }
 
-    #[test]
-    fn fake_records_ip_route() {
+    #[tokio::test]
+    async fn fake_records_ip_route() {
         let f = FakeReconcileExecutor::new();
         f.ip_route(
             Path::new("/usr/sbin/ip"),
             IpRouteVerb::Add,
             "10.0.0.0/24 dev tap0",
         )
+        .await
         .unwrap();
         let log = f.take_log();
         match &log[0] {
@@ -1924,11 +2048,12 @@ exit 0
         }
     }
 
-    #[test]
-    fn fake_records_ssh_keygen() {
+    #[tokio::test]
+    async fn fake_records_ssh_keygen() {
         let f = FakeReconcileExecutor::new();
         let result = f
             .run_ssh_keygen(Path::new("/var/lib/d2b/keys/vm-a_ed25519"), "d2b:vm-a")
+            .await
             .unwrap();
         assert!(result.public_key_fingerprint.starts_with("SHA256:fake:"));
         let log = f.take_log();

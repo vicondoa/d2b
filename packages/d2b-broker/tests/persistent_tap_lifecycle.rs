@@ -21,11 +21,11 @@ struct FakeTap {
 }
 
 impl PersistentTapBackend for FakeTap {
-    fn tap_exists(&self, _: &str) -> Result<bool, NetworkOpError> {
+    async fn tap_exists(&self, _: &str) -> Result<bool, NetworkOpError> {
         Ok(self.present.get())
     }
 
-    fn tap_ownership_marker(&self, _: &str) -> Result<Option<String>, NetworkOpError> {
+    async fn tap_ownership_marker(&self, _: &str) -> Result<Option<String>, NetworkOpError> {
         Ok(self.present.get().then(|| {
             if self.foreign_marker {
                 "d2b managed: foreign".to_owned()
@@ -35,7 +35,7 @@ impl PersistentTapBackend for FakeTap {
         }))
     }
 
-    fn delete_tap(&self, _: &str) -> Result<(), NetworkOpError> {
+    async fn delete_tap(&self, _: &str) -> Result<(), NetworkOpError> {
         self.deletes.set(self.deletes.get() + 1);
         self.present.set(false);
         Ok(())
@@ -146,8 +146,8 @@ fn state_dir(test_name: &str) -> std::path::PathBuf {
     path
 }
 
-#[test]
-fn failed_create_leaves_no_realization_and_retry_is_safe() {
+#[tokio::test]
+async fn failed_create_leaves_no_realization_and_retry_is_safe() {
     let root = state_dir("persistent-tap-lifecycle");
     let create = create_request();
     let delete = request(4, 7);
@@ -157,7 +157,7 @@ fn failed_create_leaves_no_realization_and_retry_is_safe() {
     // realization row must therefore remain absent and a retry must be able
     // to persist the successful outcome normally.
     assert_eq!(
-        load_persistent_tap_realization(&root, &delete),
+        load_persistent_tap_realization(&root, &delete).await,
         Err(NetworkOpError::RealizationUnavailable)
     );
     assert!(
@@ -167,23 +167,27 @@ fn failed_create_leaves_no_realization_and_retry_is_safe() {
             .exists()
     );
 
-    persist_persistent_tap_realization(&root, &create, &ifname).unwrap();
-    let loaded = load_persistent_tap_realization(&root, &delete).unwrap();
+    persist_persistent_tap_realization(&root, &create, &ifname)
+        .await
+        .unwrap();
+    let loaded = load_persistent_tap_realization(&root, &delete).await.unwrap();
     assert_eq!(loaded.ifname, ifname.as_str());
 
     // Replaying the successful post-create persistence is idempotent, so a
     // retry after a lost response does not create a conflicting row.
-    persist_persistent_tap_realization(&root, &create, &ifname).unwrap();
+    persist_persistent_tap_realization(&root, &create, &ifname)
+        .await
+        .unwrap();
     assert_eq!(
-        load_persistent_tap_realization(&root, &delete).unwrap(),
+        load_persistent_tap_realization(&root, &delete).await.unwrap(),
         loaded
     );
 
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[test]
-fn persistence_rejects_a_swapped_tap_identity_before_writing() {
+#[tokio::test]
+async fn persistence_rejects_a_swapped_tap_identity_before_writing() {
     let root = state_dir("persistent-tap-identity");
     let create = create_request();
     let ifname = d2b_contracts_resource::v3::IfName::new(tap_ifname()).unwrap();
@@ -192,7 +196,7 @@ fn persistence_rejects_a_swapped_tap_identity_before_writing() {
         ..create
     };
     assert_eq!(
-        persist_persistent_tap_realization(&root, &swapped, &ifname),
+        persist_persistent_tap_realization(&root, &swapped, &ifname).await,
         Err(NetworkOpError::RealizationConflict)
     );
     assert!(
@@ -220,50 +224,52 @@ fn delete_persistent_tap_pairs_with_create() {
     }
 }
 
-#[test]
-fn delete_persistent_tap_absent_is_idempotent_after_ownership_validation() {
+#[tokio::test]
+async fn delete_persistent_tap_absent_is_idempotent_after_ownership_validation() {
     let backend = FakeTap {
         present: Cell::new(false),
         deletes: Cell::new(0),
         foreign_marker: false,
     };
     assert_eq!(
-        delete_persistent_tap(&backend, &realization(), &request(4, 7)).unwrap(),
+        delete_persistent_tap(&backend, &realization(), &request(4, 7))
+            .await
+            .unwrap(),
         attachment_digest(attachment_id().as_str())
     );
     assert_eq!(backend.deletes.get(), 0);
 }
 
-#[test]
-fn delete_persistent_tap_rejects_stale_network_generation() {
+#[tokio::test]
+async fn delete_persistent_tap_rejects_stale_network_generation() {
     let backend = FakeTap {
         present: Cell::new(true),
         deletes: Cell::new(0),
         foreign_marker: false,
     };
     assert_eq!(
-        delete_persistent_tap(&backend, &realization(), &request(3, 7)),
+        delete_persistent_tap(&backend, &realization(), &request(3, 7)).await,
         Err(NetworkOpError::StaleNetworkGeneration)
     );
     assert_eq!(backend.deletes.get(), 0);
 }
 
-#[test]
-fn delete_persistent_tap_rejects_stale_attachment_generation() {
+#[tokio::test]
+async fn delete_persistent_tap_rejects_stale_attachment_generation() {
     let backend = FakeTap {
         present: Cell::new(true),
         deletes: Cell::new(0),
         foreign_marker: false,
     };
     assert_eq!(
-        delete_persistent_tap(&backend, &realization(), &request(4, 6)),
+        delete_persistent_tap(&backend, &realization(), &request(4, 6)).await,
         Err(NetworkOpError::StaleAttachmentGeneration)
     );
     assert_eq!(backend.deletes.get(), 0);
 }
 
-#[test]
-fn delete_persistent_tap_rejects_swapped_network_identity() {
+#[tokio::test]
+async fn delete_persistent_tap_rejects_swapped_network_identity() {
     let backend = FakeTap {
         present: Cell::new(true),
         deletes: Cell::new(0),
@@ -273,15 +279,15 @@ fn delete_persistent_tap_rejects_swapped_network_identity() {
     request.expected_network_uid =
         ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap();
     assert_eq!(
-        delete_persistent_tap(&backend, &realization(), &request),
+        delete_persistent_tap(&backend, &realization(), &request).await,
         Err(NetworkOpError::ForeignOwnership)
     );
     assert_eq!(backend.deletes.get(), 0);
     assert!(backend.present.get());
 }
 
-#[test]
-fn delete_persistent_tap_foreign_marker_fails_closed() {
+#[tokio::test]
+async fn delete_persistent_tap_foreign_marker_fails_closed() {
     let backend = FakeTap {
         present: Cell::new(true),
         deletes: Cell::new(0),
@@ -290,22 +296,22 @@ fn delete_persistent_tap_foreign_marker_fails_closed() {
     let mut foreign = realization();
     foreign.ownership_marker = "foreign marker".to_owned();
     assert_eq!(
-        delete_persistent_tap(&backend, &foreign, &request(4, 7)),
+        delete_persistent_tap(&backend, &foreign, &request(4, 7)).await,
         Err(NetworkOpError::ForeignOwnership)
     );
     assert_eq!(backend.deletes.get(), 0);
     assert!(backend.present.get());
 }
 
-#[test]
-fn delete_persistent_tap_refuses_unmarked_kernel_tap() {
+#[tokio::test]
+async fn delete_persistent_tap_refuses_unmarked_kernel_tap() {
     let backend = FakeTap {
         present: Cell::new(true),
         deletes: Cell::new(0),
         foreign_marker: true,
     };
     assert_eq!(
-        delete_persistent_tap(&backend, &realization(), &request(4, 7)),
+        delete_persistent_tap(&backend, &realization(), &request(4, 7)).await,
         Err(NetworkOpError::ForeignOwnership)
     );
     assert_eq!(backend.deletes.get(), 0);

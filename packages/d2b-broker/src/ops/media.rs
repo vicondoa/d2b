@@ -5,12 +5,10 @@
 //! direct image paths come only from trusted operator-authored Nix config.
 
 use std::collections::BTreeSet;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use d2b_contracts_broker::broker_wire::{
@@ -190,7 +188,7 @@ pub struct RefreshOutcome {
     pub response: QemuMediaRefreshRegistryResponse,
 }
 
-pub fn enroll(
+pub async fn enroll(
     resolver: &BundleResolver,
     req: &QemuMediaEnrollRequest,
 ) -> Result<EnrollOutcome, MediaOpError> {
@@ -199,15 +197,16 @@ pub fn enroll(
     d2b_host::media::validate_usb_busid(&req.bus_id)
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let source = resolve_physical_source(resolver, req.vm_id.as_str(), req.media_ref.as_str())?;
-    let identity = read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id)?;
-    preflight_identity_not_busy(Path::new("/sys"), &identity)?;
+    let identity =
+        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id).await?;
+    preflight_identity_not_busy(Path::new("/sys"), &identity).await?;
     let access = access_mode(source);
     let fd = open_block_device(&identity.block_device, access)?;
     drop(fd);
 
     let by_id_count = u32::try_from(identity.by_id_names.len()).unwrap_or(u32::MAX);
     let identity_hash = qemu_media_identity_hash(&identity.by_id_names);
-    let existing_records = read_all_registry_records(resolver).unwrap_or_default();
+    let existing_records = read_all_registry_records(resolver).await.unwrap_or_default();
     if existing_records.iter().any(|record| {
         record.vm == source.vm
             && record.media_ref != source.media_ref
@@ -218,11 +217,13 @@ pub fn enroll(
         ));
     }
     let record = MediaRegistryRecord::from_identity(source, identity);
-    write_registry_record(resolver, &record)?;
-    let records = read_all_registry_records(resolver).unwrap_or_else(|_| vec![record.clone()]);
-    write_redacted_registry_index(resolver, &records)?;
-    let udev_rule_written = write_runtime_udev_rules(resolver, &records)?;
-    let udev_reloaded = reload_udev_rules();
+    write_registry_record(resolver, &record).await?;
+    let records = read_all_registry_records(resolver)
+        .await
+        .unwrap_or_else(|_| vec![record.clone()]);
+    write_redacted_registry_index(resolver, &records).await?;
+    let udev_rule_written = write_runtime_udev_rules(resolver, &records).await?;
+    let udev_reloaded = reload_udev_rules().await;
 
     Ok(EnrollOutcome {
         response: QemuMediaEnrollResponse {
@@ -237,11 +238,12 @@ pub fn enroll(
     })
 }
 
-pub fn refresh_registry(resolver: &BundleResolver) -> Result<RefreshOutcome, MediaOpError> {
-    let records = read_all_registry_records(resolver)?;
-    let redacted_index_written = write_redacted_registry_index(resolver, &records).map(|_| true)?;
-    let udev_rule_written = write_runtime_udev_rules(resolver, &records)?;
-    let udev_reloaded = reload_udev_rules();
+pub async fn refresh_registry(resolver: &BundleResolver) -> Result<RefreshOutcome, MediaOpError> {
+    let records = read_all_registry_records(resolver).await?;
+    let redacted_index_written =
+        write_redacted_registry_index(resolver, &records).await.map(|_| true)?;
+    let udev_rule_written = write_runtime_udev_rules(resolver, &records).await?;
+    let udev_reloaded = reload_udev_rules().await;
     Ok(RefreshOutcome {
         response: QemuMediaRefreshRegistryResponse {
             record_count: u32::try_from(records.len()).unwrap_or(u32::MAX),
@@ -252,13 +254,13 @@ pub fn refresh_registry(resolver: &BundleResolver) -> Result<RefreshOutcome, Med
     })
 }
 
-pub fn boot(
+pub async fn boot(
     resolver: &BundleResolver,
     req: &QemuMediaBootRequest,
 ) -> Result<BootOutcome, MediaOpError> {
     let source = resolve_boot_source(resolver, req.vm_id.as_str())?;
-    let (opened, audit) = open_declared_source(resolver, source)?;
-    let outcome = run_attach_transaction(req.vm_id.as_str(), opened, true)?;
+    let (opened, audit) = open_declared_source(resolver, source).await?;
+    let outcome = run_attach_transaction(req.vm_id.as_str(), opened, true).await?;
     Ok(BootOutcome {
         response: outcome.response,
         registry_record_written: audit.registry_record_written,
@@ -268,18 +270,18 @@ pub fn boot(
     })
 }
 
-pub fn system_powerdown(
+pub async fn system_powerdown(
     req: &QemuMediaLifecycleRequest,
 ) -> Result<QemuMediaLifecycleResponse, MediaOpError> {
-    let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str()))?;
-    qmp_system_powerdown(&mut client)?;
+    let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str())).await?;
+    qmp_system_powerdown(&mut client).await?;
     Ok(QemuMediaLifecycleResponse {
         vm_id: req.vm_id.clone(),
         command: QemuMediaLifecycleAction::SystemPowerdown,
     })
 }
 
-pub fn query_status(
+pub async fn query_status(
     req: &QemuMediaQueryStatusRequest,
 ) -> Result<QemuMediaQueryStatusResponse, MediaOpError> {
     qmp_query_status_from_path(
@@ -287,14 +289,15 @@ pub fn query_status(
         &qmp_socket_path(req.vm_id.as_str()),
         req.shutdown_context,
     )
+    .await
 }
 
-fn qmp_query_status_from_path(
+async fn qmp_query_status_from_path(
     vm_id: &d2b_contracts::types::VmId,
     path: &Path,
     shutdown_context: bool,
 ) -> Result<QemuMediaQueryStatusResponse, MediaOpError> {
-    let mut client = match QmpClient::connect(path) {
+    let mut client = match QmpClient::connect(path).await {
         Ok(client) => client,
         Err(error) if shutdown_context && qmp_error_is_expected_shutdown_disconnect(&error) => {
             return Ok(QemuMediaQueryStatusResponse {
@@ -304,7 +307,7 @@ fn qmp_query_status_from_path(
         }
         Err(error) => return Err(error),
     };
-    match qmp_query_status(&mut client) {
+    match qmp_query_status(&mut client).await {
         Ok(status) => Ok(QemuMediaQueryStatusResponse {
             vm_id: vm_id.clone(),
             status,
@@ -319,39 +322,41 @@ fn qmp_query_status_from_path(
     }
 }
 
-pub fn quit(req: &QemuMediaLifecycleRequest) -> Result<QemuMediaLifecycleResponse, MediaOpError> {
-    let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str()))?;
-    qmp_quit(&mut client)?;
+pub async fn quit(req: &QemuMediaLifecycleRequest) -> Result<QemuMediaLifecycleResponse, MediaOpError> {
+    let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str())).await?;
+    qmp_quit(&mut client).await?;
     Ok(QemuMediaLifecycleResponse {
         vm_id: req.vm_id.clone(),
         command: QemuMediaLifecycleAction::Quit,
     })
 }
 
-pub fn attach(
+pub async fn attach(
     resolver: &BundleResolver,
     req: &QemuMediaHotplugRequest,
 ) -> Result<HotplugOutcome, MediaOpError> {
-    let opened = open_runtime_selector_source(resolver, req)?;
-    run_attach_transaction(req.vm_id.as_str(), opened, false)
+    let opened = open_runtime_selector_source(resolver, req).await?;
+    run_attach_transaction(req.vm_id.as_str(), opened, false).await
 }
 
-pub fn detach(
+pub async fn detach(
     resolver: &BundleResolver,
     req: &QemuMediaHotplugRequest,
 ) -> Result<HotplugOutcome, MediaOpError> {
     d2b_host::media::validate_usb_busid(&req.bus_id)
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
-    let identity = read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id)?;
-    let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str()))?;
+    let identity =
+        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id).await?;
+    let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str())).await?;
     let (record, source) =
-        resolve_detach_runtime_selector(resolver, req.vm_id.as_str(), &identity, &mut client)?;
+        resolve_detach_runtime_selector(resolver, req.vm_id.as_str(), &identity, &mut client)
+            .await?;
     let scaffold = qmp_scaffold(
         &record.media_ref,
         &source.slot,
         QemuMediaHotplugAction::Detach,
     )?;
-    let commands = qmp_detach(&mut client, &scaffold)?;
+    let commands = qmp_detach(&mut client, &scaffold).await?;
     Ok(HotplugOutcome {
         response: hotplug_response(
             req.vm_id.as_str(),
@@ -383,27 +388,28 @@ struct BootSourceAudit {
     udev_reloaded: bool,
 }
 
-fn open_runtime_selector_source<'a>(
+async fn open_runtime_selector_source<'a>(
     resolver: &'a BundleResolver,
     req: &QemuMediaHotplugRequest,
 ) -> Result<OpenedMedia<'a>, MediaOpError> {
     d2b_host::media::validate_usb_busid(&req.bus_id)
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
-    let identity = read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id)?;
-    let (_record, source) = resolve_runtime_selector(resolver, req.vm_id.as_str(), &identity)
-        .or_else(|error| {
-            if runtime_selector_allows_declared_fallback(&error) {
-                resolve_declared_runtime_selector(resolver, req.vm_id.as_str(), &identity)
-            } else {
-                Err(error)
+    let identity =
+        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id).await?;
+    let (_record, source) =
+        match resolve_runtime_selector(resolver, req.vm_id.as_str(), &identity).await {
+            Ok(pair) => pair,
+            Err(error) if runtime_selector_allows_declared_fallback(&error) => {
+                resolve_declared_runtime_selector(resolver, req.vm_id.as_str(), &identity)?
             }
-        })?;
-    preflight_identity_not_busy(Path::new("/sys"), &identity)?;
+            Err(error) => return Err(error),
+        };
+    preflight_identity_not_busy(Path::new("/sys"), &identity).await?;
     let fd = open_block_device(&identity.block_device, access_mode(source))?;
     Ok(OpenedMedia { source, fd })
 }
 
-fn open_declared_source<'a>(
+async fn open_declared_source<'a>(
     resolver: &'a BundleResolver,
     source: &'a QemuMediaSourceIntent,
 ) -> Result<(OpenedMedia<'a>, BootSourceAudit), MediaOpError> {
@@ -412,7 +418,7 @@ fn open_declared_source<'a>(
     let fd = match source.source_kind {
         QemuMediaSourceKind::PhysicalUsb => {
             let identity = if let Some(selector) = source.usb_selector.as_ref() {
-                let identity = read_usb_identity_for_selector(selector)?;
+                let identity = read_usb_identity_for_selector(selector).await?;
                 audit = write_declared_selector_artifacts(
                     &registry_dir(resolver)?,
                     &redacted_index_path(resolver)?,
@@ -422,7 +428,8 @@ fn open_declared_source<'a>(
                     0,
                     0,
                     true,
-                )?;
+                )
+                .await?;
                 if !audit.udev_reloaded {
                     tracing::warn!(
                         vm_id = %source.vm,
@@ -433,19 +440,23 @@ fn open_declared_source<'a>(
                 }
                 identity
             } else {
-                let record =
-                    read_registry_record(resolver, source.vm.as_str(), source.media_ref.as_str())?;
-                read_current_identity_for_record(&record)?
+                let record = read_registry_record(
+                    resolver,
+                    source.vm.as_str(),
+                    source.media_ref.as_str(),
+                )
+                .await?;
+                read_current_identity_for_record(&record).await?
             };
-            preflight_identity_not_busy(Path::new("/sys"), &identity)?;
+            preflight_identity_not_busy(Path::new("/sys"), &identity).await?;
             open_block_device(&identity.block_device, access)?
         }
-        QemuMediaSourceKind::ImageFile => open_image_file(source, access)?,
+        QemuMediaSourceKind::ImageFile => open_image_file(source, access).await?,
     };
     Ok((OpenedMedia { source, fd }, audit))
 }
 
-fn run_attach_transaction(
+async fn run_attach_transaction(
     vm: &str,
     opened: OpenedMedia<'_>,
     continue_vm: bool,
@@ -456,7 +467,7 @@ fn run_attach_transaction(
         source.slot.as_str(),
         QemuMediaHotplugAction::Attach,
     )?;
-    let mut client = QmpClient::connect(&qmp_socket_path(vm))?;
+    let mut client = QmpClient::connect(&qmp_socket_path(vm)).await?;
     let mut statuses = vec![
         QemuMediaHotplugStatus::IdentityResolved,
         QemuMediaHotplugStatus::QmpConnected,
@@ -468,15 +479,16 @@ fn run_attach_transaction(
         opened.fd.as_raw_fd(),
         source.source_kind,
         source.read_only,
-    )?;
+    )
+    .await?;
     statuses.extend([
         QemuMediaHotplugStatus::FdAdded,
         QemuMediaHotplugStatus::BlockdevAdded,
         QemuMediaHotplugStatus::DeviceAdded,
     ]);
     if continue_vm {
-        if let Err(error) = qmp_continue_vm(&mut client) {
-            let _ = qmp_detach(&mut client, &scaffold);
+        if let Err(error) = qmp_continue_vm(&mut client).await {
+            let _ = qmp_detach(&mut client, &scaffold).await;
             return Err(error);
         }
         commands.push("cont".to_owned());
@@ -487,23 +499,23 @@ fn run_attach_transaction(
     })
 }
 
-fn qmp_continue_vm(client: &mut QmpClient) -> Result<(), MediaOpError> {
-    client.execute("cont", json!({}), None)?;
+async fn qmp_continue_vm(client: &mut QmpClient) -> Result<(), MediaOpError> {
+    client.execute("cont", json!({}), None).await?;
     Ok(())
 }
 
-fn qmp_system_powerdown(client: &mut QmpClient) -> Result<(), MediaOpError> {
-    client.execute("system_powerdown", json!({}), None)?;
+async fn qmp_system_powerdown(client: &mut QmpClient) -> Result<(), MediaOpError> {
+    client.execute("system_powerdown", json!({}), None).await?;
     Ok(())
 }
 
-fn qmp_quit(client: &mut QmpClient) -> Result<(), MediaOpError> {
-    client.execute("quit", json!({}), None)?;
+async fn qmp_quit(client: &mut QmpClient) -> Result<(), MediaOpError> {
+    client.execute("quit", json!({}), None).await?;
     Ok(())
 }
 
-fn qmp_query_status(client: &mut QmpClient) -> Result<QemuMediaVmStatus, MediaOpError> {
-    let value = client.execute("query-status", json!({}), None)?;
+async fn qmp_query_status(client: &mut QmpClient) -> Result<QemuMediaVmStatus, MediaOpError> {
+    let value = client.execute("query-status", json!({}), None).await?;
     let status = value
         .get("status")
         .and_then(Value::as_str)
@@ -600,7 +612,7 @@ fn qemu_media_file_node_id(media_ref: &str) -> String {
     format!("d2b-file-{media_ref}")
 }
 
-fn qmp_attach(
+async fn qmp_attach(
     client: &mut QmpClient,
     scaffold: &QemuMediaHotplugScaffold,
     fd: i32,
@@ -614,57 +626,66 @@ fn qmp_attach(
     };
     let mut cleanup = QmpAttachCleanup::new(scaffold, file_node_id.clone());
     cleanup.fdset_added = true;
-    match client.execute(
-        "add-fd",
-        json!({
-            "opaque": format!("d2b:{}", scaffold.media_ref),
-        }),
-        Some(fd),
-    ) {
+    match client
+        .execute(
+            "add-fd",
+            json!({
+                "opaque": format!("d2b:{}", scaffold.media_ref),
+            }),
+            Some(fd),
+        )
+        .await
+    {
         Ok(value) => {
             cleanup.fdset_id = value.get("fdset-id").and_then(Value::as_u64);
             cleanup.fd = value.get("fd").and_then(Value::as_u64);
             if cleanup.fdset_id.is_none() || cleanup.fd.is_none() {
-                cleanup.rollback(client);
+                cleanup.rollback(client).await;
                 return Err(MediaOpError::Qmp("add-fd-missing-return-fields".to_owned()));
             }
         }
         Err(error) => {
-            cleanup.rollback(client);
+            cleanup.rollback(client).await;
             return Err(error);
         }
     }
-    if let Err(error) = client.execute(
-        "blockdev-add",
-        json!({
-            "driver": file_driver,
-            "filename": format!("/dev/fdset/{}", cleanup.fdset_id.expect("validated fdset id")),
-            "node-name": file_node_id.as_str(),
-            "read-only": read_only,
-        }),
-        None,
-    ) {
+    if let Err(error) = client
+        .execute(
+            "blockdev-add",
+            json!({
+                "driver": file_driver,
+                "filename": format!("/dev/fdset/{}", cleanup.fdset_id.expect("validated fdset id")),
+                "node-name": file_node_id.as_str(),
+                "read-only": read_only,
+            }),
+            None,
+        )
+        .await
+    {
         if qmp_error_may_have_applied(&error) {
             cleanup.file_added = true;
         }
-        cleanup.rollback(client);
+        cleanup.rollback(client).await;
         return Err(error);
     }
     cleanup.file_added = true;
-    if let Err(error) = client.execute(
-        "blockdev-add",
-        json!({
-            "driver": "raw",
-            "file": qemu_media_file_node_id(&scaffold.media_ref),
-            "node-name": scaffold.blockdev_id.as_str(),
-            "read-only": read_only,
-        }),
-        None,
-    ) {
+    if let Err(error) = client
+        .execute(
+            "blockdev-add",
+            json!({
+                "driver": "raw",
+                "file": qemu_media_file_node_id(&scaffold.media_ref),
+                "node-name": scaffold.blockdev_id.as_str(),
+                "read-only": read_only,
+            }),
+            None,
+        )
+        .await
+    {
         if qmp_error_may_have_applied(&error) {
             cleanup.raw_added = true;
         }
-        cleanup.rollback(client);
+        cleanup.rollback(client).await;
         return Err(error);
     }
     cleanup.raw_added = true;
@@ -680,11 +701,11 @@ fn qmp_attach(
     {
         args.insert("bootindex".to_owned(), json!(1));
     }
-    if let Err(error) = client.execute("device_add", device_args, None) {
+    if let Err(error) = client.execute("device_add", device_args, None).await {
         if qmp_error_may_have_applied(&error) {
             cleanup.device_added = true;
         }
-        cleanup.rollback(client);
+        cleanup.rollback(client).await;
         return Err(error);
     }
     cleanup.device_added = true;
@@ -839,54 +860,69 @@ impl QmpAttachCleanup {
         }
     }
 
-    fn rollback(&self, client: &mut QmpClient) {
+    async fn rollback(&self, client: &mut QmpClient) {
         if self.device_added
             && client
                 .execute("device_del", json!({ "id": self.device_id.as_str() }), None)
+                .await
                 .is_ok()
         {
-            let _ = client.wait_for_device_deleted(&self.device_id);
+            let _ = client.wait_for_device_deleted(&self.device_id).await;
         }
         if self.raw_added {
-            let _ = client.execute(
-                "blockdev-del",
-                json!({ "node-name": self.blockdev_id.as_str() }),
-                None,
-            );
+            let _ = client
+                .execute(
+                    "blockdev-del",
+                    json!({ "node-name": self.blockdev_id.as_str() }),
+                    None,
+                )
+                .await;
         }
         if self.file_added {
-            let _ = client.execute(
-                "blockdev-del",
-                json!({ "node-name": self.file_node_id.as_str() }),
-                None,
-            );
+            let _ = client
+                .execute(
+                    "blockdev-del",
+                    json!({ "node-name": self.file_node_id.as_str() }),
+                    None,
+                )
+                .await;
         }
-        if self.fdset_added
-            && let Some((fdset_id, fd)) = self
-                .fdset_id
-                .zip(self.fd)
-                .or_else(|| client.query_fdset_entry(&self.media_ref).ok().flatten())
-        {
-            let _ = client.execute("remove-fd", json!({ "fdset-id": fdset_id, "fd": fd }), None);
+        if self.fdset_added {
+            let entry = match self.fdset_id.zip(self.fd) {
+                Some(entry) => Some(entry),
+                None => client
+                    .query_fdset_entry(&self.media_ref)
+                    .await
+                    .ok()
+                    .flatten(),
+            };
+            if let Some((fdset_id, fd)) = entry {
+                let _ = client
+                    .execute("remove-fd", json!({ "fdset-id": fdset_id, "fd": fd }), None)
+                    .await;
+            }
         }
     }
 }
 
-fn qmp_detach(
+async fn qmp_detach(
     client: &mut QmpClient,
     scaffold: &QemuMediaHotplugScaffold,
 ) -> Result<Vec<String>, MediaOpError> {
     let file_node_id = qemu_media_file_node_id(&scaffold.media_ref);
     let mut first_error = None;
     let mut commands = Vec::new();
-    match client.execute(
-        "device_del",
-        json!({ "id": scaffold.device_id.as_str() }),
-        None,
-    ) {
+    match client
+        .execute(
+            "device_del",
+            json!({ "id": scaffold.device_id.as_str() }),
+            None,
+        )
+        .await
+    {
         Ok(_) => {
             commands.push("device_del".to_owned());
-            if let Err(error) = client.wait_for_device_deleted(&scaffold.device_id) {
+            if let Err(error) = client.wait_for_device_deleted(&scaffold.device_id).await {
                 first_error.get_or_insert(error);
                 commands.push("DEVICE_DELETED:reconciled".to_owned());
             } else {
@@ -904,31 +940,37 @@ fn qmp_detach(
         "blockdev-del:raw",
         &mut commands,
         &mut first_error,
-    );
+    )
+    .await;
     qmp_delete_block_node(
         client,
         file_node_id.as_str(),
         "blockdev-del:file",
         &mut commands,
         &mut first_error,
-    );
+    )
+    .await;
     qmp_remove_fdset_entry(
         client,
         scaffold.media_ref.as_str(),
         &mut commands,
         &mut first_error,
-    );
+    )
+    .await;
     if let Some(error) = first_error {
         let raw_absent = client
             .named_block_node_exists(scaffold.blockdev_id.as_str())
+            .await
             .map(|exists| !exists)
             .unwrap_or(false);
         let file_absent = client
             .named_block_node_exists(file_node_id.as_str())
+            .await
             .map(|exists| !exists)
             .unwrap_or(false);
         let fd_absent = client
             .query_fdset_entry(scaffold.media_ref.as_str())
+            .await
             .map(|entry| entry.is_none())
             .unwrap_or(false);
         if !(raw_absent && file_absent && fd_absent) {
@@ -938,16 +980,19 @@ fn qmp_detach(
     Ok(commands)
 }
 
-fn qmp_delete_block_node(
+async fn qmp_delete_block_node(
     client: &mut QmpClient,
     node_name: &str,
     label: &str,
     commands: &mut Vec<String>,
     first_error: &mut Option<MediaOpError>,
 ) {
-    match client.execute("blockdev-del", json!({ "node-name": node_name }), None) {
+    match client
+        .execute("blockdev-del", json!({ "node-name": node_name }), None)
+        .await
+    {
         Ok(_) => commands.push(label.to_owned()),
-        Err(error) => match client.named_block_node_exists(node_name) {
+        Err(error) => match client.named_block_node_exists(node_name).await {
             Ok(false) => {
                 first_error.get_or_insert(error);
                 commands.push(format!("{label}:absent"));
@@ -959,13 +1004,13 @@ fn qmp_delete_block_node(
     }
 }
 
-fn qmp_remove_fdset_entry(
+async fn qmp_remove_fdset_entry(
     client: &mut QmpClient,
     media_ref: &str,
     commands: &mut Vec<String>,
     first_error: &mut Option<MediaOpError>,
 ) {
-    let fdset_entry = match client.query_fdset_entry(media_ref) {
+    let fdset_entry = match client.query_fdset_entry(media_ref).await {
         Ok(entry) => entry,
         Err(error) => {
             first_error.get_or_insert(error);
@@ -976,9 +1021,12 @@ fn qmp_remove_fdset_entry(
         commands.push("remove-fd:absent".to_owned());
         return;
     };
-    match client.execute("remove-fd", json!({ "fdset-id": fdset_id, "fd": fd }), None) {
+    match client
+        .execute("remove-fd", json!({ "fdset-id": fdset_id, "fd": fd }), None)
+        .await
+    {
         Ok(_) => commands.push("remove-fd".to_owned()),
-        Err(error) => match client.query_fdset_entry(media_ref) {
+        Err(error) => match client.query_fdset_entry(media_ref).await {
             Ok(None) => {
                 first_error.get_or_insert(error);
                 commands.push("remove-fd:absent".to_owned());
@@ -993,48 +1041,53 @@ fn qmp_remove_fdset_entry(
 struct QmpClient {
     vm: String,
     next_id: u64,
-    writer: UnixStream,
-    reader: BufReader<UnixStream>,
+    writer: tokio::net::UnixStream,
+    reader: tokio::io::BufReader<tokio::net::UnixStream>,
+    timeout: Duration,
 }
 
 impl QmpClient {
-    fn connect(path: &Path) -> Result<Self, MediaOpError> {
-        Self::connect_with_timeout(path, Duration::from_secs(5))
+    async fn connect(path: &Path) -> Result<Self, MediaOpError> {
+        Self::connect_with_timeout(path, Duration::from_secs(5)).await
     }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn connect_with_timeout(path: &Path, timeout: Duration) -> Result<Self, MediaOpError> {
+    async fn connect_with_timeout(path: &Path, timeout: Duration) -> Result<Self, MediaOpError> {
         let vm = path
             .parent()
             .and_then(Path::file_name)
             .and_then(|name| name.to_str())
             .unwrap_or("unknown")
             .to_owned();
-        let writer =
-            UnixStream::connect(path).map_err(|err| MediaOpError::Qmp(format!("connect:{err}")))?;
-        writer
-            .set_read_timeout(Some(timeout))
-            .map_err(|err| MediaOpError::Qmp(format!("timeout:{err}")))?;
-        writer
-            .set_write_timeout(Some(timeout))
-            .map_err(|err| MediaOpError::Qmp(format!("timeout:{err}")))?;
-        let reader_stream = writer
+        let stream = tokio::time::timeout(timeout, tokio::net::UnixStream::connect(path))
+            .await
+            .map_err(|_| MediaOpError::Qmp("connect:timeout".to_owned()))?
+            .map_err(|err| MediaOpError::Qmp(format!("connect:{err}")))?;
+        // Split the socket into independent read/write halves via a std
+        // dup: tokio's UnixStream has no try_clone, and the reader must
+        // be able to consume events while the writer sends commands.
+        let std_stream = stream
+            .into_std()
+            .map_err(|err| MediaOpError::Qmp(format!("into-std:{err}")))?;
+        let reader_stream = std_stream
             .try_clone()
             .map_err(|err| MediaOpError::Qmp(format!("clone:{err}")))?;
-        reader_stream
-            .set_read_timeout(Some(timeout))
-            .map_err(|err| MediaOpError::Qmp(format!("timeout:{err}")))?;
+        let writer = tokio::net::UnixStream::from_std(std_stream)
+            .map_err(|err| MediaOpError::Qmp(format!("from-std:{err}")))?;
+        let reader_stream = tokio::net::UnixStream::from_std(reader_stream)
+            .map_err(|err| MediaOpError::Qmp(format!("from-std:{err}")))?;
+        let reader = tokio::io::BufReader::new(reader_stream);
         let mut client = Self {
             vm,
             next_id: 1,
             writer,
-            reader: BufReader::new(reader_stream),
+            reader,
+            timeout,
         };
-        let greeting = client.read_message()?;
+        let greeting = client.read_message().await?;
         if greeting.get("QMP").is_none() {
             return Err(MediaOpError::Qmp("missing-greeting".to_owned()));
         }
-        client.execute("qmp_capabilities", json!({}), None)?;
+        client.execute("qmp_capabilities", json!({}), None).await?;
         Ok(client)
     }
 
@@ -1042,13 +1095,14 @@ impl QmpClient {
         &self.vm
     }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn execute(
+    async fn execute(
         &mut self,
         command: &str,
         arguments: Value,
         fd: Option<i32>,
     ) -> Result<Value, MediaOpError> {
+        use tokio::io::AsyncWriteExt;
+
         let id = format!("d2b-{}", self.next_id);
         self.next_id = self.next_id.saturating_add(1);
         let request = json!({
@@ -1063,15 +1117,17 @@ impl QmpClient {
             crate::fd_passing::send_fds(self.writer.as_raw_fd(), &payload, &[fd])
                 .map_err(|err| MediaOpError::Qmp(format!("send-fd:{command}:{err}")))?;
         } else {
-            self.writer
-                .write_all(&payload)
+            tokio::time::timeout(self.timeout, self.writer.write_all(&payload))
+                .await
+                .map_err(|_| MediaOpError::Qmp(format!("write:{command}:timeout")))?
                 .map_err(|err| MediaOpError::Qmp(format!("write:{command}:{err}")))?;
-            self.writer
-                .flush()
+            tokio::time::timeout(self.timeout, self.writer.flush())
+                .await
+                .map_err(|_| MediaOpError::Qmp(format!("flush:{command}:timeout")))?
                 .map_err(|err| MediaOpError::Qmp(format!("flush:{command}:{err}")))?;
         }
         loop {
-            let message = self.read_message()?;
+            let message = self.read_message().await?;
             if message.get("event").is_some() {
                 continue;
             }
@@ -1091,9 +1147,12 @@ impl QmpClient {
         }
     }
 
-    fn query_fdset_entry(&mut self, media_ref: &str) -> Result<Option<(u64, u64)>, MediaOpError> {
+    async fn query_fdset_entry(
+        &mut self,
+        media_ref: &str,
+    ) -> Result<Option<(u64, u64)>, MediaOpError> {
         let expected_opaque = format!("d2b:{media_ref}");
-        let value = self.execute("query-fdsets", json!({}), None)?;
+        let value = self.execute("query-fdsets", json!({}), None).await?;
         let Some(fdsets) = value.as_array() else {
             return Ok(None);
         };
@@ -1116,8 +1175,8 @@ impl QmpClient {
         Ok(None)
     }
 
-    fn query_attached_media_refs(&mut self) -> Result<BTreeSet<String>, MediaOpError> {
-        let value = self.execute("query-fdsets", json!({}), None)?;
+    async fn query_attached_media_refs(&mut self) -> Result<BTreeSet<String>, MediaOpError> {
+        let value = self.execute("query-fdsets", json!({}), None).await?;
         let mut refs = BTreeSet::new();
         let Some(fdsets) = value.as_array() else {
             return Ok(refs);
@@ -1140,8 +1199,8 @@ impl QmpClient {
         Ok(refs)
     }
 
-    fn named_block_node_exists(&mut self, node_name: &str) -> Result<bool, MediaOpError> {
-        let value = self.execute("query-named-block-nodes", json!({}), None)?;
+    async fn named_block_node_exists(&mut self, node_name: &str) -> Result<bool, MediaOpError> {
+        let value = self.execute("query-named-block-nodes", json!({}), None).await?;
         let Some(nodes) = value.as_array() else {
             return Ok(false);
         };
@@ -1152,9 +1211,9 @@ impl QmpClient {
         }))
     }
 
-    fn wait_for_device_deleted(&mut self, device_id: &str) -> Result<(), MediaOpError> {
+    async fn wait_for_device_deleted(&mut self, device_id: &str) -> Result<(), MediaOpError> {
         loop {
-            let message = self.read_message()?;
+            let message = self.read_message().await?;
             if message.get("event").and_then(Value::as_str) != Some("DEVICE_DELETED") {
                 continue;
             }
@@ -1168,32 +1227,37 @@ impl QmpClient {
         }
     }
 
-    fn read_message(&mut self) -> Result<Value, MediaOpError> {
-        let line = self.read_line_bounded()?;
+    async fn read_message(&mut self) -> Result<Value, MediaOpError> {
+        let line = self.read_line_bounded().await?;
         if line.is_empty() {
             return Err(MediaOpError::Qmp("eof".to_owned()));
         }
         serde_json::from_slice(&line).map_err(|err| MediaOpError::Qmp(format!("decode:{err}")))
     }
 
-    fn read_line_bounded(&mut self) -> Result<Vec<u8>, MediaOpError> {
+    async fn read_line_bounded(&mut self) -> Result<Vec<u8>, MediaOpError> {
+        use tokio::io::AsyncBufReadExt;
+
         let mut line = Vec::new();
         loop {
-            let available = self
-                .reader
-                .fill_buf()
-                .map_err(|err| MediaOpError::Qmp(format!("read:{err}")))?;
-            if available.is_empty() {
-                return Ok(line);
-            }
-            let take = available
-                .iter()
-                .position(|byte| *byte == b'\n')
-                .map_or(available.len(), |pos| pos + 1);
-            if line.len().saturating_add(take) > QMP_MAX_RESPONSE_BYTES {
-                return Err(MediaOpError::Qmp("response-too-large".to_owned()));
-            }
-            line.extend_from_slice(&available[..take]);
+            let take = {
+                let available = tokio::time::timeout(self.timeout, self.reader.fill_buf())
+                    .await
+                    .map_err(|_| MediaOpError::Qmp("read:timeout".to_owned()))?
+                    .map_err(|err| MediaOpError::Qmp(format!("read:{err}")))?;
+                if available.is_empty() {
+                    return Ok(line);
+                }
+                let take = available
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(available.len(), |pos| pos + 1);
+                if line.len().saturating_add(take) > QMP_MAX_RESPONSE_BYTES {
+                    return Err(MediaOpError::Qmp("response-too-large".to_owned()));
+                }
+                line.extend_from_slice(&available[..take]);
+                take
+            };
             self.reader.consume(take);
             if line.last() == Some(&b'\n') {
                 return Ok(line);
@@ -1226,7 +1290,7 @@ fn verify_identity_matches_record(
     Ok(())
 }
 
-fn read_current_identity_for_record(
+async fn read_current_identity_for_record(
     record: &MediaRegistryRecord,
 ) -> Result<UsbPhysicalIdentity, MediaOpError> {
     let candidates =
@@ -1248,7 +1312,8 @@ fn read_current_identity_for_record(
                 Path::new("/sys"),
                 Path::new("/dev/disk/by-id"),
                 &candidate.bus_id,
-            )?;
+            )
+            .await?;
             if record.identity.vendor_id != identity.vendor_id
                 || record.identity.product_id != identity.product_id
             {
@@ -1269,7 +1334,7 @@ fn read_current_identity_for_record(
     }
 }
 
-fn read_usb_identity_for_selector(
+async fn read_usb_identity_for_selector(
     selector: &QemuMediaUsbSelector,
 ) -> Result<UsbPhysicalIdentity, MediaOpError> {
     read_usb_identity_for_selector_at_roots(
@@ -1277,16 +1342,17 @@ fn read_usb_identity_for_selector(
         Path::new("/dev/disk/by-id"),
         selector,
     )
+    .await
 }
 
-fn read_usb_identity_for_selector_at_roots(
+async fn read_usb_identity_for_selector_at_roots(
     sysfs_root: &Path,
     by_id_root: &Path,
     selector: &QemuMediaUsbSelector,
 ) -> Result<UsbPhysicalIdentity, MediaOpError> {
     let candidates = d2b_host::media::safe_usb_block_candidates(sysfs_root, by_id_root);
     let candidate = select_unique_usb_candidate_for_selector(&candidates, selector)?;
-    read_usb_identity(sysfs_root, by_id_root, &candidate.bus_id)
+    read_usb_identity(sysfs_root, by_id_root, &candidate.bus_id).await
 }
 
 fn select_unique_usb_candidate_for_selector<'a>(
@@ -1339,31 +1405,31 @@ fn runtime_identity_matches_record(
     !expected.is_empty() && expected == actual
 }
 
-fn resolve_runtime_selector<'a>(
+async fn resolve_runtime_selector<'a>(
     resolver: &'a BundleResolver,
     vm: &str,
     identity: &UsbPhysicalIdentity,
 ) -> Result<(MediaRegistryRecord, &'a QemuMediaSourceIntent), MediaOpError> {
-    let records = read_all_registry_records(resolver)?;
+    let records = read_all_registry_records(resolver).await?;
     let record = select_unique_runtime_record(&records, vm, identity)?;
     let source = resolve_physical_source(resolver, vm, &record.media_ref)?;
     Ok((record, source))
 }
 
-fn resolve_detach_runtime_selector<'a>(
+async fn resolve_detach_runtime_selector<'a>(
     resolver: &'a BundleResolver,
     vm: &str,
     identity: &UsbPhysicalIdentity,
     client: &mut QmpClient,
 ) -> Result<(MediaRegistryRecord, &'a QemuMediaSourceIntent), MediaOpError> {
-    let records = read_all_registry_records(resolver)?;
+    let records = read_all_registry_records(resolver).await?;
     match select_unique_runtime_record(&records, vm, identity) {
         Ok(record) => {
             let source = resolve_physical_source(resolver, vm, &record.media_ref)?;
             Ok((record, source))
         }
         Err(error) if runtime_selector_allows_detach_fallback(&error) => {
-            let attached_refs = client.query_attached_media_refs()?;
+            let attached_refs = client.query_attached_media_refs().await?;
             match select_unique_attached_detach_record(&records, vm, identity, &attached_refs) {
                 Ok(record) => {
                     let source = resolve_physical_source(resolver, vm, &record.media_ref)?;
@@ -1477,36 +1543,38 @@ fn access_mode(source: &QemuMediaSourceIntent) -> MediaAccessMode {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_usb_identity(
+async fn read_usb_identity(
     sysfs_root: &Path,
     by_id_root: &Path,
     bus_id: &str,
 ) -> Result<UsbPhysicalIdentity, MediaOpError> {
     let usb_dir = d2b_host::media::sysfs_usb_device_dir(sysfs_root, bus_id);
     let devnum = read_trimmed(&usb_dir.join("devnum"))
+        .await
         .map_err(|err| MediaOpError::Sysfs(format!("devnum:{err}")))
         .and_then(|value| {
             d2b_host::media::parse_devnum(&value)
                 .map_err(|err| MediaOpError::Sysfs(format!("devnum:{err:?}")))
         })?;
     let vendor_id = read_trimmed(&usb_dir.join("idVendor"))
+        .await
         .map_err(|err| MediaOpError::Sysfs(err.to_string()))?;
     let product_id = read_trimmed(&usb_dir.join("idProduct"))
+        .await
         .map_err(|err| MediaOpError::Sysfs(err.to_string()))?;
     let mut block_devices = BTreeSet::new();
-    collect_block_devices_under(&usb_dir, 0, &mut block_devices);
+    collect_block_devices_under(&usb_dir, 0, &mut block_devices).await;
     if let Some(parent) = usb_dir.parent()
-        && let Ok(entries) = std::fs::read_dir(parent)
+        && let Ok(mut entries) = tokio::fs::read_dir(parent).await
     {
         let prefix = format!("{bus_id}:");
-        for entry in entries.flatten() {
+        while let Ok(Some(entry)) = entries.next_entry().await {
             if entry
                 .file_name()
                 .to_str()
                 .is_some_and(|name| name.starts_with(&prefix))
             {
-                collect_block_devices_under(&entry.path(), 0, &mut block_devices);
+                collect_block_devices_under(&entry.path(), 0, &mut block_devices).await;
             }
         }
     }
@@ -1516,7 +1584,7 @@ fn read_usb_identity(
         [one] => one.clone(),
         many => return Err(MediaOpError::AmbiguousBlockDevice(many.to_vec())),
     };
-    let by_id_names = by_id_names_for_block(by_id_root, &block_device)?;
+    let by_id_names = by_id_names_for_block(by_id_root, &block_device).await?;
     if by_id_names.is_empty() {
         return Err(MediaOpError::MissingById);
     }
@@ -1530,29 +1598,29 @@ fn read_usb_identity(
     })
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_trimmed(path: &Path) -> io::Result<String> {
-    std::fs::read_to_string(path).map(|value| value.trim().to_owned())
+async fn read_trimmed(path: &Path) -> io::Result<String> {
+    tokio::fs::read_to_string(path)
+        .await
+        .map(|value| value.trim().to_owned())
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn collect_block_devices_under(path: &Path, depth: u8, out: &mut BTreeSet<String>) {
+async fn collect_block_devices_under(path: &Path, depth: u8, out: &mut BTreeSet<String>) {
     if depth > 12 {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(path) else {
+    let Ok(mut entries) = tokio::fs::read_dir(path).await else {
         return;
     };
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let Ok(file_type) = entry.file_type().await else {
             continue;
         };
         if !file_type.is_dir() {
             continue;
         }
         if entry.file_name() == "block" {
-            if let Ok(blocks) = std::fs::read_dir(entry.path()) {
-                for block in blocks.flatten() {
+            if let Ok(mut blocks) = tokio::fs::read_dir(entry.path()).await {
+                while let Ok(Some(block)) = blocks.next_entry().await {
                     if let Some(name) = block.file_name().to_str()
                         && !name.is_empty()
                     {
@@ -1562,27 +1630,29 @@ fn collect_block_devices_under(path: &Path, depth: u8, out: &mut BTreeSet<String
             }
             continue;
         }
-        collect_block_devices_under(&entry.path(), depth + 1, out);
+        Box::pin(collect_block_devices_under(&entry.path(), depth + 1, out)).await;
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn by_id_names_for_block(
+async fn by_id_names_for_block(
     by_id_root: &Path,
     block_device: &str,
 ) -> Result<Vec<String>, MediaOpError> {
     let expected = PathBuf::from("/dev").join(block_device);
     let mut names = Vec::new();
-    let entries = std::fs::read_dir(by_id_root).map_err(|err| {
-        if err.kind() == io::ErrorKind::NotFound {
-            MediaOpError::MissingById
-        } else {
-            MediaOpError::Io(format!("by-id-read-dir:{err}"))
+    let mut entries = match tokio::fs::read_dir(by_id_root).await {
+        Ok(entries) => entries,
+        Err(err) => {
+            return Err(if err.kind() == io::ErrorKind::NotFound {
+                MediaOpError::MissingById
+            } else {
+                MediaOpError::Io(format!("by-id-read-dir:{err}"))
+            });
         }
-    })?;
-    for entry in entries.flatten() {
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
-        let Ok(target) = std::fs::canonicalize(&path) else {
+        let Ok(target) = tokio::fs::canonicalize(&path).await else {
             continue;
         };
         if target == expected
@@ -1596,16 +1666,17 @@ fn by_id_names_for_block(
     Ok(names)
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn preflight_identity_not_busy(
+async fn preflight_identity_not_busy(
     sysfs_root: &Path,
     identity: &UsbPhysicalIdentity,
 ) -> Result<(), MediaOpError> {
-    let mounts =
-        std::fs::read_to_string("/proc/mounts").map_err(|err| MediaOpError::Io(err.to_string()))?;
-    let swaps =
-        std::fs::read_to_string("/proc/swaps").map_err(|err| MediaOpError::Io(err.to_string()))?;
-    let holders = holder_names_for_block_and_children(sysfs_root, &identity.block_device);
+    let mounts = tokio::fs::read_to_string("/proc/mounts")
+        .await
+        .map_err(|err| MediaOpError::Io(err.to_string()))?;
+    let swaps = tokio::fs::read_to_string("/proc/swaps")
+        .await
+        .map_err(|err| MediaOpError::Io(err.to_string()))?;
+    let holders = holder_names_for_block_and_children(sysfs_root, &identity.block_device).await;
     let report = d2b_host::media::preflight_device_not_in_use(
         &identity.block_device,
         &mounts,
@@ -1621,18 +1692,17 @@ fn preflight_identity_not_busy(
     )))
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn holder_names_for_block_and_children(sysfs_root: &Path, block_device: &str) -> Vec<String> {
+async fn holder_names_for_block_and_children(sysfs_root: &Path, block_device: &str) -> Vec<String> {
     let block_dir = d2b_host::media::sysfs_block_device_dir(sysfs_root, block_device);
     let mut holders = Vec::new();
-    append_holder_names(&block_dir.join("holders"), block_device, &mut holders);
-    if let Ok(entries) = std::fs::read_dir(&block_dir) {
-        for entry in entries.flatten() {
+    append_holder_names(&block_dir.join("holders"), block_device, &mut holders).await;
+    if let Ok(mut entries) = tokio::fs::read_dir(&block_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().into_owned();
             if !is_child_block_name(block_device, &name) {
                 continue;
             }
-            append_holder_names(&entry.path().join("holders"), &name, &mut holders);
+            append_holder_names(&entry.path().join("holders"), &name, &mut holders).await;
         }
     }
     holders.sort();
@@ -1640,12 +1710,11 @@ fn holder_names_for_block_and_children(sysfs_root: &Path, block_device: &str) ->
     holders
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn append_holder_names(holder_dir: &Path, block_name: &str, holders: &mut Vec<String>) {
-    let Some(entries) = std::fs::read_dir(holder_dir).ok() else {
+async fn append_holder_names(holder_dir: &Path, block_name: &str, holders: &mut Vec<String>) {
+    let Ok(mut entries) = tokio::fs::read_dir(holder_dir).await else {
         return;
     };
-    for entry in entries.flatten() {
+    while let Ok(Some(entry)) = entries.next_entry().await {
         if let Some(holder) = entry.file_name().to_str()
             && !holder.is_empty()
         {
@@ -1684,7 +1753,7 @@ fn open_block_device(block_device: &str, access: MediaAccessMode) -> Result<Owne
     Ok(fd)
 }
 
-fn open_image_file(
+async fn open_image_file(
     source: &QemuMediaSourceIntent,
     access: MediaAccessMode,
 ) -> Result<OwnedFd, MediaOpError> {
@@ -1699,7 +1768,7 @@ fn open_image_file(
         .ok_or(MediaOpError::MissingImagePath)?;
     let path = Path::new(path);
     validate_image_path_shape(path)?;
-    validate_image_parent_dirs(path)?;
+    validate_image_parent_dirs(path).await?;
 
     let parent = path
         .parent()
@@ -1722,7 +1791,7 @@ fn open_image_file(
         return Err(MediaOpError::Open("not-regular-file".to_owned()));
     }
     validate_image_file_metadata(&stat)?;
-    preflight_image_not_in_use(Path::new("/sys"), path)?;
+    preflight_image_not_in_use(Path::new("/sys"), path).await?;
     lock_image_fd(&fd, access)?;
     Ok(fd)
 }
@@ -1750,8 +1819,7 @@ fn validate_image_path_shape(path: &Path) -> Result<(), MediaOpError> {
     Ok(())
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn validate_image_parent_dirs(path: &Path) -> Result<(), MediaOpError> {
+async fn validate_image_parent_dirs(path: &Path) -> Result<(), MediaOpError> {
     let parent = path
         .parent()
         .ok_or_else(|| MediaOpError::ImagePathUnsafe("missing-parent".to_owned()))?;
@@ -1762,7 +1830,8 @@ fn validate_image_parent_dirs(path: &Path) -> Result<(), MediaOpError> {
             continue;
         };
         current.push(name);
-        let metadata = std::fs::symlink_metadata(&current)
+        let metadata = tokio::fs::symlink_metadata(&current)
+            .await
             .map_err(|err| MediaOpError::ImagePathUnsafe(err.to_string()))?;
         if metadata.file_type().is_symlink() {
             return Err(MediaOpError::ImagePathUnsafe("symlink-parent".to_owned()));
@@ -1808,14 +1877,14 @@ fn validate_image_file_metadata(stat: &libc::stat) -> Result<(), MediaOpError> {
     Ok(())
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn preflight_image_not_in_use(sysfs_root: &Path, image_path: &Path) -> Result<(), MediaOpError> {
-    let mounts =
-        std::fs::read_to_string("/proc/mounts").map_err(|err| MediaOpError::Io(err.to_string()))?;
+async fn preflight_image_not_in_use(sysfs_root: &Path, image_path: &Path) -> Result<(), MediaOpError> {
+    let mounts = tokio::fs::read_to_string("/proc/mounts")
+        .await
+        .map_err(|err| MediaOpError::Io(err.to_string()))?;
     if image_path_mounted_in_proc_mounts(&mounts, image_path) {
         return Err(MediaOpError::ImageBusy("mounted".to_owned()));
     }
-    if image_has_loop_backing(sysfs_root, image_path)? {
+    if image_has_loop_backing(sysfs_root, image_path).await? {
         return Err(MediaOpError::ImageBusy("loop-backed".to_owned()));
     }
     Ok(())
@@ -1848,13 +1917,13 @@ fn unescape_proc_mount_field(value: &str) -> String {
         .replace("\\134", "\\")
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn image_has_loop_backing(sysfs_root: &Path, image_path: &Path) -> Result<bool, MediaOpError> {
+async fn image_has_loop_backing(sysfs_root: &Path, image_path: &Path) -> Result<bool, MediaOpError> {
     let block_root = sysfs_root.join("block");
-    let entries = std::fs::read_dir(&block_root)
+    let mut entries = tokio::fs::read_dir(&block_root)
+        .await
         .map_err(|err| MediaOpError::Sysfs(format!("loop-scan:{err}")))?;
     let image_path = image_path.as_os_str().to_string_lossy();
-    for entry in entries.flatten() {
+    while let Ok(Some(entry)) = entries.next_entry().await {
         let file_name = entry.file_name();
         let Some(name) = file_name.to_str() else {
             continue;
@@ -1863,7 +1932,7 @@ fn image_has_loop_backing(sysfs_root: &Path, image_path: &Path) -> Result<bool, 
             continue;
         }
         let backing_path = entry.path().join("loop/backing_file");
-        match std::fs::read_to_string(&backing_path) {
+        match tokio::fs::read_to_string(&backing_path).await {
             Ok(contents) if contents.trim() == image_path.as_ref() => return Ok(true),
             Ok(_) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -1893,22 +1962,23 @@ fn rules_path(resolver: &BundleResolver) -> Result<PathBuf, MediaOpError> {
         .ok_or(MediaOpError::MissingBundlePolicy)
 }
 
-fn write_registry_record(
+async fn write_registry_record(
     resolver: &BundleResolver,
     record: &MediaRegistryRecord,
 ) -> Result<(), MediaOpError> {
     let root = registry_dir(resolver)?;
-    write_registry_record_at_root(&root, record, 0, 0)
+    write_registry_record_at_root(&root, record, 0, 0).await
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn write_registry_record_at_root(
+async fn write_registry_record_at_root(
     root: &Path,
     record: &MediaRegistryRecord,
     owner_uid: u32,
     owner_gid: u32,
 ) -> Result<(), MediaOpError> {
-    std::fs::create_dir_all(root).map_err(|err| MediaOpError::Registry(err.to_string()))?;
+    tokio::fs::create_dir_all(root)
+        .await
+        .map_err(|err| MediaOpError::Registry(err.to_string()))?;
     let root_owner = if Uid::effective().is_root() {
         Some(0)
     } else {
@@ -1941,7 +2011,7 @@ fn write_registry_record_at_root(
     .map_err(|err| MediaOpError::Registry(err.to_string()))
 }
 
-fn write_declared_selector_artifacts(
+async fn write_declared_selector_artifacts(
     registry_root: &Path,
     redacted_index_path: &Path,
     rules_path: &Path,
@@ -1953,13 +2023,14 @@ fn write_declared_selector_artifacts(
 ) -> Result<BootSourceAudit, MediaOpError> {
     let record = MediaRegistryRecord::from_identity(source, identity.clone());
     let mut audit = BootSourceAudit::default();
-    write_registry_record_at_root(registry_root, &record, owner_uid, owner_gid)?;
+    write_registry_record_at_root(registry_root, &record, owner_uid, owner_gid).await?;
     audit.registry_record_written = true;
-    let records = read_all_registry_records_at_root(registry_root).unwrap_or_else(|_| vec![record]);
-    write_redacted_registry_index_at_path(redacted_index_path, &records)?;
+    let records =
+        read_all_registry_records_at_root(registry_root).await.unwrap_or_else(|_| vec![record]);
+    write_redacted_registry_index_at_path(redacted_index_path, &records).await?;
     audit.redacted_index_written = true;
-    audit.udev_rule_written = write_runtime_udev_rules_at_path(rules_path, &records)?;
-    audit.udev_reloaded = reload_rules && reload_udev_rules();
+    audit.udev_rule_written = write_runtime_udev_rules_at_path(rules_path, &records).await?;
+    audit.udev_reloaded = reload_rules && reload_udev_rules().await;
     Ok(audit)
 }
 
@@ -1970,16 +2041,15 @@ fn redacted_index_path(resolver: &BundleResolver) -> Result<PathBuf, MediaOpErro
         .ok_or_else(|| MediaOpError::Registry("redacted-index-storage-ref-missing".to_owned()))
 }
 
-fn write_redacted_registry_index(
+async fn write_redacted_registry_index(
     resolver: &BundleResolver,
     records: &[MediaRegistryRecord],
 ) -> Result<(), MediaOpError> {
     let path = redacted_index_path(resolver)?;
-    write_redacted_registry_index_at_path(&path, records)
+    write_redacted_registry_index_at_path(&path, records).await
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn write_redacted_registry_index_at_path(
+async fn write_redacted_registry_index_at_path(
     path: &Path,
     records: &[MediaRegistryRecord],
 ) -> Result<(), MediaOpError> {
@@ -1988,7 +2058,9 @@ fn write_redacted_registry_index_at_path(
             "redacted-index-no-parent".to_owned(),
         ));
     };
-    std::fs::create_dir_all(parent).map_err(|err| MediaOpError::Registry(err.to_string()))?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|err| MediaOpError::Registry(err.to_string()))?;
     let parent_fd = crate::sys::path_safe::open_dir_path_safe(parent)
         .map_err(|err| MediaOpError::Registry(err.to_string()))?;
     let index = RedactedRegistryIndex {
@@ -2029,8 +2101,7 @@ fn qemu_media_identity_hash(by_id_names: &[String]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_registry_record(
+async fn read_registry_record(
     resolver: &BundleResolver,
     vm: &str,
     media_ref: &str,
@@ -2038,42 +2109,43 @@ fn read_registry_record(
     let path = registry_dir(resolver)?
         .join(vm)
         .join(format!("{media_ref}.json"));
-    let bytes = std::fs::read(&path).map_err(|err| MediaOpError::Registry(err.to_string()))?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|err| MediaOpError::Registry(err.to_string()))?;
     serde_json::from_slice(&bytes).map_err(|err| MediaOpError::Registry(err.to_string()))
 }
 
-fn read_all_registry_records(
+async fn read_all_registry_records(
     resolver: &BundleResolver,
 ) -> Result<Vec<MediaRegistryRecord>, MediaOpError> {
     let root = registry_dir(resolver)?;
-    read_all_registry_records_at_root(&root)
+    read_all_registry_records_at_root(&root).await
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_all_registry_records_at_root(
+async fn read_all_registry_records_at_root(
     root: &Path,
 ) -> Result<Vec<MediaRegistryRecord>, MediaOpError> {
     let mut records = Vec::new();
-    let entries = match std::fs::read_dir(root) {
+    let mut entries = match tokio::fs::read_dir(root).await {
         Ok(entries) => entries,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(records),
         Err(err) => return Err(MediaOpError::Registry(err.to_string())),
     };
-    for vm_entry in entries.flatten() {
-        let Ok(file_type) = vm_entry.file_type() else {
+    while let Ok(Some(vm_entry)) = entries.next_entry().await {
+        let Ok(file_type) = vm_entry.file_type().await else {
             continue;
         };
         if !file_type.is_dir() {
             continue;
         }
-        let Ok(files) = std::fs::read_dir(vm_entry.path()) else {
+        let Ok(mut files) = tokio::fs::read_dir(vm_entry.path()).await else {
             continue;
         };
-        for file in files.flatten() {
+        while let Ok(Some(file)) = files.next_entry().await {
             if file.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
-            if let Ok(bytes) = std::fs::read(file.path())
+            if let Ok(bytes) = tokio::fs::read(file.path()).await
                 && let Ok(record) = serde_json::from_slice::<MediaRegistryRecord>(&bytes)
             {
                 records.push(record);
@@ -2083,16 +2155,15 @@ fn read_all_registry_records_at_root(
     Ok(records)
 }
 
-fn write_runtime_udev_rules(
+async fn write_runtime_udev_rules(
     resolver: &BundleResolver,
     records: &[MediaRegistryRecord],
 ) -> Result<bool, MediaOpError> {
     let path = rules_path(resolver)?;
-    write_runtime_udev_rules_at_path(&path, records)
+    write_runtime_udev_rules_at_path(&path, records).await
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn write_runtime_udev_rules_at_path(
+async fn write_runtime_udev_rules_at_path(
     path: &Path,
     records: &[MediaRegistryRecord],
 ) -> Result<bool, MediaOpError> {
@@ -2101,7 +2172,9 @@ fn write_runtime_udev_rules_at_path(
             "udev-rule-path-has-no-parent".to_owned(),
         ));
     };
-    std::fs::create_dir_all(parent).map_err(|err| MediaOpError::Registry(err.to_string()))?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|err| MediaOpError::Registry(err.to_string()))?;
     let parent_fd = crate::sys::path_safe::open_dir_path_safe(parent)
         .map_err(|err| MediaOpError::Registry(err.to_string()))?;
     let text = render_runtime_udev_rules(records);
@@ -2134,17 +2207,17 @@ fn escape_udev_value(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn reload_udev_rules() -> bool {
+async fn reload_udev_rules() -> bool {
     let binary = std::env::var_os("D2B_BROKER_UDEVADM_BINARY")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .unwrap_or_else(|| PathBuf::from(DEFAULT_UDEVADM_BINARY));
-    Command::new(binary)
+    tokio::process::Command::new(binary)
         .arg("control")
         .arg("--reload-rules")
         .env_remove("NOTIFY_SOCKET")
         .status()
+        .await
         .map(|status| status.success())
         .unwrap_or(false)
 }
@@ -2153,8 +2226,9 @@ fn reload_udev_rules() -> bool {
 mod tests {
     use super::*;
     use d2b_core::host::QemuMediaRegistryScope;
+    use std::io::{BufRead, BufReader, Write};
     use std::os::fd::AsRawFd;
-    use std::os::unix::net::UnixListener;
+    use std::os::unix::net::{UnixListener, UnixStream};
 
     fn registry_record() -> MediaRegistryRecord {
         MediaRegistryRecord {
@@ -2242,9 +2316,9 @@ mod tests {
             .expect("qmp tempdir")
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn qmp_attach_sends_fd_and_device_commands() {
+    async fn qmp_attach_sends_fd_and_device_commands() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
@@ -2280,7 +2354,7 @@ mod tests {
             }
         });
 
-        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        let mut client = QmpClient::connect(&socket).await.expect("connect fake qmp");
         let file = std::fs::File::open("/dev/null").expect("open harmless fd");
         let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Attach)
             .expect("scaffold");
@@ -2291,6 +2365,7 @@ mod tests {
             QemuMediaSourceKind::PhysicalUsb,
             true,
         )
+        .await
         .expect("qmp attach");
         assert_eq!(
             commands,
@@ -2304,9 +2379,9 @@ mod tests {
         server.join().expect("fake qmp server joins");
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn qmp_detach_removes_device_blocks_and_fdset() {
+    async fn qmp_detach_removes_device_blocks_and_fdset() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
@@ -2333,10 +2408,10 @@ mod tests {
             expect_qmp_command(&mut writer, &mut reader, "remove-fd");
         });
 
-        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        let mut client = QmpClient::connect(&socket).await.expect("connect fake qmp");
         let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Detach)
             .expect("scaffold");
-        let commands = qmp_detach(&mut client, &scaffold).expect("qmp detach");
+        let commands = qmp_detach(&mut client, &scaffold).await.expect("qmp detach");
         assert_eq!(
             commands,
             [
@@ -2350,9 +2425,9 @@ mod tests {
         server.join().expect("fake qmp server joins");
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn qmp_detach_reconciles_missed_device_deleted_event() {
+    async fn qmp_detach_reconciles_missed_device_deleted_event() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
@@ -2381,10 +2456,11 @@ mod tests {
         });
 
         let mut client = QmpClient::connect_with_timeout(&socket, Duration::from_millis(50))
+            .await
             .expect("connect fake qmp");
         let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Detach)
             .expect("scaffold");
-        let commands = qmp_detach(&mut client, &scaffold).expect("qmp detach reconciles");
+        let commands = qmp_detach(&mut client, &scaffold).await.expect("qmp detach reconciles");
         assert_eq!(
             commands,
             [
@@ -2398,9 +2474,9 @@ mod tests {
         server.join().expect("fake qmp server joins");
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn qmp_detach_is_idempotent_when_media_nodes_are_already_absent() {
+    async fn qmp_detach_is_idempotent_when_media_nodes_are_already_absent() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
@@ -2424,10 +2500,10 @@ mod tests {
             expect_qmp_query_fdsets_with(&mut writer, &mut reader, "[]");
         });
 
-        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        let mut client = QmpClient::connect(&socket).await.expect("connect fake qmp");
         let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Detach)
             .expect("scaffold");
-        let commands = qmp_detach(&mut client, &scaffold).expect("idempotent qmp detach");
+        let commands = qmp_detach(&mut client, &scaffold).await.expect("idempotent qmp detach");
         assert_eq!(
             commands,
             [
@@ -2440,9 +2516,9 @@ mod tests {
         server.join().expect("fake qmp server joins");
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn qmp_detach_fails_closed_when_block_node_remains_after_error() {
+    async fn qmp_detach_fails_closed_when_block_node_remains_after_error() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
@@ -2473,17 +2549,19 @@ mod tests {
             expect_qmp_query_fdsets_with(&mut writer, &mut reader, "[]");
         });
 
-        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        let mut client = QmpClient::connect(&socket).await.expect("connect fake qmp");
         let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Detach)
             .expect("scaffold");
-        let err = qmp_detach(&mut client, &scaffold).expect_err("qmp detach must fail closed");
+        let err = qmp_detach(&mut client, &scaffold)
+            .await
+            .expect_err("qmp detach must fail closed");
         assert!(matches!(err, MediaOpError::Qmp(reason) if reason == "device_del:DeviceNotFound"));
         server.join().expect("fake qmp server joins");
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn qmp_attached_media_refs_ignore_non_d2b_and_invalid_opaque_values() {
+    async fn qmp_attached_media_refs_ignore_non_d2b_and_invalid_opaque_values() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
@@ -2502,19 +2580,20 @@ mod tests {
             );
         });
 
-        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        let mut client = QmpClient::connect(&socket).await.expect("connect fake qmp");
         assert_eq!(
             client
                 .query_attached_media_refs()
+                .await
                 .expect("query attached media refs"),
             BTreeSet::from(["backup".to_owned(), "installer-usb".to_owned()])
         );
         server.join().expect("fake qmp server joins");
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn qmp_boot_path_attaches_media_and_continues_vm() {
+    async fn qmp_boot_path_attaches_media_and_continues_vm() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
@@ -2546,7 +2625,7 @@ mod tests {
             }
         });
 
-        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        let mut client = QmpClient::connect(&socket).await.expect("connect fake qmp");
         let file = std::fs::File::open("/dev/null").expect("open harmless fd");
         let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Attach)
             .expect("scaffold");
@@ -2557,16 +2636,17 @@ mod tests {
             QemuMediaSourceKind::PhysicalUsb,
             true,
         )
+        .await
         .expect("qmp attach");
-        qmp_continue_vm(&mut client).expect("qmp cont");
+        qmp_continue_vm(&mut client).await.expect("qmp cont");
         commands.push("cont".to_owned());
         assert!(commands.contains(&"cont".to_owned()));
         server.join().expect("fake qmp server joins");
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn qmp_lifecycle_sends_powerdown_status_and_quit_as_typed_ops() {
+    async fn qmp_lifecycle_sends_powerdown_status_and_quit_as_typed_ops() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
@@ -2584,13 +2664,13 @@ mod tests {
             expect_qmp_command(&mut writer, &mut reader, "quit");
         });
 
-        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
-        qmp_system_powerdown(&mut client).expect("system_powerdown");
+        let mut client = QmpClient::connect(&socket).await.expect("connect fake qmp");
+        qmp_system_powerdown(&mut client).await.expect("system_powerdown");
         assert_eq!(
-            qmp_query_status(&mut client).expect("query-status"),
+            qmp_query_status(&mut client).await.expect("query-status"),
             QemuMediaVmStatus::Shutdown
         );
-        qmp_quit(&mut client).expect("quit");
+        qmp_quit(&mut client).await.expect("quit");
         server.join().expect("fake qmp server joins");
     }
 
@@ -2603,13 +2683,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn qmp_query_status_treats_missing_socket_as_shutdown_context() {
+    #[tokio::test]
+    async fn qmp_query_status_treats_missing_socket_as_shutdown_context() {
         let dir = qmp_tempdir();
         let missing = dir.path().join("missing.sock");
         let vm = d2b_contracts::types::VmId::new("media");
 
         let response = qmp_query_status_from_path(&vm, &missing, true)
+            .await
             .expect("missing QMP socket during shutdown is expected");
         assert_eq!(
             response.status,
@@ -2617,13 +2698,14 @@ mod tests {
         );
 
         let err = qmp_query_status_from_path(&vm, &missing, false)
+            .await
             .expect_err("missing QMP socket outside shutdown is an error");
         assert!(matches!(err, MediaOpError::Qmp(reason) if reason.contains("connect:")));
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn qmp_reader_rejects_oversized_response_before_json_parse() {
+    async fn qmp_reader_rejects_oversized_response_before_json_parse() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
@@ -2649,8 +2731,10 @@ mod tests {
             writer.write_all(b"\n").expect("oversized newline");
         });
 
-        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
-        let err = qmp_query_status(&mut client).expect_err("oversized response must fail");
+        let mut client = QmpClient::connect(&socket).await.expect("connect fake qmp");
+        let err = qmp_query_status(&mut client)
+            .await
+            .expect_err("oversized response must fail");
         assert!(matches!(err, MediaOpError::Qmp(reason) if reason == "response-too-large"));
         server.join().expect("fake qmp server joins");
     }
@@ -2790,14 +2874,16 @@ mod tests {
             .to_owned()
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn registry_writes_runtime_only_root_private_modes() {
+    async fn registry_writes_runtime_only_root_private_modes() {
         let dir = tempfile::tempdir().expect("registry tempdir");
         let root = dir.path().join("registry");
         let uid = rustix::process::getuid().as_raw();
         let gid = rustix::process::getgid().as_raw();
-        write_registry_record_at_root(&root, &registry_record(), uid, gid).expect("write registry");
+        write_registry_record_at_root(&root, &registry_record(), uid, gid)
+            .await
+            .expect("write registry");
 
         let vm_dir = root.join("media");
         let record_path = vm_dir.join("installer-usb.json");
@@ -2829,9 +2915,9 @@ mod tests {
         assert!(raw.contains("usb-Vendor_SecretSerial"));
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn runtime_udev_rules_are_root_private_and_cover_partitions() {
+    async fn runtime_udev_rules_are_root_private_and_cover_partitions() {
         let dir = tempfile::tempdir().expect("udev tempdir");
         let path = dir
             .path()
@@ -2843,7 +2929,9 @@ mod tests {
             "usb-Quoted\"Serial\\Path".to_owned(),
         ];
 
-        write_runtime_udev_rules_at_path(&path, &[record]).expect("write udev rules");
+        write_runtime_udev_rules_at_path(&path, &[record])
+            .await
+            .expect("write udev rules");
 
         assert_eq!(
             std::fs::metadata(&path)
@@ -3004,8 +3092,9 @@ mod tests {
         assert!(!usb_selector_matches(&selector, &identity));
     }
 
-    #[test]
-    fn read_usb_identity_for_selector_uses_injected_roots_and_fails_closed() {
+    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn read_usb_identity_for_selector_uses_injected_roots_and_fails_closed() {
         let dir = tempfile::tempdir().expect("selector tempdir");
         let sysfs_root = dir.path().join("sys");
         let by_id_root = dir.path().join("by-id");
@@ -3020,8 +3109,10 @@ mod tests {
             by_id_name: "usb-Vendor_SecretSerial".to_owned(),
         };
 
-        let identity = read_usb_identity_for_selector_at_roots(&sysfs_root, &by_id_root, &selector)
-            .expect("selector identity");
+        let identity =
+            read_usb_identity_for_selector_at_roots(&sysfs_root, &by_id_root, &selector)
+                .await
+                .expect("selector identity");
         assert_eq!(identity.bus_id, "1-2.3");
         assert_eq!(identity.block_device, "null");
         assert_eq!(identity.by_id_names, vec!["usb-Vendor_SecretSerial"]);
@@ -3030,7 +3121,8 @@ mod tests {
             by_id_name: "usb-Missing".to_owned(),
         };
         assert!(matches!(
-            read_usb_identity_for_selector_at_roots(&sysfs_root, &by_id_root, &missing),
+            read_usb_identity_for_selector_at_roots(&sysfs_root, &by_id_root, &missing)
+                .await,
             Err(MediaOpError::IdentityMismatch(reason)) if reason == "configured-selector"
         ));
 
@@ -3048,9 +3140,9 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn declared_selector_artifacts_write_registry_index_and_udev_rules() {
+    async fn declared_selector_artifacts_write_registry_index_and_udev_rules() {
         let dir = tempfile::tempdir().expect("boot artifacts tempdir");
         let registry_root = dir.path().join("registry");
         let redacted_index = dir.path().join("run/d2b/qemu-media-registry-index.json");
@@ -3070,6 +3162,7 @@ mod tests {
             gid,
             false,
         )
+        .await
         .expect("write boot selector artifacts");
 
         assert!(audit.registry_record_written);
@@ -3190,9 +3283,9 @@ mod tests {
         assert!(validate_image_path_shape(Path::new("/var/lib/d2b/images/installer.img")).is_ok());
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn image_mount_and_loop_preflights_detect_busy_paths() {
+    async fn image_mount_and_loop_preflights_detect_busy_paths() {
         let image = Path::new("/var/lib/d2b/images/space image.img");
         assert!(image_path_mounted_in_proc_mounts(
             "/var/lib/d2b/images/space\\040image.img /mnt ext4 rw 0 0\n",
@@ -3208,7 +3301,9 @@ mod tests {
         )
         .expect("backing file");
 
-        assert!(image_has_loop_backing(root.path(), image).expect("loop scan"));
+        assert!(image_has_loop_backing(root.path(), image)
+            .await
+            .expect("loop scan"));
     }
 
     #[test]

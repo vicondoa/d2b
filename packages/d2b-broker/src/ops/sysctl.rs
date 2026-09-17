@@ -8,9 +8,9 @@
 
 use crate::ops::exec_reconcile::{ReconcileExecError, ReconcileExecutor};
 use d2b_core::host_w3::SysctlIntent;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 #[derive(Debug, Clone)]
 pub struct ApplySysctlRequest {
@@ -81,17 +81,16 @@ pub fn intent_to_proc_path(root: &Path, intent: &SysctlIntent) -> PathBuf {
     path
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn apply_sysctl_intents(
+pub async fn apply_sysctl_intents(
     req: &ApplySysctlRequest,
 ) -> Result<Vec<ApplySysctlOutcome>, ApplySysctlError> {
     let mut out = Vec::with_capacity(req.intents.len());
     for intent in &req.intents {
         let path = intent_to_proc_path(&req.proc_sys_root, intent);
-        let before = std::fs::read_to_string(&path).unwrap_or_default();
+        let before = tokio::fs::read_to_string(&path).await.unwrap_or_default();
         let trimmed_before = before.trim().to_owned();
-        std::fs::write(&path, intent.value.as_bytes())?;
-        let after = std::fs::read_to_string(&path).unwrap_or_default();
+        tokio::fs::write(&path, intent.value.as_bytes()).await?;
+        let after = tokio::fs::read_to_string(&path).await.unwrap_or_default();
         let trimmed_after = after.trim().to_owned();
         if trimmed_after != intent.value {
             return Err(ApplySysctlError::ReadbackDrift {
@@ -150,27 +149,30 @@ impl std::error::Error for ApplyWithReadbackError {}
 /// Keep the dispatch surface anchored on `ops::sysctl` so future
 /// per-key verification logic can land here without another runtime
 /// rewrite.
-pub fn apply_with_readback(
+pub async fn apply_with_readback(
     executor: &dyn ReconcileExecutor,
     key: &str,
     value: &str,
 ) -> Result<(), ApplyWithReadbackError> {
-    apply_with_readback_using(executor, key, value, read_sysctl_value)
+    apply_with_readback_using(executor, key, value, |key| Box::pin(read_sysctl_value(key))).await
 }
 
-fn apply_with_readback_using<F>(
+async fn apply_with_readback_using<F>(
     executor: &dyn ReconcileExecutor,
     key: &str,
     value: &str,
     mut readback: F,
 ) -> Result<(), ApplyWithReadbackError>
 where
-    F: FnMut(&str) -> Result<String, ApplyWithReadbackError>,
+    F: FnMut(
+        &str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, ApplyWithReadbackError>> + Send + '_>>,
 {
     executor
         .write_sysctl(key, value)
+        .await
         .map_err(ApplyWithReadbackError::ReconcileExec)?;
-    let observed = readback(key)?.trim().to_owned();
+    let observed = readback(key).await?.trim().to_owned();
     if observed != value {
         return Err(ApplyWithReadbackError::ReadbackDrift {
             key: key.to_owned(),
@@ -181,13 +183,14 @@ where
     Ok(())
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_sysctl_value(key: &str) -> Result<String, ApplyWithReadbackError> {
+async fn read_sysctl_value(key: &str) -> Result<String, ApplyWithReadbackError> {
     let path = proc_sys_path(key);
-    fs::read_to_string(&path).map_err(|err| ApplyWithReadbackError::ReadbackIo {
-        path: path.display().to_string(),
-        detail: err.to_string(),
-    })
+    tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|err| ApplyWithReadbackError::ReadbackIo {
+            path: path.display().to_string(),
+            detail: err.to_string(),
+        })
 }
 
 fn proc_sys_path(key: &str) -> PathBuf {
@@ -219,6 +222,7 @@ pub fn destroy_value_for_key(key: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
+    use std::fs;
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn scratch() -> PathBuf {
@@ -250,9 +254,9 @@ mod tests {
         );
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn apply_writes_value_and_returns_outcome() {
+    async fn apply_writes_value_and_returns_outcome() {
         let dir = scratch();
         let leaf = dir.join("net/ipv6/conf/x");
         fs::create_dir_all(&leaf).unwrap();
@@ -266,6 +270,7 @@ mod tests {
             intents: vec![intent],
             proc_sys_root: dir.clone(),
         })
+        .await
         .unwrap();
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].value_before, "0");
@@ -273,9 +278,9 @@ mod tests {
         fs::remove_dir_all(dir).ok();
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn drift_after_write_fails_closed() {
+    async fn drift_after_write_fails_closed() {
         let dir = scratch();
         let leaf = dir.join("net/ipv6/conf/x");
         fs::create_dir_all(&leaf).unwrap();
@@ -290,16 +295,23 @@ mod tests {
             intents: vec![intent],
             proc_sys_root: dir.clone(),
         })
+        .await
         .unwrap();
         assert_eq!(outcomes[0].value_after, "1");
         fs::remove_dir_all(dir).ok();
     }
 
-    #[test]
-    fn apply_with_readback_records_write_then_confirms() {
+    #[tokio::test]
+    async fn apply_with_readback_records_write_then_confirms() {
         let exec = FakeReconcileExecutor::new();
-        apply_with_readback_using(&exec, "net.ipv4.ip_forward", "1", |_| Ok("1\n".to_owned()))
-            .unwrap();
+        apply_with_readback_using(
+            &exec,
+            "net.ipv4.ip_forward",
+            "1",
+            |_| Box::pin(async move { Ok("1\n".to_owned()) }),
+        )
+        .await
+        .unwrap();
         let log = exec.take_log();
         assert_eq!(log.len(), 1);
         match &log[0] {
@@ -311,12 +323,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn apply_with_readback_rejects_drift() {
+    #[tokio::test]
+    async fn apply_with_readback_rejects_drift() {
         let exec = FakeReconcileExecutor::new();
-        let err =
-            apply_with_readback_using(&exec, "net.ipv4.ip_forward", "1", |_| Ok("0\n".to_owned()))
-                .unwrap_err();
+        let err = apply_with_readback_using(
+            &exec,
+            "net.ipv4.ip_forward",
+            "1",
+            |_| Box::pin(async move { Ok("0\n".to_owned()) }),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(
             err,
             ApplyWithReadbackError::ReadbackDrift {

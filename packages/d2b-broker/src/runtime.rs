@@ -1,6 +1,10 @@
 use std::env;
 use std::fs;
+#[cfg(not(feature = "layer1-bootstrap"))]
+use std::future::Future;
 use std::io;
+#[cfg(not(feature = "layer1-bootstrap"))]
+use std::pin::Pin;
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::io::Read;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
@@ -107,6 +111,14 @@ const DEFAULT_ACTIVATION_HELPER_PATH: &str = "/run/current-system/sw/bin/d2b-act
 const CAPABILITIES: &[&str] = &["Hello", "ExportBrokerAudit", "ApplyHostGenerationHandoff"];
 const DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND: u32 = 512;
 const IPC_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
+/// Bound on one PipeWire probe subprocess (`pw_dump` / `wpctl`) wait.
+///
+/// The typed `PipeWireAudio` arm carries no envelope context deadline, so
+/// the probe wait is bounded by this default, mirroring the zbus
+/// `SYSTEMD_METHOD_TIMEOUT` precedent (5s) in `ops/systemd.rs`. A probe
+/// that exceeds the bound is treated exactly like a failed probe (host not
+/// ready / effect not applied), never a stall of the dispatch worker.
+const PW_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_IPC_RATE_LIMIT_MAX_BUCKETS: usize = 4096;
 const MAX_MODULE_NAME_LEN: usize = 64;
 
@@ -1505,16 +1517,38 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
     };
     let outcome = pool
         .run(move || {
-            answer_request(
-                envelope,
-                request_fds,
-                peer_uid,
-                peer_gid,
-                peer_pid,
-                &config,
-                &audit_log,
-                &ipc_rate_limiter,
-            )
+            // The dispatch chain is async end-to-end (the backend trait and
+            // the dispatch fns await in async time), but the pool workers are
+            // plain threads with no executor. The job bridges the boundary
+            // with `block_on` on the broker's dispatch runtime - the same
+            // bridge the envelope arms used before the chain went async - so
+            // the pool's bounded-worker semantics are unchanged.
+            #[cfg(not(feature = "layer1-bootstrap"))]
+            {
+                envelope_call_runtime().block_on(answer_request(
+                    envelope,
+                    request_fds,
+                    peer_uid,
+                    peer_gid,
+                    peer_pid,
+                    &config,
+                    &audit_log,
+                    &ipc_rate_limiter,
+                ))
+            }
+            #[cfg(feature = "layer1-bootstrap")]
+            {
+                bootstrap_dispatch_runtime().block_on(answer_request(
+                    envelope,
+                    request_fds,
+                    peer_uid,
+                    peer_gid,
+                    peer_pid,
+                    &config,
+                    &audit_log,
+                    &ipc_rate_limiter,
+                ))
+            }
         })
         .await
         // A pool that is gone answered nothing: the caller is closed rather
@@ -1565,7 +1599,7 @@ enum RequestOutcome {
 /// the handlers' subprocess and filesystem work, the audit append - so they
 /// run on the dispatch pool, whose workers bound the work and whose queue
 /// bounds the waiters, rather than on a reactor worker or a thread per call.
-fn answer_request(
+async fn answer_request(
     envelope: RequestEnvelope,
     request_fds: Vec<OwnedFd>,
     peer_uid: u32,
@@ -1573,7 +1607,7 @@ fn answer_request(
     peer_pid: i32,
     config: &ServerConfig,
     audit_log: &AuditLog,
-    ipc_rate_limiter: &Arc<tokio::sync::Mutex<IpcRateLimiter>>,
+    ipc_rate_limiter: &tokio::sync::Mutex<IpcRateLimiter>,
 ) -> io::Result<RequestOutcome> {
     #[cfg(feature = "layer1-bootstrap")]
     let _ = &request_fds; // the bootstrap wire carries no request descriptors
@@ -1753,6 +1787,7 @@ fn answer_request(
             resolver.as_ref(),
             request_fds,
         )
+        .await
     };
     #[cfg(feature = "layer1-bootstrap")]
     let dispatch_outcome = dispatch_request(
@@ -2939,7 +2974,7 @@ fn prepare_runner_launch_identity(
 /// `live_handlers::*`, transporting fds via SCM_RIGHTS on the response
 /// frame.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn dispatch_request(
+async fn dispatch_request(
     request: BrokerRequest,
     caller_uid: u32,
     caller_gid: u32,
@@ -2960,11 +2995,12 @@ fn dispatch_request(
         resolver,
         Vec::new(),
     )
+    .await
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
-fn dispatch_request_with_request_fds(
+async fn dispatch_request_with_request_fds(
     request: BrokerRequest,
     caller_uid: u32,
     caller_gid: u32,
@@ -3001,11 +3037,12 @@ fn dispatch_request_with_request_fds(
         &backend,
         request_fds,
     )
+    .await
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
-fn dispatch_request_with_backend<B: DispatchBackend>(
+async fn dispatch_request_with_backend<B: DispatchBackend>(
     request: BrokerRequest,
     caller_uid: u32,
     caller_gid: u32,
@@ -3028,11 +3065,12 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         backend,
         Vec::new(),
     )
+    .await
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
-fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
+async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
     request: BrokerRequest,
     caller_uid: u32,
     caller_gid: u32,
@@ -3112,24 +3150,35 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             // the broker keeps serving everything else. Restart
             // invalidation still holds: a fresh broker process bumps the
             // persisted epoch before it can serve a publication.
+            // The store's channel boundary is a blocking one by design
+            // (the single writer's commands are `blocking_send` /
+            // `blocking_recv`, sanctioned for a dedicated blocking worker
+            // per plan R4). The dispatch chain now runs on the broker's
+            // async runtime, so the store calls hop out through
+            // `block_in_place` to a blocking thread - the same dedicated
+            // blocking-worker shape - instead of panicking on a runtime
+            // worker that must never block.
             if crate::envelope::trusted_context_store().is_none() {
-                crate::envelope::init_trusted_context_store(&config.state_dir).map_err(
-                    |error| {
-                        BrokerError::LiveHandler(format!(
-                            "trusted-context store unavailable: {error}"
-                        ))
-                    },
-                )?;
-            }
-            let reply = crate::envelope::trusted_context_store()
-                .expect("the lazy init above just opened the store")
-                .publication_reply(&req)
+                tokio::task::block_in_place(|| {
+                    crate::envelope::init_trusted_context_store(&config.state_dir)
+                })
                 .map_err(|error| {
                     BrokerError::LiveHandler(format!(
-                        "trusted-context publication refused: {}",
-                        error.code()
+                        "trusted-context store unavailable: {error}"
                     ))
                 })?;
+            }
+            let reply = tokio::task::block_in_place(|| {
+                crate::envelope::trusted_context_store()
+                    .expect("the lazy init above just opened the store")
+                    .publication_reply(&req)
+            })
+            .map_err(|error| {
+                BrokerError::LiveHandler(format!(
+                    "trusted-context publication refused: {}",
+                    error.code()
+                ))
+            })?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3170,12 +3219,15 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             // carries the same identity the audit join derives.
             let zone = req.vm_id.as_str();
             let payload = serde_json::json!({ "vm": req.vm_id.as_str() });
-            let invocation = envelope_call_runtime().block_on(backend.operation_envelope().call(
-                crate::envelope::CallerAuthority::Daemon,
-                "OwnershipMatrixCheck",
-                zone,
-                &payload,
-            ));
+            let invocation = backend
+                .operation_envelope()
+                .call(
+                    crate::envelope::CallerAuthority::Daemon,
+                    "OwnershipMatrixCheck",
+                    zone,
+                    &payload,
+                )
+                .await;
             if let Err(refusal) = invocation {
                 tracing::warn!(
                     broker_operation = "OwnershipMatrixCheck",
@@ -3240,24 +3292,22 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     for identity in tail {
                         chain = chain.nested(identity.clone());
                     }
-                    envelope_call_runtime().block_on(
-                        backend.operation_envelope().call_nested_with_fds(
+                    backend
+                        .operation_envelope()
+                        .call_nested_with_fds(
                             chain,
                             operation,
                             zone,
                             &req.payload,
                             &request_fds,
-                        ),
-                    )
+                        )
+                        .await
                 }
                 (None, None) => {
-                    envelope_call_runtime().block_on(backend.operation_envelope().call_with_fds(
-                        caller,
-                        operation,
-                        zone,
-                        &req.payload,
-                        &request_fds,
-                    ))
+                    backend
+                        .operation_envelope()
+                        .call_with_fds(caller, operation, zone, &req.payload, &request_fds)
+                        .await
                 }
                 _ => {
                     return Err(BrokerError::RequestValidation {
@@ -3482,20 +3532,28 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                         && Path::new(pw_dump_path).is_absolute()
                         && Path::new(runtime_dir).is_absolute() =>
                 {
-                    // The PipeWire probe runs on the synchronous dispatch
-                    // worker (the request body has no async form until the
-                    // seam's handler-task model lands, plan U8 item 1), so
-                    // the subprocess wait keeps the sanctioned synchronous
-                    // path allow rather than a tokio::process conversion.
-                    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-                    let dump = std::process::Command::new(pw_dump_path)
-                        .env_clear()
-                        .env("PIPEWIRE_RUNTIME_DIR", runtime_dir)
-                        .env("XDG_RUNTIME_DIR", runtime_dir)
-                        .stdin(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .output();
-                    match dump.ok().filter(|output| output.status.success()) {
+                    // The PipeWire probe runs in async time on the dispatch
+                    // runtime. The wait is bounded by PW_PROBE_TIMEOUT (5s,
+                    // mirroring the zbus SYSTEMD_METHOD_TIMEOUT precedent):
+                    // this ADDS a bound where the old synchronous path had
+                    // none, so a stalled pw_dump can no longer pin a
+                    // dispatch worker. A timeout is treated exactly like a
+                    // failed probe (host not ready), never a stall.
+                    let dump = tokio::time::timeout(
+                        PW_PROBE_TIMEOUT,
+                        tokio::process::Command::new(pw_dump_path)
+                            .env_clear()
+                            .env("PIPEWIRE_RUNTIME_DIR", runtime_dir)
+                            .env("XDG_RUNTIME_DIR", runtime_dir)
+                            .stdin(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .output(),
+                    )
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .filter(|output| output.status.success());
+                    match dump {
                         None => d2b_contracts_broker::broker_wire::PipeWireAudioResponse {
                             vm_id: req.vm_id.clone(),
                             role_id: req.role_id.clone(),
@@ -3544,7 +3602,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                                     node_present: false,
                                 },
                                 Some(node_id) => {
-                                    let mut command = std::process::Command::new(wpctl_path);
+                                    let mut command = tokio::process::Command::new(wpctl_path);
                                     command
                                         .env_clear()
                                         .env("PIPEWIRE_RUNTIME_DIR", runtime_dir)
@@ -3570,13 +3628,16 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                                             command.args(["set-volume", &node_id, &level_arg]);
                                         }
                                     }
-                                    // Same synchronous dispatch worker as the
-                                    // pw_dump probe above (plan U8 item 1).
-                                    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-                                    let applied = command
-                                        .output()
-                                        .map(|output| output.status.success())
-                                        .unwrap_or(false);
+                                    // Same bounded async wait as the pw_dump
+                                    // probe above (PW_PROBE_TIMEOUT).
+                                    let applied = tokio::time::timeout(
+                                        PW_PROBE_TIMEOUT,
+                                        command.output(),
+                                    )
+                                    .await
+                                    .map(|output| output.map(|output| output.status.success()))
+                                    .unwrap_or(Ok(false))
+                                    .unwrap_or(false);
                                     d2b_contracts_broker::broker_wire::PipeWireAudioResponse {
                                         vm_id: req.vm_id.clone(),
                                         role_id: req.role_id.clone(),
@@ -3636,7 +3697,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         }
         RealBrokerRequest::StartSystemdUnit(req) => {
             let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
-            let (identity, pidfd) = backend.start_systemd_unit(resolver, &req)?;
+            let (identity, pidfd) = backend.start_systemd_unit(resolver, &req).await?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3672,7 +3733,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         }
         RealBrokerRequest::CheckSystemdUserManager(req) => {
             let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
-            let available = backend.check_systemd_user_manager(resolver, &req)?;
+            let available = backend.check_systemd_user_manager(resolver, &req).await?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3706,7 +3767,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         }
         RealBrokerRequest::ObserveSystemdUnit(req) => {
             let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
-            let identity = backend.observe_systemd_unit(resolver, &req)?;
+            let identity = backend.observe_systemd_unit(resolver, &req).await?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3739,7 +3800,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         }
         RealBrokerRequest::OpenSystemdUnitPidfd(req) => {
             let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
-            let (identity, pidfd) = backend.reopen_systemd_unit(resolver, &req)?;
+            let (identity, pidfd) = backend.reopen_systemd_unit(resolver, &req).await?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3775,7 +3836,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         }
         RealBrokerRequest::StopSystemdUnit(req) => {
             let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
-            backend.stop_systemd_unit(resolver, &req)?;
+            backend.stop_systemd_unit(resolver, &req).await?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3833,6 +3894,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             let exec = live_exec(config);
             let outcome =
                 crate::ops::modprobe::live_modprobe_if_allowed(&exec, resolver, &req, audit_log)
+                    .await
                     .map_err(BrokerError::LiveHandler)?;
             let disposition = serde_json::to_value(outcome.disposition)
                 .ok()
@@ -3953,6 +4015,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 &resolver.host.security_key_selectors,
                 audit_log,
             )
+            .await
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
             write_success_op_record!(
                 audit_log,
@@ -4010,6 +4073,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         RealBrokerRequest::QemuMediaEnroll(req) => {
             let resolver = require_resolver(resolver)?;
             let outcome = crate::ops::media::enroll(resolver, &req)
+                .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             write_success_op_record!(
                 audit_log,
@@ -4038,6 +4102,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         RealBrokerRequest::QemuMediaRefreshRegistry(req) => {
             let resolver = require_resolver(resolver)?;
             let outcome = crate::ops::media::refresh_registry(resolver)
+                .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             write_success_op_record!(
                 audit_log,
@@ -4064,6 +4129,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         RealBrokerRequest::QemuMediaBoot(req) => {
             let resolver = require_resolver(resolver)?;
             let outcome = crate::ops::media::boot(resolver, &req)
+                .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             write_success_op_record!(
                 audit_log,
@@ -4093,7 +4159,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             )))
         }
         RealBrokerRequest::QemuMediaSystemPowerdown(req) => {
-            let response = backend.qemu_media_system_powerdown(&req)?;
+            let response = backend.qemu_media_system_powerdown(&req).await?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -4115,13 +4181,13 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             ))
         }
         RealBrokerRequest::QemuMediaQueryStatus(req) => {
-            let response = backend.qemu_media_query_status(&req)?;
+            let response = backend.qemu_media_query_status(&req).await?;
             Ok(DispatchResult::no_fds(
                 BrokerResponse::QemuMediaQueryStatus(response),
             ))
         }
         RealBrokerRequest::QemuMediaQuit(req) => {
-            let response = backend.qemu_media_quit(&req)?;
+            let response = backend.qemu_media_quit(&req).await?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -4145,6 +4211,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         RealBrokerRequest::QemuMediaAttach(req) => {
             let resolver = require_resolver(resolver)?;
             let outcome = crate::ops::media::attach(resolver, &req)
+                .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             write_success_op_record!(
                 audit_log,
@@ -4172,6 +4239,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         RealBrokerRequest::QemuMediaDetach(req) => {
             let resolver = require_resolver(resolver)?;
             let outcome = crate::ops::media::detach(resolver, &req)
+                .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             write_success_op_record!(
                 audit_log,
@@ -4399,11 +4467,13 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 )?;
                 return Err(BrokerError::AuditRequiresAdmin);
             }
-            let response = backend.apply_host_generation_handoff(
-                &config.state_dir,
-                &config.activation_helper_path,
-                &req,
-            )?;
+            let response = backend
+                .apply_host_generation_handoff(
+                    &config.state_dir,
+                    &config.activation_helper_path,
+                    &req,
+                )
+                .await?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -4493,19 +4563,22 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 }
             }
             let expected_device_node = inspection.device_node;
-            backend.usbip_bind(&intent)?;
+            backend.usbip_bind(&intent).await?;
             if let Err(grant_error) = grant_usbip_backend_device_acl(
                 resolver,
                 &intent,
                 expected_identity,
                 expected_device_node,
-            ) {
+            )
+            .await
+            {
                 return Err(rollback_usbip_bind_after_acl_grant_failure(
                     backend,
                     &intent,
                     same_vm_replay,
                     grant_error,
-                ));
+                )
+                .await);
             }
             let scope_id = format!("env:{}", intent.env);
             let audit_result = write_success_op_record!(
@@ -4526,7 +4599,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 },
             );
             if let Err(audit_error) = audit_result {
-                rollback_usbip_bind_after_audit_failure(backend, resolver, &intent, same_vm_replay);
+                rollback_usbip_bind_after_audit_failure(backend, resolver, &intent, same_vm_replay).await;
                 return Err(audit_error);
             }
             Ok(DispatchResult::no_fds(ack_response("UsbipBind")))
@@ -4551,9 +4624,9 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 }
                 None => false,
             };
-            backend.usbip_unbind(&intent)?;
+            backend.usbip_unbind(&intent).await?;
             if had_matching_lock {
-                if let Err(revoke_error) = revoke_usbip_backend_device_acl(resolver, &intent) {
+                if let Err(revoke_error) = revoke_usbip_backend_device_acl(resolver, &intent).await {
                     return Err(handle_usbip_acl_revoke_failure_after_unbind(
                         &intent,
                         req.preserve_durable_claim,
@@ -4595,7 +4668,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 kind: "usbip-firewall",
                 intent_id: req.bundle_usbip_firewall_intent_ref.as_str().to_owned(),
             })?;
-            backend.usbip_bind_firewall_rule(resolver, &intent)?;
+            backend.usbip_bind_firewall_rule(resolver, &intent).await?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -4632,8 +4705,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     })
                 })
                 .collect();
-            backend.usbip_proxy_reconcile(&expectations)?;
-            reconcile_active_usbip_backend_acls(resolver)?;
+            backend.usbip_proxy_reconcile(&expectations).await?;
+            reconcile_active_usbip_backend_acls(resolver).await?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -4757,7 +4830,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             };
 
             // Acquire OFD lock and run `usbip bind` via the standard live handler.
-            backend.usbip_bind(&synthetic_intent)?;
+            backend.usbip_bind(&synthetic_intent).await?;
 
             // Grant per-device ACL to the env's USBIP backend runner (no allowlist).
             if let Err(grant_error) = grant_explicit_usbip_backend_acl(
@@ -4766,9 +4839,11 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 &req.bus_id,
                 expected_identity,
                 expected_device_node,
-            ) {
+            )
+            .await
+            {
                 if !same_vm_replay {
-                    match backend.usbip_unbind(&synthetic_intent) {
+                    match backend.usbip_unbind(&synthetic_intent).await {
                         Ok(()) => {
                             if let Err(lock_error) =
                                 crate::ops::usbip_lock::release_lock(&lock_path, &req.vm)
@@ -4818,7 +4893,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             if let Err(audit_error) = audit_result {
                 if !same_vm_replay {
                     if let Err(revoke_err) =
-                        revoke_explicit_usbip_backend_acl(resolver, &req.env, &req.bus_id)
+                        revoke_explicit_usbip_backend_acl(resolver, &req.env, &req.bus_id).await
                     {
                         warn!(
                             bus_id = %req.bus_id,
@@ -4827,7 +4902,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                             "UsbipExplicitBind audit write failed and backend ACL rollback failed"
                         );
                     }
-                    match backend.usbip_unbind(&synthetic_intent) {
+                    match backend.usbip_unbind(&synthetic_intent).await {
                         Ok(()) => {
                             if let Err(lock_error) =
                                 crate::ops::usbip_lock::release_lock(&lock_path, &req.vm)
@@ -4887,6 +4962,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
             let nft_script = decision.batch.render_nft_script();
             let expected_hash = persisted_nft_hash()
+                .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
                 .or_else(|| resolver.host.nftables.table_hash_after_apply.clone());
             crate::ops::nft::apply_with_coexistence(
@@ -4897,6 +4973,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 resolver.host.firewall_coexistence_policy.as_ref(),
                 expected_hash.as_deref(),
             )
+            .await
             .map_err(|err| match err {
                 crate::ops::nft::ApplyWithCoexistenceError::CoexistenceRefused {
                     manager,
@@ -4931,6 +5008,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 &resolver.host.nftables.table,
                 &nft_hash_sidecar_path(),
             )
+            .await
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
 
             write_success_op_record!(
@@ -4962,6 +5040,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             let resolver = require_resolver(resolver)?;
             let vm_name = lookup_vm_name(resolver, &req.vm_id);
             let summary = crate::ops::disk_init::live_disk_init(resolver.as_ref(), &vm_name)
+                .await
                 .map_err(|e| BrokerError::LiveHandler(e.to_string()))?;
             write_success_op_record!(
                 audit_log,
@@ -6226,159 +6305,225 @@ trait DispatchBackend {
     /// authority and an unwired operation stays unreachable.
     fn operation_envelope(&self) -> &crate::envelope::BrokerEnvelope;
 
-    fn apply_nftables(
-        &self,
-        resolver: &BundleResolver,
-        intent: &d2b_core::bundle_resolver::ResolvedNftIntent,
-        desired_hash: Option<&str>,
+    fn apply_nftables<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        intent: &'a d2b_core::bundle_resolver::ResolvedNftIntent,
+        desired_hash: Option<&'a str>,
         destroy: bool,
-    ) -> Result<(), BrokerError>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
-    fn apply_route(
-        &self,
-        state_dir: &Path,
-        intent: &d2b_core::bundle_resolver::ResolvedRouteIntent,
-        provenance: &d2b_contracts_resource::v3::NetworkProvenance,
+    fn apply_route<'a>(
+        &'a self,
+        state_dir: &'a Path,
+        intent: &'a d2b_core::bundle_resolver::ResolvedRouteIntent,
+        provenance: &'a d2b_contracts_resource::v3::NetworkProvenance,
         destroy: bool,
-    ) -> Result<(), BrokerError>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
-    fn apply_sysctl(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedSysctlIntent,
+    fn apply_sysctl<'a>(
+        &'a self,
+        intent: &'a d2b_core::bundle_resolver::ResolvedSysctlIntent,
         destroy: bool,
-    ) -> Result<(), BrokerError>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
-    fn update_hosts_file(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedHostsIntent,
+    fn update_hosts_file<'a>(
+        &'a self,
+        intent: &'a d2b_core::bundle_resolver::ResolvedHostsIntent,
         destroy: bool,
-    ) -> Result<(), BrokerError>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
-    fn apply_nm_unmanaged(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent,
+    fn apply_nm_unmanaged<'a>(
+        &'a self,
+        intent: &'a d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent,
         destroy: bool,
-    ) -> Result<(), BrokerError>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
-    fn set_bridge_port_flags(
-        &self,
-        req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
-        resolver: &BundleResolver,
-    ) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, BrokerError>;
+    fn set_bridge_port_flags<'a>(
+        &'a self,
+        req: &'a d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
+        resolver: &'a BundleResolver,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, BrokerError>>
+                + Send
+                + 'a,
+        >,
+    >;
 
-    fn open_pidfd(
-        &self,
-        runner_id: &str,
+    fn open_pidfd<'a>(
+        &'a self,
+        runner_id: &'a str,
         pid: i32,
         expected_start_time_ticks: u64,
-    ) -> Result<crate::live_handlers::OpenPidfdResult, BrokerError>;
+    ) -> Pin<Box<dyn Future<Output = Result<crate::live_handlers::OpenPidfdResult, BrokerError>> + Send + 'a>>;
 
-    fn start_systemd_unit(
-        &self,
-        resolver: &BundleResolver,
-        request: &d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
-    ) -> Result<
-        (
-            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
-            OwnedFd,
-        ),
-        BrokerError,
+    fn start_systemd_unit<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        request: &'a d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        (
+                            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+                            OwnedFd,
+                        ),
+                        BrokerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
     >;
 
-    fn check_systemd_user_manager(
-        &self,
-        resolver: &BundleResolver,
-        request: &d2b_contracts_broker::broker_wire::CheckSystemdUserManagerRequest,
-    ) -> Result<bool, BrokerError>;
+    fn check_systemd_user_manager<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        request: &'a d2b_contracts_broker::broker_wire::CheckSystemdUserManagerRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, BrokerError>> + Send + 'a>>;
 
-    fn observe_systemd_unit(
-        &self,
-        resolver: &BundleResolver,
-        request: &d2b_contracts_broker::broker_wire::ObserveSystemdUnitRequest,
-    ) -> Result<Option<d2b_contracts_broker::broker_wire::SystemdUnitIdentity>, BrokerError>;
-
-    fn reopen_systemd_unit(
-        &self,
-        resolver: &BundleResolver,
-        request: &d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
-    ) -> Result<
-        (
-            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
-            OwnedFd,
-        ),
-        BrokerError,
+    fn observe_systemd_unit<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        request: &'a d2b_contracts_broker::broker_wire::ObserveSystemdUnitRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<Option<d2b_contracts_broker::broker_wire::SystemdUnitIdentity>, BrokerError>>
+                + Send
+                + 'a,
+        >,
     >;
 
-    fn stop_systemd_unit(
-        &self,
-        resolver: &BundleResolver,
-        request: &d2b_contracts_broker::broker_wire::StopSystemdUnitRequest,
-    ) -> Result<(), BrokerError>;
+    fn reopen_systemd_unit<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        request: &'a d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        (
+                            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+                            OwnedFd,
+                        ),
+                        BrokerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >;
 
-    fn signal_runner(
-        &self,
-        runner_id: &str,
+    fn stop_systemd_unit<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        request: &'a d2b_contracts_broker::broker_wire::StopSystemdUnitRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
+
+    fn signal_runner<'a>(
+        &'a self,
+        runner_id: &'a str,
         signal: d2b_contracts_broker::broker_wire::RunnerSignal,
-    ) -> Result<(), BrokerError>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
-    fn spawn_runner(
-        &self,
-        runner_id: &str,
-        plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
-        resolver: &BundleResolver,
-        req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+    fn spawn_runner<'a>(
+        &'a self,
+        runner_id: &'a str,
+        plan_input: &'a crate::ops::spawn_runner::SpawnRunnerPlanInput,
+        resolver: &'a BundleResolver,
+        req: &'a d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
         // Launch posture resolved from the trusted intent by the dispatch
         // arm; the backend must not re-derive it from the request.
         posture: LaunchPosture,
         // Device-owned worker scope resolved (and pinned) by the dispatch arm
         // from the verified bundle; `default()` for every other launch.
-        device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
+        device_worker: &'a crate::ops::device_worker::DeviceWorkerLaunch,
         request_fds: Vec<OwnedFd>,
-        audit_log: &crate::audit::AuditLog,
-    ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError>;
+        audit_log: &'a crate::audit::AuditLog,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::live_handlers::SpawnRunnerResult, BrokerError>> + Send + 'a>>;
 
-    fn apply_host_generation_handoff(
-        &self,
-        state_dir: &std::path::Path,
-        helper_path: &std::path::Path,
-        request: &d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
-    ) -> Result<d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError>;
+    fn apply_host_generation_handoff<'a>(
+        &'a self,
+        state_dir: &'a std::path::Path,
+        helper_path: &'a std::path::Path,
+        request: &'a d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse,
+                        BrokerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >;
 
-    fn usbip_bind(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
-    ) -> Result<(), BrokerError>;
+    fn usbip_bind<'a>(
+        &'a self,
+        intent: &'a d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
-    fn usbip_unbind(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
-    ) -> Result<(), BrokerError>;
+    fn usbip_unbind<'a>(
+        &'a self,
+        intent: &'a d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
-    fn usbip_bind_firewall_rule(
-        &self,
-        resolver: &BundleResolver,
-        intent: &d2b_core::bundle_resolver::ResolvedUsbipFirewallIntent,
-    ) -> Result<(), BrokerError>;
+    fn usbip_bind_firewall_rule<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        intent: &'a d2b_core::bundle_resolver::ResolvedUsbipFirewallIntent,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
-    fn usbip_proxy_reconcile(
-        &self,
-        expectations: &[(String, String, PathBuf)],
-    ) -> Result<(), BrokerError>;
+    fn usbip_proxy_reconcile<'a>(
+        &'a self,
+        expectations: &'a [(String, String, PathBuf)],
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
-    fn qemu_media_system_powerdown(
-        &self,
-        req: &d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
-    ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse, BrokerError>;
+    fn qemu_media_system_powerdown<'a>(
+        &'a self,
+        req: &'a d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse,
+                        BrokerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >;
 
-    fn qemu_media_query_status(
-        &self,
-        req: &d2b_contracts_broker::broker_wire::QemuMediaQueryStatusRequest,
-    ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaQueryStatusResponse, BrokerError>;
+    fn qemu_media_query_status<'a>(
+        &'a self,
+        req: &'a d2b_contracts_broker::broker_wire::QemuMediaQueryStatusRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        d2b_contracts_broker::broker_wire::QemuMediaQueryStatusResponse,
+                        BrokerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >;
 
-    fn qemu_media_quit(
-        &self,
-        req: &d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
-    ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse, BrokerError>;
+    fn qemu_media_quit<'a>(
+        &'a self,
+        req: &'a d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse,
+                        BrokerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >;
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -6403,7 +6548,7 @@ struct RunnerPreopenedFds {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn prepare_runner_preopened_fds(
+async fn prepare_runner_preopened_fds(
     _plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
     resolver: &BundleResolver,
     req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
@@ -6452,6 +6597,7 @@ fn prepare_runner_preopened_fds(
                 )));
             }
             let fd = crate::ops::tap::live_create_macvtap_fd(&intent)
+                .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             child_fds.push(fd);
         }
@@ -6512,6 +6658,7 @@ fn prepare_runner_preopened_fds(
         },
         Some(audit_log),
     )
+    .await
     .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
 
     let reconcile = crate::ops::exec_reconcile::SystemReconcileExecutor;
@@ -6524,7 +6671,8 @@ fn prepare_runner_preopened_fds(
         },
         resolver,
         &reconcile,
-    )?;
+    )
+    .await?;
 
     let tap_fd = outcome
         .fd
@@ -6550,237 +6698,300 @@ impl DispatchBackend for LiveDispatchBackend {
         live_operation_envelope()
     }
 
-    fn apply_nftables(
-        &self,
-        resolver: &BundleResolver,
-        intent: &d2b_core::bundle_resolver::ResolvedNftIntent,
-        desired_hash: Option<&str>,
+    fn apply_nftables<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        intent: &'a d2b_core::bundle_resolver::ResolvedNftIntent,
+        desired_hash: Option<&'a str>,
         destroy: bool,
-    ) -> Result<(), BrokerError> {
-        let nft_binary = nft_binary_path();
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        let destroy_script;
-        let script_body = if destroy {
-            destroy_script = render_nft_destroy_script(
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            let nft_binary = nft_binary_path();
+            let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+            let destroy_script;
+            let script_body = if destroy {
+                destroy_script = render_nft_destroy_script(
+                    &resolver.host.nftables.family,
+                    &resolver.host.nftables.table,
+                );
+                destroy_script.as_str()
+            } else {
+                intent.script_body.as_str()
+            };
+            let persisted_hash = if destroy {
+                None
+            } else {
+                persisted_nft_hash()
+                    .await
+                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
+                    .or_else(|| resolver.host.nftables.table_hash_after_apply.clone())
+            };
+            let expected_hash = if destroy {
+                None
+            } else {
+                desired_hash.or(persisted_hash.as_deref())
+            };
+            let _new_hash = crate::ops::nft::apply_with_coexistence(
+                &exec,
+                &nft_binary,
+                script_body,
+                intent.ownership_id.as_str(),
+                resolver.host.firewall_coexistence_policy.as_ref(),
+                expected_hash,
+            )
+            .await
+            .map_err(|err| match err {
+                crate::ops::nft::ApplyWithCoexistenceError::CoexistenceRefused {
+                    manager,
+                    rationale,
+                } => BrokerError::CoexistenceRefused { manager, rationale },
+                crate::ops::nft::ApplyWithCoexistenceError::ParseFailed(err) => {
+                    BrokerError::NftScriptParseFailed(err.to_string())
+                }
+                crate::ops::nft::ApplyWithCoexistenceError::CarveoutOrderingViolation(err) => {
+                    BrokerError::CarveoutOrderingViolation(match err {
+                        d2b_host::nftables::NftError::ForeignNftRuleShadowsD2b { details } => {
+                            details
+                        }
+                        other => other.to_string(),
+                    })
+                }
+                crate::ops::nft::ApplyWithCoexistenceError::DriftDetected {
+                    expected,
+                    observed,
+                } => BrokerError::NftablesDriftDetected { expected, observed },
+                crate::ops::nft::ApplyWithCoexistenceError::ForeignOwnership => {
+                    BrokerError::LiveHandler("foreign-nft-ownership".to_owned())
+                }
+                crate::ops::nft::ApplyWithCoexistenceError::ReconcileExec(err) => {
+                    BrokerError::LiveHandler(err.to_string())
+                }
+            })?;
+            crate::ops::nft::persist_live_nft_hash(
+                &exec,
+                &nft_binary,
                 &resolver.host.nftables.family,
                 &resolver.host.nftables.table,
-            );
-            destroy_script.as_str()
-        } else {
-            intent.script_body.as_str()
-        };
-        let persisted_hash = if destroy {
-            None
-        } else {
-            persisted_nft_hash()
-                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
-                .or_else(|| resolver.host.nftables.table_hash_after_apply.clone())
-        };
-        let expected_hash = if destroy {
-            None
-        } else {
-            desired_hash.or(persisted_hash.as_deref())
-        };
-        let _new_hash = crate::ops::nft::apply_with_coexistence(
-            &exec,
-            &nft_binary,
-            script_body,
-            intent.ownership_id.as_str(),
-            resolver.host.firewall_coexistence_policy.as_ref(),
-            expected_hash,
-        )
-        .map_err(|err| match err {
-            crate::ops::nft::ApplyWithCoexistenceError::CoexistenceRefused {
-                manager,
-                rationale,
-            } => BrokerError::CoexistenceRefused { manager, rationale },
-            crate::ops::nft::ApplyWithCoexistenceError::ParseFailed(err) => {
-                BrokerError::NftScriptParseFailed(err.to_string())
-            }
-            crate::ops::nft::ApplyWithCoexistenceError::CarveoutOrderingViolation(err) => {
-                BrokerError::CarveoutOrderingViolation(match err {
-                    d2b_host::nftables::NftError::ForeignNftRuleShadowsD2b { details } => details,
-                    other => other.to_string(),
-                })
-            }
-            crate::ops::nft::ApplyWithCoexistenceError::DriftDetected { expected, observed } => {
-                BrokerError::NftablesDriftDetected { expected, observed }
-            }
-            crate::ops::nft::ApplyWithCoexistenceError::ForeignOwnership => {
-                BrokerError::LiveHandler("foreign-nft-ownership".to_owned())
-            }
-            crate::ops::nft::ApplyWithCoexistenceError::ReconcileExec(err) => {
-                BrokerError::LiveHandler(err.to_string())
-            }
-        })?;
-        crate::ops::nft::persist_live_nft_hash(
-            &exec,
-            &nft_binary,
-            &resolver.host.nftables.family,
-            &resolver.host.nftables.table,
-            &nft_hash_sidecar_path(),
-        )
-        .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
-        Ok(())
+                &nft_hash_sidecar_path(),
+            )
+            .await
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            Ok(())
+        })
     }
 
-    fn apply_route(
-        &self,
-        state_dir: &Path,
-        intent: &d2b_core::bundle_resolver::ResolvedRouteIntent,
-        provenance: &d2b_contracts_resource::v3::NetworkProvenance,
+    fn apply_route<'a>(
+        &'a self,
+        state_dir: &'a Path,
+        intent: &'a d2b_core::bundle_resolver::ResolvedRouteIntent,
+        provenance: &'a d2b_contracts_resource::v3::NetworkProvenance,
         destroy: bool,
-    ) -> Result<(), BrokerError> {
-        let ip_binary = ip_binary_path();
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::ops::route::apply_with_preflight_owned(
-            &exec, &ip_binary, state_dir, intent, provenance, destroy,
-        )
-        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
-    }
-
-    fn apply_sysctl(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedSysctlIntent,
-        destroy: bool,
-    ) -> Result<(), BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        let value = if destroy {
-            destroy_sysctl_value(&intent.key)?
-        } else {
-            intent.value.as_str()
-        };
-        crate::ops::sysctl::apply_with_readback(&exec, &intent.key, value)
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            let ip_binary = ip_binary_path();
+            let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+            crate::ops::route::apply_with_preflight_owned(
+                &exec, &ip_binary, state_dir, intent, provenance, destroy,
+            )
+            .await
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+        })
     }
 
-    fn update_hosts_file(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedHostsIntent,
+    fn apply_sysctl<'a>(
+        &'a self,
+        intent: &'a d2b_core::bundle_resolver::ResolvedSysctlIntent,
         destroy: bool,
-    ) -> Result<(), BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        if destroy {
-            crate::ops::hosts::remove_marker_block(&exec, intent)
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+            let value = if destroy {
+                destroy_sysctl_value(&intent.key)?
+            } else {
+                intent.value.as_str()
+            };
+            crate::ops::sysctl::apply_with_readback(&exec, &intent.key, value)
+                .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))
-        } else {
-            crate::ops::hosts::write_marker_block(&exec, intent)
-                .map_err(|err| BrokerError::LiveHandler(err.to_string()))
-        }
+        })
     }
 
-    fn apply_nm_unmanaged(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent,
+    fn update_hosts_file<'a>(
+        &'a self,
+        intent: &'a d2b_core::bundle_resolver::ResolvedHostsIntent,
         destroy: bool,
-    ) -> Result<(), BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        if destroy {
-            crate::ops::nm::remove_with_reload(intent)
-                .map_err(|err| BrokerError::LiveHandler(err.to_string()))
-        } else {
-            crate::ops::nm::apply_with_reload(&exec, intent)
-                .map_err(|err| BrokerError::LiveHandler(err.to_string()))
-        }
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+            if destroy {
+                crate::ops::hosts::remove_marker_block(&exec, intent)
+                    .await
+                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+            } else {
+                crate::ops::hosts::write_marker_block(&exec, intent)
+                    .await
+                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+            }
+        })
     }
 
-    fn set_bridge_port_flags(
-        &self,
-        req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
-        resolver: &BundleResolver,
-    ) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, BrokerError> {
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        dispatch_set_bridge_port_flags_inner(req, resolver, &exec)
+    fn apply_nm_unmanaged<'a>(
+        &'a self,
+        intent: &'a d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent,
+        destroy: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+            if destroy {
+                crate::ops::nm::remove_with_reload(intent)
+                    .await
+                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+            } else {
+                crate::ops::nm::apply_with_reload(&exec, intent)
+                    .await
+                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+            }
+        })
     }
 
-    fn open_pidfd(
-        &self,
-        runner_id: &str,
+    fn set_bridge_port_flags<'a>(
+        &'a self,
+        req: &'a d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
+        resolver: &'a BundleResolver,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, BrokerError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+            dispatch_set_bridge_port_flags_inner(req, resolver, &exec).await
+        })
+    }
+
+    fn open_pidfd<'a>(
+        &'a self,
+        runner_id: &'a str,
         pid: i32,
         expected_start_time_ticks: u64,
-    ) -> Result<crate::live_handlers::OpenPidfdResult, BrokerError> {
-        let outcome = crate::live_handlers::live_open_pidfd(pid, expected_start_time_ticks)
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
-        register_runner_pidfd(runner_id, &outcome.pidfd)?;
-        Ok(outcome)
+    ) -> Pin<Box<dyn Future<Output = Result<crate::live_handlers::OpenPidfdResult, BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            let outcome = crate::live_handlers::live_open_pidfd(pid, expected_start_time_ticks)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            register_runner_pidfd(runner_id, &outcome.pidfd)?;
+            Ok(outcome)
+        })
     }
 
-    fn start_systemd_unit(
-        &self,
-        resolver: &BundleResolver,
-        request: &d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
-    ) -> Result<
-        (
-            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
-            OwnedFd,
-        ),
-        BrokerError,
+    fn start_systemd_unit<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        request: &'a d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        (
+                            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+                            OwnedFd,
+                        ),
+                        BrokerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
     > {
-        crate::ops::systemd::start(resolver, request)
-            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+        Box::pin(async move {
+            crate::ops::systemd::start(resolver, request)
+                .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+        })
     }
 
-    fn check_systemd_user_manager(
-        &self,
-        resolver: &BundleResolver,
-        request: &d2b_contracts_broker::broker_wire::CheckSystemdUserManagerRequest,
-    ) -> Result<bool, BrokerError> {
-        crate::ops::systemd::check_user_manager(resolver, request)
-            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+    fn check_systemd_user_manager<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        request: &'a d2b_contracts_broker::broker_wire::CheckSystemdUserManagerRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            crate::ops::systemd::check_user_manager(resolver, request)
+                .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+        })
     }
 
-    fn observe_systemd_unit(
-        &self,
-        resolver: &BundleResolver,
-        request: &d2b_contracts_broker::broker_wire::ObserveSystemdUnitRequest,
-    ) -> Result<Option<d2b_contracts_broker::broker_wire::SystemdUnitIdentity>, BrokerError> {
-        crate::ops::systemd::observe(resolver, request)
-            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
-    }
-
-    fn reopen_systemd_unit(
-        &self,
-        resolver: &BundleResolver,
-        request: &d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
-    ) -> Result<
-        (
-            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
-            OwnedFd,
-        ),
-        BrokerError,
+    fn observe_systemd_unit<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        request: &'a d2b_contracts_broker::broker_wire::ObserveSystemdUnitRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<Option<d2b_contracts_broker::broker_wire::SystemdUnitIdentity>, BrokerError>>
+                + Send
+                + 'a,
+        >,
     > {
-        crate::ops::systemd::reopen(resolver, request)
-            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+        Box::pin(async move {
+            crate::ops::systemd::observe(resolver, request)
+                .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+        })
     }
 
-    fn stop_systemd_unit(
-        &self,
-        resolver: &BundleResolver,
-        request: &d2b_contracts_broker::broker_wire::StopSystemdUnitRequest,
-    ) -> Result<(), BrokerError> {
-        crate::ops::systemd::stop(resolver, request)
-            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+    fn reopen_systemd_unit<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        request: &'a d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        (
+                            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+                            OwnedFd,
+                        ),
+                        BrokerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            crate::ops::systemd::reopen(resolver, request)
+                .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+        })
     }
 
-    fn signal_runner(
-        &self,
-        runner_id: &str,
+    fn stop_systemd_unit<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        request: &'a d2b_contracts_broker::broker_wire::StopSystemdUnitRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            crate::ops::systemd::stop(resolver, request)
+                .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+        })
+    }
+
+    fn signal_runner<'a>(
+        &'a self,
+        runner_id: &'a str,
         signal: d2b_contracts_broker::broker_wire::RunnerSignal,
-    ) -> Result<(), BrokerError> {
-        signal_registered_runner(runner_id, signal)
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+        Box::pin(async move { signal_registered_runner(runner_id, signal) })
     }
 
-    fn spawn_runner(
-        &self,
-        runner_id: &str,
-        plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
-        resolver: &BundleResolver,
-        req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+    fn spawn_runner<'a>(
+        &'a self,
+        runner_id: &'a str,
+        plan_input: &'a crate::ops::spawn_runner::SpawnRunnerPlanInput,
+        resolver: &'a BundleResolver,
+        req: &'a d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
         posture: LaunchPosture,
-        device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
+        device_worker: &'a crate::ops::device_worker::DeviceWorkerLaunch,
         mut request_fds: Vec<OwnedFd>,
-        audit_log: &crate::audit::AuditLog,
-    ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
+        audit_log: &'a crate::audit::AuditLog,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::live_handlers::SpawnRunnerResult, BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
         // Reserve the runner_id BEFORE spawning the child: refuse a
         // duplicate active registration up front so we never create an
         // orphan child (see `reserve_runner_id_for_spawn`).
@@ -6793,7 +7004,8 @@ impl DispatchBackend for LiveDispatchBackend {
             audit_log,
             self.daemon_uid,
             self.daemon_gid,
-        )?;
+        )
+        .await?;
         // The escrow descriptor is retained as registry custody only: no
         // duplicate rides the answer leg (a dup of the caller's own
         // descriptor is refused by the forward carrier's anti-replay
@@ -6825,6 +7037,7 @@ impl DispatchBackend for LiveDispatchBackend {
             device_worker,
             &self.runtime_root,
         )
+        .await
         .map_err(|err| {
             // Log the actual LiveHandlerError detail before wrapping it
             // in the opaque BrokerError::LiveHandler envelope so
@@ -6874,158 +7087,234 @@ impl DispatchBackend for LiveDispatchBackend {
         #[cfg(not(feature = "layer1-bootstrap"))]
         targeted_reap_runner(runner_id, outcome.pidfd.as_fd());
         Ok(outcome)
+        })
     }
 
-    fn apply_host_generation_handoff(
-        &self,
-        state_dir: &std::path::Path,
-        helper_path: &std::path::Path,
-        request: &d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
-    ) -> Result<d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError>
-    {
-        crate::ops::host_generation_handoff::apply_with_helper(state_dir, helper_path, request)
+    fn apply_host_generation_handoff<'a>(
+        &'a self,
+        state_dir: &'a std::path::Path,
+        helper_path: &'a std::path::Path,
+        request: &'a d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse,
+                        BrokerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            crate::ops::host_generation_handoff::apply_with_helper(
+                state_dir,
+                helper_path,
+                request,
+            )
+            .await
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+        })
     }
 
-    fn usbip_bind(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
-    ) -> Result<(), BrokerError> {
-        let usbip_binary = usbip_binary_path();
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::live_handlers::live_usbip_bind(
-            &exec,
-            &usbip_binary,
-            usb_device_sysfs_root(),
-            &intent.bus_id,
-            &intent.lock_path,
-            &intent.vm_name,
-            self.daemon_uid,
-            self.daemon_gid,
-        )
-        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    fn usbip_bind<'a>(
+        &'a self,
+        intent: &'a d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            let usbip_binary = usbip_binary_path();
+            let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+            crate::live_handlers::live_usbip_bind(
+                &exec,
+                &usbip_binary,
+                usb_device_sysfs_root(),
+                &intent.bus_id,
+                &intent.lock_path,
+                &intent.vm_name,
+                self.daemon_uid,
+                self.daemon_gid,
+            )
+            .await
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+        })
     }
 
-    fn usbip_unbind(
-        &self,
-        intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
-    ) -> Result<(), BrokerError> {
-        let usbip_binary = usbip_binary_path();
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::live_handlers::live_usbip_unbind(
-            &exec,
-            &usbip_binary,
-            usb_device_sysfs_root(),
-            &intent.bus_id,
-            &intent.lock_path,
-            &intent.vm_name,
-        )
-        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    fn usbip_unbind<'a>(
+        &'a self,
+        intent: &'a d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            let usbip_binary = usbip_binary_path();
+            let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+            crate::live_handlers::live_usbip_unbind(
+                &exec,
+                &usbip_binary,
+                usb_device_sysfs_root(),
+                &intent.bus_id,
+                &intent.lock_path,
+                &intent.vm_name,
+            )
+            .await
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+        })
     }
 
-    fn usbip_bind_firewall_rule(
-        &self,
-        resolver: &BundleResolver,
-        intent: &d2b_core::bundle_resolver::ResolvedUsbipFirewallIntent,
-    ) -> Result<(), BrokerError> {
-        let host_nft_intent = resolver
-            .find_nft_intent(&d2b_core::bundle_resolver::intent_id_nft_host())
-            .ok_or_else(|| BrokerError::BundleIntentMissing {
-                kind: "nft",
-                intent_id: d2b_core::bundle_resolver::intent_id_nft_host(),
+    fn usbip_bind_firewall_rule<'a>(
+        &'a self,
+        resolver: &'a BundleResolver,
+        intent: &'a d2b_core::bundle_resolver::ResolvedUsbipFirewallIntent,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            let host_nft_intent = resolver
+                .find_nft_intent(&d2b_core::bundle_resolver::intent_id_nft_host())
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
+                    kind: "nft",
+                    intent_id: d2b_core::bundle_resolver::intent_id_nft_host(),
+                })?;
+            let decision = build_usbip_firewall_decision(resolver, host_nft_intent, intent)?;
+            let nft_binary = nft_binary_path();
+            let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+            let nft_script = decision.batch.render_nft_script();
+            let expected_hash = persisted_nft_hash()
+                .await
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
+                .or_else(|| resolver.host.nftables.table_hash_after_apply.clone());
+            crate::ops::nft::apply_with_coexistence(
+                &exec,
+                &nft_binary,
+                &nft_script,
+                resolver.host.nftables.ownership_id.as_str(),
+                resolver.host.firewall_coexistence_policy.as_ref(),
+                expected_hash.as_deref(),
+            )
+            .await
+            .map_err(|err| match err {
+                crate::ops::nft::ApplyWithCoexistenceError::CoexistenceRefused {
+                    manager,
+                    rationale,
+                } => BrokerError::CoexistenceRefused { manager, rationale },
+                crate::ops::nft::ApplyWithCoexistenceError::ParseFailed(err) => {
+                    BrokerError::NftScriptParseFailed(err.to_string())
+                }
+                crate::ops::nft::ApplyWithCoexistenceError::CarveoutOrderingViolation(err) => {
+                    BrokerError::CarveoutOrderingViolation(match err {
+                        d2b_host::nftables::NftError::ForeignNftRuleShadowsD2b { details } => {
+                            details
+                        }
+                        other => other.to_string(),
+                    })
+                }
+                crate::ops::nft::ApplyWithCoexistenceError::DriftDetected {
+                    expected,
+                    observed,
+                } => BrokerError::NftablesDriftDetected { expected, observed },
+                crate::ops::nft::ApplyWithCoexistenceError::ForeignOwnership => {
+                    BrokerError::LiveHandler("foreign-nft-ownership".to_owned())
+                }
+                crate::ops::nft::ApplyWithCoexistenceError::ReconcileExec(err) => {
+                    BrokerError::LiveHandler(err.to_string())
+                }
             })?;
-        let decision = build_usbip_firewall_decision(resolver, host_nft_intent, intent)?;
-        let nft_binary = nft_binary_path();
-        let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        let nft_script = decision.batch.render_nft_script();
-        let expected_hash = persisted_nft_hash()
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
-            .or_else(|| resolver.host.nftables.table_hash_after_apply.clone());
-        crate::ops::nft::apply_with_coexistence(
-            &exec,
-            &nft_binary,
-            &nft_script,
-            resolver.host.nftables.ownership_id.as_str(),
-            resolver.host.firewall_coexistence_policy.as_ref(),
-            expected_hash.as_deref(),
-        )
-        .map_err(|err| match err {
-            crate::ops::nft::ApplyWithCoexistenceError::CoexistenceRefused {
-                manager,
-                rationale,
-            } => BrokerError::CoexistenceRefused { manager, rationale },
-            crate::ops::nft::ApplyWithCoexistenceError::ParseFailed(err) => {
-                BrokerError::NftScriptParseFailed(err.to_string())
-            }
-            crate::ops::nft::ApplyWithCoexistenceError::CarveoutOrderingViolation(err) => {
-                BrokerError::CarveoutOrderingViolation(match err {
-                    d2b_host::nftables::NftError::ForeignNftRuleShadowsD2b { details } => details,
-                    other => other.to_string(),
-                })
-            }
-            crate::ops::nft::ApplyWithCoexistenceError::DriftDetected { expected, observed } => {
-                BrokerError::NftablesDriftDetected { expected, observed }
-            }
-            crate::ops::nft::ApplyWithCoexistenceError::ForeignOwnership => {
-                BrokerError::LiveHandler("foreign-nft-ownership".to_owned())
-            }
-            crate::ops::nft::ApplyWithCoexistenceError::ReconcileExec(err) => {
-                BrokerError::LiveHandler(err.to_string())
-            }
-        })?;
-        crate::ops::nft::persist_live_nft_hash(
-            &exec,
-            &nft_binary,
-            &resolver.host.nftables.family,
-            &resolver.host.nftables.table,
-            &nft_hash_sidecar_path(),
-        )
-        .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
-        Ok(())
+            crate::ops::nft::persist_live_nft_hash(
+                &exec,
+                &nft_binary,
+                &resolver.host.nftables.family,
+                &resolver.host.nftables.table,
+                &nft_hash_sidecar_path(),
+            )
+            .await
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            Ok(())
+        })
     }
 
-    fn usbip_proxy_reconcile(
-        &self,
-        expectations: &[(String, String, PathBuf)],
-    ) -> Result<(), BrokerError> {
-        crate::live_handlers::live_usbip_proxy_reconcile(expectations)
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    fn usbip_proxy_reconcile<'a>(
+        &'a self,
+        expectations: &'a [(String, String, PathBuf)],
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            crate::live_handlers::live_usbip_proxy_reconcile(expectations)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+        })
     }
 
-    fn qemu_media_system_powerdown(
-        &self,
-        req: &d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
-    ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
-        crate::ops::media::system_powerdown(req)
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    fn qemu_media_system_powerdown<'a>(
+        &'a self,
+        req: &'a d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse,
+                        BrokerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            crate::ops::media::system_powerdown(req)
+                .await
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+        })
     }
 
-    fn qemu_media_query_status(
-        &self,
-        req: &d2b_contracts_broker::broker_wire::QemuMediaQueryStatusRequest,
-    ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaQueryStatusResponse, BrokerError> {
-        crate::ops::media::query_status(req)
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    fn qemu_media_query_status<'a>(
+        &'a self,
+        req: &'a d2b_contracts_broker::broker_wire::QemuMediaQueryStatusRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        d2b_contracts_broker::broker_wire::QemuMediaQueryStatusResponse,
+                        BrokerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            crate::ops::media::query_status(req)
+                .await
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+        })
     }
 
-    fn qemu_media_quit(
-        &self,
-        req: &d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
-    ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
-        crate::ops::media::quit(req).map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    fn qemu_media_quit<'a>(
+        &'a self,
+        req: &'a d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse,
+                        BrokerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            crate::ops::media::quit(req)
+                .await
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+        })
     }
 }
 
-/// The runtime one envelope call from the synchronous dispatch pool runs on.
+/// The runtime one request's dispatch chain from the synchronous dispatch
+/// pool runs on.
 ///
-/// The wire arms are synchronous (they run on the broker's dispatch pool),
-/// while the envelope's dispatch step is async: the forward leg dials and
-/// exchanges frames in async time under the forwarder's round-trip budget.
-/// A sync arm that invokes the envelope blocks on this dedicated runtime
-/// instead of stalling a dispatch worker's executor, which has no reactor by
-/// construction. The set is built the way the broker's other runtimes are
-/// (`enable_all`, capped workers), and exists only when a committed
-/// operation's arm actually calls the envelope.
+/// The dispatch pool workers are plain threads with no executor, while the
+/// dispatch chain is async end-to-end (the backend trait methods and the
+/// dispatch fns await in async time): the forward leg dials and exchanges
+/// frames under the forwarder's round-trip budget, the subprocess probes
+/// wait in async time, and the nested kernel calls dispatch on this
+/// runtime's workers. A pool job bridges the boundary with `block_on` on
+/// this dedicated runtime instead of stalling a dispatch worker's executor,
+/// which has no reactor by construction. The set is built the way the
+/// broker's other runtimes are (`enable_all`, capped workers), and exists
+/// only when a committed operation's arm actually calls the envelope.
 #[cfg(not(feature = "layer1-bootstrap"))]
 static ENVELOPE_CALL_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
     std::sync::LazyLock::new(|| {
@@ -7045,6 +7334,26 @@ static ENVELOPE_CALL_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn envelope_call_runtime() -> &'static tokio::runtime::Runtime {
     &ENVELOPE_CALL_RUNTIME
+}
+
+/// The runtime the layer1-bootstrap wire's dispatch chain runs on.
+///
+/// The bootstrap wire's dispatch body is synchronous (every live arm is an
+/// `Unimplemented` refusal), but it shares the async `answer_request` shape
+/// with the production wire, so its pool jobs bridge the same way on a
+/// single-thread runtime.
+#[cfg(feature = "layer1-bootstrap")]
+static BOOTSTRAP_DISPATCH_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
+    std::sync::LazyLock::new(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("bootstrap dispatch runtime")
+    });
+
+#[cfg(feature = "layer1-bootstrap")]
+fn bootstrap_dispatch_runtime() -> &'static tokio::runtime::Runtime {
+    &BOOTSTRAP_DISPATCH_RUNTIME
 }
 
 /// The committed-operation envelope of this broker instance.
@@ -7140,7 +7449,7 @@ fn live_exec(config: &ServerConfig) -> crate::ops::exec_reconcile::SystemLiveExe
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn dispatch_set_bridge_port_flags_inner(
+pub(crate) async fn dispatch_set_bridge_port_flags_inner(
     req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
     resolver: &BundleResolver,
     executor: &dyn crate::ops::exec_reconcile::ReconcileExecutor,
@@ -7169,6 +7478,7 @@ pub(crate) fn dispatch_set_bridge_port_flags_inner(
         });
     }
     crate::ops::tap::live_set_bridge_port_flags(executor, resolver, req)
+        .await
         .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
@@ -7186,9 +7496,9 @@ pub(crate) fn nft_hash_sidecar_path() -> PathBuf {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn persisted_nft_hash()
+pub(crate) async fn persisted_nft_hash()
 -> Result<Option<String>, crate::ops::exec_reconcile::ReconcileExecError> {
-    crate::ops::nft::read_persisted_nft_hash(&nft_hash_sidecar_path())
+    crate::ops::nft::read_persisted_nft_hash(&nft_hash_sidecar_path()).await
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -7846,7 +8156,7 @@ fn take_test_usbip_backend_acl_events() -> Vec<TestUsbipBackendAclEvent> {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn rollback_usbip_bind_after_audit_failure<B: DispatchBackend>(
+async fn rollback_usbip_bind_after_audit_failure<B: DispatchBackend>(
     backend: &B,
     resolver: &Arc<BundleResolver>,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
@@ -7855,7 +8165,7 @@ fn rollback_usbip_bind_after_audit_failure<B: DispatchBackend>(
     if same_vm_replay {
         return;
     }
-    if let Err(revoke_error) = revoke_usbip_backend_device_acl(resolver, intent) {
+    if let Err(revoke_error) = revoke_usbip_backend_device_acl(resolver, intent).await {
         warn!(
             bus_id = %intent.bus_id,
             vm = %intent.vm_name,
@@ -7863,7 +8173,7 @@ fn rollback_usbip_bind_after_audit_failure<B: DispatchBackend>(
             "UsbipBind audit write failed and backend ACL rollback failed"
         );
     }
-    match backend.usbip_unbind(intent) {
+    match backend.usbip_unbind(intent).await {
         Ok(()) => {
             if let Err(lock_error) =
                 crate::ops::usbip_lock::release_lock(&intent.lock_path, &intent.vm_name)
@@ -7888,7 +8198,7 @@ fn rollback_usbip_bind_after_audit_failure<B: DispatchBackend>(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn rollback_usbip_bind_after_acl_grant_failure<B: DispatchBackend>(
+async fn rollback_usbip_bind_after_acl_grant_failure<B: DispatchBackend>(
     backend: &B,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
     same_vm_replay: bool,
@@ -7897,7 +8207,7 @@ fn rollback_usbip_bind_after_acl_grant_failure<B: DispatchBackend>(
     if same_vm_replay {
         return grant_error;
     }
-    match backend.usbip_unbind(intent) {
+    match backend.usbip_unbind(intent).await {
         Ok(()) => {
             if let Err(lock_error) =
                 crate::ops::usbip_lock::release_lock(&intent.lock_path, &intent.vm_name)
@@ -7990,7 +8300,7 @@ const USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP: std::time::Duration =
     std::time::Duration::from_millis(100);
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn retry_usbip_backend_acl_grant<V, G, R, S>(
+async fn retry_usbip_backend_acl_grant<V, G, R, S>(
     uid: u32,
     mut verify_device_node: V,
     mut grant_acl: G,
@@ -7999,8 +8309,14 @@ fn retry_usbip_backend_acl_grant<V, G, R, S>(
 ) -> Result<(), BrokerError>
 where
     V: FnMut() -> Result<PathBuf, BrokerError>,
-    G: FnMut(&Path, u32) -> Result<(), BrokerError>,
-    R: FnMut(&Path, u32) -> Result<(), BrokerError>,
+    G: for<'a> FnMut(
+            &'a Path,
+            u32,
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>,
+    R: for<'a> FnMut(
+            &'a Path,
+            u32,
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>,
     S: FnMut(),
 {
     let mut last_error = None;
@@ -8015,7 +8331,7 @@ where
             }
         };
 
-        if let Err(error) = grant_acl(&device_node, uid) {
+        if let Err(error) = grant_acl(&device_node, uid).await {
             last_error = Some(error);
             sleep();
             continue;
@@ -8024,7 +8340,7 @@ where
         match verify_device_node() {
             Ok(current_device_node) if current_device_node == device_node => return Ok(()),
             Ok(current_device_node) => {
-                let _ = revoke_acl(&device_node, uid);
+                let _ = revoke_acl(&device_node, uid).await;
                 last_error = Some(BrokerError::LiveHandler(format!(
                     "USBIP device node changed while granting backend ACL: granted {}, observed {}; retrying",
                     device_node.display(),
@@ -8032,7 +8348,7 @@ where
                 )));
             }
             Err(error) => {
-                let _ = revoke_acl(&device_node, uid);
+                let _ = revoke_acl(&device_node, uid).await;
                 last_error = Some(error);
             }
         }
@@ -8045,7 +8361,7 @@ where
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn grant_usbip_backend_device_acl(
+async fn grant_usbip_backend_device_acl(
     resolver: &Arc<BundleResolver>,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
     expected_identity: (u16, u16),
@@ -8089,20 +8405,27 @@ fn grant_usbip_backend_device_acl(
             runner.uid,
             || verify_usbip_device_node(intent, expected_identity),
             |device_node, uid| {
-                crate::live_handlers::live_grant_verified_device_acl(device_node, uid)
-                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+                Box::pin(async move {
+                    crate::live_handlers::live_grant_verified_device_acl(device_node, uid)
+                        .await
+                        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+                })
             },
             |device_node, uid| {
-                crate::live_handlers::live_revoke_verified_device_acl(device_node, uid)
-                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+                Box::pin(async move {
+                    crate::live_handlers::live_revoke_verified_device_acl(device_node, uid)
+                        .await
+                        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+                })
             },
             || std::thread::sleep(USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP),
         )
+        .await
     }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn revoke_usbip_backend_device_acl(
+async fn revoke_usbip_backend_device_acl(
     resolver: &Arc<BundleResolver>,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
 ) -> Result<(), BrokerError> {
@@ -8122,12 +8445,15 @@ fn revoke_usbip_backend_device_acl(
                 .map_err(|err| map_usbip_host_inspection_error_for_intent(intent, err))?;
         let device_node = inspection.device_node;
         crate::live_handlers::live_revoke_verified_device_acl(&device_node, runner.uid)
+            .await
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))
     }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn reconcile_active_usbip_backend_acls(resolver: &Arc<BundleResolver>) -> Result<(), BrokerError> {
+async fn reconcile_active_usbip_backend_acls(
+    resolver: &Arc<BundleResolver>,
+) -> Result<(), BrokerError> {
     for intent in active_locked_usbip_bind_intents(resolver)? {
         let inspection = match crate::ops::usbip_host::enforce_usbip_physical_policy(
             &intent,
@@ -8161,7 +8487,8 @@ fn reconcile_active_usbip_backend_acls(resolver: &Arc<BundleResolver>) -> Result
             &intent,
             (inspection.vendor, inspection.product),
             inspection.device_node,
-        )?;
+        )
+        .await?;
     }
     Ok(())
 }
@@ -8304,7 +8631,7 @@ fn build_explicit_usbip_rule_body(
 /// vendor/product allowlist; the explicit path carries no bundle allowlist.
 /// Retries up to 20 times with 100ms sleep (same policy as the declared path).
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn grant_explicit_usbip_backend_acl(
+async fn grant_explicit_usbip_backend_acl(
     resolver: &Arc<BundleResolver>,
     env: &str,
     bus_id: &str,
@@ -8328,15 +8655,22 @@ fn grant_explicit_usbip_backend_acl(
             backend_uid,
             || verify_explicit_usbip_device_stable(bus_id, expected_identity),
             |device_node, uid| {
-                crate::live_handlers::live_grant_verified_device_acl(device_node, uid)
-                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+                Box::pin(async move {
+                    crate::live_handlers::live_grant_verified_device_acl(device_node, uid)
+                        .await
+                        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+                })
             },
             |device_node, uid| {
-                crate::live_handlers::live_revoke_verified_device_acl(device_node, uid)
-                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+                Box::pin(async move {
+                    crate::live_handlers::live_revoke_verified_device_acl(device_node, uid)
+                        .await
+                        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+                })
             },
             || std::thread::sleep(USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP),
         )
+        .await
     }
 }
 
@@ -8371,7 +8705,7 @@ fn verify_explicit_usbip_device_stable(
 /// Revoke the per-device ACL from the env's USBIP backend runner for the
 /// explicit attach path rollback. Best-effort; failures are logged only.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn revoke_explicit_usbip_backend_acl(
+async fn revoke_explicit_usbip_backend_acl(
     resolver: &Arc<BundleResolver>,
     env: &str,
     bus_id: &str,
@@ -8396,6 +8730,7 @@ fn revoke_explicit_usbip_backend_acl(
                     ))
                 })?;
         crate::live_handlers::live_revoke_verified_device_acl(&inspection.device_node, backend_uid)
+            .await
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))
     }
 }
@@ -14073,56 +14408,71 @@ mod tests {
             &self.envelope
         }
 
-        fn apply_nftables(
-            &self,
-            _resolver: &BundleResolver,
-            _intent: &d2b_core::bundle_resolver::ResolvedNftIntent,
-            _desired_hash: Option<&str>,
+        fn apply_nftables<'a>(
+            &'a self,
+            _resolver: &'a BundleResolver,
+            _intent: &'a d2b_core::bundle_resolver::ResolvedNftIntent,
+            _desired_hash: Option<&'a str>,
             _destroy: bool,
-        ) -> Result<(), BrokerError> {
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Ok(())
+        
+            })
         }
 
-        fn apply_route(
-            &self,
-            _state_dir: &Path,
-            _intent: &d2b_core::bundle_resolver::ResolvedRouteIntent,
-            _provenance: &d2b_contracts_resource::v3::NetworkProvenance,
+        fn apply_route<'a>(
+            &'a self,
+            _state_dir: &'a Path,
+            _intent: &'a d2b_core::bundle_resolver::ResolvedRouteIntent,
+            _provenance: &'a d2b_contracts_resource::v3::NetworkProvenance,
             _destroy: bool,
-        ) -> Result<(), BrokerError> {
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Ok(())
+        
+            })
         }
 
-        fn apply_sysctl(
-            &self,
-            _intent: &d2b_core::bundle_resolver::ResolvedSysctlIntent,
+        fn apply_sysctl<'a>(
+            &'a self,
+            _intent: &'a d2b_core::bundle_resolver::ResolvedSysctlIntent,
             _destroy: bool,
-        ) -> Result<(), BrokerError> {
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Ok(())
+        
+            })
         }
 
-        fn update_hosts_file(
-            &self,
-            _intent: &d2b_core::bundle_resolver::ResolvedHostsIntent,
+        fn update_hosts_file<'a>(
+            &'a self,
+            _intent: &'a d2b_core::bundle_resolver::ResolvedHostsIntent,
             _destroy: bool,
-        ) -> Result<(), BrokerError> {
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Ok(())
+        
+            })
         }
 
-        fn apply_nm_unmanaged(
-            &self,
-            _intent: &d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent,
+        fn apply_nm_unmanaged<'a>(
+            &'a self,
+            _intent: &'a d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent,
             _destroy: bool,
-        ) -> Result<(), BrokerError> {
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Ok(())
+        
+            })
         }
 
-        fn set_bridge_port_flags(
-            &self,
-            req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
-            _resolver: &BundleResolver,
-        ) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, BrokerError>
-        {
+        fn set_bridge_port_flags<'a>(
+            &'a self,
+            req: &'a d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
+            _resolver: &'a BundleResolver,
+        ) -> Pin<Box<dyn Future<Output = Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Ok(d2b_contracts_broker::broker_wire::BridgePortFlagsResponse {
                 bridge: d2b_contracts_resource::v3::IfName::new("nlworkbr0")
                     .expect("fake bridge ifname"),
@@ -14134,95 +14484,115 @@ mod tests {
                 ))
                 .expect("fake tap ifname"),
             })
+        
+            })
         }
 
-        fn open_pidfd(
-            &self,
-            runner_id: &str,
+        fn open_pidfd<'a>(
+            &'a self,
+            runner_id: &'a str,
             pid: i32,
             expected_start_time_ticks: u64,
-        ) -> Result<crate::live_handlers::OpenPidfdResult, BrokerError> {
+        ) -> Pin<Box<dyn Future<Output = Result<crate::live_handlers::OpenPidfdResult, BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             self.remember_runner(runner_id)?;
             Ok(crate::live_handlers::OpenPidfdResult {
                 pidfd: dummy_fd(),
                 pid,
                 verified_start_time_ticks: expected_start_time_ticks,
             })
+        
+            })
         }
 
-        fn start_systemd_unit(
-            &self,
-            _resolver: &BundleResolver,
-            _request: &d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
-        ) -> Result<
+        fn start_systemd_unit<'a>(
+            &'a self,
+            _resolver: &'a BundleResolver,
+            _request: &'a d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<
             (
                 d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
                 OwnedFd,
             ),
             BrokerError,
-        > {
+        >> + Send + 'a>> {
+            Box::pin(async move {
             Err(BrokerError::Unimplemented {
                 operation: "StartSystemdUnit",
                 target_wave: "W6",
             })
+        
+            })
         }
 
-        fn check_systemd_user_manager(
-            &self,
-            _resolver: &BundleResolver,
-            _request: &d2b_contracts_broker::broker_wire::CheckSystemdUserManagerRequest,
-        ) -> Result<bool, BrokerError> {
+        fn check_systemd_user_manager<'a>(
+            &'a self,
+            _resolver: &'a BundleResolver,
+            _request: &'a d2b_contracts_broker::broker_wire::CheckSystemdUserManagerRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<bool, BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Err(BrokerError::Unimplemented {
                 operation: "CheckSystemdUserManager",
                 target_wave: "W6",
             })
+        
+            })
         }
 
-        fn observe_systemd_unit(
-            &self,
-            _resolver: &BundleResolver,
-            _request: &d2b_contracts_broker::broker_wire::ObserveSystemdUnitRequest,
-        ) -> Result<Option<d2b_contracts_broker::broker_wire::SystemdUnitIdentity>, BrokerError>
-        {
+        fn observe_systemd_unit<'a>(
+            &'a self,
+            _resolver: &'a BundleResolver,
+            _request: &'a d2b_contracts_broker::broker_wire::ObserveSystemdUnitRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<d2b_contracts_broker::broker_wire::SystemdUnitIdentity>, BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Err(BrokerError::Unimplemented {
                 operation: "ObserveSystemdUnit",
                 target_wave: "W6",
             })
+        
+            })
         }
 
-        fn reopen_systemd_unit(
-            &self,
-            _resolver: &BundleResolver,
-            _request: &d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
-        ) -> Result<
+        fn reopen_systemd_unit<'a>(
+            &'a self,
+            _resolver: &'a BundleResolver,
+            _request: &'a d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<
             (
                 d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
                 OwnedFd,
             ),
             BrokerError,
-        > {
+        >> + Send + 'a>> {
+            Box::pin(async move {
             Err(BrokerError::Unimplemented {
                 operation: "OpenSystemdUnitPidfd",
                 target_wave: "W6",
             })
+        
+            })
         }
 
-        fn stop_systemd_unit(
-            &self,
-            _resolver: &BundleResolver,
-            _request: &d2b_contracts_broker::broker_wire::StopSystemdUnitRequest,
-        ) -> Result<(), BrokerError> {
+        fn stop_systemd_unit<'a>(
+            &'a self,
+            _resolver: &'a BundleResolver,
+            _request: &'a d2b_contracts_broker::broker_wire::StopSystemdUnitRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Err(BrokerError::Unimplemented {
                 operation: "StopSystemdUnit",
                 target_wave: "W6",
             })
+        
+            })
         }
 
-        fn signal_runner(
-            &self,
-            runner_id: &str,
+        fn signal_runner<'a>(
+            &'a self,
+            runner_id: &'a str,
             _signal: d2b_contracts_broker::broker_wire::RunnerSignal,
-        ) -> Result<(), BrokerError> {
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             if self.has_runner(runner_id)? {
                 Ok(())
             } else {
@@ -14230,19 +14600,22 @@ mod tests {
                     runner_id: runner_id.to_owned(),
                 })
             }
+        
+            })
         }
 
-        fn spawn_runner(
-            &self,
-            runner_id: &str,
-            _plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
-            _resolver: &BundleResolver,
-            _req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+        fn spawn_runner<'a>(
+            &'a self,
+            runner_id: &'a str,
+            _plan_input: &'a crate::ops::spawn_runner::SpawnRunnerPlanInput,
+            _resolver: &'a BundleResolver,
+            _req: &'a d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
             _posture: LaunchPosture,
-            _device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
+            _device_worker: &'a crate::ops::device_worker::DeviceWorkerLaunch,
             request_fds: Vec<OwnedFd>,
-            _audit_log: &crate::audit::AuditLog,
-        ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
+            _audit_log: &'a crate::audit::AuditLog,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::live_handlers::SpawnRunnerResult, BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             drop(request_fds);
             self.remember_runner(runner_id)?;
             Ok(crate::live_handlers::SpawnRunnerResult {
@@ -14253,61 +14626,78 @@ mod tests {
                 used_fork_fallback: false,
                 swtpm_dir_audit: None,
             })
+        
+            })
         }
 
-        fn apply_host_generation_handoff(
-            &self,
-            state_dir: &std::path::Path,
-            helper_path: &std::path::Path,
-            request: &d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
-        ) -> Result<
+        fn apply_host_generation_handoff<'a>(
+            &'a self,
+            state_dir: &'a std::path::Path,
+            helper_path: &'a std::path::Path,
+            request: &'a d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
+        ) -> Pin<Box<dyn Future<Output = Result<
             d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse,
             BrokerError,
-        > {
+        >> + Send + 'a>> {
+            Box::pin(async move {
             crate::ops::host_generation_handoff::apply_with_helper(state_dir, helper_path, request)
+                .await
                 .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+            })
         }
 
-        fn usbip_bind(
-            &self,
-            intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
-        ) -> Result<(), BrokerError> {
+        fn usbip_bind<'a>(
+            &'a self,
+            intent: &'a d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             self.push_usbip_event(FakeUsbipEvent::Bind {
                 intent_id: intent.intent_id.clone(),
             })?;
             Ok(())
+        
+            })
         }
 
-        fn usbip_unbind(
-            &self,
-            intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
-        ) -> Result<(), BrokerError> {
+        fn usbip_unbind<'a>(
+            &'a self,
+            intent: &'a d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             self.push_usbip_event(FakeUsbipEvent::Unbind {
                 intent_id: intent.intent_id.clone(),
             })?;
             Ok(())
+        
+            })
         }
 
-        fn usbip_bind_firewall_rule(
-            &self,
-            _resolver: &BundleResolver,
-            _intent: &d2b_core::bundle_resolver::ResolvedUsbipFirewallIntent,
-        ) -> Result<(), BrokerError> {
+        fn usbip_bind_firewall_rule<'a>(
+            &'a self,
+            _resolver: &'a BundleResolver,
+            _intent: &'a d2b_core::bundle_resolver::ResolvedUsbipFirewallIntent,
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Ok(())
+        
+            })
         }
 
-        fn usbip_proxy_reconcile(
-            &self,
-            _expectations: &[(String, String, PathBuf)],
-        ) -> Result<(), BrokerError> {
+        fn usbip_proxy_reconcile<'a>(
+            &'a self,
+            _expectations: &'a [(String, String, PathBuf)],
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Ok(())
+        
+            })
         }
 
-        fn qemu_media_system_powerdown(
-            &self,
-            req: &d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
-        ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse, BrokerError>
-        {
+        fn qemu_media_system_powerdown<'a>(
+            &'a self,
+            req: &'a d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse, BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Ok(
                 d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse {
                     vm_id: req.vm_id.clone(),
@@ -14315,13 +14705,15 @@ mod tests {
                         d2b_contracts_broker::broker_wire::QemuMediaLifecycleAction::SystemPowerdown,
                 },
             )
+        
+            })
         }
 
-        fn qemu_media_query_status(
-            &self,
-            req: &d2b_contracts_broker::broker_wire::QemuMediaQueryStatusRequest,
-        ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaQueryStatusResponse, BrokerError>
-        {
+        fn qemu_media_query_status<'a>(
+            &'a self,
+            req: &'a d2b_contracts_broker::broker_wire::QemuMediaQueryStatusRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<d2b_contracts_broker::broker_wire::QemuMediaQueryStatusResponse, BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             let status = if req.shutdown_context {
                 d2b_contracts_broker::broker_wire::QemuMediaVmStatus::ConnectionLostDuringShutdown
             } else {
@@ -14333,19 +14725,23 @@ mod tests {
                     status,
                 },
             )
+        
+            })
         }
 
-        fn qemu_media_quit(
-            &self,
-            req: &d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
-        ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse, BrokerError>
-        {
+        fn qemu_media_quit<'a>(
+            &'a self,
+            req: &'a d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse, BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
             Ok(
                 d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse {
                     vm_id: req.vm_id.clone(),
                     command: d2b_contracts_broker::broker_wire::QemuMediaLifecycleAction::Quit,
                 },
             )
+        
+            })
         }
     }
 
@@ -14375,7 +14771,7 @@ mod tests {
         let dispatch = |request: BrokerRequest| {
             let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
                 .expect("audit context");
-            dispatch_request_with_backend(
+            envelope_call_runtime().block_on(dispatch_request_with_backend(
                 request,
                 1000,
                 caller_gid,
@@ -14385,7 +14781,7 @@ mod tests {
                 &log,
                 Some(&bundle.resolver),
                 &backend,
-            )
+            ))
             .expect("dispatch succeeds")
         };
 
@@ -14517,7 +14913,7 @@ mod tests {
             });
             let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
                 .expect("audit context");
-            dispatch_request_with_backend_and_request_fds(
+            envelope_call_runtime().block_on(dispatch_request_with_backend_and_request_fds(
                 request,
                 1000,
                 caller_gid,
@@ -14528,7 +14924,7 @@ mod tests {
                 None,
                 &backend,
                 request_fds,
-            )
+            ))
         };
         let envelope_response = |result: DispatchResult| match result.response {
             BrokerResponse::EnvelopeInvoke(response) => response,
@@ -14829,7 +15225,7 @@ mod tests {
             });
             let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
                 .expect("audit context");
-            dispatch_request_with_backend_and_request_fds(
+            envelope_call_runtime().block_on(dispatch_request_with_backend_and_request_fds(
                 request,
                 1000,
                 caller_gid,
@@ -14840,7 +15236,7 @@ mod tests {
                 None,
                 &backend,
                 request_fds,
-            )
+            ))
         };
         let envelope_response = |result: DispatchResult| match result.response {
             BrokerResponse::EnvelopeInvoke(response) => response,
@@ -15236,7 +15632,7 @@ mod tests {
             let audit_context =
                 DispatchAuditContext::from_request(&request, 4242, &self.caller_role)
                     .expect("audit context");
-            dispatch_request_with_backend_and_request_fds(
+            envelope_call_runtime().block_on(dispatch_request_with_backend_and_request_fds(
                 request,
                 1000,
                 self.caller_gid,
@@ -15247,7 +15643,7 @@ mod tests {
                 None,
                 &self.backend,
                 Vec::new(),
-            )
+            ))
         }
     }
 
@@ -15555,7 +15951,7 @@ mod tests {
             let audit_context =
                 DispatchAuditContext::from_request(&request, 4242, &self.caller_role)
                     .expect("audit context");
-            dispatch_request_with_backend_and_request_fds(
+            envelope_call_runtime().block_on(dispatch_request_with_backend_and_request_fds(
                 request,
                 1000,
                 self.caller_gid,
@@ -15566,7 +15962,7 @@ mod tests {
                 None,
                 &self.backend,
                 request_fds,
-            )
+            ))
         }
     }
 
@@ -16056,7 +16452,7 @@ mod tests {
         )
         .expect("audit context");
 
-        let result = dispatch_request_with_backend(
+        let result = envelope_call_runtime().block_on(dispatch_request_with_backend(
             BrokerRequest::PublishTrustedContext(values.clone()),
             1000,
             Gid::current().as_raw(),
@@ -16066,7 +16462,7 @@ mod tests {
             &log,
             Some(&bundle.resolver),
             &backend,
-        )
+        ))
         .expect("the publication dispatches");
         assert!(
             result.fds.is_empty(),
@@ -16096,7 +16492,7 @@ mod tests {
             &caller_role,
         )
         .expect("audit context");
-        let error = dispatch_request_with_backend(
+        let error = envelope_call_runtime().block_on(dispatch_request_with_backend(
             BrokerRequest::PublishTrustedContext(backward),
             1000,
             Gid::current().as_raw(),
@@ -16106,7 +16502,7 @@ mod tests {
             &log,
             Some(&bundle.resolver),
             &backend,
-        )
+        ))
         .expect_err("a backwards publication is refused");
         assert!(
             matches!(error, BrokerError::LiveHandler(ref detail) if detail.contains("stale-context")),
@@ -16231,7 +16627,7 @@ mod tests {
         });
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
             .expect("audit context");
-        let result = dispatch_request_with_backend(
+        let result = envelope_call_runtime().block_on(dispatch_request_with_backend(
             request,
             1000,
             Gid::current().as_raw(),
@@ -16241,7 +16637,7 @@ mod tests {
             &log,
             None,
             &backend,
-        )
+        ))
         .expect("the preflight dispatches through the envelope");
         match result.response {
             BrokerResponse::Ack(ack) => {
@@ -16294,7 +16690,7 @@ mod tests {
         });
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
             .expect("audit context");
-        let error = dispatch_request_with_backend(
+        let error = envelope_call_runtime().block_on(dispatch_request_with_backend(
             request,
             1000,
             Gid::current().as_raw(),
@@ -16304,7 +16700,7 @@ mod tests {
             &log,
             None,
             &backend,
-        )
+        ))
         .expect_err("a call before the daemon binds must refuse");
         match &error {
             BrokerError::LiveHandler(detail) => assert!(
@@ -16404,7 +16800,7 @@ mod tests {
         });
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
             .expect("audit context");
-        let result = dispatch_request_with_backend(
+        let result = envelope_call_runtime().block_on(dispatch_request_with_backend(
             request,
             1000,
             Gid::current().as_raw(),
@@ -16414,7 +16810,7 @@ mod tests {
             &log,
             None,
             &backend,
-        )
+        ))
         .expect("the generic invocation dispatches through the envelope");
         match result.response {
             BrokerResponse::EnvelopeInvoke(response) => {
@@ -16483,7 +16879,7 @@ mod tests {
         });
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
             .expect("audit context");
-        let result = dispatch_request_with_backend(
+        let result = envelope_call_runtime().block_on(dispatch_request_with_backend(
             request,
             1000,
             Gid::current().as_raw(),
@@ -16493,7 +16889,7 @@ mod tests {
             &log,
             None,
             &backend,
-        )
+        ))
         .expect("the refusal travels inside the EnvelopeInvoke response");
         match result.response {
             BrokerResponse::EnvelopeInvoke(response) => {
@@ -16565,7 +16961,7 @@ mod tests {
             &caller_role,
         )
         .expect("audit context");
-        let outcome = dispatch_request_with_backend(
+        let outcome = envelope_call_runtime().block_on(dispatch_request_with_backend(
             BrokerRequest::PublishTrustedContext(values),
             1000,
             Gid::current().as_raw(),
@@ -16575,7 +16971,7 @@ mod tests {
             &log,
             None,
             &backend,
-        );
+        ));
         match outcome {
             // No store exists yet (this process never published before):
             // the arm's lazy open refuses the publication by name, and the
@@ -16642,7 +17038,7 @@ mod tests {
                 DispatchAuditContext::from_request(&request, peer_pid, &caller_role)
                     .expect("audit context");
             let before = capture.lock().expect("capture lock before dispatch").len();
-            let result = dispatch_request_with_backend(
+            let result = envelope_call_runtime().block_on(dispatch_request_with_backend(
                 request,
                 1000,
                 caller_gid,
@@ -16652,7 +17048,7 @@ mod tests {
                 &log,
                 Some(&bundle.resolver),
                 &backend,
-            )
+            ))
             .expect("dispatch succeeds");
             let records = capture.lock().expect("capture lock after dispatch");
             assert_eq!(
@@ -16878,7 +17274,7 @@ mod tests {
             &caller_role,
         )
         .expect("query audit context");
-        let query_result = dispatch_request_with_backend(
+        let query_result = envelope_call_runtime().block_on(dispatch_request_with_backend(
             BrokerRequest::QemuMediaQueryStatus(
                 d2b_contracts_broker::broker_wire::QemuMediaQueryStatusRequest {
                     vm_id: VmId::new("media"),
@@ -16894,7 +17290,7 @@ mod tests {
             &log,
             Some(&bundle.resolver),
             &backend,
-        )
+        ))
         .expect("query status succeeds without success audit");
         match query_result.response {
             BrokerResponse::QemuMediaQueryStatus(response) => {
@@ -17075,7 +17471,7 @@ mod tests {
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
             .expect("audit context");
         let before = capture.lock().expect("capture lock before").len();
-        let result = dispatch_request_with_backend(
+        let result = envelope_call_runtime().block_on(dispatch_request_with_backend(
             request,
             1000,
             caller_gid,
@@ -17085,7 +17481,7 @@ mod tests {
             &log,
             Some(&bundle.resolver),
             &backend,
-        )
+        ))
         .expect("store sync succeeds");
         match result.response {
             BrokerResponse::StoreSync(resp) => {
@@ -17174,7 +17570,7 @@ mod tests {
             let request = store_sync_request(7);
             let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
                 .expect("audit ctx");
-            dispatch_request_with_backend(
+            envelope_call_runtime().block_on(dispatch_request_with_backend(
                 request,
                 1000,
                 caller_gid,
@@ -17184,7 +17580,7 @@ mod tests {
                 &log,
                 Some(&bundle.resolver),
                 &backend,
-            )
+            ))
             .expect("store sync succeeds")
         };
 
@@ -17276,7 +17672,7 @@ mod tests {
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
             .expect("audit context");
         let before = capture.lock().expect("capture lock before").len();
-        let error = dispatch_request_with_backend(
+        let error = envelope_call_runtime().block_on(dispatch_request_with_backend(
             request,
             1000,
             caller_gid,
@@ -17286,7 +17682,7 @@ mod tests {
             &log,
             Some(&bundle.resolver),
             &backend,
-        )
+        ))
         .expect_err("generation mismatch must fail");
         match &error {
             BrokerError::StoreSyncFailed {
@@ -17533,7 +17929,7 @@ mod tests {
         });
         let audit_context = DispatchAuditContext::from_request(&request, 5151, &caller_role)
             .expect("audit context");
-        let result = dispatch_request_with_backend_and_request_fds(
+        let result = envelope_call_runtime().block_on(dispatch_request_with_backend_and_request_fds(
             request,
             1000,
             Gid::current().as_raw(),
@@ -17544,7 +17940,7 @@ mod tests {
             None,
             &backend,
             vec![pidfd],
-        )
+        ))
         .expect("the refusal travels inside the EnvelopeInvoke response");
         let BrokerResponse::EnvelopeInvoke(response) = result.response else {
             panic!(
@@ -18549,7 +18945,7 @@ mod tests {
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
             .expect("audit context");
 
-        let result = dispatch_request_with_backend(
+        let result = envelope_call_runtime().block_on(dispatch_request_with_backend(
             request,
             1000,
             caller_gid,
@@ -18559,7 +18955,7 @@ mod tests {
             &log,
             Some(&bundle.resolver),
             &backend,
-        )
+        ))
         .expect("privileged audit is never rate limited");
         assert_eq!(
             backend.take_usbip_events(),
@@ -18597,12 +18993,12 @@ mod tests {
         .expect("seed post-bind lock");
         let backend = FakeDispatchBackend::default();
 
-        let error = rollback_usbip_bind_after_acl_grant_failure(
+        let error = envelope_call_runtime().block_on(rollback_usbip_bind_after_acl_grant_failure(
             &backend,
             &intent,
             false,
             BrokerError::LiveHandler("grant failed".to_owned()),
-        );
+        ));
 
         assert!(matches!(
             error,
@@ -18639,12 +19035,12 @@ mod tests {
         .expect("seed same-VM replay lock");
         let backend = FakeDispatchBackend::default();
 
-        let error = rollback_usbip_bind_after_acl_grant_failure(
+        let error = envelope_call_runtime().block_on(rollback_usbip_bind_after_acl_grant_failure(
             &backend,
             &intent,
             true,
             BrokerError::LiveHandler("grant failed".to_owned()),
-        );
+        ));
 
         assert!(matches!(
             error,
@@ -18679,16 +19075,16 @@ mod tests {
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed same-VM replay lock");
-        grant_usbip_backend_device_acl(
+        envelope_call_runtime().block_on(grant_usbip_backend_device_acl(
             &bundle.resolver,
             &intent,
             (0x1050, 0x0407),
             PathBuf::from("/dev/bus/usb/001/002"),
-        )
+        ))
         .expect("seed same-VM replay ACL grant");
         let backend = FakeDispatchBackend::default();
 
-        rollback_usbip_bind_after_audit_failure(&backend, &bundle.resolver, &intent, true);
+        envelope_call_runtime().block_on(rollback_usbip_bind_after_audit_failure(&backend, &bundle.resolver, &intent, true));
 
         assert_eq!(
             backend.take_usbip_events(),
@@ -18730,7 +19126,7 @@ mod tests {
         )
         .expect("seed lock for absent device");
 
-        reconcile_active_usbip_backend_acls(&bundle.resolver)
+        envelope_call_runtime().block_on(reconcile_active_usbip_backend_acls(&bundle.resolver))
             .expect("absent locked hardware should not make proxy reconcile fail");
 
         assert_eq!(
@@ -18846,19 +19242,19 @@ mod tests {
         use std::cell::RefCell;
         let log = RefCell::new(AclCallLog::default());
         let node = PathBuf::from("/dev/bus/usb/001/007");
-        let result = retry_usbip_backend_acl_grant(
+        let result = envelope_call_runtime().block_on(retry_usbip_backend_acl_grant(
             1002,
             || Ok(node.clone()),
             |path, _uid| {
                 log.borrow_mut().grants.push(path.to_owned());
-                Ok(())
+                Box::pin(async { Ok(()) })
             },
             |path, _uid| {
                 log.borrow_mut().revokes.push(path.to_owned());
-                Ok(())
+                Box::pin(async { Ok(()) })
             },
             || log.borrow_mut().sleeps += 1,
-        );
+        ));
         assert!(result.is_ok(), "stable node must succeed immediately");
         let log = log.into_inner();
         assert_eq!(log.grants, vec![node], "exactly one grant");
@@ -18880,7 +19276,7 @@ mod tests {
         // verify_device_node: first call → A, second call (post-grant re-check) → B,
         // third call (retry pre-grant) → B, fourth call (post-grant re-check) → B.
         let call_count = RefCell::new(0usize);
-        let result = retry_usbip_backend_acl_grant(
+        let result = envelope_call_runtime().block_on(retry_usbip_backend_acl_grant(
             1002,
             || {
                 let n = *call_count.borrow();
@@ -18893,14 +19289,14 @@ mod tests {
             },
             |path, _uid| {
                 log.borrow_mut().grants.push(path.to_owned());
-                Ok(())
+                Box::pin(async { Ok(()) })
             },
             |path, _uid| {
                 log.borrow_mut().revokes.push(path.to_owned());
-                Ok(())
+                Box::pin(async { Ok(()) })
             },
             || log.borrow_mut().sleeps += 1,
-        );
+        ));
         assert!(result.is_ok(), "must converge after transient node change");
         let log = log.into_inner();
         // First attempt: grant A, post-grant verify sees B → revoke A, sleep.
@@ -18927,19 +19323,19 @@ mod tests {
         use std::cell::RefCell;
         let log = RefCell::new(AclCallLog::default());
         let err_msg = "identity changed: VID/PID mismatch";
-        let result = retry_usbip_backend_acl_grant(
+        let result = envelope_call_runtime().block_on(retry_usbip_backend_acl_grant(
             1002,
             || Err(BrokerError::LiveHandler(err_msg.to_owned())),
             |path, _uid| {
                 log.borrow_mut().grants.push(path.to_owned());
-                Ok(())
+                Box::pin(async { Ok(()) })
             },
             |path, _uid| {
                 log.borrow_mut().revokes.push(path.to_owned());
-                Ok(())
+                Box::pin(async { Ok(()) })
             },
             || log.borrow_mut().sleeps += 1,
-        );
+        ));
         assert!(result.is_err(), "must fail when verify never succeeds");
         let log = log.into_inner();
         assert!(log.grants.is_empty(), "no grants when verify always fails");
@@ -18965,7 +19361,7 @@ mod tests {
         let base = "/dev/bus/usb/001/";
         let log = RefCell::new(AclCallLog::default());
         let counter = RefCell::new(0u32);
-        let result = retry_usbip_backend_acl_grant(
+        let result = envelope_call_runtime().block_on(retry_usbip_backend_acl_grant(
             1002,
             || {
                 let n = *counter.borrow();
@@ -18976,14 +19372,14 @@ mod tests {
             },
             |path, _uid| {
                 log.borrow_mut().grants.push(path.to_owned());
-                Ok(())
+                Box::pin(async { Ok(()) })
             },
             |path, _uid| {
                 log.borrow_mut().revokes.push(path.to_owned());
-                Ok(())
+                Box::pin(async { Ok(()) })
             },
             || log.borrow_mut().sleeps += 1,
-        );
+        ));
         assert!(result.is_err(), "must fail when node never stabilizes");
         let log = log.into_inner();
         assert_eq!(
@@ -19018,7 +19414,7 @@ mod tests {
         let call_count = RefCell::new(0usize);
         let log = RefCell::new(AclCallLog::default());
         // Revoke always fails with "not found" - benign during re-enum.
-        let result = retry_usbip_backend_acl_grant(
+        let result = envelope_call_runtime().block_on(retry_usbip_backend_acl_grant(
             1002,
             || {
                 let n = *call_count.borrow();
@@ -19031,17 +19427,19 @@ mod tests {
             },
             |path, _uid| {
                 log.borrow_mut().grants.push(path.to_owned());
-                Ok(())
+                Box::pin(async { Ok(()) })
             },
             |path, _uid| {
                 log.borrow_mut().revokes.push(path.to_owned());
                 // Simulate ENOENT: old node already removed.
-                Err(BrokerError::LiveHandler(
-                    "No such file or directory".to_owned(),
-                ))
+                Box::pin(async {
+                    Err(BrokerError::LiveHandler(
+                        "No such file or directory".to_owned(),
+                    ))
+                })
             },
             || log.borrow_mut().sleeps += 1,
-        );
+        ));
         // The revoke error must not surface as the final result; the
         // retry on node B must succeed.
         assert!(
@@ -19154,7 +19552,7 @@ mod tests {
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
             .expect("audit context");
 
-        let dispatch = dispatch_request_with_backend(
+        let dispatch = envelope_call_runtime().block_on(dispatch_request_with_backend(
             request,
             1000,
             caller_gid,
@@ -19164,7 +19562,7 @@ mod tests {
             &log,
             Some(&bundle.resolver),
             &backend,
-        )
+        ))
         .expect("dispatch succeeds");
         match dispatch.response {
             BrokerResponse::Ack(response) => {
@@ -19255,7 +19653,7 @@ mod tests {
         let repeat_audit_context =
             DispatchAuditContext::from_request(&repeat_request, 4242, &caller_role)
                 .expect("repeat audit context");
-        dispatch_request_with_backend(
+        envelope_call_runtime().block_on(dispatch_request_with_backend(
             repeat_request,
             1000,
             caller_gid,
@@ -19265,7 +19663,7 @@ mod tests {
             &log,
             Some(&bundle.resolver),
             &backend,
-        )
+        ))
         .expect("repeat dispatch succeeds");
 
         let records_after_repeat = capture.lock().expect("capture lock").clone();

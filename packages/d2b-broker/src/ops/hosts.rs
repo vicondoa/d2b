@@ -142,7 +142,7 @@ impl std::error::Error for WriteMarkerBlockError {}
 /// The broker owns the merge: preserve foreign lines, replace the
 /// managed region when present, append it otherwise, then hand the
 /// final file to the atomic writer.
-pub fn write_marker_block(
+pub async fn write_marker_block(
     executor: &dyn ReconcileExecutor,
     intent: &ResolvedHostsIntent,
 ) -> Result<(), WriteMarkerBlockError> {
@@ -165,10 +165,11 @@ pub fn write_marker_block(
     };
     executor
         .write_atomic_file(&intent.path, merged.as_bytes(), intent.mode)
+        .await
         .map_err(WriteMarkerBlockError::ReconcileExec)
 }
 
-pub fn remove_marker_block(
+pub async fn remove_marker_block(
     executor: &dyn ReconcileExecutor,
     intent: &ResolvedHostsIntent,
 ) -> Result<(), WriteMarkerBlockError> {
@@ -189,6 +190,7 @@ pub fn remove_marker_block(
     }
     executor
         .write_atomic_file(&intent.path, merged.as_bytes(), intent.mode)
+        .await
         .map_err(WriteMarkerBlockError::ReconcileExec)
 }
 
@@ -395,8 +397,8 @@ mod tests {
         fs::remove_dir_all(dir).ok();
     }
 
-    #[test]
-    fn write_marker_block_preserves_foreign_lines_in_executor_payload() {
+    #[tokio::test]
+    async fn write_marker_block_preserves_foreign_lines_in_executor_payload() {
         let dir = scratch_dir("hosts-merge");
         let path = dir.join("hosts");
         fs::write(
@@ -415,7 +417,7 @@ mod tests {
             ownership_marker: None,
         };
         let exec = FakeReconcileExecutor::new();
-        write_marker_block(&exec, &intent).unwrap();
+        write_marker_block(&exec, &intent).await.unwrap();
 
         let log = exec.take_log();
         assert_eq!(log.len(), 1);
@@ -437,8 +439,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn network_marker_block_refuses_foreign_existing_block() {
+    #[tokio::test]
+    async fn network_marker_block_refuses_foreign_existing_block() {
         let dir = scratch_dir("hosts-foreign-marker");
         let path = dir.join("hosts");
         fs::write(
@@ -461,15 +463,15 @@ mod tests {
         };
         let exec = FakeReconcileExecutor::new();
         assert!(matches!(
-            write_marker_block(&exec, &intent),
+            write_marker_block(&exec, &intent).await,
             Err(WriteMarkerBlockError::ForeignOwnership)
         ));
         assert!(exec.take_log().is_empty());
         fs::remove_dir_all(dir).ok();
     }
 
-    #[test]
-    fn network_marker_block_preserves_another_network_marker() {
+    #[tokio::test]
+    async fn network_marker_block_preserves_another_network_marker() {
         let dir = scratch_dir("hosts-swapped-marker");
         let path = dir.join("hosts");
         let foreign_marker = "network:hosts:zone:foreign-zone:network:foreign-network:generation:2:attachment:3:bundle:sha256:1111111111111111111111111111111111111111111111111111111111111111";
@@ -491,7 +493,7 @@ mod tests {
             ownership_marker: Some(expected_marker.to_owned()),
         };
         let exec = FakeReconcileExecutor::new();
-        write_marker_block(&exec, &intent).unwrap();
+        write_marker_block(&exec, &intent).await.unwrap();
         let log = exec.take_log();
         assert_eq!(log.len(), 1);
         let ReconcileOp::WriteAtomicFile { contents, .. } = &log[0] else {

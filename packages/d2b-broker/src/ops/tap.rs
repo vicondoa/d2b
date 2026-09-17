@@ -32,8 +32,8 @@ use d2b_host::netlink::{NetlinkBackend, NetlinkError, readback_bridge_port_flags
 use std::io::ErrorKind;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
+use std::pin::Pin;
+use std::process::Stdio;
 use std::time::Duration;
 
 /// Outcome of the prior `ApplyNmUnmanaged` op for the same ifname
@@ -187,7 +187,7 @@ pub struct LiveCreateTapOutcome {
     pub fd: Option<OwnedFd>,
 }
 
-pub fn live_create_tap_fd(
+pub async fn live_create_tap_fd(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
     req: &d2b_contracts_broker::broker_wire::CreateTapFdRequest,
@@ -215,7 +215,7 @@ pub fn live_create_tap_fd(
         &req.attachment_id,
         &req.admitted_interface_names,
     )?;
-    ensure_bridge_owned(&intent)?;
+    ensure_bridge_owned(&intent).await?;
     let dev_net =
         crate::sys::path_safe::open_dir_path_safe(Path::new("/dev/net")).map_err(|e| {
             super::OpError::Io {
@@ -235,14 +235,15 @@ pub fn live_create_tap_fd(
             detail: e.to_string(),
         }
     })?;
-    if let Err(error) = set_tap_ownership_marker(&intent) {
+    if let Err(error) = set_tap_ownership_marker(&intent).await {
         let _ = run_ip_link(
             &ip_binary_path(),
             &["link", "delete", "dev", intent.tap_ifname.as_str()],
-        );
+        )
+        .await;
         return Err(error);
     }
-    attach_tap_to_bridge(&intent.tap_ifname, &intent.bridge_ifname)?;
+    attach_tap_to_bridge(&intent.tap_ifname, &intent.bridge_ifname).await?;
     Ok(LiveCreateTapOutcome {
         bridge_ifname: Some(intent.bridge_ifname),
         tap_ifname: intent.tap_ifname,
@@ -250,7 +251,7 @@ pub fn live_create_tap_fd(
     })
 }
 
-pub fn live_create_persistent_tap(
+pub async fn live_create_persistent_tap(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
     req: &d2b_contracts_broker::broker_wire::CreatePersistentTapRequest,
@@ -278,8 +279,8 @@ pub fn live_create_persistent_tap(
         &req.attachment_id,
         &req.admitted_interface_names,
     )?;
-    ensure_bridge_owned(&intent)?;
-    if let Some(existing) = existing_persistent_tap(&intent)? {
+    ensure_bridge_owned(&intent).await?;
+    if let Some(existing) = existing_persistent_tap(&intent).await? {
         return Ok(existing);
     }
     let dev_net =
@@ -313,18 +314,21 @@ pub fn live_create_persistent_tap(
         path: PathBuf::from("/dev/net/tun"),
         detail: e.to_string(),
     })?;
-    if let Err(error) = set_tap_ownership_marker(&intent) {
+    if let Err(error) = set_tap_ownership_marker(&intent).await {
         let _ = run_ip_link(
             &ip_binary_path(),
             &["link", "delete", "dev", intent.tap_ifname.as_str()],
-        );
+        )
+        .await;
         return Err(error);
     }
-    if let Err(error) = attach_tap_to_bridge(&intent.tap_ifname, &intent.bridge_ifname) {
+    if let Err(error) = attach_tap_to_bridge(&intent.tap_ifname, &intent.bridge_ifname).await {
         return match run_ip_link(
             &ip_binary_path(),
             &["link", "delete", "dev", intent.tap_ifname.as_str()],
-        ) {
+        )
+        .await
+        {
             Ok(()) => Err(error),
             Err(cleanup) => Err(cleanup),
         };
@@ -336,11 +340,10 @@ pub fn live_create_persistent_tap(
     })
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn existing_persistent_tap(
+async fn existing_persistent_tap(
     intent: &d2b_core::bundle_resolver::ResolvedTapIntent,
 ) -> Result<Option<LiveCreateTapOutcome>, super::OpError> {
-    let output = Command::new(ip_binary_path())
+    let output = tokio::process::Command::new(ip_binary_path())
         .args([
             "-d",
             "-j",
@@ -352,6 +355,7 @@ fn existing_persistent_tap(
         .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::null())
         .output()
+        .await
         .map_err(|err| super::OpError::Io {
             path: PathBuf::from("ip"),
             detail: err.to_string(),
@@ -377,19 +381,20 @@ fn existing_persistent_tap(
         .pointer("/linkinfo/info_kind")
         .and_then(serde_json::Value::as_str);
     let master = link.get("master").and_then(serde_json::Value::as_str);
-    let marker = link
+    let mut marker = link
         .get("ifalias")
         .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| {
-            std::fs::read_to_string(
-                PathBuf::from("/sys/class/net")
-                    .join(intent.tap_ifname.as_str())
-                    .join("ifalias"),
-            )
-            .ok()
-            .map(|value| value.trim().to_owned())
-        });
+        .map(str::to_owned);
+    if marker.is_none() {
+        marker = tokio::fs::read_to_string(
+            PathBuf::from("/sys/class/net")
+                .join(intent.tap_ifname.as_str())
+                .join("ifalias"),
+        )
+        .await
+        .ok()
+        .map(|value| value.trim().to_owned());
+    }
     let expected_marker = expected_tap_marker(intent);
     if !matches!(kind, Some("tun" | "tap"))
         || master != Some(intent.bridge_ifname.as_str())
@@ -408,7 +413,8 @@ fn existing_persistent_tap(
     run_ip_link(
         &ip_binary_path(),
         &["link", "set", "dev", intent.tap_ifname.as_str(), "up"],
-    )?;
+    )
+    .await?;
     Ok(Some(LiveCreateTapOutcome {
         bridge_ifname: Some(intent.bridge_ifname.clone()),
         tap_ifname: intent.tap_ifname.clone(),
@@ -572,14 +578,13 @@ fn expected_tap_marker(intent: &d2b_core::bundle_resolver::ResolvedTapIntent) ->
     format!("d2b managed: {}", intent.ownership_marker)
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn ensure_bridge_owned(
+async fn ensure_bridge_owned(
     intent: &d2b_core::bundle_resolver::ResolvedTapIntent,
 ) -> Result<(), super::OpError> {
     let marker_path = PathBuf::from("/sys/class/net")
         .join(intent.bridge_ifname.as_str())
         .join("ifalias");
-    let marker = std::fs::read_to_string(marker_path).ok();
+    let marker = tokio::fs::read_to_string(marker_path).await.ok();
     if marker.as_deref().map(str::trim) != Some(expected_bridge_marker(intent).as_str()) {
         return Err(super::OpError::Refused {
             operation: "CreateTap",
@@ -589,7 +594,7 @@ fn ensure_bridge_owned(
     Ok(())
 }
 
-fn set_tap_ownership_marker(
+async fn set_tap_ownership_marker(
     intent: &d2b_core::bundle_resolver::ResolvedTapIntent,
 ) -> Result<(), super::OpError> {
     let marker = expected_tap_marker(intent);
@@ -604,19 +609,21 @@ fn set_tap_ownership_marker(
             marker.as_str(),
         ],
     )
+    .await
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<OwnedFd, super::OpError> {
+pub async fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<OwnedFd, super::OpError> {
     let ip = ip_binary_path();
     let create_args = build_macvtap_link_add_args(intent);
     match run_ip_link(
         &ip,
         &create_args.iter().map(String::as_str).collect::<Vec<_>>(),
-    ) {
+    )
+    .await
+    {
         Ok(()) => {}
         Err(super::OpError::Io { path: _, detail }) if detail.contains("File exists") => {
-            validate_existing_macvtap(&ip, intent)?
+            validate_existing_macvtap(&ip, intent).await?
         }
         Err(err) => return Err(err),
     }
@@ -630,10 +637,12 @@ pub fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<OwnedFd,
             "address",
             intent.mac.as_str(),
         ],
-    )?;
-    run_ip_link(&ip, &["link", "set", "dev", intent.ifname.as_str(), "up"])?;
+    )
+    .await?;
+    run_ip_link(&ip, &["link", "set", "dev", intent.ifname.as_str(), "up"]).await?;
     let ifindex_path = PathBuf::from(format!("/sys/class/net/{}/ifindex", intent.ifname.as_str()));
-    let ifindex = std::fs::read_to_string(&ifindex_path)
+    let ifindex = tokio::fs::read_to_string(&ifindex_path)
+        .await
         .map_err(|err| super::OpError::Io {
             path: ifindex_path.clone(),
             detail: err.to_string(),
@@ -648,23 +657,24 @@ pub fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<OwnedFd,
             ),
         })?;
     let tap_path = macvtap_device_path(ifindex);
-    let file = open_macvtap_device_with_udev_wait(&tap_path)?;
+    let file = open_macvtap_device_with_udev_wait(&tap_path).await?;
+    let file = file.into_std().await;
     Ok(file.into())
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn open_macvtap_device_with_udev_wait(tap_path: &Path) -> Result<std::fs::File, super::OpError> {
+async fn open_macvtap_device_with_udev_wait(tap_path: &Path) -> Result<tokio::fs::File, super::OpError> {
     let mut last_error = None;
     for _ in 0..100 {
-        match std::fs::OpenOptions::new()
+        match tokio::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(tap_path)
+            .await
         {
             Ok(file) => return Ok(file),
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 last_error = Some(err);
-                thread::sleep(Duration::from_millis(20));
+                tokio::time::sleep(Duration::from_millis(20)).await;
             }
             Err(err) => {
                 return Err(super::OpError::Io {
@@ -701,16 +711,16 @@ fn macvtap_device_path(ifindex: u32) -> PathBuf {
     PathBuf::from(format!("/dev/tap{ifindex}"))
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn validate_existing_macvtap(
+async fn validate_existing_macvtap(
     ip: &Path,
     intent: &ResolvedMacvtapIntent,
 ) -> Result<(), super::OpError> {
-    let output = Command::new(ip)
+    let output = tokio::process::Command::new(ip)
         .args(["-d", "-j", "link", "show", "dev", intent.ifname.as_str()])
         .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::null())
         .output()
+        .await
         .map_err(|err| super::OpError::Io {
             path: ip.to_path_buf(),
             detail: err.to_string(),
@@ -774,7 +784,7 @@ fn validate_existing_macvtap_json(
     Ok(())
 }
 
-fn attach_tap_to_bridge(
+async fn attach_tap_to_bridge(
     tap_ifname: &d2b_contracts_resource::v3::IfName,
     bridge_ifname: &d2b_contracts_resource::v3::IfName,
 ) -> Result<(), super::OpError> {
@@ -789,17 +799,18 @@ fn attach_tap_to_bridge(
             "master",
             bridge_ifname.as_str(),
         ],
-    )?;
-    run_ip_link(&ip, &["link", "set", "dev", tap_ifname.as_str(), "up"])
+    )
+    .await?;
+    run_ip_link(&ip, &["link", "set", "dev", tap_ifname.as_str(), "up"]).await
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn run_ip_link(ip: &Path, args: &[&str]) -> Result<(), super::OpError> {
-    let output = Command::new(ip)
+async fn run_ip_link(ip: &Path, args: &[&str]) -> Result<(), super::OpError> {
+    let output = tokio::process::Command::new(ip)
         .args(args)
         .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::null())
         .output()
+        .await
         .map_err(|err| super::OpError::Io {
             path: ip.to_path_buf(),
             detail: err.to_string(),
@@ -855,8 +866,7 @@ struct LiveBridgePortTarget {
     bridge_marker: Option<String>,
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn live_set_bridge_port_flags(
+pub async fn live_set_bridge_port_flags(
     _executor: &dyn ReconcileExecutor,
     _resolver: &BundleResolver,
     req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
@@ -867,7 +877,8 @@ pub fn live_set_bridge_port_flags(
         .join(target.bridge.as_str())
         .join("ifalias");
     if target.bridge_marker.as_deref()
-        != std::fs::read_to_string(marker_path)
+        != tokio::fs::read_to_string(marker_path)
+            .await
             .ok()
             .map(|value| value.trim().to_owned())
             .as_deref()
@@ -877,24 +888,34 @@ pub fn live_set_bridge_port_flags(
     let ip_binary = ip_binary_path();
     live_set_bridge_port_flags_with_ops(
         &target,
-        |port, flags| apply_bridge_port_flags_via_ip(&ip_binary, port, flags),
-        |port| read_bridge_port_flags_via_ip(&ip_binary, port),
+        |port, flags| {
+            let ip_binary = ip_binary.clone();
+            Box::pin(async move { apply_bridge_port_flags_via_ip(&ip_binary, port, flags).await })
+        },
+        |port| {
+            let ip_binary = ip_binary.clone();
+            Box::pin(async move { read_bridge_port_flags_via_ip(&ip_binary, port).await })
+        },
     )
+    .await
 }
 
-fn live_set_bridge_port_flags_with_ops<F, G>(
+async fn live_set_bridge_port_flags_with_ops<F, G>(
     target: &LiveBridgePortTarget,
     mut apply: F,
     mut readback: G,
 ) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, LiveSetBridgePortFlagsError>
 where
-    F: FnMut(&str, BridgePortFlagSet) -> Result<(), ReconcileExecError>,
-    G: FnMut(&str) -> Result<BridgePortFlagSet, ReconcileExecError>,
+    F: for<'a> FnMut(&'a str, BridgePortFlagSet) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>>,
+    G: for<'a> FnMut(&'a str) -> Pin<Box<dyn Future<Output = Result<BridgePortFlagSet, ReconcileExecError>> + Send + 'a>>,
 {
     let desired = target.desired_flags();
-    apply(target.port.as_str(), desired).map_err(LiveSetBridgePortFlagsError::ReconcileExec)?;
-    let observed =
-        readback(target.port.as_str()).map_err(LiveSetBridgePortFlagsError::ReconcileExec)?;
+    apply(target.port.as_str(), desired)
+        .await
+        .map_err(LiveSetBridgePortFlagsError::ReconcileExec)?;
+    let observed = readback(target.port.as_str())
+        .await
+        .map_err(LiveSetBridgePortFlagsError::ReconcileExec)?;
     d2b_host::bridge_port::validate_readback(target.role.clone(), observed).map_err(|drift| {
         let first = drift
             .differences
@@ -1041,8 +1062,7 @@ fn ip_binary_path() -> PathBuf {
 /// workspace does not currently wire `rtnetlink` directly, but `ip link
 /// ... type bridge_slave ...` emits the same `RTM_SETLINK`
 /// `IFLA_PROTINFO` updates without reaching into `/sys`.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn apply_bridge_port_flags_via_ip(
+async fn apply_bridge_port_flags_via_ip(
     ip_binary: &Path,
     port: &str,
     flags: BridgePortFlagSet,
@@ -1053,11 +1073,12 @@ fn apply_bridge_port_flags_via_ip(
         });
     }
     let args = build_bridge_port_ip_args(port, flags);
-    let output = Command::new(ip_binary)
+    let output = tokio::process::Command::new(ip_binary)
         .args(&args)
         .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::null())
         .output()
+        .await
         .map_err(|err| ReconcileExecError::BinaryMissing {
             which: "ip link set".to_owned(),
             detail: err.to_string(),
@@ -1072,8 +1093,7 @@ fn apply_bridge_port_flags_via_ip(
     Ok(())
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_bridge_port_flags_via_ip(
+async fn read_bridge_port_flags_via_ip(
     ip_binary: &Path,
     port: &str,
 ) -> Result<BridgePortFlagSet, ReconcileExecError> {
@@ -1082,11 +1102,12 @@ fn read_bridge_port_flags_via_ip(
             detail: format!("ip binary must be absolute: {}", ip_binary.display()),
         });
     }
-    let output = Command::new(ip_binary)
+    let output = tokio::process::Command::new(ip_binary)
         .args(["-d", "-j", "link", "show", "dev", port])
         .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::null())
         .output()
+        .await
         .map_err(|err| ReconcileExecError::BinaryMissing {
             which: "ip link show".to_owned(),
             detail: err.to_string(),
@@ -1640,8 +1661,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn live_set_bridge_port_flags_uses_netlink_apply_and_readback() {
+    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn live_set_bridge_port_flags_uses_netlink_apply_and_readback() {
         let req = d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
             vm_id: d2b_contracts::types::VmId::new("corp-vm"),
             role_id: d2b_contracts::types::RoleId::new("workload-lan"),
@@ -1649,21 +1671,27 @@ mod tests {
             tracing_span_id: None,
         };
         let target = resolve_live_bridge_port_target(&req).expect("resolve bridge port");
-        let applied = std::cell::RefCell::new(Vec::new());
+        let applied = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
         let response = live_set_bridge_port_flags_with_ops(
             &target,
             |port, flags| {
-                applied.borrow_mut().push((port.to_owned(), flags));
-                Ok(())
+                let applied = applied.clone();
+                Box::pin(async move {
+                    applied.lock().unwrap().push((port.to_owned(), flags));
+                    Ok(())
+                })
             },
             |port| {
-                assert!(port.starts_with("d2b-t"));
-                Ok(BridgePortFlagSet::defaults_for(
-                    TapRoleW3::WorkloadLanIsolated,
-                ))
+                Box::pin(async move {
+                    assert!(port.starts_with("d2b-t"));
+                    Ok(BridgePortFlagSet::defaults_for(
+                        TapRoleW3::WorkloadLanIsolated,
+                    ))
+                })
             },
         )
+        .await
         .expect("live bridge flags");
 
         assert!(response.bridge.as_str().starts_with("d2b-b"));
@@ -1671,7 +1699,7 @@ mod tests {
         assert!(response.isolated);
         assert!(response.neigh_suppress);
         assert_eq!(
-            applied.into_inner(),
+            *applied.lock().unwrap(),
             vec![(
                 target.port.clone(),
                 BridgePortFlagSet::defaults_for(TapRoleW3::WorkloadLanIsolated),
@@ -1679,8 +1707,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn live_set_bridge_port_flags_fails_closed_on_readback_drift() {
+    #[tokio::test]
+    async fn live_set_bridge_port_flags_fails_closed_on_readback_drift() {
         let req = d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
             vm_id: d2b_contracts::types::VmId::new("corp-vm"),
             role_id: d2b_contracts::types::RoleId::new("workload-lan"),
@@ -1690,9 +1718,10 @@ mod tests {
         let target = resolve_live_bridge_port_target(&req).expect("resolve bridge port");
         let err = live_set_bridge_port_flags_with_ops(
             &target,
-            |_port, _flags| Ok(()),
-            |_port| Ok(BridgePortFlagSet::ALL_OFF),
+            |_port, _flags| Box::pin(async move { Ok(()) }),
+            |_port| Box::pin(async move { Ok(BridgePortFlagSet::ALL_OFF) }),
         )
+        .await
         .unwrap_err();
         assert!(matches!(
             err,

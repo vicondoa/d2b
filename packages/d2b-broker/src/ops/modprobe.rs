@@ -21,6 +21,8 @@ use d2b_host::modules::{
     read_builtin_modules_with_fallback, read_loaded_modules,
 };
 
+use std::pin::Pin;
+
 use crate::audit::AuditLog;
 use crate::ops::exec_reconcile::SystemLiveExec;
 
@@ -63,7 +65,10 @@ pub struct AllowlistRow {
 
 /// Backend trait so the L1c canary can swap a fake `modprobe`.
 pub trait ModprobeBackend {
-    fn load(&mut self, module: &str) -> Result<(), String>;
+    fn load<'a>(
+        &'a mut self,
+        module: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 }
 
 /// Fake backend used by `tests/kernel-module-matrix.sh`.
@@ -74,19 +79,24 @@ pub struct RecordingBackend {
 }
 
 impl ModprobeBackend for RecordingBackend {
-    fn load(&mut self, module: &str) -> Result<(), String> {
-        if self.fail_on.iter().any(|m| m == module) {
-            return Err(format!("fake modprobe refused {module}"));
-        }
-        self.loaded.push(module.to_owned());
-        Ok(())
+    fn load<'a>(
+        &'a mut self,
+        module: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            if self.fail_on.iter().any(|m| m == module) {
+                return Err(format!("fake modprobe refused {module}"));
+            }
+            self.loaded.push(module.to_owned());
+            Ok(())
+        })
     }
 }
 
 /// Dispatcher entry point. The four-step probe is run via the typed
 /// `d2b_host::modules` helpers; this function only resolves the
 /// matrix row and audit record.
-pub fn dispatch(
+pub async fn dispatch(
     requested: &str,
     allowlist: &[AllowlistRow],
     inputs: &ProbeInputs,
@@ -117,7 +127,7 @@ pub fn dispatch(
             if !row.load_allowed {
                 ModprobeDecision::DeniedNotLoadAllowed
             } else {
-                match backend.load(&module_name) {
+                match backend.load(&module_name).await {
                     Ok(()) => ModprobeDecision::LoadedNow,
                     Err(_) => ModprobeDecision::LoadFailed,
                 }
@@ -139,14 +149,20 @@ struct LiveBackend<'a> {
 }
 
 impl ModprobeBackend for LiveBackend<'_> {
-    fn load(&mut self, module: &str) -> Result<(), String> {
-        self.exec
-            .run_modprobe(module)
-            .map_err(|err| err.to_string())
+    fn load<'a>(
+        &'a mut self,
+        module: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.exec
+                .run_modprobe(module)
+                .await
+                .map_err(|err| err.to_string())
+        })
     }
 }
 
-pub fn live_modprobe_if_allowed(
+pub async fn live_modprobe_if_allowed(
     exec: &SystemLiveExec,
     resolver: &BundleResolver,
     req: &ModprobeIfAllowedRequest,
@@ -177,7 +193,8 @@ pub fn live_modprobe_if_allowed(
         &allowlist,
         &inputs,
         &mut backend,
-    ))
+    )
+    .await)
 }
 
 #[cfg(test)]
@@ -207,23 +224,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unknown_module_denied_not_in_matrix() {
+    #[tokio::test]
+    async fn unknown_module_denied_not_in_matrix() {
         let mut backend = RecordingBackend::default();
-        let record = dispatch("rogue", &[], &empty_inputs(false), &mut backend);
+        let record = dispatch("rogue", &[], &empty_inputs(false), &mut backend)
+            .await;
         assert_eq!(record.disposition, ModprobeDecision::DeniedNotInMatrix);
         assert!(backend.loaded.is_empty());
     }
 
-    #[test]
-    fn modules_disabled_blocks_loadable_request() {
+    #[tokio::test]
+    async fn modules_disabled_blocks_loadable_request() {
         let mut backend = RecordingBackend::default();
         let record = dispatch(
             "kvm",
             &[allow("kvm", true)],
             &empty_inputs(true),
             &mut backend,
-        );
+        )
+            .await;
         assert_eq!(
             record.disposition,
             ModprobeDecision::DeniedHostModulesLocked
@@ -231,50 +250,54 @@ mod tests {
         assert!(backend.loaded.is_empty());
     }
 
-    #[test]
-    fn load_allowed_module_invokes_backend() {
+    #[tokio::test]
+    async fn load_allowed_module_invokes_backend() {
         let mut backend = RecordingBackend::default();
         let record = dispatch(
             "kvm",
             &[allow("kvm", true)],
             &empty_inputs(false),
             &mut backend,
-        );
+        )
+            .await;
         assert_eq!(record.disposition, ModprobeDecision::LoadedNow);
         assert_eq!(backend.loaded, vec!["kvm".to_owned()]);
     }
 
-    #[test]
-    fn matrix_row_with_load_allowed_false_refuses_silently() {
+    #[tokio::test]
+    async fn matrix_row_with_load_allowed_false_refuses_silently() {
         let mut backend = RecordingBackend::default();
         let record = dispatch(
             "kvm",
             &[allow("kvm", false)],
             &empty_inputs(false),
             &mut backend,
-        );
+        )
+            .await;
         assert_eq!(record.disposition, ModprobeDecision::DeniedNotLoadAllowed);
     }
 
-    #[test]
-    fn already_loaded_module_short_circuits() {
+    #[tokio::test]
+    async fn already_loaded_module_short_circuits() {
         let mut backend = RecordingBackend::default();
         let mut inputs = empty_inputs(false);
         inputs.loaded.names.insert("kvm".to_owned());
-        let record = dispatch("kvm", &[allow("kvm", true)], &inputs, &mut backend);
+        let record = dispatch("kvm", &[allow("kvm", true)], &inputs, &mut backend)
+            .await;
         assert_eq!(record.disposition, ModprobeDecision::AlreadyLoaded);
         assert!(backend.loaded.is_empty());
     }
 
-    #[test]
-    fn audit_record_carries_matrix_entry_id() {
+    #[tokio::test]
+    async fn audit_record_carries_matrix_entry_id() {
         let mut backend = RecordingBackend::default();
         let record = dispatch(
             "kvm",
             &[allow("kvm", true)],
             &empty_inputs(false),
             &mut backend,
-        );
+        )
+            .await;
         assert_eq!(record.module_name, "kvm");
         assert_eq!(record.matrix_entry_id, "matrix-kvm");
         assert!(!record.modules_disabled_sysctl);

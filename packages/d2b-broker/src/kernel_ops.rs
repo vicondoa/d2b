@@ -478,13 +478,7 @@ async fn open_cgroup_dir(invocation: &DirectInvocation<'_>) -> Result<DispatchOu
 /// comparison stays on the family side.
 async fn observe_process(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let pid = field_i64(invocation.payload, "pid")? as i32;
-    // The kernel handler body is synchronous by construction (the envelope
-    // `HandlerTable` API takes sync closures; the seam's async handler-task
-    // model is plan U8 item 1's sequencing dependency), so the /proc probe
-    // keeps the sanctioned synchronous-path allow until the seam's U13
-    // async sweep converts handler bodies to tokio::fs.
-    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
+    let stat = tokio::fs::read_to_string(format!("/proc/{pid}/stat")).await;
     let (present, state, start_time_ticks) = match &stat {
         Ok(stat) => (
             true,
@@ -498,10 +492,9 @@ async fn observe_process(invocation: &DirectInvocation<'_>) -> Result<DispatchOu
     // /proc/<pid>/exe can be unreadable from the broker's context even for
     // a present process (the runner runs under its own uid/namespace), so
     // the family side prefers this record and uses the readlink only as a
-    // cross-check when both are readable. Synchronous handler body, same
-    // sanctioned allow as the /proc stat read above (plan U8 item 1).
-    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    let executable = std::fs::read_link(format!("/proc/{pid}/exe"))
+    // cross-check when both are readable.
+    let executable = tokio::fs::read_link(format!("/proc/{pid}/exe"))
+        .await
         .ok()
         .map(|path| path.display().to_string());
     let registered_binary =
@@ -526,9 +519,10 @@ async fn observe_process(invocation: &DirectInvocation<'_>) -> Result<DispatchOu
         });
     let invocation_id = invocation.ctx.invocation_id;
     let registered = crate::runtime::runner_pidfds().contains_key(invocation_id)
-        && crate::runtime::runner_pidfds()
-            .get(invocation_id)
-            .is_some_and(|pidfd| pidfd_pid(pidfd.as_fd()) == Some(pid));
+        && match crate::runtime::runner_pidfds().get(invocation_id) {
+            Some(pidfd) => pidfd_pid(pidfd.as_fd()).await == Some(pid),
+            None => false,
+        };
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({
             "pid": pid,
@@ -891,6 +885,7 @@ async fn spawn_process(
         &device_worker,
         &config.runtime_root,
     )
+    .await
     .map_err(|error| errored(format!("spawn-process: {error}")))?;
     // Register the spawned child under the invocation id so the SIGCHLD
     // reaper owns it; a registration failure reaps the child right here
@@ -1053,6 +1048,7 @@ async fn apply_nftables(
         script_body
     };
     let persisted_hash = crate::runtime::persisted_nft_hash()
+        .await
         .map_err(|error| errored(format!("apply-nftables: {error}")))?;
     let expected_hash = if destroy {
         None
@@ -1067,6 +1063,7 @@ async fn apply_nftables(
         coexistence_policy.as_ref(),
         expected_hash.as_deref(),
     )
+    .await
     .map_err(|error| match error {
         ApplyWithCoexistenceError::CoexistenceRefused { manager, rationale } => {
             refused(format!("coexistence-refused: {manager:?}: {rationale}"))
@@ -1090,6 +1087,7 @@ async fn apply_nftables(
         &table,
         &crate::runtime::nft_hash_sidecar_path(),
     )
+    .await
     .map_err(|error| errored(format!("apply-nftables: {error}")))?;
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({}))?,
@@ -1132,6 +1130,7 @@ async fn apply_nftables_projection(
         &installed_generation,
         action,
     )
+    .await
     .map(|result| result.projection_digest)
     .map_err(|error| errored(format!("apply-nftables-projection: {}", error.code())))?;
     Ok(DispatchOutcome {
@@ -1159,9 +1158,11 @@ async fn apply_nm_unmanaged(
     let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
     if destroy {
         crate::ops::nm::remove_with_reload(&intent)
+            .await
             .map_err(|error| errored(format!("apply-nm-unmanaged: {error}")))?;
     } else {
         crate::ops::nm::apply_with_reload(&exec, &intent)
+            .await
             .map_err(|error| errored(format!("apply-nm-unmanaged: {error}")))?;
     }
     Ok(DispatchOutcome {
@@ -1201,6 +1202,7 @@ async fn apply_route(
         &provenance,
         destroy,
     )
+    .await
     .map_err(|error| errored(format!("apply-route: {error}")))?;
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({}))?,
@@ -1228,6 +1230,7 @@ async fn apply_sysctl(invocation: &DirectInvocation<'_>) -> Result<DispatchOutco
     };
     let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
     crate::ops::sysctl::apply_with_readback(&exec, &key, &value)
+        .await
         .map_err(|error| errored(format!("apply-sysctl: {error}")))?;
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({}))?,
@@ -1242,6 +1245,7 @@ async fn create_bridge(invocation: &DirectInvocation<'_>) -> Result<DispatchOutc
     let intent = parse_resolved_bridge_intent(invocation)?;
     let bridge_intent_digest =
         crate::ops::network::create_bridge(&crate::ops::network::SystemBridgeBackend, &intent)
+            .await
             .map_err(|error| errored(format!("create-bridge: {}", error.code())))?;
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({ "bridgeIntentDigest": bridge_intent_digest }))?,
@@ -1255,6 +1259,7 @@ async fn delete_bridge(invocation: &DirectInvocation<'_>) -> Result<DispatchOutc
     let intent = parse_resolved_bridge_intent(invocation)?;
     let bridge_intent_digest =
         crate::ops::network::delete_bridge(&crate::ops::network::SystemBridgeBackend, &intent)
+            .await
             .map_err(|error| errored(format!("delete-bridge: {}", error.code())))?;
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({ "bridgeIntentDigest": bridge_intent_digest }))?,
@@ -1303,30 +1308,34 @@ async fn create_persistent_tap(
     let exec =
         crate::ops::exec_reconcile::SystemLiveExec::new(config.daemon_uid, config.daemon_gid);
     let outcome = crate::ops::tap::live_create_persistent_tap(&exec, &resolver, &req, None)
+        .await
         .map_err(|error| errored(format!("create-persistent-tap: {error}")))?;
-    crate::ops::network::persist_persistent_tap_realization(
+    if let Err(error) = crate::ops::network::persist_persistent_tap_realization(
         &config.state_dir,
         &req,
         &outcome.tap_ifname,
     )
-    .map_err(|error| {
+    .await
+    {
         let cleanup = crate::ops::network::PersistentTapBackend::delete_tap(
             &crate::ops::network::SystemPersistentTapBackend,
             outcome.tap_ifname.as_str(),
-        );
+        )
+        .await;
         if let Err(cleanup) = cleanup {
-            return errored(format!(
+            return Err(errored(format!(
                 "create-persistent-tap: {} (cleanup failed: {})",
                 error.code(),
                 cleanup.code()
-            ));
+            )));
         }
         let _ = crate::ops::network::remove_persistent_tap_realization(
             &config.state_dir,
             &req.attachment_id,
-        );
-        errored(format!("create-persistent-tap: {}", error.code()))
-    })?;
+        )
+        .await;
+        return Err(errored(format!("create-persistent-tap: {}", error.code())));
+    }
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({
             "bridge": outcome.bridge_ifname.as_ref().map(|ifname| ifname.as_str()),
@@ -1355,17 +1364,20 @@ async fn delete_persistent_tap(
         ));
     }
     let realization = crate::ops::network::load_persistent_tap_realization(&config.state_dir, &req)
+        .await
         .map_err(|error| errored(format!("delete-persistent-tap: {}", error.code())))?;
     let attachment_digest = crate::ops::network::delete_persistent_tap(
         &crate::ops::network::SystemPersistentTapBackend,
         &realization,
         &req,
     )
+    .await
     .map_err(|error| errored(format!("delete-persistent-tap: {}", error.code())))?;
     crate::ops::network::mark_persistent_tap_realization_deleted(
         &config.state_dir,
         &req.attachment_id,
     )
+    .await
     .map_err(|error| errored(format!("delete-persistent-tap: {}", error.code())))?;
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({ "attachmentDigest": attachment_digest }))?,
@@ -1386,6 +1398,7 @@ async fn create_tap_fd(
     let exec =
         crate::ops::exec_reconcile::SystemLiveExec::new(config.daemon_uid, config.daemon_gid);
     let outcome = crate::ops::tap::live_create_tap_fd(&exec, &resolver, &req, None)
+        .await
         .map_err(|error| errored(format!("create-tap-fd: {error}")))?;
     let fd = outcome
         .fd
@@ -1412,6 +1425,7 @@ async fn set_bridge_port_flags(
     let resolver = kernel_resolver(config, "set-bridge-port-flags")?;
     let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
     let response = crate::runtime::dispatch_set_bridge_port_flags_inner(&req, &resolver, &exec)
+        .await
         .map_err(|error| {
             errored(format!(
                 "set-bridge-port-flags: {}",
@@ -1449,9 +1463,11 @@ async fn update_hosts_file(
     let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
     if destroy {
         crate::ops::hosts::remove_marker_block(&exec, &intent)
+            .await
             .map_err(|error| errored(format!("update-hosts-file: {error}")))?;
     } else {
         crate::ops::hosts::write_marker_block(&exec, &intent)
+            .await
             .map_err(|error| errored(format!("update-hosts-file: {error}")))?;
     }
     Ok(DispatchOutcome {
@@ -2059,11 +2075,11 @@ fn exit_kind_str(kind: &d2b_contracts_broker::broker_wire::ChildExitKind) -> &'s
 }
 
 /// The pid of one pidfd, read from its fdinfo entry (`Pid:` line).
-fn pidfd_pid(pidfd: std::os::fd::BorrowedFd<'_>) -> Option<i32> {
-    // Synchronous kernel handler body; same sanctioned allow as the
-    // observe-process /proc probes (plan U8 item 1).
-    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd())).ok()?;
+async fn pidfd_pid(pidfd: std::os::fd::BorrowedFd<'_>) -> Option<i32> {
+    let info =
+        tokio::fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd()))
+            .await
+            .ok()?;
     info.lines().find_map(|line| {
         line.strip_prefix("Pid:")
             .and_then(|value| value.trim().parse::<i32>().ok())

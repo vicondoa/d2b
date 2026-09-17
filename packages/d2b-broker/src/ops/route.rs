@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteConflictKey {
@@ -51,7 +51,7 @@ impl std::error::Error for ApplyWithPreflightError {}
 /// therefore records the exact UID-bound route tuple and marker before it
 /// will replace or delete an existing route. A present route without a
 /// matching record is foreign and remains untouched.
-pub fn apply_with_preflight_owned(
+pub async fn apply_with_preflight_owned(
     executor: &dyn ReconcileExecutor,
     ip_binary: &Path,
     state_dir: &Path,
@@ -101,8 +101,8 @@ pub fn apply_with_preflight_owned(
         table: intent.table.clone().unwrap_or_else(|| "main".to_owned()),
         provenance: intent_provenance.clone(),
     };
-    let current = read_route_record(&record_path)?;
-    let observed_routes = read_existing_routes(ip_binary, intent)?;
+    let current = read_route_record(&record_path).await?;
+    let observed_routes = read_existing_routes(ip_binary, intent).await?;
     let requested = requested_route_conflict_key(intent);
     let conflict = observed_routes
         .iter()
@@ -116,10 +116,10 @@ pub fn apply_with_preflight_owned(
         return Ok(());
     }
 
-    ensure_route_ledger_root(&root)?;
-    let _lock = acquire_route_ledger_lock(&root)?;
-    let current = read_route_record(&record_path)?;
-    let observed_routes = read_existing_routes(ip_binary, intent)?;
+    ensure_route_ledger_root(&root).await?;
+    let _lock = acquire_route_ledger_lock(&root).await?;
+    let current = read_route_record(&record_path).await?;
+    let observed_routes = read_existing_routes(ip_binary, intent).await?;
     let exact = observed_routes.iter().any(|route| {
         route.destination == requested.destination
             && route.via == requested.via
@@ -139,10 +139,11 @@ pub fn apply_with_preflight_owned(
                 IpRouteVerb::Del,
                 &intent.route_spec,
             )
+            .await
             .map_err(map_live_route_error)?;
-            remove_route_record(&record_path)?;
+            remove_route_record(&record_path).await?;
         } else if current.is_some() {
-            remove_route_record(&record_path)?;
+            remove_route_record(&record_path).await?;
         }
         return Ok(());
     }
@@ -154,8 +155,9 @@ pub fn apply_with_preflight_owned(
             IpRouteVerb::Replace,
             &intent.route_spec,
         )
+        .await
         .map_err(map_live_route_error)?;
-        write_route_record(&record_path, &expected)?;
+        write_route_record(&record_path, &expected).await?;
         return Ok(());
     }
 
@@ -165,11 +167,12 @@ pub fn apply_with_preflight_owned(
         IpRouteVerb::Add
     };
     crate::live_handlers::live_apply_route(executor, ip_binary, verb, &intent.route_spec)
+        .await
         .map_err(map_live_route_error)?;
     // A route has no kernel ownership marker. If the durable marker cannot
     // be recorded, do not issue an unproven delete that could race with a
     // foreign route; the next reconcile will fail closed on the tuple.
-    write_route_record(&record_path, &expected)?;
+    write_route_record(&record_path, &expected).await?;
     Ok(())
 }
 
@@ -185,9 +188,8 @@ struct RouteOwnershipRecord {
     provenance: d2b_contracts_resource::v3::NetworkProvenance,
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn ensure_route_ledger_root(root: &Path) -> Result<(), ApplyWithPreflightError> {
-    match fs::symlink_metadata(root) {
+async fn ensure_route_ledger_root(root: &Path) -> Result<(), ApplyWithPreflightError> {
+    match tokio::fs::symlink_metadata(root).await {
         Ok(metadata) => {
             if !metadata.is_dir()
                 || metadata.file_type().is_symlink()
@@ -199,13 +201,14 @@ fn ensure_route_ledger_root(root: &Path) -> Result<(), ApplyWithPreflightError> 
             Ok(())
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(root).map_err(|error| {
+            tokio::fs::create_dir_all(root).await.map_err(|error| {
                 ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
                     path: root.display().to_string(),
                     detail: error.to_string(),
                 })
             })?;
-            fs::set_permissions(root, std::os::unix::fs::PermissionsExt::from_mode(0o750))
+            tokio::fs::set_permissions(root, std::os::unix::fs::PermissionsExt::from_mode(0o750))
+                .await
                 .map_err(|error| {
                     ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
                         path: root.display().to_string(),
@@ -223,22 +226,30 @@ fn ensure_route_ledger_root(root: &Path) -> Result<(), ApplyWithPreflightError> 
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn acquire_route_ledger_lock(root: &Path) -> Result<fs::File, ApplyWithPreflightError> {
+/// Acquire the route-ledger OFD lock asynchronously.
+///
+/// The lock is an fd-based OFD write lock on `<root>/.lock` (multi-process
+/// exclusion via the kernel). The blocking `F_OFD_SETLKW` form would park
+/// an executor worker, so the acquisition polls non-blocking `F_OFD_SETLK`
+/// and sleeps on the async timer until the lock is free (R13: admission
+/// becomes a 25ms poll instead of a blocking wait).
+async fn acquire_route_ledger_lock(root: &Path) -> Result<fs::File, ApplyWithPreflightError> {
     let path = root.join(".lock");
-    let file = fs::OpenOptions::new()
+    let file = tokio::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .mode(0o640)
         .open(&path)
+        .await
         .map_err(|error| {
             ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
                 path: path.display().to_string(),
                 detail: error.to_string(),
             })
         })?;
+    let file = file.into_std().await;
     let lock = nix::libc::flock {
         l_type: nix::libc::F_WRLCK as _,
         l_whence: nix::libc::SEEK_SET as _,
@@ -246,19 +257,28 @@ fn acquire_route_ledger_lock(root: &Path) -> Result<fs::File, ApplyWithPreflight
         l_len: 0,
         l_pid: 0,
     };
-    nix::fcntl::fcntl(file.as_raw_fd(), nix::fcntl::FcntlArg::F_OFD_SETLKW(&lock))
-        .map_err(|_| ApplyWithPreflightError::ForeignRoute)?;
-    Ok(file)
+    loop {
+        match nix::fcntl::fcntl(file.as_raw_fd(), nix::fcntl::FcntlArg::F_OFD_SETLK(&lock)) {
+            Ok(_) => return Ok(file),
+            Err(errno) if errno == nix::errno::Errno::EAGAIN || errno == nix::errno::Errno::EACCES => {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            Err(_) => return Err(ApplyWithPreflightError::ForeignRoute),
+        }
+    }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_route_record(path: &Path) -> Result<Option<RouteOwnershipRecord>, ApplyWithPreflightError> {
-    match fs::OpenOptions::new()
+async fn read_route_record(
+    path: &Path,
+) -> Result<Option<RouteOwnershipRecord>, ApplyWithPreflightError> {
+    match tokio::fs::OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(path)
+        .await
     {
         Ok(file) => {
+            let file = file.into_std().await;
             let metadata = file
                 .metadata()
                 .map_err(|_| ApplyWithPreflightError::ForeignRoute)?;
@@ -279,64 +299,72 @@ fn read_route_record(path: &Path) -> Result<Option<RouteOwnershipRecord>, ApplyW
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn write_route_record(
+async fn write_route_record(
     path: &Path,
     record: &RouteOwnershipRecord,
 ) -> Result<(), ApplyWithPreflightError> {
     let bytes = serde_json::to_vec(record).map_err(|_| ApplyWithPreflightError::ForeignRoute)?;
     let temp = path.with_extension("json.tmp");
-    let mut file = fs::OpenOptions::new()
+    let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .mode(0o640)
         .open(&temp)
+        .await
         .map_err(|error| {
             ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
                 path: temp.display().to_string(),
                 detail: error.to_string(),
             })
         })?;
-    use std::io::Write as _;
-    if file.write_all(&bytes).is_err() || file.sync_data().is_err() {
-        let _ = fs::remove_file(&temp);
+    use tokio::io::AsyncWriteExt;
+    if file.write_all(&bytes).await.is_err() || file.sync_data().await.is_err() {
+        drop(file);
+        let _ = tokio::fs::remove_file(&temp).await;
         return Err(ApplyWithPreflightError::ForeignRoute);
     }
     drop(file);
-    fs::rename(&temp, path).map_err(|error| {
-        let _ = fs::remove_file(&temp);
+    tokio::fs::rename(&temp, path).await.map_err(|error| {
+        let _ = tokio::fs::remove_file(&temp);
         ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
             path: path.display().to_string(),
             detail: error.to_string(),
         })
     })?;
     if let Some(parent) = path.parent() {
-        fs::File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| {
-                ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
-                    path: parent.display().to_string(),
-                    detail: error.to_string(),
-                })
-            })?;
+        let directory = tokio::fs::File::open(parent).await.map_err(|error| {
+            ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+                path: parent.display().to_string(),
+                detail: error.to_string(),
+            })
+        })?;
+        directory.sync_all().await.map_err(|error| {
+            ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+                path: parent.display().to_string(),
+                detail: error.to_string(),
+            })
+        })?;
     }
     Ok(())
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn remove_route_record(path: &Path) -> Result<(), ApplyWithPreflightError> {
-    match fs::remove_file(path) {
+async fn remove_route_record(path: &Path) -> Result<(), ApplyWithPreflightError> {
+    match tokio::fs::remove_file(path).await {
         Ok(()) => {
             if let Some(parent) = path.parent() {
-                fs::File::open(parent)
-                    .and_then(|directory| directory.sync_all())
-                    .map_err(|error| {
-                        ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
-                            path: parent.display().to_string(),
-                            detail: error.to_string(),
-                        })
-                    })?;
+                let directory = tokio::fs::File::open(parent).await.map_err(|error| {
+                    ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+                        path: parent.display().to_string(),
+                        detail: error.to_string(),
+                    })
+                })?;
+                directory.sync_all().await.map_err(|error| {
+                    ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+                        path: parent.display().to_string(),
+                        detail: error.to_string(),
+                    })
+                })?;
             }
             Ok(())
         }
@@ -402,8 +430,7 @@ fn map_live_route_error(err: LiveHandlerError) -> ApplyWithPreflightError {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_existing_routes(
+async fn read_existing_routes(
     ip_binary: &Path,
     intent: &ResolvedRouteIntent,
 ) -> Result<Vec<RouteConflictKey>, ApplyWithPreflightError> {
@@ -416,11 +443,12 @@ fn read_existing_routes(
     }
 
     let family_flag = if route_uses_ipv6(intent) { "-6" } else { "-4" };
-    let output = Command::new(ip_binary)
+    let output = tokio::process::Command::new(ip_binary)
         .args([family_flag, "-j", "route", "show", "table", "all"])
         .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::null())
         .output()
+        .await
         .map_err(|err| {
             ApplyWithPreflightError::RouteQuery(ReconcileExecError::BinaryMissing {
                 which: "ip route show".to_owned(),
@@ -612,13 +640,13 @@ mod tests {
         path
     }
 
-    fn seed_route_record(
+    async fn seed_route_record(
         state_dir: &std::path::Path,
         intent: &ResolvedRouteIntent,
         provenance: &d2b_contracts_resource::v3::NetworkProvenance,
     ) {
         let root = state_dir.join("network-routes");
-        ensure_route_ledger_root(&root).unwrap();
+        ensure_route_ledger_root(&root).await.unwrap();
         let route_name = intent.route_name.as_deref().unwrap();
         let marker = intent.ownership_marker.as_deref().unwrap();
         write_route_record(
@@ -633,6 +661,7 @@ mod tests {
                 provenance: provenance.clone(),
             },
         )
+        .await
         .unwrap();
     }
 
@@ -641,8 +670,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn unmarked_route_is_unchanged_on_replace_and_delete() {
+    #[tokio::test]
+    async fn unmarked_route_is_unchanged_on_replace_and_delete() {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -657,7 +686,8 @@ mod tests {
         for destroy in [false, true] {
             let exec = FakeReconcileExecutor::new();
             assert_eq!(
-                apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, destroy,),
+                apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, destroy,)
+                    .await,
                 Err(ApplyWithPreflightError::ForeignRoute)
             );
             assert!(exec.take_log().is_empty());
@@ -669,8 +699,8 @@ mod tests {
         cleanup_route_test(&root);
     }
 
-    #[test]
-    fn matching_synthetic_route_id_without_observable_record_is_foreign() {
+    #[tokio::test]
+    async fn matching_synthetic_route_id_without_observable_record_is_foreign() {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -683,15 +713,16 @@ mod tests {
         let (intent, provenance) = owned_network_route();
         let exec = FakeReconcileExecutor::new();
         assert_eq!(
-            apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false,),
+            apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false,)
+                .await,
             Err(ApplyWithPreflightError::ForeignRoute)
         );
         assert!(exec.take_log().is_empty());
         cleanup_route_test(&root);
     }
 
-    #[test]
-    fn forged_route_marker_is_rejected_before_creation() {
+    #[tokio::test]
+    async fn forged_route_marker_is_rejected_before_creation() {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -702,15 +733,16 @@ mod tests {
         intent.ownership_marker = Some("d2b managed: forged".to_owned());
         let exec = FakeReconcileExecutor::new();
         assert_eq!(
-            apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false,),
+            apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false,)
+                .await,
             Err(ApplyWithPreflightError::ForeignRoute)
         );
         assert!(exec.take_log().is_empty());
         cleanup_route_test(&root);
     }
 
-    #[test]
-    fn matching_route_marker_preserves_add_replace_delete_semantics() {
+    #[tokio::test]
+    async fn matching_route_marker_preserves_add_replace_delete_semantics() {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -719,7 +751,9 @@ mod tests {
         let ip = fake_ip(&root, "[]");
         let (intent, provenance) = owned_network_route();
         let exec = FakeReconcileExecutor::new();
-        apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false).unwrap();
+        apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false)
+            .await
+            .unwrap();
         assert!(matches!(
             exec.take_log().as_slice(),
             [ReconcileOp::IpRoute {
@@ -732,7 +766,9 @@ mod tests {
             &root,
             r#"[{"dst":"10.20.0.0/24","gateway":"192.0.2.2","dev":"d2b-b12345678","table":254}]"#,
         );
-        apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false).unwrap();
+        apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false)
+            .await
+            .unwrap();
         assert!(matches!(
             exec.take_log().as_slice(),
             [ReconcileOp::IpRoute {
@@ -741,7 +777,9 @@ mod tests {
             }]
         ));
 
-        apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, true).unwrap();
+        apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, true)
+            .await
+            .unwrap();
         assert!(matches!(
             exec.take_log().as_slice(),
             [ReconcileOp::IpRoute {
@@ -758,9 +796,9 @@ mod tests {
         cleanup_route_test(&root);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn mismatched_route_record_is_unchanged_on_replace_and_delete() {
+    async fn mismatched_route_record_is_unchanged_on_replace_and_delete() {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -771,7 +809,7 @@ mod tests {
             r#"[{"dst":"10.20.0.0/24","gateway":"192.0.2.2","dev":"d2b-b12345678","table":254}]"#,
         );
         let (intent, provenance) = owned_network_route();
-        seed_route_record(&root, &intent, &provenance);
+        seed_route_record(&root, &intent, &provenance).await;
         let record_path = root
             .join("network-routes")
             .join(format!("{}.json", intent.route_name.as_deref().unwrap()));
@@ -781,7 +819,8 @@ mod tests {
         for destroy in [false, true] {
             let exec = FakeReconcileExecutor::new();
             assert_eq!(
-                apply_with_preflight_owned(&exec, &ip, &root, &foreign, &provenance, destroy,),
+                apply_with_preflight_owned(&exec, &ip, &root, &foreign, &provenance, destroy,)
+                    .await,
                 Err(ApplyWithPreflightError::ForeignRoute)
             );
             assert!(exec.take_log().is_empty());

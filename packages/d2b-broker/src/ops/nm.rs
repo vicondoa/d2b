@@ -18,7 +18,7 @@ use d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent;
 use d2b_core::host_w3::NmUnmanagedEntry;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::pin::Pin;
 
 pub const DEFAULT_NM_CONF_PATH: &str = "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf";
 pub const NM_RELOAD_MIN_VERSION: (u32, u32) = (1, 20);
@@ -293,37 +293,37 @@ fn rollback(path: &Path, prior: Option<&str>) -> io::Result<()> {
 /// The dispatcher now lands on `ops::nm` even though the live path is
 /// still a thin wrapper. That preserves a stable integration point for
 /// future coexistence/reload-verification work.
-pub fn apply_with_reload(
+pub async fn apply_with_reload(
     executor: &dyn ReconcileExecutor,
     intent: &ResolvedNmUnmanagedIntent,
 ) -> Result<(), crate::live_handlers::LiveHandlerError> {
-    crate::live_handlers::live_apply_nm_unmanaged(executor, intent)
+    crate::live_handlers::live_apply_nm_unmanaged(executor, intent).await
 }
 
-pub fn remove_with_reload(
+pub async fn remove_with_reload(
     intent: &ResolvedNmUnmanagedIntent,
 ) -> Result<(), crate::live_handlers::LiveHandlerError> {
-    remove_with_reload_using(intent, systemctl_invoke)
+    remove_with_reload_using(intent, |args| Box::pin(systemctl_invoke(args))).await
 }
 
 #[cfg(test)]
-fn apply_with_reload_using<F>(
+async fn apply_with_reload_using<F>(
     executor: &dyn ReconcileExecutor,
     intent: &ResolvedNmUnmanagedIntent,
     reload: F,
 ) -> Result<(), crate::live_handlers::LiveHandlerError>
 where
-    F: FnMut(&[&str]) -> Result<(), String>,
+    F: AsyncFnMut(&[&str]) -> Result<(), String>,
 {
-    crate::live_handlers::live_apply_nm_unmanaged_with_reload(executor, intent, reload)
+    crate::live_handlers::live_apply_nm_unmanaged_with_reload(executor, intent, reload).await
 }
 
-fn remove_with_reload_using<F>(
+async fn remove_with_reload_using<F>(
     intent: &ResolvedNmUnmanagedIntent,
     mut reload: F,
 ) -> Result<(), crate::live_handlers::LiveHandlerError>
 where
-    F: FnMut(&[&str]) -> Result<(), String>,
+    F: for<'a> FnMut(&'a [&'a str]) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>,
 {
     path_safe::refuse_world_writable_parent(&intent.file_path)
         .map_err(|err| io_to_live_handler(&intent.file_path, err))?;
@@ -342,7 +342,7 @@ where
         Err(err) => return Err(io_to_live_handler(&intent.file_path, err)),
     }
     if intent.reload_behavior == "atomic-reload"
-        && let Err(err) = reload(&["reload", "NetworkManager"])
+        && let Err(err) = reload(&["reload", "NetworkManager"]).await
     {
         let _ = rollback(&intent.file_path, prior.as_deref());
         return Err(crate::live_handlers::LiveHandlerError::NmReload(err));
@@ -359,11 +359,12 @@ fn io_to_live_handler(path: &Path, err: io::Error) -> crate::live_handlers::Live
     )
 }
 
-fn systemctl_invoke(args: &[&str]) -> Result<(), String> {
-    let output = Command::new("/usr/bin/systemctl")
+async fn systemctl_invoke(args: &[&str]) -> Result<(), String> {
+    let output = tokio::process::Command::new("/usr/bin/systemctl")
         .args(args)
         .env_remove("NOTIFY_SOCKET")
         .output()
+        .await
         .map_err(|err| format!("systemctl spawn failed: {err}"))?;
     if !output.status.success() {
         let action = args.first().copied().unwrap_or("invoke");
@@ -386,7 +387,7 @@ mod tests {
     use super::*;
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
     use d2b_host::ifname::{DerivedRole, derive_from_env_vm};
-    use std::cell::RefCell;
+    
 
     fn entry(ifn_str: &str) -> NmUnmanagedEntry {
         NmUnmanagedEntry {
@@ -514,10 +515,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn apply_with_reload_writes_resolved_contents_and_reloads_nm() {
+    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn apply_with_reload_writes_resolved_contents_and_reloads_nm() {
         let exec = FakeReconcileExecutor::new();
-        let reloads = RefCell::new(Vec::<String>::new());
+        let reloads = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let intent = ResolvedNmUnmanagedIntent {
             intent_id: "nm-unmanaged:host".to_owned(),
             file_path: PathBuf::from(DEFAULT_NM_CONF_PATH),
@@ -528,10 +530,15 @@ mod tests {
             reload_behavior: "atomic-reload".to_owned(),
         };
 
-        apply_with_reload_using(&exec, &intent, |args| {
-            reloads.borrow_mut().push(args.join(" "));
-            Ok(())
+        apply_with_reload_using(&exec, &intent, {
+            let reloads = std::sync::Arc::clone(&reloads);
+            async move |args: &[&str]| {
+                let reloads = std::sync::Arc::clone(&reloads);
+                reloads.lock().unwrap().push(args.join(" "));
+                Ok(())
+            }
         })
+        .await
         .unwrap();
 
         let log = exec.take_log();
@@ -549,7 +556,7 @@ mod tests {
             other => panic!("unexpected op: {other:?}"),
         }
         assert_eq!(
-            reloads.into_inner(),
+            *reloads.lock().unwrap(),
             vec!["reload NetworkManager".to_owned()]
         );
     }

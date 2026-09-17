@@ -33,17 +33,17 @@ impl FakeBridge {
 }
 
 impl BridgeBackend for FakeBridge {
-    fn read_bridge(&self, _: &ResolvedBridgeIntent) -> Result<BridgeReadback, NetworkOpError> {
+    async fn read_bridge(&self, _: &ResolvedBridgeIntent) -> Result<BridgeReadback, NetworkOpError> {
         self.events.borrow_mut().push("read");
         Ok(self.state.borrow().clone())
     }
 
-    fn create_bridge_down(&self, _: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+    async fn create_bridge_down(&self, _: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
         self.events.borrow_mut().push("create-down");
         Ok(())
     }
 
-    fn configure_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+    async fn configure_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
         self.events.borrow_mut().push("configure-ipv6-off");
         self.state.replace(BridgeReadback {
             present: true,
@@ -58,13 +58,13 @@ impl BridgeBackend for FakeBridge {
         Ok(())
     }
 
-    fn set_bridge_up(&self, _: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+    async fn set_bridge_up(&self, _: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
         self.events.borrow_mut().push("link-up");
         assert!(self.state.borrow().ipv6_suppressed);
         Ok(())
     }
 
-    fn delete_bridge(&self, _: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+    async fn delete_bridge(&self, _: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
         self.events.borrow_mut().push("delete");
         self.state.replace(BridgeReadback {
             present: false,
@@ -114,12 +114,12 @@ fn expected_marker() -> String {
     )
 }
 
-#[test]
-fn create_bridge_applies_ipv6_sysctl() {
+#[tokio::test]
+async fn create_bridge_applies_ipv6_sysctl() {
     let backend = FakeBridge::absent();
     let expected = intent();
     assert_eq!(
-        create_bridge(&backend, &expected).unwrap(),
+        create_bridge(&backend, &expected).await.unwrap(),
         bridge_intent_digest(&expected)
     );
     assert_eq!(
@@ -135,10 +135,10 @@ fn create_bridge_applies_ipv6_sysctl() {
     assert!(backend.state.borrow().ipv6_suppressed);
 }
 
-#[test]
-fn create_bridge_parameters_match_spec() {
+#[tokio::test]
+async fn create_bridge_parameters_match_spec() {
     let backend = FakeBridge::absent();
-    create_bridge(&backend, &intent()).unwrap();
+    create_bridge(&backend, &intent()).await.unwrap();
     let observed = backend.state.borrow().clone();
     assert_eq!(observed.mtu, 1280);
     assert!(observed.stp_disabled);
@@ -146,19 +146,19 @@ fn create_bridge_parameters_match_spec() {
     assert!(observed.ipv6_suppressed);
 }
 
-#[test]
-fn delete_bridge_is_idempotent() {
+#[tokio::test]
+async fn delete_bridge_is_idempotent() {
     let backend = FakeBridge::absent();
     let expected = intent();
     assert_eq!(
-        delete_bridge(&backend, &expected).unwrap(),
+        delete_bridge(&backend, &expected).await.unwrap(),
         bridge_intent_digest(&expected)
     );
     assert_eq!(*backend.events.borrow(), ["read"]);
 }
 
-#[test]
-fn delete_bridge_never_cascades_attached_tap() {
+#[tokio::test]
+async fn delete_bridge_never_cascades_attached_tap() {
     let backend = FakeBridge::absent();
     backend.state.replace(BridgeReadback {
         present: true,
@@ -171,20 +171,20 @@ fn delete_bridge_never_cascades_attached_tap() {
         ownership_marker: Some(expected_marker()),
     });
     assert_eq!(
-        delete_bridge(&backend, &intent()),
+        delete_bridge(&backend, &intent()).await,
         Err(NetworkOpError::BridgeNotEmpty)
     );
     assert_eq!(*backend.events.borrow(), ["read"]);
     assert_eq!(backend.state.borrow().attached_links, 1);
 }
 
-#[test]
-fn bridge_name_prefix_is_not_ownership_proof() {
+#[tokio::test]
+async fn bridge_name_prefix_is_not_ownership_proof() {
     let backend = FakeBridge::absent();
     let mut trusted = intent();
     trusted.bridge_ifname = IfName::new("br-foreign").unwrap();
     assert_eq!(
-        create_bridge(&backend, &trusted).unwrap(),
+        create_bridge(&backend, &trusted).await.unwrap(),
         bridge_intent_digest(&trusted)
     );
     assert_eq!(
@@ -199,8 +199,8 @@ fn bridge_name_prefix_is_not_ownership_proof() {
     );
 }
 
-#[test]
-fn unmarked_existing_bridge_is_foreign_and_unchanged() {
+#[tokio::test]
+async fn unmarked_existing_bridge_is_foreign_and_unchanged() {
     let backend = FakeBridge::absent();
     backend.state.replace(BridgeReadback {
         present: true,
@@ -214,15 +214,15 @@ fn unmarked_existing_bridge_is_foreign_and_unchanged() {
     });
     let before = backend.state.borrow().clone();
     assert_eq!(
-        create_bridge(&backend, &intent()),
+        create_bridge(&backend, &intent()).await,
         Err(NetworkOpError::ForeignOwnership)
     );
     assert_eq!(*backend.state.borrow(), before);
     assert_eq!(*backend.events.borrow(), ["read"]);
 }
 
-#[test]
-fn matching_bridge_marker_allows_adoption_without_mutation() {
+#[tokio::test]
+async fn matching_bridge_marker_allows_adoption_without_mutation() {
     let backend = FakeBridge::absent();
     backend.state.replace(BridgeReadback {
         present: true,
@@ -236,15 +236,15 @@ fn matching_bridge_marker_allows_adoption_without_mutation() {
     });
     let before = backend.state.borrow().clone();
     assert_eq!(
-        create_bridge(&backend, &intent()).unwrap(),
+        create_bridge(&backend, &intent()).await.unwrap(),
         bridge_intent_digest(&intent())
     );
     assert_eq!(*backend.state.borrow(), before);
     assert_eq!(*backend.events.borrow(), ["read"]);
 }
 
-#[test]
-fn matching_bridge_marker_with_parameter_drift_is_unchanged() {
+#[tokio::test]
+async fn matching_bridge_marker_with_parameter_drift_is_unchanged() {
     let backend = FakeBridge::absent();
     backend.state.replace(BridgeReadback {
         present: true,
@@ -258,15 +258,15 @@ fn matching_bridge_marker_with_parameter_drift_is_unchanged() {
     });
     let before = backend.state.borrow().clone();
     assert_eq!(
-        create_bridge(&backend, &intent()),
+        create_bridge(&backend, &intent()).await,
         Err(NetworkOpError::BridgeParameterMismatch)
     );
     assert_eq!(*backend.state.borrow(), before);
     assert_eq!(*backend.events.borrow(), ["read"]);
 }
 
-#[test]
-fn mismatched_existing_bridge_refuses_create_without_mutation() {
+#[tokio::test]
+async fn mismatched_existing_bridge_refuses_create_without_mutation() {
     let backend = FakeBridge::absent();
     backend.state.replace(BridgeReadback {
         present: true,
@@ -280,15 +280,15 @@ fn mismatched_existing_bridge_refuses_create_without_mutation() {
     });
     let before = backend.state.borrow().clone();
     assert_eq!(
-        create_bridge(&backend, &intent()),
+        create_bridge(&backend, &intent()).await,
         Err(NetworkOpError::ForeignOwnership)
     );
     assert_eq!(*backend.state.borrow(), before);
     assert_eq!(*backend.events.borrow(), ["read"]);
 }
 
-#[test]
-fn mismatched_existing_bridge_refuses_delete_without_mutation() {
+#[tokio::test]
+async fn mismatched_existing_bridge_refuses_delete_without_mutation() {
     let backend = FakeBridge::absent();
     backend.state.replace(BridgeReadback {
         present: true,
@@ -302,7 +302,7 @@ fn mismatched_existing_bridge_refuses_delete_without_mutation() {
     });
     let before = backend.state.borrow().clone();
     assert_eq!(
-        delete_bridge(&backend, &intent()),
+        delete_bridge(&backend, &intent()).await,
         Err(NetworkOpError::ForeignOwnership)
     );
     assert_eq!(*backend.state.borrow(), before);

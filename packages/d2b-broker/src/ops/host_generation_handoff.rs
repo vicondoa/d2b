@@ -5,11 +5,9 @@
 //! existing entry returns the same terminal result instead of repeating a
 //! target effect.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse;
 use d2b_contracts_broker::host_generation::{
@@ -65,9 +63,15 @@ impl core::fmt::Display for HandoffOperationError {
 impl std::error::Error for HandoffOperationError {}
 
 /// Typed target-local effect used by the broker-owned journal.
+///
+/// `async fn` in trait is kept (generic-bound only, never dyn); the
+/// `-D warnings` build promotes the `async_fn_in_trait` lint, so the
+/// trait carries a targeted allow. A future sweep may desugar to the
+/// `Pin<Box<dyn Future + Send>>` executor shape.
+#[allow(async_fn_in_trait)]
 pub trait HandoffEffect {
     /// Execute or adopt the authenticated target generation.
-    fn execute(
+    async fn execute(
         &self,
         request: &ApplyHostGenerationHandoff,
     ) -> Result<ActivationHelperOutcome, HandoffOperationError>;
@@ -79,7 +83,7 @@ pub trait HandoffEffect {
 pub struct SuccessfulHandoffEffect;
 
 impl HandoffEffect for SuccessfulHandoffEffect {
-    fn execute(
+    async fn execute(
         &self,
         request: &ApplyHostGenerationHandoff,
     ) -> Result<ActivationHelperOutcome, HandoffOperationError> {
@@ -109,8 +113,7 @@ impl ActivationHelperEffect {
 }
 
 impl HandoffEffect for ActivationHelperEffect {
-    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn execute(
+    async fn execute(
         &self,
         request: &ApplyHostGenerationHandoff,
     ) -> Result<ActivationHelperOutcome, HandoffOperationError> {
@@ -137,21 +140,27 @@ impl HandoffEffect for ActivationHelperEffect {
         };
         let input = serde_json::to_vec(&helper_request)
             .map_err(|_| HandoffOperationError::HelperOutputInvalid)?;
-        let mut child = Command::new(&self.helper_path)
+        let mut child = tokio::process::Command::new(&self.helper_path)
             .arg("apply-generation")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .map_err(|_| HandoffOperationError::HelperUnavailable)?;
-        child
-            .stdin
-            .take()
-            .ok_or(HandoffOperationError::HelperUnavailable)?
-            .write_all(&input)
-            .map_err(|_| HandoffOperationError::HelperUnavailable)?;
+        {
+            use tokio::io::AsyncWriteExt;
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or(HandoffOperationError::HelperUnavailable)?;
+            stdin
+                .write_all(&input)
+                .await
+                .map_err(|_| HandoffOperationError::HelperUnavailable)?;
+        }
         let output = child
             .wait_with_output()
+            .await
             .map_err(|_| HandoffOperationError::HelperUnavailable)?;
         if output.stdout.len() > 512 {
             return Err(HandoffOperationError::HelperOutputInvalid);
@@ -175,8 +184,7 @@ impl HandoffEffect for ActivationHelperEffect {
 /// This is used before a host-generation handoff is activated. The helper
 /// remains the sole authority for catalog, store-path, and package-digest
 /// validation.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn validate_artifact_with_helper(
+pub async fn validate_artifact_with_helper(
     helper_path: &Path,
     artifact_id: &ArtifactId,
 ) -> Result<bool, HandoffOperationError> {
@@ -184,21 +192,27 @@ pub fn validate_artifact_with_helper(
         system_artifact_id: artifact_id.clone(),
     })
     .map_err(|_| HandoffOperationError::ArtifactValidationOutputInvalid)?;
-    let mut child = Command::new(helper_path)
+    let mut child = tokio::process::Command::new(helper_path)
         .arg("validate-artifact")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| HandoffOperationError::ArtifactValidationUnavailable)?;
-    child
-        .stdin
-        .take()
-        .ok_or(HandoffOperationError::ArtifactValidationUnavailable)?
-        .write_all(&input)
-        .map_err(|_| HandoffOperationError::ArtifactValidationUnavailable)?;
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or(HandoffOperationError::ArtifactValidationUnavailable)?;
+        stdin
+            .write_all(&input)
+            .await
+            .map_err(|_| HandoffOperationError::ArtifactValidationUnavailable)?;
+    }
     let output = child
         .wait_with_output()
+        .await
         .map_err(|_| HandoffOperationError::ArtifactValidationUnavailable)?;
     if output.stdout.len() > 512 {
         return Err(HandoffOperationError::ArtifactValidationOutputInvalid);
@@ -214,35 +228,37 @@ pub fn validate_artifact_with_helper(
 /// KD1 - no surviving `std::sync::Mutex`), and the same file excludes
 /// concurrent writers across processes as well as threads. The fd stays
 /// owned by the caller for the whole apply/replay critical section.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn acquire_handoff_lock(
+async fn acquire_handoff_lock(
     state_dir: &Path,
 ) -> Result<nix::fcntl::Flock<std::fs::File>, HandoffOperationError> {
-    fs::create_dir_all(state_dir).map_err(HandoffOperationError::Io)?;
+    tokio::fs::create_dir_all(state_dir)
+        .await
+        .map_err(HandoffOperationError::Io)?;
     let path = state_dir.join(HANDOFF_LOCK_FILE);
-    let file = OpenOptions::new()
+    let file = tokio::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .mode(0o600)
         .write(true)
         .open(&path)
+        .await
         .map_err(HandoffOperationError::Io)?;
-    nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusive)
+    nix::fcntl::Flock::lock(file.into_std().await, nix::fcntl::FlockArg::LockExclusive)
         .map_err(|(_, err)| HandoffOperationError::Io(io::Error::from(err)))
 }
 
 /// Apply or replay one broker-owned generation handoff using a typed effect.
-pub fn apply_with_effect<E: HandoffEffect>(
+pub async fn apply_with_effect<E: HandoffEffect>(
     state_dir: &Path,
     request: &ApplyHostGenerationHandoff,
     effect: &E,
 ) -> Result<ApplyHostGenerationHandoffResponse, HandoffOperationError> {
-    let _lock = acquire_handoff_lock(state_dir)?;
-    apply_locked(state_dir, request, effect)
+    let _lock = acquire_handoff_lock(state_dir).await?;
+    apply_locked(state_dir, request, effect).await
 }
 
 /// Apply one production handoff through the target-local helper.
-pub fn apply_with_helper(
+pub async fn apply_with_helper(
     state_dir: &Path,
     helper_path: &Path,
     request: &ApplyHostGenerationHandoff,
@@ -252,18 +268,18 @@ pub fn apply_with_helper(
         request,
         &ActivationHelperEffect::new(helper_path),
     )
+    .await
 }
 
 /// Apply or replay one deterministic handoff for compatibility callers.
-pub fn apply(
+pub async fn apply(
     state_dir: &Path,
     request: &ApplyHostGenerationHandoff,
 ) -> Result<ApplyHostGenerationHandoffResponse, HandoffOperationError> {
-    apply_with_effect(state_dir, request, &SuccessfulHandoffEffect)
+    apply_with_effect(state_dir, request, &SuccessfulHandoffEffect).await
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn apply_locked<E: HandoffEffect>(
+async fn apply_locked<E: HandoffEffect>(
     state_dir: &Path,
     request: &ApplyHostGenerationHandoff,
     effect: &E,
@@ -281,10 +297,17 @@ fn apply_locked<E: HandoffEffect>(
         .map_err(HandoffOperationError::Invalid)?;
 
     let journal_dir = state_dir.join(JOURNAL_DIR);
-    fs::create_dir_all(&journal_dir).map_err(HandoffOperationError::Io)?;
+    tokio::fs::create_dir_all(&journal_dir)
+        .await
+        .map_err(HandoffOperationError::Io)?;
     let journal_path = journal_path(&journal_dir, request);
-    let mut coordinator = if journal_path.exists() {
-        let bytes = fs::read(&journal_path).map_err(HandoffOperationError::Io)?;
+    let mut coordinator = if tokio::fs::symlink_metadata(&journal_path)
+        .await
+        .is_ok()
+    {
+        let bytes = tokio::fs::read(&journal_path)
+            .await
+            .map_err(HandoffOperationError::Io)?;
         let entry: JournalEntry =
             serde_json::from_slice(&bytes).map_err(|_| HandoffOperationError::JournalMismatch)?;
         if entry.request != *request {
@@ -300,7 +323,7 @@ fn apply_locked<E: HandoffEffect>(
                 request.intent.target_generation,
             )
             .map_err(HandoffOperationError::Invalid)?;
-        persist(&journal_path, request, &coordinator)?;
+        persist(&journal_path, request, &coordinator).await?;
         coordinator
     };
 
@@ -318,27 +341,27 @@ fn apply_locked<E: HandoffEffect>(
         coordinator
             .validate_target(request.intent.target_generation, fingerprint)
             .map_err(HandoffOperationError::Invalid)?;
-        persist(&journal_path, request, &coordinator)?;
+        persist(&journal_path, request, &coordinator).await?;
     }
     if coordinator.state() == HandoffState::Validated {
         coordinator
             .begin_mutation()
             .map_err(HandoffOperationError::Invalid)?;
-        persist(&journal_path, request, &coordinator)?;
+        persist(&journal_path, request, &coordinator).await?;
     }
     if coordinator.state() == HandoffState::Mutating {
-        match effect.execute(request)? {
+        match effect.execute(request).await? {
             ActivationHelperOutcome::Succeeded | ActivationHelperOutcome::Adopted => {
                 coordinator
                     .transfer()
                     .map_err(HandoffOperationError::Invalid)?;
-                persist(&journal_path, request, &coordinator)?;
+                persist(&journal_path, request, &coordinator).await?;
             }
             ActivationHelperOutcome::Refused | ActivationHelperOutcome::Failed => {
                 coordinator
                     .rollback()
                     .map_err(HandoffOperationError::Invalid)?;
-                persist(&journal_path, request, &coordinator)?;
+                persist(&journal_path, request, &coordinator).await?;
                 return Ok(response(request, &coordinator));
             }
         }
@@ -347,7 +370,7 @@ fn apply_locked<E: HandoffEffect>(
         coordinator
             .complete()
             .map_err(HandoffOperationError::Invalid)?;
-        persist(&journal_path, request, &coordinator)?;
+        persist(&journal_path, request, &coordinator).await?;
     }
     Ok(response(request, &coordinator))
 }
@@ -388,41 +411,45 @@ fn journal_path(directory: &Path, request: &ApplyHostGenerationHandoff) -> PathB
     directory.join(format!("{name}.json"))
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn persist(
+async fn persist(
     path: &Path,
     request: &ApplyHostGenerationHandoff,
     coordinator: &HandoffCoordinator,
 ) -> Result<(), HandoffOperationError> {
+    use tokio::io::AsyncWriteExt;
+
     let entry = serde_json::to_vec(&JournalEntry {
         request: request.clone(),
         coordinator: coordinator.clone(),
     })
     .map_err(|_| HandoffOperationError::JournalMismatch)?;
     let tmp = path.with_extension("json.tmp");
-    let mut file = OpenOptions::new()
+    let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
         .open(&tmp)
+        .await
         .map_err(HandoffOperationError::Io)?;
-    file.write_all(&entry).map_err(HandoffOperationError::Io)?;
-    file.sync_all().map_err(HandoffOperationError::Io)?;
+    file.write_all(&entry).await.map_err(HandoffOperationError::Io)?;
+    file.sync_all().await.map_err(HandoffOperationError::Io)?;
     drop(file);
-    fs::rename(&tmp, path).map_err(HandoffOperationError::Io)?;
-    sync_parent(path).map_err(HandoffOperationError::Io)?;
+    tokio::fs::rename(&tmp, path)
+        .await
+        .map_err(HandoffOperationError::Io)?;
+    sync_parent(path).await.map_err(HandoffOperationError::Io)?;
     Ok(())
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn sync_parent(path: &Path) -> io::Result<()> {
+async fn sync_parent(path: &Path) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    File::open(parent)?.sync_all()
+    tokio::fs::File::open(parent).await?.sync_all().await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use d2b_contracts_broker::host_generation::{
         HandoffCallerRole, HostGenerationHandoffIntent, SourceGenerationCompatibilityFloorV1,
     };
@@ -446,45 +473,49 @@ mod tests {
         }
     }
 
-    #[test]
+    #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn handoff_is_replay_safe_and_source_retirement_is_terminal() {
+    async fn handoff_is_replay_safe_and_source_retirement_is_terminal() {
         let directory = PathBuf::from("target").join(format!(
             "d2b-handoff-{}-{}",
             std::process::id(),
             std::thread::current().name().unwrap_or("test")
         ));
         let _ = fs::remove_dir_all(&directory);
-        let first = apply(&directory, &request()).unwrap();
-        let second = apply(&directory, &request()).unwrap();
+        let first = apply(&directory, &request()).await.unwrap();
+        let second = apply(&directory, &request()).await.unwrap();
         assert_eq!(first.state, HandoffState::Completed);
         assert_eq!(first, second);
         assert!(!first.source_remains_usable);
         let _ = fs::remove_dir_all(directory);
     }
 
-    #[test]
-    fn target_substitution_is_refused_before_journal_mutation() {
+    #[tokio::test]
+    async fn target_substitution_is_refused_before_journal_mutation() {
         let directory = PathBuf::from("target")
             .join(format!("d2b-handoff-substitution-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
         let mut request = request();
         request.target = ResourceRef::parse("Host/other").unwrap();
         assert!(matches!(
-            apply(&directory, &request),
+            apply(&directory, &request).await,
             Err(HandoffOperationError::Invalid(
                 HandoffError::TargetFingerprintMismatch
             ))
         ));
-        assert!(!directory.exists());
+        // The flock needs the state dir itself, but the journal must not
+        // have been touched: no `host-generation-handoffs` subtree exists.
+        assert!(!directory.join(JOURNAL_DIR).exists());
+        let _ = fs::remove_dir_all(directory);
     }
 
-    #[test]
-    fn artifact_validation_fails_closed_when_helper_is_unavailable() {
+    #[tokio::test]
+    async fn artifact_validation_fails_closed_when_helper_is_unavailable() {
         let helper = PathBuf::from("target")
             .join(format!("missing-activation-helper-{}", std::process::id()));
         let artifact = ArtifactId::parse("candidate-artifact").expect("artifact");
         assert!(matches!(
-            validate_artifact_with_helper(&helper, &artifact),
+            validate_artifact_with_helper(&helper, &artifact).await,
             Err(HandoffOperationError::ArtifactValidationUnavailable)
         ));
     }

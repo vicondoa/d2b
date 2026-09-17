@@ -58,7 +58,7 @@ pub struct LiveOpenHidrawSecurityKeyOutcome {
 /// Resolve `req.selector_id`, open the physical hidraw node, and
 /// validate it. Returns the fd plus scrubbed metadata for the audit
 /// record and wire response.
-pub fn live_open_hidraw_security_key(
+pub async fn live_open_hidraw_security_key(
     req: &d2b_contracts_broker::broker_wire::OpenHidrawSecurityKeyRequest,
     selectors: &[SecurityKeySelector],
     _audit_log: &crate::audit::AuditLog,
@@ -68,8 +68,9 @@ pub fn live_open_hidraw_security_key(
         req.selector_id.as_str(),
         selectors,
         Path::new("/sys/class/hidraw"),
-    )?;
-    let fd = open_and_validate_hidraw(&resolved.hidraw_path, resolved.descriptor_verified)?;
+    )
+    .await?;
+    let fd = open_and_validate_hidraw(&resolved.hidraw_path, resolved.descriptor_verified).await?;
     Ok(LiveOpenHidrawSecurityKeyOutcome {
         fd,
         selector_label: resolved.selector_label,
@@ -108,8 +109,7 @@ pub(crate) fn validate_device_authority(
 ///
 /// Raw `hidraw-N` identifiers are deliberately rejected. Resolution is
 /// limited to the trusted vendor/product/serial selector registry.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub(crate) fn resolve_selector(
+pub(crate) async fn resolve_selector(
     selector_id: &str,
     selectors: &[SecurityKeySelector],
     sysfs_root: &Path,
@@ -139,31 +139,33 @@ pub(crate) fn resolve_selector(
     };
 
     let mut matches = Vec::new();
-    let entries = std::fs::read_dir(sysfs_root).map_err(|error| OpError::Io {
-        path: sysfs_root.to_owned(),
-        detail: error.to_string(),
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| OpError::Io {
+    let mut entries = tokio::fs::read_dir(sysfs_root)
+        .await
+        .map_err(|error| OpError::Io {
             path: sysfs_root.to_owned(),
             detail: error.to_string(),
         })?;
+    while let Some(entry) = entries.next_entry().await.map_err(|error| OpError::Io {
+        path: sysfs_root.to_owned(),
+        detail: error.to_string(),
+    })? {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if !name.starts_with("hidraw") {
             continue;
         }
         let path = entry.path();
-        let Some((vendor_id, product_id, serial)) = hidraw_identity(&path) else {
+        let Some((vendor_id, product_id, serial)) = hidraw_identity(&path).await else {
             continue;
         };
+        let fido_match = fido_device_match(&path).await;
         if vendor_id == selector.vendor_id
             && product_id == selector.product_id
             && selector
                 .serial
                 .as_deref()
                 .is_none_or(|expected| serial.as_deref() == Some(expected))
-            && fido_device_match(&path).is_some()
+            && fido_match.is_some()
         {
             matches.push(PathBuf::from("/dev").join(name.as_ref()));
         }
@@ -182,14 +184,14 @@ pub(crate) fn resolve_selector(
     })
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn hidraw_identity(path: &Path) -> Option<(u16, u16, Option<String>)> {
-    let mut current = std::fs::canonicalize(path.join("device")).ok()?;
+async fn hidraw_identity(path: &Path) -> Option<(u16, u16, Option<String>)> {
+    let mut current = tokio::fs::canonicalize(path.join("device")).await.ok()?;
     for _ in 0..8 {
-        let vendor = read_hex_attr(&current.join("idVendor"));
-        let product = read_hex_attr(&current.join("idProduct"));
+        let vendor = read_hex_attr(&current.join("idVendor")).await;
+        let product = read_hex_attr(&current.join("idProduct")).await;
         if let (Some(vendor), Some(product)) = (vendor, product) {
-            let serial = std::fs::read_to_string(current.join("serial"))
+            let serial = tokio::fs::read_to_string(current.join("serial"))
+                .await
                 .ok()
                 .map(|value| value.trim_end_matches(['\r', '\n']).to_owned());
             return Some((vendor, product, serial));
@@ -199,23 +201,21 @@ fn hidraw_identity(path: &Path) -> Option<(u16, u16, Option<String>)> {
     None
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_hex_attr(path: &Path) -> Option<u16> {
-    let value = std::fs::read_to_string(path).ok()?;
+async fn read_hex_attr(path: &Path) -> Option<u16> {
+    let value = tokio::fs::read_to_string(path).await.ok()?;
     let value = value.trim();
     u16::from_str_radix(value.strip_prefix("0x").unwrap_or(value), 16).ok()
 }
 
 /// Check whether a sysfs hidraw entry is a FIDO-class device.
 #[cfg(test)]
-fn is_fido_device(sysfs_entry: &Path) -> bool {
-    fido_device_match(sysfs_entry).is_some()
+async fn is_fido_device(sysfs_entry: &Path) -> bool {
+    fido_device_match(sysfs_entry).await.is_some()
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn fido_device_match(sysfs_entry: &Path) -> Option<bool> {
+async fn fido_device_match(sysfs_entry: &Path) -> Option<bool> {
     let rdesc_path = sysfs_entry.join("device/report_descriptor");
-    match std::fs::read(&rdesc_path) {
+    match tokio::fs::read(&rdesc_path).await {
         Ok(rdesc) => rdesc
             .windows(FIDO_USAGE_PAGE_LE.len())
             .any(|w| w == FIDO_USAGE_PAGE_LE)
@@ -225,20 +225,20 @@ fn fido_device_match(sysfs_entry: &Path) -> Option<bool> {
 }
 
 /// Open the hidraw node with pre- and post-open safety checks.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub(crate) fn open_and_validate_hidraw(
+pub(crate) async fn open_and_validate_hidraw(
     path: &Path,
     descriptor_verified: bool,
 ) -> Result<OwnedFd, OpError> {
-    use std::fs::OpenOptions;
-    use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+    use std::os::unix::fs::FileTypeExt;
 
     // Pre-open check (defence-in-depth; O_NOFOLLOW below prevents a
     // symlink swap between this stat and the actual open).
-    let meta = std::fs::symlink_metadata(path).map_err(|e| OpError::Io {
-        path: path.to_owned(),
-        detail: e.to_string(),
-    })?;
+    let meta = tokio::fs::symlink_metadata(path)
+        .await
+        .map_err(|e| OpError::Io {
+            path: path.to_owned(),
+            detail: e.to_string(),
+        })?;
     if !meta.file_type().is_char_device() {
         return Err(OpError::Refused {
             operation: "OpenHidrawSecurityKey",
@@ -255,16 +255,17 @@ pub(crate) fn open_and_validate_hidraw(
         });
     }
 
-    let file = OpenOptions::new()
+    let file = tokio::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .custom_flags(nix::libc::O_NONBLOCK | nix::libc::O_NOFOLLOW)
         .open(path)
+        .await
         .map_err(|e| OpError::Io {
             path: path.to_owned(),
             detail: e.to_string(),
         })?;
-    let fd = OwnedFd::from(file);
+    let fd = OwnedFd::from(file.into_std().await);
 
     // Post-open re-check: confirm we really opened a character device
     // (guards against a raced symlink swap between the pre-open stat
@@ -291,16 +292,16 @@ mod tests {
     use super::*;
     use d2b_contracts_resource::v3::ResourceRef;
 
-    #[test]
-    fn unconfigured_selector_is_rejected_before_sysfs_lookup() {
+    #[tokio::test]
+    async fn unconfigured_selector_is_rejected_before_sysfs_lookup() {
         assert!(matches!(
-            resolve_selector("test-selector", &[], Path::new("/sys/class/hidraw")),
+            resolve_selector("test-selector", &[], Path::new("/sys/class/hidraw")).await,
             Err(OpError::UnknownSubject { subject, .. }) if subject == "test-selector"
         ));
     }
 
-    #[test]
-    fn configured_selector_reports_sysfs_io_errors() {
+    #[tokio::test]
+    async fn configured_selector_reports_sysfs_io_errors() {
         let selector = SecurityKeySelector {
             selector_id: "test-selector".to_owned(),
             label: "test-selector".to_owned(),
@@ -313,22 +314,23 @@ mod tests {
                 "test-selector",
                 std::slice::from_ref(&selector),
                 Path::new("/does-not-exist"),
-            ),
+            )
+            .await,
             Err(OpError::Io { .. })
         ));
     }
 
-    #[test]
-    fn raw_hidraw_selector_is_rejected() {
+    #[tokio::test]
+    async fn raw_hidraw_selector_is_rejected() {
         assert!(matches!(
-            resolve_selector("hidraw-0", &[], Path::new("/sys/class/hidraw")),
+            resolve_selector("hidraw-0", &[], Path::new("/sys/class/hidraw")).await,
             Err(OpError::UnknownSubject { .. })
         ));
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn trusted_selector_resolves_one_fido_hidraw_and_refuses_ambiguity() {
+    async fn trusted_selector_resolves_one_fido_hidraw_and_refuses_ambiguity() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path().join("hidraw");
         std::fs::create_dir_all(root.join("hidraw0/device")).expect("hidraw0");
@@ -346,8 +348,9 @@ mod tests {
             product_id: 0x0407,
             serial: None,
         };
-        let resolved =
-            resolve_selector("primary", std::slice::from_ref(&selector), &root).expect("resolve");
+        let resolved = resolve_selector("primary", std::slice::from_ref(&selector), &root)
+            .await
+            .expect("resolve");
         assert_eq!(resolved.selector_label, "primary");
         assert!(resolved.descriptor_verified);
 
@@ -360,7 +363,7 @@ mod tests {
         )
         .expect("descriptor");
         assert!(matches!(
-            resolve_selector("primary", &[selector], &root),
+            resolve_selector("primary", &[selector], &root).await,
             Err(OpError::UnknownSubject { .. })
         ));
     }
@@ -414,14 +417,14 @@ mod tests {
         assert!(validate_device_authority(&request).is_ok());
     }
 
-    #[test]
-    fn is_fido_device_rejects_nonexistent_path() {
-        assert!(!is_fido_device(Path::new("/nonexistent/hidraw-path")));
+    #[tokio::test]
+    async fn is_fido_device_rejects_nonexistent_path() {
+        assert!(!is_fido_device(Path::new("/nonexistent/hidraw-path")).await);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn is_fido_device_rejects_readable_non_fido_descriptor_without_group_fallback() {
+    async fn is_fido_device_rejects_readable_non_fido_descriptor_without_group_fallback() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let device_dir = tmp.path().join("hidraw0/device");
         std::fs::create_dir_all(&device_dir).expect("device dir");
@@ -432,14 +435,14 @@ mod tests {
         .expect("write descriptor");
 
         assert!(
-            !is_fido_device(&tmp.path().join("hidraw0")),
+            !is_fido_device(&tmp.path().join("hidraw0")).await,
             "readable non-FIDO report descriptors must fail closed instead of falling through to group fallback"
         );
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn is_fido_device_accepts_readable_fido_descriptor() {
+    async fn is_fido_device_accepts_readable_fido_descriptor() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let device_dir = tmp.path().join("hidraw0/device");
         std::fs::create_dir_all(&device_dir).expect("device dir");
@@ -449,15 +452,15 @@ mod tests {
         )
         .expect("write descriptor");
 
-        assert!(is_fido_device(&tmp.path().join("hidraw0")));
-        assert_eq!(fido_device_match(&tmp.path().join("hidraw0")), Some(true));
+        assert!(is_fido_device(&tmp.path().join("hidraw0")).await);
+        assert_eq!(fido_device_match(&tmp.path().join("hidraw0")).await, Some(true));
     }
 
-    #[test]
-    fn open_and_validate_hidraw_dev_null_fails_group_or_type_validation() {
+    #[tokio::test]
+    async fn open_and_validate_hidraw_dev_null_fails_group_or_type_validation() {
         // /dev/null is a character device but is never owned by a FIDO
         // group, so it must be refused, not silently opened.
-        match open_and_validate_hidraw(Path::new("/dev/null"), false) {
+        match open_and_validate_hidraw(Path::new("/dev/null"), false).await {
             Err(OpError::Refused { .. }) => {}
             Err(OpError::Io { .. }) => {
                 // Sandboxed environments without /dev/null access also
@@ -468,9 +471,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn open_and_validate_hidraw_missing_path_is_io_error() {
-        match open_and_validate_hidraw(Path::new("/nonexistent/hidraw-path"), false) {
+    #[tokio::test]
+    async fn open_and_validate_hidraw_missing_path_is_io_error() {
+        match open_and_validate_hidraw(Path::new("/nonexistent/hidraw-path"), false).await {
             Err(OpError::Io { .. }) => {}
             other => panic!("expected Io error for missing path, got {other:?}"),
         }

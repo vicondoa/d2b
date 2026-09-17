@@ -21,12 +21,13 @@
 //! and broker-spawn-runner-smoke.sh).
 
 use std::collections::HashSet;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use tokio::process::Command;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -198,30 +199,32 @@ pub fn live_open_pidfd(
 
 /// Live broker `ApplyNftables` handler. Wraps the
 /// `exec_reconcile::ReconcileExecutor::apply_nft_script` call.
-pub fn live_apply_nftables(
+pub async fn live_apply_nftables(
     executor: &dyn ReconcileExecutor,
     nft_binary: &Path,
     nft_script: &str,
 ) -> Result<(), LiveHandlerError> {
     executor
         .apply_nft_script(nft_binary, nft_script)
+        .await
         .map_err(LiveHandlerError::ReconcileExec)
 }
 
 /// Live broker `ApplySysctl` handler.
-pub fn live_apply_sysctl(
+pub async fn live_apply_sysctl(
     executor: &dyn ReconcileExecutor,
     key: &str,
     value: &str,
 ) -> Result<(), LiveHandlerError> {
     executor
         .write_sysctl(key, value)
+        .await
         .map_err(LiveHandlerError::ReconcileExec)
 }
 
 /// Live broker `UpdateHostsFile` handler. Atomic write with fsync via
 /// the executor.
-pub fn live_update_hosts_file(
+pub async fn live_update_hosts_file(
     executor: &dyn ReconcileExecutor,
     path: &Path,
     contents: &[u8],
@@ -229,11 +232,12 @@ pub fn live_update_hosts_file(
 ) -> Result<(), LiveHandlerError> {
     executor
         .write_atomic_file(path, contents, mode)
+        .await
         .map_err(LiveHandlerError::ReconcileExec)
 }
 
 /// Live broker `ApplyRoute` handler.
-pub fn live_apply_route(
+pub async fn live_apply_route(
     executor: &dyn ReconcileExecutor,
     ip_binary: &Path,
     verb: IpRouteVerb,
@@ -241,6 +245,7 @@ pub fn live_apply_route(
 ) -> Result<(), LiveHandlerError> {
     executor
         .ip_route(ip_binary, verb, route_spec)
+        .await
         .map_err(LiveHandlerError::ReconcileExec)
 }
 
@@ -260,16 +265,18 @@ impl NmReloadMethod {
 }
 
 /// Live broker `ApplyNmUnmanaged` handler.
-pub fn live_apply_nm_unmanaged(
+pub async fn live_apply_nm_unmanaged(
     executor: &dyn ReconcileExecutor,
     intent: &d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent,
 ) -> Result<(), LiveHandlerError> {
     if let Some(method) = live_apply_nm_unmanaged_with_reloaders(
         executor,
         intent,
-        networkmanager_reload_via_dbus,
-        systemctl_invoke,
-    )? {
+        async || networkmanager_reload_via_dbus().await,
+        async |args| systemctl_invoke(args).await,
+    )
+    .await?
+    {
         tracing::info!(
             reload_method = method.as_str(),
             file_path = %intent.file_path.display(),
@@ -280,13 +287,13 @@ pub fn live_apply_nm_unmanaged(
 }
 
 #[cfg(test)]
-pub(crate) fn live_apply_nm_unmanaged_with_reload<F>(
+pub(crate) async fn live_apply_nm_unmanaged_with_reload<F>(
     executor: &dyn ReconcileExecutor,
     intent: &d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent,
     mut reload: F,
 ) -> Result<(), LiveHandlerError>
 where
-    F: FnMut(&[&str]) -> Result<(), String>,
+    F: AsyncFnMut(&[&str]) -> Result<(), String>,
 {
     let existing = match crate::sys::path_safe::read_to_string_nofollow(&intent.file_path) {
         Ok(contents) => contents,
@@ -297,9 +304,12 @@ where
         .map_err(|_| LiveHandlerError::NmOwnershipConflict)?;
     executor
         .write_atomic_file(&intent.file_path, intent.contents.as_bytes(), intent.mode)
+        .await
         .map_err(LiveHandlerError::ReconcileExec)?;
     if intent.reload_behavior == "atomic-reload" {
-        reload(&["reload", "NetworkManager"]).map_err(LiveHandlerError::NmReload)?;
+        reload(&["reload", "NetworkManager"])
+            .await
+            .map_err(LiveHandlerError::NmReload)?;
         tracing::info!(
             reload_method = "custom",
             file_path = %intent.file_path.display(),
@@ -309,15 +319,15 @@ where
     Ok(())
 }
 
-fn live_apply_nm_unmanaged_with_reloaders<D, F>(
+async fn live_apply_nm_unmanaged_with_reloaders<D, F>(
     executor: &dyn ReconcileExecutor,
     intent: &d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent,
     mut dbus_reload: D,
     mut fallback_reload: F,
 ) -> Result<Option<NmReloadMethod>, LiveHandlerError>
 where
-    D: FnMut() -> Result<(), String>,
-    F: FnMut(&[&str]) -> Result<(), String>,
+    D: AsyncFnMut() -> Result<(), String>,
+    F: AsyncFnMut(&[&str]) -> Result<(), String>,
 {
     let existing = match crate::sys::path_safe::read_to_string_nofollow(&intent.file_path) {
         Ok(contents) => contents,
@@ -328,11 +338,12 @@ where
         .map_err(|_| LiveHandlerError::NmOwnershipConflict)?;
     executor
         .write_atomic_file(&intent.file_path, intent.contents.as_bytes(), intent.mode)
+        .await
         .map_err(LiveHandlerError::ReconcileExec)?;
     if intent.reload_behavior != "atomic-reload" {
         return Ok(None);
     }
-    match dbus_reload() {
+    match dbus_reload().await {
         Ok(()) => Ok(Some(NmReloadMethod::Dbus)),
         Err(dbus_err) => {
             tracing::warn!(
@@ -341,7 +352,9 @@ where
                 error = %dbus_err,
                 "NetworkManager DBus reload failed; falling back to systemctl"
             );
-            fallback_reload(&["reload", "NetworkManager"]).map_err(|systemctl_err| {
+            fallback_reload(&["reload", "NetworkManager"])
+                .await
+                .map_err(|systemctl_err| {
                 LiveHandlerError::NmReload(format!(
                     "dbus Reload(0) failed: {dbus_err}; systemctl fallback failed: {systemctl_err}"
                 ))
@@ -361,7 +374,7 @@ where
 ///    verify sysfs converged to `usbip-host`. On bind failure or failed
 ///    convergence inspection, release the lock so a retried `UsbipBind`
 ///    from the same VM can succeed.
-pub fn live_usbip_bind(
+pub async fn live_usbip_bind(
     executor: &dyn ReconcileExecutor,
     usbip_binary: &Path,
     sysfs_root: &Path,
@@ -384,11 +397,14 @@ pub fn live_usbip_bind(
         Ok(crate::ops::usbip_host::UsbipDriverBinding::Unbound)
         | Ok(crate::ops::usbip_host::UsbipDriverBinding::BoundToOtherDriver { .. }) => {}
     }
-    if let Err(e) = executor.run_usbip(
-        usbip_binary,
-        crate::ops::exec_reconcile::UsbipSubcommand::Bind,
-        bus_id,
-    ) {
+    if let Err(e) = executor
+        .run_usbip(
+            usbip_binary,
+            crate::ops::exec_reconcile::UsbipSubcommand::Bind,
+            bus_id,
+        )
+        .await
+    {
         let _ = crate::ops::usbip_lock::release_lock(lock_path, vm_name);
         return Err(LiveHandlerError::ReconcileExec(e));
     }
@@ -423,7 +439,7 @@ pub fn live_usbip_bind(
 ///    revokes the backend device ACL after successful unbind, then releases the
 ///    host-session claim last. Timeout/failure deliberately preserves the claim for
 ///    operator recovery.
-pub fn live_usbip_unbind(
+pub async fn live_usbip_unbind(
     executor: &dyn ReconcileExecutor,
     usbip_binary: &Path,
     sysfs_root: &Path,
@@ -457,9 +473,11 @@ pub fn live_usbip_unbind(
     }
     executor
         .shutdown_usbip_streams(sysfs_root, bus_id)
+        .await
         .map_err(LiveHandlerError::ReconcileExec)?;
     executor
         .wait_usbip_stream_fd_release(sysfs_root, bus_id)
+        .await
         .map_err(LiveHandlerError::ReconcileExec)?;
     executor
         .run_usbip(
@@ -467,6 +485,7 @@ pub fn live_usbip_unbind(
             crate::ops::exec_reconcile::UsbipSubcommand::Unbind,
             bus_id,
         )
+        .await
         .map_err(LiveHandlerError::ReconcileExec)?;
     match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
         .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?
@@ -481,7 +500,7 @@ pub fn live_usbip_unbind(
     }
 }
 
-fn ensure_dir_tree(path: &Path, mode: u32) -> std::io::Result<()> {
+async fn ensure_dir_tree(path: &Path, mode: u32) -> std::io::Result<()> {
     if path == Path::new("/") {
         return Ok(());
     }
@@ -494,24 +513,42 @@ fn ensure_dir_tree(path: &Path, mode: u32) -> std::io::Result<()> {
             ),
         ));
     }
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) => validate_existing_dir(path, &metadata),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let parent = path.parent().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("directory path has no parent: {}", path.display()),
-                )
-            })?;
-            ensure_dir_tree(parent, mode)?;
-            if production_path(path) {
-                crate::sys::path_safe::refuse_non_root_parent(path)?;
-            }
-            crate::sys::path_safe::refuse_world_writable_parent(path)?;
-            crate::sys::path_safe::ensure_dir(path, mode, None, None).map(|_| ())
+    // Walk up to the first existing ancestor (validating it), collecting the
+    // missing levels; then create them bottom-up with the same per-level
+    // checks the recursive form ran. The flat loop is the async form of the
+    // recursion (an `async fn` recursion would need boxing, E0733).
+    let mut missing = Vec::new();
+    let mut current = path;
+    loop {
+        if current == Path::new("/") {
+            break;
         }
-        Err(err) => Err(err),
+        match tokio::fs::symlink_metadata(current).await {
+            Ok(metadata) => {
+                validate_existing_dir(current, &metadata)?;
+                break;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(current.to_path_buf());
+                let parent = current.parent().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("directory path has no parent: {}", current.display()),
+                    )
+                })?;
+                current = parent;
+            }
+            Err(err) => return Err(err),
+        }
     }
+    for directory in missing.into_iter().rev() {
+        if production_path(&directory) {
+            crate::sys::path_safe::refuse_non_root_parent(&directory)?;
+        }
+        crate::sys::path_safe::refuse_world_writable_parent(&directory)?;
+        crate::sys::path_safe::ensure_dir(&directory, mode, None, None).map(|_| ())?;
+    }
+    Ok(())
 }
 
 fn validate_existing_dir(path: &Path, metadata: &std::fs::Metadata) -> std::io::Result<()> {
@@ -564,13 +601,12 @@ fn production_path(path: &Path) -> bool {
     path.starts_with("/etc") || path.starts_with("/run") || path.starts_with("/var/lib/d2b")
 }
 
-fn systemctl_invoke(args: &[&str]) -> Result<(), String> {
-    use std::process::Command;
-
+async fn systemctl_invoke(args: &[&str]) -> Result<(), String> {
     let output = Command::new("/usr/bin/systemctl")
         .args(args)
         .env_remove("NOTIFY_SOCKET")
         .output()
+        .await
         .map_err(|e| format!("systemctl spawn failed: {e}"))?;
     if !output.status.success() {
         let action = args.first().copied().unwrap_or("invoke");
@@ -592,9 +628,7 @@ fn systemctl_invoke(args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-fn networkmanager_reload_via_dbus() -> Result<(), String> {
-    use std::process::Command;
-
+async fn networkmanager_reload_via_dbus() -> Result<(), String> {
     const BUSCTL_CANDIDATES: [&str; 2] = ["/usr/bin/busctl", "/run/current-system/sw/bin/busctl"];
     let busctl = BUSCTL_CANDIDATES
         .iter()
@@ -613,6 +647,7 @@ fn networkmanager_reload_via_dbus() -> Result<(), String> {
         ])
         .env_remove("NOTIFY_SOCKET")
         .output()
+        .await
         .map_err(|e| format!("busctl Reload(0) spawn failed via {busctl}: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
@@ -626,11 +661,11 @@ fn networkmanager_reload_via_dbus() -> Result<(), String> {
     Ok(())
 }
 
-fn read_host_runtime(path: &Path) -> Result<Option<HostRuntime>, ReconcileExecError> {
+async fn read_host_runtime(path: &Path) -> Result<Option<HostRuntime>, ReconcileExecError> {
     let contents = match if path.is_absolute() {
         crate::sys::path_safe::read_to_string_nofollow(path)
     } else {
-        std::fs::read_to_string(path)
+        tokio::fs::read_to_string(path).await
     } {
         Ok(contents) => contents,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -649,13 +684,15 @@ fn read_host_runtime(path: &Path) -> Result<Option<HostRuntime>, ReconcileExecEr
     Ok(Some(runtime))
 }
 
-pub(crate) fn read_host_runtime_nft_hash(
+pub(crate) async fn read_host_runtime_nft_hash(
     path: &Path,
 ) -> Result<Option<String>, ReconcileExecError> {
-    Ok(read_host_runtime(path)?.and_then(|runtime| runtime.nft_applied_hash))
+    Ok(read_host_runtime(path)
+        .await?
+        .and_then(|runtime| runtime.nft_applied_hash))
 }
 
-pub(crate) fn update_host_runtime_nft_hash(
+pub(crate) async fn update_host_runtime_nft_hash(
     path: &Path,
     nft_hash: Option<&str>,
 ) -> Result<(), ReconcileExecError> {
@@ -664,7 +701,9 @@ pub(crate) fn update_host_runtime_nft_hash(
             detail: format!("host-runtime path must be absolute: {}", path.display()),
         });
     }
-    let mut runtime = read_host_runtime(path)?.ok_or_else(|| ReconcileExecError::Io {
+    let mut runtime = read_host_runtime(path)
+        .await?
+        .ok_or_else(|| ReconcileExecError::Io {
         path: path.display().to_string(),
         detail: "host-runtime.json missing".to_owned(),
     })?;
@@ -679,10 +718,12 @@ pub(crate) fn update_host_runtime_nft_hash(
         .ok_or_else(|| ReconcileExecError::InvalidInput {
             detail: format!("host-runtime path has no parent: {}", path.display()),
         })?;
-    ensure_dir_tree(parent, 0o755).map_err(|err| ReconcileExecError::Io {
-        path: parent.display().to_string(),
-        detail: err.to_string(),
-    })?;
+    ensure_dir_tree(parent, 0o755)
+        .await
+        .map_err(|err| ReconcileExecError::Io {
+            path: parent.display().to_string(),
+            detail: err.to_string(),
+        })?;
     let dir_fd = crate::sys::path_safe::open_dir_path_safe(parent).map_err(|err| {
         ReconcileExecError::Io {
             path: parent.display().to_string(),
@@ -1090,13 +1131,15 @@ fn qemu_media_memlock_preflight_required_bytes(guest_bytes: u64) -> u64 {
     guest_bytes.saturating_add(QEMU_MEDIA_MEMLOCK_PREFLIGHT_OVERHEAD_BYTES)
 }
 
-fn qemu_media_preflight_memlock_budget(required_bytes: u64) -> Result<(), LiveHandlerError> {
+async fn qemu_media_preflight_memlock_budget(required_bytes: u64) -> Result<(), LiveHandlerError> {
     let meminfo =
-        fs::read_to_string("/proc/meminfo").map_err(|err| LiveHandlerError::SpawnFailed {
-            detail: format!(
-                "qemu-media mem-lock preflight could not read host memory availability: {err}"
-            ),
-        })?;
+        tokio::fs::read_to_string("/proc/meminfo")
+            .await
+            .map_err(|err| LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "qemu-media mem-lock preflight could not read host memory availability: {err}"
+                ),
+            })?;
     let available =
         parse_meminfo_available_bytes(&meminfo).ok_or_else(|| LiveHandlerError::SpawnFailed {
             detail: "qemu-media mem-lock preflight could not parse host MemAvailable".to_owned(),
@@ -1339,7 +1382,7 @@ fn setfacl_fd_safe_op(
     setfacl_fd_safe_op_classed(path, op, acl_spec, kind).map_err(|failure| failure.legacy_detail)
 }
 
-fn setfacl_verified_device(
+async fn setfacl_verified_device(
     path: &Path,
     operation: &str,
     acl_spec: &str,
@@ -1378,6 +1421,7 @@ fn setfacl_verified_device(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
+        .await
         .map_err(|err| format!("spawn setfacl for {}: {err}", path.display()))?;
     if output.status.success() {
         let after_fd = match rustix::fs::openat2(
@@ -1410,7 +1454,8 @@ fn setfacl_verified_device(
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
-                    .status();
+                    .status()
+                    .await;
             }
             return Err(format!(
                 "setfacl target changed while applying ACL on {}: before={before:?} after={after:?}",
@@ -1635,21 +1680,21 @@ fn refresh_obs_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError>
     }
 }
 
-pub(crate) fn live_grant_verified_device_acl(
+pub(crate) async fn live_grant_verified_device_acl(
     path: &Path,
     uid: u32,
 ) -> Result<(), LiveHandlerError> {
-    live_set_verified_device_acl(path, uid, "-m", &format!("u:{uid}:rw"), "grant", false)
+    live_set_verified_device_acl(path, uid, "-m", &format!("u:{uid}:rw"), "grant", false).await
 }
 
-pub(crate) fn live_revoke_verified_device_acl(
+pub(crate) async fn live_revoke_verified_device_acl(
     path: &Path,
     uid: u32,
 ) -> Result<(), LiveHandlerError> {
-    live_set_verified_device_acl(path, uid, "-x", &format!("u:{uid}"), "revoke", true)
+    live_set_verified_device_acl(path, uid, "-x", &format!("u:{uid}"), "revoke", true).await
 }
 
-fn live_set_verified_device_acl(
+async fn live_set_verified_device_acl(
     path: &Path,
     uid: u32,
     operation: &str,
@@ -1657,14 +1702,16 @@ fn live_set_verified_device_acl(
     verb: &str,
     missing_ok: bool,
 ) -> Result<(), LiveHandlerError> {
-    setfacl_verified_device(path, operation, acl_spec, missing_ok).map_err(|detail| {
-        LiveHandlerError::Activation(format!(
-            "{verb} USBIP device ACL for runner uid {uid}: {detail}"
-        ))
-    })
+    setfacl_verified_device(path, operation, acl_spec, missing_ok)
+        .await
+        .map_err(|detail| {
+            LiveHandlerError::Activation(format!(
+                "{verb} USBIP device ACL for runner uid {uid}: {detail}"
+            ))
+        })
 }
 
-fn refresh_spawn_runner_acls(
+async fn refresh_spawn_runner_acls(
     plan: &SpawnRunnerPlan,
     broker_state_dir: &Path,
 ) -> Result<(), LiveHandlerError> {
@@ -1680,6 +1727,7 @@ fn refresh_spawn_runner_acls(
                     &format!("u:{}:rw", plan.uid),
                     true,
                 )
+                .await
                 .map_err(|detail| LiveHandlerError::SpawnFailed {
                     detail: format!("refresh device ACL for runner uid {}: {detail}", plan.uid),
                 })?;
@@ -2728,7 +2776,7 @@ fn refresh_component_session_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), Liv
 ///
 /// Caller transports the pidfd via SCM_RIGHTS in the broker
 /// response frame.
-pub fn live_spawn_runner(
+pub async fn live_spawn_runner(
     plan_input: &SpawnRunnerPlanInput,
     mut pre_opened_device_fds: Vec<std::os::fd::OwnedFd>,
     request_fds: Vec<std::os::fd::OwnedFd>,
@@ -2774,7 +2822,7 @@ pub fn live_spawn_runner(
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;
     let seccomp_program = load_runner_seccomp(&plan)?;
     let cgroup_fds = prepare_runner_cgroup_fds(&plan.cgroup_placement)?;
-    refresh_spawn_runner_acls(&plan, broker_state_dir)?;
+    refresh_spawn_runner_acls(&plan, broker_state_dir).await?;
 
     // swtpm-dir first-run hardening (issue #64). Gated on the
     // `w1-swtpm` role and run BEFORE clone3 so the persistent TPM2
@@ -2782,7 +2830,7 @@ pub fn live_spawn_runner(
     // before swtpm - which opens the NVRAM by pathname under its user
     // namespace - is ever spawned. ONLY the persistent state dir is
     // touched; the `/run` runtime-socket-dir posture is left intact.
-    let swtpm_dir_audit = maybe_harden_swtpm_dir(&plan, swtpm_identity)?;
+    let swtpm_dir_audit = maybe_harden_swtpm_dir(&plan, swtpm_identity).await?;
     let api_socket_acl_path = cloud_hypervisor_api_socket(&plan);
 
     // Pre-open /dev/dri/renderD128 for gpu-render-node broker-pre-NS
@@ -2845,7 +2893,8 @@ pub fn live_spawn_runner(
     if let Some(guest_bytes) = memlock_guest_bytes {
         qemu_media_preflight_memlock_budget(qemu_media_memlock_preflight_required_bytes(
             guest_bytes,
-        ))?;
+        ))
+        .await?;
     }
 
     // Every typed fence above passed (the swtpm-dir hardening, the GPU plan
@@ -2952,7 +3001,7 @@ pub fn live_spawn_runner(
 ///   ownership stamp would be wrong. The hook's job for those launches is to
 ///   refuse any launch whose declared paths or argv do not name the trusted
 ///   directory.
-fn maybe_harden_swtpm_dir(
+async fn maybe_harden_swtpm_dir(
     plan: &SpawnRunnerPlan,
     resource_backed: Option<&crate::ops::swtpm_dir::ResourceBackedSwtpm>,
 ) -> Result<Option<crate::ops::audit_op::SwtpmDirAudit>, LiveHandlerError> {
@@ -3002,7 +3051,7 @@ fn maybe_harden_swtpm_dir(
         now_ms,
         enforce_root_parents: true,
     };
-    match crate::ops::swtpm_dir::harden(&paths, &cfg) {
+    match crate::ops::swtpm_dir::harden(&paths, &cfg).await {
         Ok(audit) => Ok(Some(audit)),
         Err(err) => Err(LiveHandlerError::SwtpmDirHardening {
             audit: err.audit,
@@ -3037,8 +3086,10 @@ mod tests {
     };
     use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet, WritablePath};
     use d2b_host::cgroup::fake::FakeCgroupBackend;
+    use std::future::Future;
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
+    use std::pin::Pin;
 
     struct TestDir {
         path: PathBuf,
@@ -3134,10 +3185,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn live_apply_nftables_drives_executor() {
+    #[tokio::test]
+    async fn live_apply_nftables_drives_executor() {
         let exec = FakeReconcileExecutor::new();
-        live_apply_nftables(&exec, Path::new("/usr/sbin/nft"), "table inet d2b {}").unwrap();
+        live_apply_nftables(&exec, Path::new("/usr/sbin/nft"), "table inet d2b {}")
+            .await
+            .unwrap();
         let log = exec.take_log();
         assert_eq!(log.len(), 1);
         match &log[0] {
@@ -3149,10 +3202,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn live_apply_sysctl_drives_executor() {
+    #[tokio::test]
+    async fn live_apply_sysctl_drives_executor() {
         let exec = FakeReconcileExecutor::new();
-        live_apply_sysctl(&exec, "net.ipv4.ip_forward", "1").unwrap();
+        live_apply_sysctl(&exec, "net.ipv4.ip_forward", "1").await.unwrap();
         let log = exec.take_log();
         assert!(matches!(
             &log[0],
@@ -3161,8 +3214,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn live_update_hosts_file_drives_executor() {
+    #[tokio::test]
+    async fn live_update_hosts_file_drives_executor() {
         let exec = FakeReconcileExecutor::new();
         live_update_hosts_file(
             &exec,
@@ -3170,6 +3223,7 @@ mod tests {
             b"127.0.0.1 localhost\n",
             0o644,
         )
+        .await
         .unwrap();
         let log = exec.take_log();
         assert!(matches!(
@@ -3178,8 +3232,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn live_apply_route_drives_executor() {
+    #[tokio::test]
+    async fn live_apply_route_drives_executor() {
         let exec = FakeReconcileExecutor::new();
         live_apply_route(
             &exec,
@@ -3187,6 +3241,7 @@ mod tests {
             IpRouteVerb::Add,
             "10.0.0.0/24 dev tap0",
         )
+        .await
         .unwrap();
         let log = exec.take_log();
         match &log[0] {
@@ -3202,122 +3257,164 @@ mod tests {
 
     /// A failing reconcile executor surfaces ReconcileExec
     /// LiveHandlerError variant.
-    #[test]
-    fn live_apply_propagates_executor_error() {
+    #[tokio::test]
+    async fn live_apply_propagates_executor_error() {
         struct FailExec;
         impl ReconcileExecutor for FailExec {
             fn apply_nft_script(
                 &self,
                 _nft: &Path,
                 _script: &str,
-            ) -> Result<(), ReconcileExecError> {
-                Err(ReconcileExecError::NonZeroExit {
-                    which: "nft".to_owned(),
-                    exit_code: 1,
-                    stderr: "fail".to_owned(),
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move {
+                    Err(ReconcileExecError::NonZeroExit {
+                        which: "nft".to_owned(),
+                        exit_code: 1,
+                        stderr: "fail".to_owned(),
+                    })
                 })
             }
-            fn write_sysctl(&self, _: &str, _: &str) -> Result<(), ReconcileExecError> {
-                unreachable!()
+            fn write_sysctl(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
             }
             fn write_atomic_file(
                 &self,
                 _: &Path,
                 _: &[u8],
                 _: u32,
-            ) -> Result<(), ReconcileExecError> {
-                unreachable!()
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
             }
-            fn write_path_value(&self, _: &Path, _: &str) -> Result<(), ReconcileExecError> {
-                unreachable!()
+            fn write_path_value(
+                &self,
+                _: &Path,
+                _: &str,
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
             }
-            fn read_path_value(&self, _: &Path) -> Result<String, ReconcileExecError> {
-                unreachable!()
+            fn read_path_value(
+                &self,
+                _: &Path,
+            ) -> Pin<Box<dyn Future<Output = Result<String, ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
             }
             fn ip_route(
                 &self,
                 _: &Path,
                 _: IpRouteVerb,
                 _: &str,
-            ) -> Result<(), ReconcileExecError> {
-                unreachable!()
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
             }
             fn run_usbip(
                 &self,
                 _: &Path,
                 _: crate::ops::exec_reconcile::UsbipSubcommand,
                 _: &str,
-            ) -> Result<(), ReconcileExecError> {
-                unreachable!()
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
             }
             fn run_ssh_keygen(
                 &self,
                 _: &Path,
                 _: &str,
-            ) -> Result<crate::ops::exec_reconcile::GeneratedSshKey, ReconcileExecError>
-            {
-                unreachable!()
+            ) -> Pin<
+                Box<
+                    dyn Future<Output = Result<crate::ops::exec_reconcile::GeneratedSshKey, ReconcileExecError>>
+                        + Send
+                        + '_,
+                >,
+            > {
+                Box::pin(async move { unreachable!() })
             }
         }
-        let err = live_apply_nftables(&FailExec, Path::new("/usr/sbin/nft"), "x").unwrap_err();
+        let err = live_apply_nftables(&FailExec, Path::new("/usr/sbin/nft"), "x")
+            .await
+            .unwrap_err();
         assert!(matches!(err, LiveHandlerError::ReconcileExec(_)));
     }
 
-    #[test]
-    fn usbip_unbind_failure_preserves_claim_for_operator_recovery() {
+    #[tokio::test]
+    async fn usbip_unbind_failure_preserves_claim_for_operator_recovery() {
         struct FailUsbipUnbind;
         impl ReconcileExecutor for FailUsbipUnbind {
-            fn apply_nft_script(&self, _: &Path, _: &str) -> Result<(), ReconcileExecError> {
-                unreachable!()
+            fn apply_nft_script(
+                &self,
+                _: &Path,
+                _: &str,
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
             }
-            fn write_sysctl(&self, _: &str, _: &str) -> Result<(), ReconcileExecError> {
-                unreachable!()
+            fn write_sysctl(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
             }
             fn write_atomic_file(
                 &self,
                 _: &Path,
                 _: &[u8],
                 _: u32,
-            ) -> Result<(), ReconcileExecError> {
-                unreachable!()
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
             }
-            fn write_path_value(&self, _: &Path, _: &str) -> Result<(), ReconcileExecError> {
-                unreachable!()
+            fn write_path_value(
+                &self,
+                _: &Path,
+                _: &str,
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
             }
-            fn read_path_value(&self, _: &Path) -> Result<String, ReconcileExecError> {
-                unreachable!()
+            fn read_path_value(
+                &self,
+                _: &Path,
+            ) -> Pin<Box<dyn Future<Output = Result<String, ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
             }
             fn ip_route(
                 &self,
                 _: &Path,
                 _: IpRouteVerb,
                 _: &str,
-            ) -> Result<(), ReconcileExecError> {
-                unreachable!()
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
             }
             fn run_usbip(
                 &self,
                 _: &Path,
                 subcommand: crate::ops::exec_reconcile::UsbipSubcommand,
                 _: &str,
-            ) -> Result<(), ReconcileExecError> {
-                assert_eq!(
-                    subcommand,
-                    crate::ops::exec_reconcile::UsbipSubcommand::Unbind
-                );
-                Err(ReconcileExecError::TimedOut {
-                    which: "usbip unbind".to_owned(),
-                    timeout_ms: 1,
-                    remediation: "manual recovery required".to_owned(),
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move {
+                    assert_eq!(
+                        subcommand,
+                        crate::ops::exec_reconcile::UsbipSubcommand::Unbind
+                    );
+                    Err(ReconcileExecError::TimedOut {
+                        which: "usbip unbind".to_owned(),
+                        timeout_ms: 1,
+                        remediation: "manual recovery required".to_owned(),
+                    })
                 })
             }
             fn run_ssh_keygen(
                 &self,
                 _: &Path,
                 _: &str,
-            ) -> Result<crate::ops::exec_reconcile::GeneratedSshKey, ReconcileExecError>
-            {
-                unreachable!()
+            ) -> Pin<
+                Box<
+                    dyn Future<Output = Result<crate::ops::exec_reconcile::GeneratedSshKey, ReconcileExecError>>
+                        + Send
+                        + '_,
+                >,
+            > {
+                Box::pin(async move { unreachable!() })
             }
         }
 
@@ -3342,6 +3439,7 @@ mod tests {
             &lock_path,
             "corp-vm",
         )
+        .await
         .unwrap_err();
 
         assert!(matches!(err, LiveHandlerError::ReconcileExec(_)));
@@ -3352,8 +3450,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn usbip_bind_same_vm_replay_skips_shellout_and_preserves_claim() {
+    #[tokio::test]
+    async fn usbip_bind_same_vm_replay_skips_shellout_and_preserves_claim() {
         let root = TestDir::new("usbip-bind-same-vm-replay");
         let lock_dir = root.join("locks");
         std::fs::create_dir_all(&lock_dir).expect("create lock dir");
@@ -3378,6 +3476,7 @@ mod tests {
             nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
+        .await
         .expect("same-VM replay converges without mutation");
 
         assert_eq!(
@@ -3391,8 +3490,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn usbip_bind_shellout_failure_releases_claim_for_retry() {
+    #[tokio::test]
+    async fn usbip_bind_shellout_failure_releases_claim_for_retry() {
         let root = TestDir::new("usbip-bind-failure-releases-claim");
         let lock_dir = root.join("locks");
         std::fs::create_dir_all(&lock_dir).expect("create lock dir");
@@ -3415,6 +3514,7 @@ mod tests {
             nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
+        .await
         .expect_err("bind shellout failure fails closed");
 
         assert!(matches!(err, LiveHandlerError::ReconcileExec(_)));
@@ -3433,8 +3533,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn usbip_bind_initial_driver_inspection_failure_releases_claim() {
+    #[tokio::test]
+    async fn usbip_bind_initial_driver_inspection_failure_releases_claim() {
         let root = TestDir::new("usbip-bind-initial-inspect-failure");
         let lock_dir = root.join("locks");
         std::fs::create_dir_all(&lock_dir).expect("create lock dir");
@@ -3452,6 +3552,7 @@ mod tests {
             nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
+        .await
         .expect_err("invalid busid fails initial driver inspection");
 
         assert!(matches!(err, LiveHandlerError::UsbipLock(_)));
@@ -3467,8 +3568,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn usbip_bind_post_bind_driver_inspection_failure_releases_claim() {
+    #[tokio::test]
+    async fn usbip_bind_post_bind_driver_inspection_failure_releases_claim() {
         let root = TestDir::new("usbip-bind-post-inspect-failure");
         let lock_dir = root.join("locks");
         std::fs::create_dir_all(&lock_dir).expect("create lock dir");
@@ -3487,6 +3588,7 @@ mod tests {
             nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
+        .await
         .expect_err("post-bind driver inspection failure fails closed");
 
         assert!(matches!(err, LiveHandlerError::UsbipLock(_)));
@@ -3505,8 +3607,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn usbip_bind_non_converged_driver_releases_claim() {
+    #[tokio::test]
+    async fn usbip_bind_non_converged_driver_releases_claim() {
         let root = TestDir::new("usbip-bind-non-converged-releases-claim");
         let lock_dir = root.join("locks");
         std::fs::create_dir_all(&lock_dir).expect("create lock dir");
@@ -3524,6 +3626,7 @@ mod tests {
             nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
+        .await
         .expect_err("bind that does not converge fails closed");
 
         assert!(matches!(err, LiveHandlerError::UsbipLock(_)));
@@ -3542,8 +3645,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn usbip_unbind_aborts_stream_before_driver_unbind_and_preserves_claim_for_acl_phase() {
+    #[tokio::test]
+    async fn usbip_unbind_aborts_stream_before_driver_unbind_and_preserves_claim_for_acl_phase() {
         let root = TestDir::new("usbip-unbind-order");
         let lock_dir = root.join("locks");
         std::fs::create_dir_all(&lock_dir).expect("create lock dir");
@@ -3566,6 +3669,7 @@ mod tests {
             &lock_path,
             "corp-vm",
         )
+        .await
         .expect("unbind succeeds");
 
         assert_eq!(
@@ -3593,8 +3697,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn usbip_unbind_fd_release_timeout_preserves_claim_without_driver_unbind() {
+    #[tokio::test]
+    async fn usbip_unbind_fd_release_timeout_preserves_claim_without_driver_unbind() {
         let root = TestDir::new("usbip-unbind-release-timeout");
         let lock_dir = root.join("locks");
         std::fs::create_dir_all(&lock_dir).expect("create lock dir");
@@ -3625,6 +3729,7 @@ mod tests {
             &lock_path,
             "corp-vm",
         )
+        .await
         .expect_err("fd release timeout fails closed");
 
         assert!(matches!(err, LiveHandlerError::ReconcileExec(_)));
@@ -3649,8 +3754,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn live_apply_nm_unmanaged_prefers_dbus_reload() {
+    #[tokio::test]
+    async fn live_apply_nm_unmanaged_prefers_dbus_reload() {
         let exec = FakeReconcileExecutor::new();
         let root = TestDir::new("nm-unmanaged-dbus");
         let intent = sample_nm_unmanaged_intent(&root);
@@ -3660,15 +3765,16 @@ mod tests {
         let method = live_apply_nm_unmanaged_with_reloaders(
             &exec,
             &intent,
-            || {
+            async || {
                 dbus_calls.set(dbus_calls.get() + 1);
                 Ok(())
             },
-            |args| {
+            async |args| {
                 fallback_calls.borrow_mut().push(args.join(" "));
                 Ok(())
             },
         )
+        .await
         .expect("nm unmanaged apply succeeds");
 
         assert_eq!(method, Some(NmReloadMethod::Dbus));
@@ -3687,8 +3793,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn live_apply_nm_unmanaged_falls_back_to_systemctl() {
+    #[tokio::test]
+    async fn live_apply_nm_unmanaged_falls_back_to_systemctl() {
         let exec = FakeReconcileExecutor::new();
         let root = TestDir::new("nm-unmanaged-fallback");
         let intent = sample_nm_unmanaged_intent(&root);
@@ -3697,12 +3803,13 @@ mod tests {
         let method = live_apply_nm_unmanaged_with_reloaders(
             &exec,
             &intent,
-            || Err("dbus unavailable".to_owned()),
-            |args| {
+            async || Err("dbus unavailable".to_owned()),
+            async |args| {
                 fallback_calls.borrow_mut().push(args.join(" "));
                 Ok(())
             },
         )
+        .await
         .expect("systemctl fallback succeeds");
 
         assert_eq!(method, Some(NmReloadMethod::SystemctlFallback));
@@ -3712,8 +3819,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn live_apply_nm_unmanaged_refuses_foreign_file_before_reload() {
+    #[tokio::test]
+    async fn live_apply_nm_unmanaged_refuses_foreign_file_before_reload() {
         let exec = FakeReconcileExecutor::new();
         let root = TestDir::new("nm-unmanaged-foreign");
         let intent = sample_nm_unmanaged_intent(&root);
@@ -3724,14 +3831,20 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            live_apply_nm_unmanaged_with_reloaders(&exec, &intent, || Ok(()), |_| Ok(())),
+            live_apply_nm_unmanaged_with_reloaders(
+                &exec,
+                &intent,
+                async || Ok(()),
+                async |_| Ok(())
+            )
+            .await,
             Err(LiveHandlerError::NmOwnershipConflict)
         ));
         assert!(exec.take_log().is_empty());
     }
 
-    #[test]
-    fn live_apply_nm_unmanaged_refuses_legacy_owned_file() {
+    #[tokio::test]
+    async fn live_apply_nm_unmanaged_refuses_legacy_owned_file() {
         let exec = FakeReconcileExecutor::new();
         let root = TestDir::new("nm-unmanaged-legacy");
         let intent = sample_nm_unmanaged_intent(&root);
@@ -3742,14 +3855,20 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            live_apply_nm_unmanaged_with_reloaders(&exec, &intent, || Ok(()), |_| Ok(())),
+            live_apply_nm_unmanaged_with_reloaders(
+                &exec,
+                &intent,
+                async || Ok(()),
+                async |_| Ok(())
+            )
+            .await,
             Err(LiveHandlerError::NmOwnershipConflict)
         ));
         assert!(exec.take_log().is_empty());
     }
 
-    #[test]
-    fn update_host_runtime_nft_hash_rewrites_runtime_json() {
+    #[tokio::test]
+    async fn update_host_runtime_nft_hash_rewrites_runtime_json() {
         let root = TestDir::new("host-runtime-nft-hash");
         let runtime = sample_host_runtime(root.join("host-runtime.json"));
         std::fs::create_dir_all(runtime.path.parent().expect("runtime parent")).unwrap();
@@ -3760,10 +3879,13 @@ mod tests {
         .unwrap();
 
         update_host_runtime_nft_hash(&runtime.path, Some("0123456789abcdef"))
+            .await
             .expect("update host runtime hash");
 
         assert_eq!(
-            read_host_runtime_nft_hash(&runtime.path).expect("read host runtime hash"),
+            read_host_runtime_nft_hash(&runtime.path)
+                .await
+                .expect("read host runtime hash"),
             Some("0123456789abcdef".to_owned())
         );
         let updated = std::fs::read_to_string(&runtime.path).expect("read updated runtime");
@@ -3834,8 +3956,8 @@ mod tests {
         plan
     }
 
-    #[test]
-    fn resource_backed_swtpm_launch_is_fenced_against_the_trusted_identity() {
+    #[tokio::test]
+    async fn resource_backed_swtpm_launch_is_fenced_against_the_trusted_identity() {
         use crate::ops::swtpm_dir::{ResourceBackedSwtpm, reasons};
         // The state Volume's layout creates the directory; the fence reads
         // that fact from the filesystem, so the fixture owns a real one.
@@ -3859,6 +3981,7 @@ mod tests {
         let plan = resource_backed_swtpm_plan(&state_dir, &runtime_dir);
         assert!(
             maybe_harden_swtpm_dir(&plan, Some(&identity))
+                .await
                 .expect("trusted launch passes")
                 .is_none()
         );
@@ -3867,8 +3990,9 @@ mod tests {
         // fails closed retryably instead of starting a child that dies on its
         // first log write and burns the row's restart budget.
         std::fs::remove_dir(&state_dir).expect("drop the state volume directory");
-        let refusal =
-            maybe_harden_swtpm_dir(&plan, Some(&identity)).expect_err("unprovisioned refuses");
+        let refusal = maybe_harden_swtpm_dir(&plan, Some(&identity))
+            .await
+            .expect_err("unprovisioned refuses");
         assert!(matches!(
             refusal,
             LiveHandlerError::SwtpmDirHardening { reason, .. }
@@ -3894,13 +4018,16 @@ mod tests {
             format!("d2b.slice/{}/swtpm", "process-".to_owned() + &"c".repeat(64));
         assert!(
             maybe_harden_swtpm_dir(&flush, Some(&identity))
+                .await
                 .expect("one-shot flush passes")
                 .is_none()
         );
         std::fs::create_dir_all(&state_dir).expect("restore the state volume directory");
 
         // Without a trusted identity the launch fails closed by derivation.
-        let refusal = maybe_harden_swtpm_dir(&plan, None).expect_err("missing identity refuses");
+        let refusal = maybe_harden_swtpm_dir(&plan, None)
+            .await
+            .expect_err("missing identity refuses");
         assert!(matches!(
             refusal,
             LiveHandlerError::SwtpmDirHardening { reason, .. }
@@ -3913,8 +4040,9 @@ mod tests {
             Path::new("/var/lib/d2b/tpm-state/device-foreign-tpm-state"),
             &runtime_dir,
         );
-        let refusal =
-            maybe_harden_swtpm_dir(&foreign, Some(&identity)).expect_err("mismatch refuses");
+        let refusal = maybe_harden_swtpm_dir(&foreign, Some(&identity))
+            .await
+            .expect_err("mismatch refuses");
         assert!(matches!(
             refusal,
             LiveHandlerError::SwtpmDirHardening { reason, audit }
@@ -3927,6 +4055,7 @@ mod tests {
         other.seccomp_policy_ref = Some("w1-gpu".to_owned());
         assert!(
             maybe_harden_swtpm_dir(&other, Some(&identity))
+                .await
                 .expect("other roles no-op")
                 .is_none()
         );
@@ -4015,8 +4144,8 @@ mod tests {
     }
 
     /// live_spawn_runner preflight failure surfaces SpawnPreflight.
-    #[test]
-    fn live_spawn_runner_propagates_preflight_error() {
+    #[tokio::test]
+    async fn live_spawn_runner_propagates_preflight_error() {
         let plan = SpawnRunnerPlanInput {
             binary_path: PathBuf::from("not-absolute"),
             argv: vec!["x".to_owned()],
@@ -4044,6 +4173,7 @@ mod tests {
             &crate::ops::device_worker::DeviceWorkerLaunch::default(),
             Path::new("/run/d2b"),
         )
+        .await
         .unwrap_err();
         assert!(matches!(err, LiveHandlerError::SpawnPreflight(_)));
     }
@@ -4991,8 +5121,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn live_spawn_runner_applies_capability_and_net_namespace_when_privileged() {
+    #[tokio::test]
+    async fn live_spawn_runner_applies_capability_and_net_namespace_when_privileged() {
         if rustix::process::geteuid().as_raw() != 0 {
             eprintln!("skipping privileged SpawnRunner isolation test: requires euid 0");
             return;
@@ -5052,6 +5182,7 @@ mod tests {
             &crate::ops::device_worker::DeviceWorkerLaunch::default(),
             Path::new("/run/d2b"),
         )
+        .await
         .expect("spawn privileged test child");
         let wait_status = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(outcome.pid), None)
             .expect("wait for test child");
@@ -5092,10 +5223,11 @@ mod tests {
         plan
     }
 
-    #[test]
-    fn wayland_proxy_acls_error_when_xdg_runtime_dir_not_set() {
+    #[tokio::test]
+    async fn wayland_proxy_acls_error_when_xdg_runtime_dir_not_set() {
         let plan = wayland_proxy_plan(None, None);
         let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+            .await
             .expect_err("missing XDG_RUNTIME_DIR must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,
@@ -5111,13 +5243,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn wayland_proxy_acls_error_when_runtime_dir_absent() {
+    #[tokio::test]
+    async fn wayland_proxy_acls_error_when_runtime_dir_absent() {
         let root = TestDir::new("wlproxy-absent-dir");
         // Point at a path that does not exist beneath the tempdir.
         let absent = root.join("run").join("user").join("1000");
         let plan = wayland_proxy_plan(Some(absent.to_str().unwrap()), None);
         let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+            .await
             .expect_err("absent runtime dir must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,
@@ -5129,8 +5262,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn wayland_proxy_acls_error_when_runtime_dir_owner_mismatch() {
+    #[tokio::test]
+    async fn wayland_proxy_acls_error_when_runtime_dir_owner_mismatch() {
         let root = TestDir::new("wlproxy-owner-mismatch");
         // Create a dir owned by the current user but parsed path uid != current uid.
         // Pick a uid that is almost certainly not the running test uid.
@@ -5146,6 +5279,7 @@ mod tests {
         std::fs::create_dir(&runtime).expect("create runtime dir");
         let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), None);
         let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+            .await
             .expect_err("owner uid mismatch must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,
@@ -5165,8 +5299,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn wayland_proxy_acls_error_when_wayland_socket_absent() {
+    #[tokio::test]
+    async fn wayland_proxy_acls_error_when_wayland_socket_absent() {
         let root = TestDir::new("wlproxy-socket-absent");
         // Use the current uid so the owner check passes.
         let current_uid = nix::unistd::Uid::current().as_raw();
@@ -5175,6 +5309,7 @@ mod tests {
         // Do NOT create the socket. Use a known display name.
         let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), Some("wayland-test-99"));
         let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+            .await
             .expect_err("absent Wayland socket must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,
@@ -5193,8 +5328,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn wayland_proxy_acls_error_when_socket_is_regular_file() {
+    #[tokio::test]
+    async fn wayland_proxy_acls_error_when_socket_is_regular_file() {
         let root = TestDir::new("wlproxy-socket-wrong-type");
         let current_uid = nix::unistd::Uid::current().as_raw();
         let runtime = root.join(&format!("{current_uid}"));
@@ -5204,6 +5339,7 @@ mod tests {
         std::fs::write(&socket_path, b"not a socket").expect("write file");
         let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), Some("wayland-type-test"));
         let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+            .await
             .expect_err("regular file at socket location must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,

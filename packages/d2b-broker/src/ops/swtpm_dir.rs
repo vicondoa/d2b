@@ -32,7 +32,7 @@
 //! fold it straight into a public error envelope and a path-free
 //! `PrepareSwtpmDir` audit record.
 
-use std::io::{self, Read, Write};
+use std::io;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
@@ -593,7 +593,7 @@ pub fn derive_paths(plan: &SpawnRunnerPlan) -> Result<SwtpmDirPaths, &'static st
 /// path-free [`SwtpmDirAudit`] (success) or a path-free
 /// [`SwtpmHardenError`] (fail closed) so the dispatch layer can emit
 /// the terminal `PrepareSwtpmDir` audit record on BOTH paths.
-pub fn harden(
+pub async fn harden(
     paths: &SwtpmDirPaths,
     cfg: &SwtpmHardenConfig,
 ) -> Result<SwtpmDirAudit, SwtpmHardenError> {
@@ -642,6 +642,7 @@ pub fn harden(
     let marker_dir_fd = ensure_marker_tree(paths, cfg)
         .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
     let existing_marker = read_marker(&marker_dir_fd, paths, cfg)
+        .await
         .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
 
     let (result, marker_result) = match swtpm_stat {
@@ -669,6 +670,7 @@ pub fn harden(
             let (dev, ino) = create_fresh_swtpm_dir(&per_vm_root_fd, cfg)
                 .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
             write_marker(&marker_dir_fd, paths, cfg, dev, ino)
+                .await
                 .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
             (SwtpmDirResult::Created, SwtpmMarkerResult::Created)
         }
@@ -819,8 +821,7 @@ fn marker_file_present(paths: &SwtpmDirPaths) -> Result<bool, &'static str> {
 /// marker exists, `Ok(Some(_))` for a valid marker, and a path-free
 /// `previously-provisioned-swtpm-state-missing` slug for ANY tamper
 /// (symlink, non-regular, foreign owner/mode, parse/vm mismatch).
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_marker(
+async fn read_marker(
     marker_dir_fd: &OwnedFd,
     paths: &SwtpmDirPaths,
     cfg: &SwtpmHardenConfig,
@@ -860,8 +861,11 @@ fn read_marker(
     }
 
     let mut buf = String::new();
-    let mut file = std::fs::File::from(file_fd);
+    let file = tokio::fs::File::from_std(std::fs::File::from(file_fd));
+    use tokio::io::AsyncReadExt;
+    let mut file = file;
     file.read_to_string(&mut buf)
+        .await
         .map_err(|_| reasons::PREV_PROVISIONED_MISSING)?;
     let marker: MarkerData =
         serde_json::from_str(&buf).map_err(|_| reasons::PREV_PROVISIONED_MISSING)?;
@@ -874,8 +878,7 @@ fn read_marker(
 /// Atomically write the per-VM marker as `O_EXCL` (never overwrite an
 /// existing marker), root:root 0600, with a parent fsync for
 /// durability.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn write_marker(
+async fn write_marker(
     marker_dir_fd: &OwnedFd,
     paths: &SwtpmDirPaths,
     cfg: &SwtpmHardenConfig,
@@ -910,10 +913,12 @@ fn write_marker(
     )
     .map_err(|_| reasons::MARKER_WRITE_FAILED)?;
     {
-        let mut file = std::fs::File::from(fd);
+        let mut file = tokio::fs::File::from_std(std::fs::File::from(fd));
+        use tokio::io::AsyncWriteExt;
         file.write_all(&payload)
+            .await
             .map_err(|_| reasons::MARKER_WRITE_FAILED)?;
-        file.sync_all().map_err(|_| reasons::MARKER_WRITE_FAILED)?;
+        file.sync_all().await.map_err(|_| reasons::MARKER_WRITE_FAILED)?;
     }
 
     rustix::fs::fsync(marker_dir_fd.as_fd()).map_err(|_| reasons::MARKER_WRITE_FAILED)?;
@@ -1241,14 +1246,16 @@ mod tests {
         fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777
     }
 
-    #[test]
-    fn fresh_create_sets_mode_owner_and_marker() {
+    #[tokio::test]
+    async fn fresh_create_sets_mode_owner_and_marker() {
         let s = Scratch::new("fresh");
         let paths = s.paths("alpha");
         s.make_per_vm_root(&paths);
         let cfg = s.cfg();
 
-        let audit = harden(&paths, &cfg).expect("fresh harden ok");
+        let audit = harden(&paths, &cfg)
+            .await
+            .expect("fresh harden ok");
         assert_eq!(audit.result, SwtpmDirResult::Created);
         assert_eq!(audit.marker_result, SwtpmMarkerResult::Created);
         assert_eq!(audit.mode, 0o700);
@@ -1263,9 +1270,9 @@ mod tests {
         assert!(!json.contains(&s.root.display().to_string()));
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn raced_fresh_create_fails_closed_instead_of_adopting() {
+    async fn raced_fresh_create_fails_closed_instead_of_adopting() {
         // A role UID with rwx on the sticky per-VM root can race a `swtpm`
         // entry into existence between the broker's absence pre-check and its
         // mkdirat. The strict create MUST fail closed (RACED_CREATE) rather
@@ -1287,15 +1294,17 @@ mod tests {
         assert!(paths.swtpm_dir.join("attacker-nvram").exists());
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn existing_correct_with_acl_drift_reconciles_and_preserves_contents() {
+    async fn existing_correct_with_acl_drift_reconciles_and_preserves_contents() {
         let s = Scratch::new("reconcile");
         let paths = s.paths("beta");
         s.make_per_vm_root(&paths);
         let cfg = s.cfg();
         // First provision.
-        harden(&paths, &cfg).expect("provision");
+        harden(&paths, &cfg)
+            .await
+            .expect("provision");
         // Drop an NVRAM-ish file + drift mode + add an ACL.
         let nvram = paths.swtpm_dir.join("tpm2-00.permall");
         fs::write(&nvram, b"nvram-state").unwrap();
@@ -1308,7 +1317,9 @@ mod tests {
             &format!("u:{}:rwx", cur_uid()),
         );
 
-        let audit = harden(&paths, &cfg).expect("reconcile ok");
+        let audit = harden(&paths, &cfg)
+            .await
+            .expect("reconcile ok");
         assert_eq!(audit.result, SwtpmDirResult::Reconciled);
         assert_eq!(audit.marker_result, SwtpmMarkerResult::Verified);
         assert_eq!(mode_of(&paths.swtpm_dir), 0o700);
@@ -1324,9 +1335,9 @@ mod tests {
         assert!(!a && !d, "extended ACL must be cleared");
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn existing_dir_without_marker_requires_core_migration_decision() {
+    async fn existing_dir_without_marker_requires_core_migration_decision() {
         let s = Scratch::new("upgrade");
         let paths = s.paths("gamma");
         s.make_per_vm_root(&paths);
@@ -1336,14 +1347,16 @@ mod tests {
         fs::set_permissions(&paths.swtpm_dir, fs::Permissions::from_mode(0o700)).unwrap();
         fs::write(paths.swtpm_dir.join("tpm2-00.permall"), b"legacy").unwrap();
 
-        let err = harden(&paths, &cfg).expect_err("legacy state must migrate first");
+        let err = harden(&paths, &cfg)
+            .await
+            .expect_err("legacy state must migrate first");
         assert_eq!(err.reason, reasons::LEGACY_ADOPTION_REQUIRED);
         assert!(!paths.marker_dir.join(&paths.marker_name).exists());
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn fresh_create_with_legacy_source_requires_adoption_without_mutation() {
+    async fn fresh_create_with_legacy_source_requires_adoption_without_mutation() {
         let s = Scratch::new("fresh-legacy");
         let paths = s.paths("gamma-fresh");
         s.make_per_vm_root(&paths);
@@ -1352,7 +1365,9 @@ mod tests {
         fs::create_dir_all(&legacy).unwrap();
         fs::write(legacy.join("tpm2-00.permall"), b"legacy").unwrap();
 
-        let err = harden(&paths, &cfg).expect_err("legacy source must require adoption");
+        let err = harden(&paths, &cfg)
+            .await
+            .expect_err("legacy source must require adoption");
         assert_eq!(err.reason, reasons::LEGACY_ADOPTION_REQUIRED);
         assert!(!paths.swtpm_dir.exists());
         assert!(!paths.marker_dir.join(&paths.marker_name).exists());
@@ -1360,9 +1375,9 @@ mod tests {
         assert!(legacy.exists());
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn wrong_owner_dir_fails_closed() {
+    async fn wrong_owner_dir_fails_closed() {
         let s = Scratch::new("wrongowner");
         let paths = s.paths("delta");
         s.make_per_vm_root(&paths);
@@ -1372,7 +1387,9 @@ mod tests {
         fs::create_dir_all(&paths.swtpm_dir).unwrap();
         cfg.expected_uid = cur_uid().wrapping_add(424_242);
 
-        let err = harden(&paths, &cfg).expect_err("must fail closed");
+        let err = harden(&paths, &cfg)
+            .await
+            .expect_err("must fail closed");
         assert_eq!(err.reason, reasons::OWNER_MISMATCH);
         assert_eq!(err.audit.result, SwtpmDirResult::FailedClosed);
         // NVRAM dir untouched (still present).
@@ -1381,9 +1398,9 @@ mod tests {
         assert!(!err.to_string().contains('/'));
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn symlink_swtpm_dir_fails_closed() {
+    async fn symlink_swtpm_dir_fails_closed() {
         let s = Scratch::new("symlink");
         let paths = s.paths("epsilon");
         s.make_per_vm_root(&paths);
@@ -1392,46 +1409,56 @@ mod tests {
         fs::create_dir_all(&target).unwrap();
         std::os::unix::fs::symlink(&target, &paths.swtpm_dir).unwrap();
 
-        let err = harden(&paths, &cfg).expect_err("symlink must fail");
+        let err = harden(&paths, &cfg)
+            .await
+            .expect_err("symlink must fail");
         assert_eq!(err.reason, reasons::IS_SYMLINK);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn non_directory_swtpm_path_fails_closed() {
+    async fn non_directory_swtpm_path_fails_closed() {
         let s = Scratch::new("nondir");
         let paths = s.paths("zeta");
         s.make_per_vm_root(&paths);
         let cfg = s.cfg();
         fs::write(&paths.swtpm_dir, b"i am a file").unwrap();
 
-        let err = harden(&paths, &cfg).expect_err("non-dir must fail");
+        let err = harden(&paths, &cfg)
+            .await
+            .expect_err("non-dir must fail");
         assert_eq!(err.reason, reasons::NOT_A_DIRECTORY);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn marker_present_dir_absent_fails_closed() {
+    async fn marker_present_dir_absent_fails_closed() {
         let s = Scratch::new("markerorphan");
         let paths = s.paths("eta");
         s.make_per_vm_root(&paths);
         let cfg = s.cfg();
         // Provision, then remove the swtpm dir (marker remains).
-        harden(&paths, &cfg).expect("provision");
+        harden(&paths, &cfg)
+            .await
+            .expect("provision");
         fs::remove_dir_all(&paths.swtpm_dir).unwrap();
 
-        let err = harden(&paths, &cfg).expect_err("orphan marker must fail");
+        let err = harden(&paths, &cfg)
+            .await
+            .expect_err("orphan marker must fail");
         assert_eq!(err.reason, reasons::PREV_PROVISIONED_MISSING);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn marker_present_empty_replacement_ino_mismatch_fails_closed() {
+    async fn marker_present_empty_replacement_ino_mismatch_fails_closed() {
         let s = Scratch::new("inoswap");
         let paths = s.paths("theta");
         s.make_per_vm_root(&paths);
         let cfg = s.cfg();
-        harden(&paths, &cfg).expect("provision");
+        harden(&paths, &cfg)
+            .await
+            .expect("provision");
         // Replace the dir with a fresh, correct-owner, empty dir that is
         // GUARANTEED to have a different st_ino than the marker
         // recorded. Renaming the original away (keeping its inode
@@ -1442,25 +1469,31 @@ mod tests {
         fs::create_dir(&paths.swtpm_dir).unwrap();
         fs::set_permissions(&paths.swtpm_dir, fs::Permissions::from_mode(0o700)).unwrap();
 
-        let err = harden(&paths, &cfg).expect_err("ino mismatch must fail");
+        let err = harden(&paths, &cfg)
+            .await
+            .expect_err("ino mismatch must fail");
         assert_eq!(err.reason, reasons::PREV_PROVISIONED_MISSING);
     }
 
-    #[test]
-    fn idempotent_second_run_is_clean() {
+    #[tokio::test]
+    async fn idempotent_second_run_is_clean() {
         let s = Scratch::new("idem");
         let paths = s.paths("iota");
         s.make_per_vm_root(&paths);
         let cfg = s.cfg();
-        harden(&paths, &cfg).expect("provision");
-        let audit = harden(&paths, &cfg).expect("second run ok");
+        harden(&paths, &cfg)
+            .await
+            .expect("provision");
+        let audit = harden(&paths, &cfg)
+            .await
+            .expect("second run ok");
         assert_eq!(audit.marker_result, SwtpmMarkerResult::Verified);
         assert_eq!(audit.result, SwtpmDirResult::VerifiedClean);
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn runtime_dir_posture_untouched_and_stale_socket_removed() {
+    async fn runtime_dir_posture_untouched_and_stale_socket_removed() {
         let s = Scratch::new("runtime");
         let paths = s.paths("kappa");
         s.make_per_vm_root(&paths);
@@ -1474,7 +1507,9 @@ mod tests {
         let stale = paths.runtime_dir.join("tpm.sock");
         fs::write(&stale, b"stale").unwrap();
 
-        harden(&paths, &cfg).expect("harden ok");
+        harden(&paths, &cfg)
+            .await
+            .expect("harden ok");
         // Runtime dir mode unchanged.
         assert_eq!(mode_of(&paths.runtime_dir), 0o751);
         // Sibling untouched.
@@ -1483,13 +1518,15 @@ mod tests {
         assert!(!stale.exists());
     }
 
-    #[test]
-    fn ancestor_traverse_acl_applied() {
+    #[tokio::test]
+    async fn ancestor_traverse_acl_applied() {
         let s = Scratch::new("ancestoracl");
         let paths = s.paths("lambda");
         s.make_per_vm_root(&paths);
         let cfg = s.cfg();
-        harden(&paths, &cfg).expect("harden ok");
+        harden(&paths, &cfg)
+            .await
+            .expect("harden ok");
         // The per-VM root carries a u:<uid>:--x ACL entry.
         let (access, _default) = path_safe::fd_extended_acl_present(
             path_safe::open_dir_path_safe(&paths.per_vm_root)
@@ -1503,9 +1540,9 @@ mod tests {
         );
     }
 
-    #[test]
+    #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn sticky_parent_blocks_non_owner_replacement_or_skips() {
+    async fn sticky_parent_blocks_non_owner_replacement_or_skips() {
         // The per-VM root is mode 3770 (setgid + sticky) on the base
         // branch so a NON-owner role uid cannot rename/replace the
         // swtpm dir entry. Verifying that requires a second uid we can
@@ -1548,7 +1585,9 @@ mod tests {
             Some(nix::unistd::Gid::from_raw(cur_gid())),
         )
         .unwrap();
-        harden(&paths, &cfg).expect("root provision ok");
+        harden(&paths, &cfg)
+            .await
+            .expect("root provision ok");
         // Attempt a non-owner unlink of the swtpm dir under the sticky
         // parent: kernel must refuse with EPERM/EACCES.
         let swtpm_dir = paths.swtpm_dir.clone();
