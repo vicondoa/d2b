@@ -14,8 +14,8 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     error::Error,
     fmt,
-    sync::Mutex,
 };
+use tokio::sync::Mutex;
 
 const MAX_OPEN_TRANSPORTS: usize = 256;
 
@@ -225,7 +225,7 @@ impl TransportPortal {
             socket_kind: request.socket_kind(),
             attachments_enabled: request.attachments_enabled(),
         };
-        let mut state = self.state.lock().map_err(|_| {
+        let mut state = self.state.try_lock().map_err(|_| {
             tracing::warn!(
                 provider = "transport-unix",
                 "transport portal monitor lock poisoned; open rejected"
@@ -267,7 +267,7 @@ impl TransportPortal {
     pub fn close(&self, handle: TransportHandle) -> Result<(), PortalError> {
         let mut state = self
             .state
-            .lock()
+            .try_lock()
             .map_err(|_| PortalError::MonitorUnavailable)?;
         if state.entries.remove(&handle).is_some() {
             state.mark_finalized(handle);
@@ -287,7 +287,7 @@ impl TransportPortal {
     pub fn observe(&self, handle: TransportHandle) -> Result<TransportObservation, PortalError> {
         let state = self
             .state
-            .lock()
+            .try_lock()
             .map_err(|_| PortalError::MonitorUnavailable)?;
         let entry = state
             .entries
@@ -316,7 +316,7 @@ impl TransportPortal {
 
     /// Retire every portal-owned monitor descriptor during service finalization.
     pub fn finalize(&self) {
-        if let Ok(mut state) = self.state.lock() {
+        if let Ok(mut state) = self.state.try_lock() {
             let handles = state
                 .entries
                 .drain()
