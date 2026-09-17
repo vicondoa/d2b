@@ -239,6 +239,7 @@ async fn acquire_route_ledger_lock(root: &Path) -> Result<fs::File, ApplyWithPre
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .mode(0o640)
         .open(&path)
@@ -325,13 +326,13 @@ async fn write_route_record(
         return Err(ApplyWithPreflightError::ForeignRoute);
     }
     drop(file);
-    tokio::fs::rename(&temp, path).await.map_err(|error| {
-        let _ = tokio::fs::remove_file(&temp);
-        ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+    if let Err(error) = tokio::fs::rename(&temp, path).await {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
             path: path.display().to_string(),
             detail: error.to_string(),
-        })
-    })?;
+        }));
+    }
     if let Some(parent) = path.parent() {
         let directory = tokio::fs::File::open(parent).await.map_err(|error| {
             ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {

@@ -3154,6 +3154,9 @@ mod tests {
     }
 
     impl AuthorityPersistence for RecordingPersistence {
+        // R11 inventory note: sanctioned "cfg(test) helper" exception; the
+        // std Mutex capture is short and synchronous, dropped before any await.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn prepare<'a>(
             &'a self,
             operation_id: &'a str,
@@ -3172,6 +3175,8 @@ mod tests {
             })
         }
 
+        // R11 inventory note: sanctioned "cfg(test) helper" exception (see above).
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn record_effect<'a>(
             &'a self,
             _capability: &'a crate::authority_persistence::AuthorityOperationCapability,
@@ -3181,6 +3186,8 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
 
+        // R11 inventory note: sanctioned "cfg(test) helper" exception (see above).
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn record_close<'a>(
             &'a self,
             _capability: &'a crate::authority_persistence::AuthorityOperationCapability,
@@ -3192,6 +3199,8 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
 
+        // R11 inventory note: sanctioned "cfg(test) helper" exception (see above).
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn release<'a>(
             &'a self,
             _capability: &'a crate::authority_persistence::AuthorityOperationCapability,
@@ -4178,6 +4187,9 @@ mod tests {
         assert!(index.is_ready_for_readiness());
     }
 
+    // R11 inventory note: tokio Mutex::lock().await resolves to the banned
+    // Runtime::block_on bridge in clippy 1.97; sanctioned "cfg(test) helper".
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reservation_stays_held_across_async_effect_and_closes_before_release() {
         let host = uid("f83e4567-e89b-42d3-a456-426614174050");
@@ -4215,6 +4227,9 @@ mod tests {
         assert!(index.lock().await.authority_status(&request).is_none());
     }
 
+    // R11 inventory note: tokio Mutex::lock().await resolves to the banned
+    // Runtime::block_on bridge in clippy 1.97; sanctioned "cfg(test) helper".
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn failed_reservation_close_keeps_lease_for_successful_retry() {
         let host = uid("d93e4567-e89b-42d3-a456-426614174053");
@@ -4256,6 +4271,10 @@ mod tests {
         assert!(index.lock().await.authority_status(&request).is_none());
     }
 
+    // R11 inventory note: clippy 1.97 double-reports the std Mutex::lock()
+    // capture chain as both Mutex::lock and the banned Runtime::block_on
+    // bridge; sanctioned "cfg(test) helper".
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn durable_reservation_records_pending_effect_close_and_release() {
         let host = uid("f93e4567-e89b-42d3-a456-426614174055");

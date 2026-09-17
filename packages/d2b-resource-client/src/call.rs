@@ -480,7 +480,6 @@ mod tests {
 
     /// The delay is driven by the caller's executor: with a Tokio runtime
     /// installed it rides that runtime's timer.
-
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn retry_backoff_rides_the_caller_runtime_timer() {
@@ -489,7 +488,6 @@ mod tests {
     }
 
     /// An already-cancelled call refuses immediately instead of sleeping.
-
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn retry_backoff_observes_cancellation() {

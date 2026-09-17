@@ -507,10 +507,10 @@ pub async fn persist_persistent_tap_realization(
         return Err(NetworkOpError::RealizationUnavailable);
     }
     drop(file);
-    tokio::fs::rename(&temp_path, &row_path).await.map_err(|_| {
-        let _ = tokio::fs::remove_file(&temp_path);
-        NetworkOpError::RealizationUnavailable
-    })?;
+    if tokio::fs::rename(&temp_path, &row_path).await.is_err() {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        return Err(NetworkOpError::RealizationUnavailable);
+    }
     let directory = tokio::fs::File::open(&root)
         .await
         .map_err(|_| NetworkOpError::RealizationUnavailable)?;
@@ -663,10 +663,10 @@ pub async fn mark_persistent_tap_realization_deleted(
         return Err(NetworkOpError::RealizationUnavailable);
     }
     drop(file);
-    tokio::fs::rename(&temp_path, &row_path).await.map_err(|_| {
-        let _ = tokio::fs::remove_file(&temp_path);
-        NetworkOpError::RealizationUnavailable
-    })?;
+    if tokio::fs::rename(&temp_path, &row_path).await.is_err() {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        return Err(NetworkOpError::RealizationUnavailable);
+    }
     let directory = tokio::fs::File::open(&root)
         .await
         .map_err(|_| NetworkOpError::RealizationUnavailable)?;

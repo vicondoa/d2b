@@ -234,7 +234,6 @@ const MAX_DISPATCH_QUEUE_DEPTH: usize = 16;
 type DispatchJob = Box<dyn FnOnce() + Send + 'static>;
 
 /// One dedicated dispatch worker thread with its own bounded queue。
-
 struct DispatchWorker {
     sender: SyncSender<DispatchJob>,
 }
@@ -261,8 +260,6 @@ fn start_dispatch_worker() -> Option<DispatchWorker> {
 }
 
 /// The blocking config-dispatch seat, started on first use。
-
-
 static DISPATCH_WORKER: LazyLock<Option<DispatchWorker>> = LazyLock::new(start_dispatch_worker);
 
 /// Dispatch one operation on the dedicated bounded dispatch worker。

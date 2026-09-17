@@ -5664,7 +5664,7 @@ async fn observe_registered_runner(
         request.zone_uid.as_ref(),
         request.runtime_scope,
     );
-    let registered = (|| async move {
+    let registered = async move {
         // Keep the lock order aligned with deregistration: pidfd registry
         // first, metadata second. This makes the binding update atomic with
         // the live pidfd registration.
@@ -5813,7 +5813,7 @@ let mut metadata_registry = runner_metadata_registry().try_lock().map_err(|_| {
                 },
             ))
         }
-    })().await?;
+    }.await?;
     match registered {
         Some(response) => Ok(response),
         None => discover_runner_candidate(request, intent, &cgroup_placement.subtree).await,
@@ -6316,6 +6316,11 @@ fn store_sync_error_kind(stage: crate::ops::store_sync_audit::ErrorStage) -> &'s
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+type SystemdUnitHandleFuture<'a> = Pin<
+    Box<dyn Future<Output = Result<(d2b_contracts_broker::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>> + Send + 'a>,
+>;
+
+#[cfg(not(feature = "layer1-bootstrap"))]
 trait DispatchBackend {
     /// The committed-operation envelope this process serves.
     ///
@@ -6382,20 +6387,7 @@ trait DispatchBackend {
         &'a self,
         resolver: &'a BundleResolver,
         request: &'a d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        (
-                            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
-                            OwnedFd,
-                        ),
-                        BrokerError,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    >;
+    ) -> SystemdUnitHandleFuture<'a>;
 
     fn check_systemd_user_manager<'a>(
         &'a self,
@@ -6419,20 +6411,7 @@ trait DispatchBackend {
         &'a self,
         resolver: &'a BundleResolver,
         request: &'a d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        (
-                            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
-                            OwnedFd,
-                        ),
-                        BrokerError,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    >;
+    ) -> SystemdUnitHandleFuture<'a>;
 
     fn stop_systemd_unit<'a>(
         &'a self,
