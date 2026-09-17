@@ -304,13 +304,17 @@ impl ZonePlanePort for ProductionPlanePort {
         let Some(surface) = Self::surface(&self.surfaces, provider_ref) else {
             return Err(self.refuse(provider_ref, root.path.to_owned(), "provider-undeclared").await);
         };
-        let undeclared_refusal =
-            self.refuse(provider_ref, root.path.to_owned(), "storage-root-undeclared").await;
-        let declared = surface
+        let declared = if let Some(declared) = surface
             .storage_roots
             .iter()
             .find(|declared| declared.path == root.path)
-            .ok_or(undeclared_refusal)?;
+        {
+            declared
+        } else {
+            return Err(self
+                .refuse(provider_ref, root.path.to_owned(), "storage-root-undeclared")
+                .await);
+        };
         if declared.provider_owned != root.provider_owned {
             return Err(self.refuse(
                 provider_ref,
