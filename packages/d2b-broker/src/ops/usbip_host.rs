@@ -488,6 +488,7 @@ mod tests {
     use std::os::unix::fs::symlink;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn temp_root(name: &str) -> PathBuf {
         let base = crate::test_scratch_root().join("usbip-host-tests");
         let root = base.join(format!("{}-{}", name, std::process::id()));
@@ -496,6 +497,7 @@ mod tests {
         root
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_device(root: &Path, bus_id: &str, vendor: &str, product: &str, devpath: &str) {
         let dir = root.join(bus_id);
         fs::create_dir_all(&dir).expect("create fake device");
@@ -572,6 +574,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn enforces_vendor_product_and_physical_topology() {
         let root = temp_root("match");
         write_device(&root, "1-2.3", "1050", "0407", "2.3");
@@ -599,6 +602,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn rejects_serial_only_or_empty_allowlist_policy() {
         let root = temp_root("allowlist-missing");
         write_device(&root, "1-2.3", "1050", "0407", "2.3");
@@ -615,6 +619,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn rejects_topology_mismatch_even_when_vid_pid_match() {
         let root = temp_root("topology-mismatch");
         write_device(&root, "1-2.3", "1050", "0407", "2.4");
@@ -636,6 +641,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn rejects_devnum_change_during_identity_inspection() {
         let root = temp_root("devnum-change");
         write_device(&root, "1-2.3", "1050", "0407", "2.3");
@@ -657,6 +663,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn rejects_device_departure_during_identity_inspection() {
         let root = temp_root("devnum-departed");
         write_device(&root, "1-2.3", "1050", "0407", "2.3");
@@ -674,6 +681,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn rejects_invalid_busid_before_path_join() {
         let root = temp_root("invalid-busid");
         let error = inspect_usbip_host_device(&root, "../1-2").await.expect_err("invalid bus id");
@@ -685,6 +693,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn checks_usbip_host_driver_unbind_support_explicitly() {
         let root = temp_root("unbind-support")
             .join("sys")

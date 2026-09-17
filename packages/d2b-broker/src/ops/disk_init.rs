@@ -1442,6 +1442,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn disk_init_rejects_path_outside_permitted_root() {
         let spec = ResolvedDiskInitOp {
             target_path: PathBuf::from("/etc/d2b/evil.img"),

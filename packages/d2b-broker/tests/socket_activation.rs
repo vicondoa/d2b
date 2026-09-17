@@ -109,6 +109,7 @@ fn bind_seqpacket_listen(path: &std::path::Path) -> io::Result<OwnedFd> {
 /// the shell redirects it to fd 3 before exec-ing the broker.
 #[test]
 #[allow(unsafe_code)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn broker_adopts_socket_activated_fd_and_serves_hello() {
     let scratch = scratch_dir();
     let sock_path = scratch.path().join("priv.sock");

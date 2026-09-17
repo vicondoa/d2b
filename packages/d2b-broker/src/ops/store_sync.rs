@@ -767,6 +767,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn happy_path_populates_split_layout_and_swaps_currents() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "alpha", 7, 2);
@@ -865,6 +866,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn guest_meta_excludes_host_only_fields() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "zeta", 9, 1);
@@ -898,6 +900,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn second_sync_same_closure_takes_fast_path() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "omega", 4, 2);
@@ -922,6 +925,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn fast_path_repairs_live_marker_posture() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "alpha", 7, 1);
@@ -941,6 +945,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn non_fast_sync_sweeps_stale_live_entries_when_not_served() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "theta", 8, 1);
@@ -959,6 +964,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn farm_shares_inodes_with_source_no_recursive_chown() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "beta", 3, 1);
@@ -991,6 +997,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn refuses_generation_mismatch() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "gamma", 5, 1);
@@ -1008,6 +1015,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn refuses_vm_mismatch() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "delta", 1, 1);
@@ -1023,6 +1031,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn generation_overflow_maps_to_probe_stage() {
         let tmp = tempdir().unwrap();
         // A resolved generation that does not fit in u32 overflows the
@@ -1073,6 +1082,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn failed_sync_before_lock_writes_no_guest_metadata() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "sigma", 5, 1);

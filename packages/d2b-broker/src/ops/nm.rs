@@ -479,6 +479,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn reload_failure_rolls_back() {
         let dir = std::env::current_dir()
             .unwrap()

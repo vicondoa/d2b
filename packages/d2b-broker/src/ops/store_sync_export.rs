@@ -407,6 +407,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn append_export_record_writes_one_jsod2b_line() {
         let dir = scratch_dir("writer");
         let _ = fs::remove_dir_all(&dir);

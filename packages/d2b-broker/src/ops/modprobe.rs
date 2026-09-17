@@ -225,6 +225,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn unknown_module_denied_not_in_matrix() {
         let mut backend = RecordingBackend::default();
         let record = dispatch("rogue", &[], &empty_inputs(false), &mut backend)
@@ -234,6 +235,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn modules_disabled_blocks_loadable_request() {
         let mut backend = RecordingBackend::default();
         let record = dispatch(
@@ -251,6 +253,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn load_allowed_module_invokes_backend() {
         let mut backend = RecordingBackend::default();
         let record = dispatch(
@@ -265,6 +268,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn matrix_row_with_load_allowed_false_refuses_silently() {
         let mut backend = RecordingBackend::default();
         let record = dispatch(
@@ -278,6 +282,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn already_loaded_module_short_circuits() {
         let mut backend = RecordingBackend::default();
         let mut inputs = empty_inputs(false);
@@ -289,6 +294,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn audit_record_carries_matrix_entry_id() {
         let mut backend = RecordingBackend::default();
         let record = dispatch(

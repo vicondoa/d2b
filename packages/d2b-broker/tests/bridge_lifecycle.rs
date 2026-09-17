@@ -115,6 +115,7 @@ fn expected_marker() -> String {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn create_bridge_applies_ipv6_sysctl() {
     let backend = FakeBridge::absent();
     let expected = intent();
@@ -136,6 +137,7 @@ async fn create_bridge_applies_ipv6_sysctl() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn create_bridge_parameters_match_spec() {
     let backend = FakeBridge::absent();
     create_bridge(&backend, &intent()).await.unwrap();
@@ -147,6 +149,7 @@ async fn create_bridge_parameters_match_spec() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn delete_bridge_is_idempotent() {
     let backend = FakeBridge::absent();
     let expected = intent();
@@ -158,6 +161,7 @@ async fn delete_bridge_is_idempotent() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn delete_bridge_never_cascades_attached_tap() {
     let backend = FakeBridge::absent();
     backend.state.replace(BridgeReadback {
@@ -179,6 +183,7 @@ async fn delete_bridge_never_cascades_attached_tap() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn bridge_name_prefix_is_not_ownership_proof() {
     let backend = FakeBridge::absent();
     let mut trusted = intent();
@@ -200,6 +205,7 @@ async fn bridge_name_prefix_is_not_ownership_proof() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn unmarked_existing_bridge_is_foreign_and_unchanged() {
     let backend = FakeBridge::absent();
     backend.state.replace(BridgeReadback {
@@ -222,6 +228,7 @@ async fn unmarked_existing_bridge_is_foreign_and_unchanged() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn matching_bridge_marker_allows_adoption_without_mutation() {
     let backend = FakeBridge::absent();
     backend.state.replace(BridgeReadback {
@@ -244,6 +251,7 @@ async fn matching_bridge_marker_allows_adoption_without_mutation() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn matching_bridge_marker_with_parameter_drift_is_unchanged() {
     let backend = FakeBridge::absent();
     backend.state.replace(BridgeReadback {
@@ -266,6 +274,7 @@ async fn matching_bridge_marker_with_parameter_drift_is_unchanged() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn mismatched_existing_bridge_refuses_create_without_mutation() {
     let backend = FakeBridge::absent();
     backend.state.replace(BridgeReadback {
@@ -288,6 +297,7 @@ async fn mismatched_existing_bridge_refuses_create_without_mutation() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn mismatched_existing_bridge_refuses_delete_without_mutation() {
     let backend = FakeBridge::absent();
     backend.state.replace(BridgeReadback {

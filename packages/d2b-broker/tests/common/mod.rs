@@ -76,6 +76,7 @@ impl TestBroker {
         Self::spawn_profile(prefix, "host-test", "host", D2BD_UID)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn spawn_profile(prefix: &str, authority_id: &str, profile: &str, d2bd_uid: u32) -> Self {
         let scratch = Scratch::new(prefix);
         let run_dir = scratch.path().join("run/d2b");
@@ -127,6 +128,7 @@ impl TestBroker {
         broker
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn socket_mode(&self) -> u32 {
         fs::metadata(&self.socket_path)
             .expect("stat broker socket")
@@ -155,10 +157,12 @@ impl TestBroker {
         nix::unistd::Gid::current().as_raw()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn server_log(&self) -> String {
         fs::read_to_string(&self.server_log_path).unwrap_or_default()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn audit_path(&self) -> PathBuf {
         let mut paths: Vec<PathBuf> = fs::read_dir(&self.audit_dir)
             .expect("read broker audit dir")
@@ -175,6 +179,7 @@ impl TestBroker {
         paths.remove(0)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn audit_contents(&self) -> String {
         fs::read_to_string(self.audit_path()).expect("read broker audit file")
     }
@@ -213,6 +218,7 @@ impl TestBroker {
         ])
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn audit_write_fds(&self, audit_path: &Path) -> Vec<FdFlags> {
         let fd_dir = PathBuf::from(format!("/proc/{}/fd", self.pid()));
         let fdinfo_dir = PathBuf::from(format!("/proc/{}/fdinfo", self.pid()));
@@ -247,6 +253,7 @@ impl TestBroker {
         write_fds
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn wait_for_socket(&self) {
         for _ in 0..50 {
             if is_socket(&self.socket_path) {
@@ -261,6 +268,7 @@ impl TestBroker {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn run_probe<I, S>(&self, args: I) -> ProbeOutput
     where
         I: IntoIterator<Item = S>,
@@ -276,6 +284,7 @@ impl TestBroker {
 }
 
 impl Drop for TestBroker {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn drop(&mut self) {
         match self.child.try_wait() {
             Ok(Some(_)) => {}
@@ -333,6 +342,7 @@ impl FdFlags {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub fn audit_file_metadata(path: &Path) -> io::Result<(u32, u32, u32)> {
     let metadata = fs::metadata(path)?;
     Ok((
@@ -342,6 +352,7 @@ pub fn audit_file_metadata(path: &Path) -> io::Result<(u32, u32, u32)> {
     ))
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn is_socket(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .map(|metadata| metadata.file_type().is_socket())

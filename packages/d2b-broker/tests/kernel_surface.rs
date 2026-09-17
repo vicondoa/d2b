@@ -13,6 +13,7 @@ fn scratch_dir() -> TempDir {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn open_dir_path_safe_follows_real_mount_but_refuses_symlink() {
     if std::env::var_os(OPEN_DIR_XDEV_HELPER_ENV).is_some() {
         open_dir_path_safe_mount_contract_helper();
@@ -64,6 +65,7 @@ fn open_dir_path_safe_follows_real_mount_but_refuses_symlink() {
 /// still refused - INCLUDING after a followed mount crossing - and a
 /// path crossing TWO mounts still resolves (NO_XDEV is re-applied per
 /// component, so the relax is scoped to exactly the crossing component).
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn open_dir_path_safe_mount_contract_helper() {
     let tmp = scratch_dir();
     let safe_root = tmp.path().join("safe");
@@ -152,6 +154,7 @@ fn open_dir_path_safe_mount_contract_helper() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn atomic_replace_fd_installs_into_empty_target() {
     let tmp = scratch_dir();
     let target = tmp.path().join("state");
@@ -171,6 +174,7 @@ fn atomic_replace_fd_installs_into_empty_target() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn atomic_replace_fd_exchanges_existing_target() {
     let tmp = scratch_dir();
     let target = tmp.path().join("state");

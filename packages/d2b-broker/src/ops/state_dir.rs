@@ -447,6 +447,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn scratch() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "d2b-w3-s2-state-{}-{}",
@@ -462,6 +463,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn creates_base_and_relative_paths() {
         let dir = scratch();
         let base = dir.join("state");
@@ -485,6 +487,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn idempotent_reuses_existing_dirs() {
         let dir = scratch();
         let base = dir.join("state");
@@ -512,6 +515,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn preserves_existing_base_dir_mode_instead_of_restamping() {
         // Regression: vm-start's per-VM root prepare must NOT re-stamp
         // mode/ownership on an EXISTING dir. Host activation creates the
@@ -553,6 +557,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fresh_base_dir_still_receives_requested_mode() {
         // The preserve-existing behavior must only apply to EXISTING
         // dirs; a freshly created base dir still gets the requested mode.
@@ -579,6 +584,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn refuses_absolute_relative_path() {
         let dir = scratch();
         let base = dir.join("state");
@@ -598,6 +604,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn refuses_parent_dir_escape() {
         let dir = scratch();
         let req = PrepareDirRequest {

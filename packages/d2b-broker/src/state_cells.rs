@@ -580,6 +580,7 @@ impl CellStore {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 impl Drop for CellStore {
     /// Stop the owner deterministically: the Shutdown ack arrives only after
     /// the owner's state (including any in-flight durable persist) is gone,
@@ -1386,6 +1387,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn crash_between_durable_persist_and_granted_response_regrants_exactly_once() {
         // U6 invariant (AE): the one-time claim is durable before Granted
         // returns; a crash in the window between the durable persist and the

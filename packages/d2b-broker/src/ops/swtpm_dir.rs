@@ -1247,6 +1247,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn fresh_create_sets_mode_owner_and_marker() {
         let s = Scratch::new("fresh");
         let paths = s.paths("alpha");
@@ -1476,6 +1477,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn idempotent_second_run_is_clean() {
         let s = Scratch::new("idem");
         let paths = s.paths("iota");
@@ -1519,6 +1521,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn ancestor_traverse_acl_applied() {
         let s = Scratch::new("ancestoracl");
         let paths = s.paths("lambda");

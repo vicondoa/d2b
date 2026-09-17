@@ -733,6 +733,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn delegate_happy_path() {
         let b = backend(1234);
         let ctx = context(&[]);
@@ -751,6 +752,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn delegate_refused_uid_zero() {
         let b = backend(0);
         let ctx = context(&[]);
@@ -772,6 +774,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn delegate_refuses_when_parent_not_delegated() {
         let b = undelegated_backend(1234);
         let ctx = context(&[]);
@@ -790,6 +793,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn open_unknown_subject_audited() {
         let b = backend(1234);
         let ctx = context(&["alpha"]);

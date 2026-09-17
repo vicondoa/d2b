@@ -507,6 +507,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn accept(listener: &std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd> {
         use nix::sys::socket::{SockFlag, accept4};
         accept4(listener.as_raw_fd(), SockFlag::empty())
@@ -521,6 +522,7 @@ mod tests {
     }
 
     /// One forwarded call through a fresh runtime, as the broker makes it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn forward(
         forwarder: &SocketForwarder,
         operation: &str,
@@ -628,6 +630,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_unrouted_forwarder_refuses_every_operation() {
         let chain = d2b_audit::evidence_chain::EvidenceChain::root("invocation-10", "daemon");
         let failure = runtime()
@@ -656,6 +659,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_peer_that_accepts_and_never_answers_is_bounded_by_the_round_trip_budget() {
         // The peer accepts the dial and then says nothing. A blocking
         // exchange with no deadline would hold the caller forever; the
@@ -754,6 +758,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_minted_context_crosses_the_wire_verbatim() {
         use d2b_contracts_broker::broker_wire::{ForwardContext, STALE_CONTEXT};
         // The peer echoes the context block it received: a forwarder that

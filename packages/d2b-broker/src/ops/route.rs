@@ -671,6 +671,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn unmarked_route_is_unchanged_on_replace_and_delete() {
         let root = std::env::current_dir()
             .unwrap()
@@ -700,6 +701,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn matching_synthetic_route_id_without_observable_record_is_foreign() {
         let root = std::env::current_dir()
             .unwrap()
@@ -722,6 +724,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn forged_route_marker_is_rejected_before_creation() {
         let root = std::env::current_dir()
             .unwrap()
@@ -742,6 +745,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn matching_route_marker_preserves_add_replace_delete_semantics() {
         let root = std::env::current_dir()
             .unwrap()

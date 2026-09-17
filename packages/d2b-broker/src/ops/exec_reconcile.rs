@@ -1591,6 +1591,7 @@ mod tests {
     /// slashes for the /proc/sys path. Rejects absolute paths,
     /// traversal, and unsafe characters.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn system_write_sysctl_rejects_absolute_key() {
         let exec = SystemReconcileExecutor;
         let err = exec
@@ -1601,6 +1602,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn system_write_sysctl_rejects_traversal() {
         let exec = SystemReconcileExecutor;
         let err = exec
@@ -1611,6 +1613,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn system_write_sysctl_rejects_unsafe_char() {
         let exec = SystemReconcileExecutor;
         let err = exec
@@ -1621,6 +1624,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn system_write_sysctl_rejects_empty_key() {
         let exec = SystemReconcileExecutor;
         let err = exec.write_sysctl("", "1").await.unwrap_err();
@@ -1628,6 +1632,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn system_write_sysctl_rejects_newline_in_value() {
         let exec = SystemReconcileExecutor;
         let err = exec
@@ -1638,6 +1643,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn system_apply_nft_rejects_non_absolute_binary() {
         let exec = SystemReconcileExecutor;
         let err = exec
@@ -1648,6 +1654,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn system_apply_nft_rejects_empty_script() {
         let exec = SystemReconcileExecutor;
         let err = exec
@@ -1658,6 +1665,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn system_ip_route_rejects_non_absolute_binary() {
         let exec = SystemReconcileExecutor;
         let err = exec
@@ -1668,6 +1676,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn system_ip_route_rejects_empty_spec() {
         let exec = SystemReconcileExecutor;
         let err = exec
@@ -1678,6 +1687,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn system_write_atomic_file_rejects_non_absolute_path() {
         let exec = SystemReconcileExecutor;
         let err = exec
@@ -1975,6 +1985,7 @@ exit 0
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn system_run_ssh_keygen_rejects_relative_path() {
         let exec = SystemReconcileExecutor;
         let err = exec
@@ -1987,6 +1998,7 @@ exit 0
     // ---- Fake executor regression tests ----
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn fake_records_nft_apply() {
         let f = FakeReconcileExecutor::new();
         f.apply_nft_script(Path::new("/usr/sbin/nft"), "table inet d2b {}")
@@ -2004,6 +2016,7 @@ exit 0
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn fake_records_sysctl_write() {
         let f = FakeReconcileExecutor::new();
         f.write_sysctl("net.ipv4.ip_forward", "1").await.unwrap();
@@ -2016,6 +2029,7 @@ exit 0
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn fake_records_atomic_write() {
         let f = FakeReconcileExecutor::new();
         f.write_atomic_file(Path::new("/etc/hosts"), b"127.0.0.1 host\n", 0o644)
@@ -2029,6 +2043,7 @@ exit 0
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn fake_records_ip_route() {
         let f = FakeReconcileExecutor::new();
         f.ip_route(
@@ -2051,6 +2066,7 @@ exit 0
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn fake_records_ssh_keygen() {
         let f = FakeReconcileExecutor::new();
         let result = f

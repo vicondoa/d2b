@@ -62,7 +62,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "net", "time", "fs", "process", "io-util"] }
 sha2 = "0.10"
-zbus = { version = "5.16", features = ["blocking-api"] }
+# U9 (plan R16): the `blocking-api` feature is removed - the broker's
+# systemd D-Bus surface is async (ops/systemd.rs), so the blocking module
+# must not be linkable into the broker closure.
+zbus = "5.16"
 
 [dev-dependencies]
 # Dev-only override to enable d2b-host's `fake-backends` feature
@@ -80,16 +83,17 @@ d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version =
 tempfile = "3"
 sha2 = "0.10"
 
-# U33: this crate does not inherit `[workspace.lints]` (it carries its own lint
-# posture), but `clippy.toml` at the workspace root arms
+# U33/U9: this crate does not inherit `[workspace.lints]` (it carries its own
+# lint posture), but `clippy.toml` at the workspace root arms
 # `clippy::disallowed_methods` for every crate clippy checks - the lint is
 # warn-by-default and the blocking-API list is what makes it fire, so the
-# workspace lint table is not what turns it on. Without the levels below the
-# workspace's pre-existing blocking calls would fail this crate's build under
-# the repo's `-D warnings`. TEMPORARY: the `disallowed_methods` allowance goes
-# away together with the workspace-level one in the root manifest - see the
-# removal condition there; `await_holding_lock` is already a live denial.
+# workspace lint table is not what turns it on. U9 flipped the broker to
+# `deny` once its census reached zero (plan R7/F1); the workspace-root level
+# still stands at `allow` until U16 flips it workspace-wide. The zbus
+# `blocking-api` feature removal (plan R16) landed in the same flip, so the
+# blocking module is not linkable into the broker closure.
+# `await_holding_lock` and `await_holding_refcell_ref` are live denials.
 [lints.clippy]
-disallowed_methods = "allow"
+disallowed_methods = "deny"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"

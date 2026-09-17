@@ -417,6 +417,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn injected_fixture_handler_answers_through_call() {
         let table =
             register_declared_handlers(&[fixture_declaration()]).expect("the fixture admits");
@@ -453,6 +454,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_fixture_handler_reaches_only_its_declared_context() {
         let declaration = HandlerDeclaration {
             handler: declared_context_only_handler,
@@ -475,6 +477,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_handler_touching_an_undeclared_state_cell_refuses_at_the_capability_object() {
         // AE3's runtime half: the refusal is decided by the HANDLER's own
         // code at the capability object (no cell handle is carried), and
@@ -677,6 +680,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn two_admitted_fixture_handlers_both_answer() {
         // Fail-closed registration admits every declared handler and
         // refuses none of them silently: two pure fixture declarations

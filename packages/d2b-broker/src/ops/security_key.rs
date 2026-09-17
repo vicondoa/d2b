@@ -293,6 +293,7 @@ mod tests {
     use d2b_contracts_resource::v3::ResourceRef;
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn unconfigured_selector_is_rejected_before_sysfs_lookup() {
         assert!(matches!(
             resolve_selector("test-selector", &[], Path::new("/sys/class/hidraw")).await,
@@ -301,6 +302,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn configured_selector_reports_sysfs_io_errors() {
         let selector = SecurityKeySelector {
             selector_id: "test-selector".to_owned(),
@@ -321,6 +323,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn raw_hidraw_selector_is_rejected() {
         assert!(matches!(
             resolve_selector("hidraw-0", &[], Path::new("/sys/class/hidraw")).await,
@@ -420,6 +423,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn is_fido_device_rejects_nonexistent_path() {
         assert!(!is_fido_device(Path::new("/nonexistent/hidraw-path")).await);
     }
@@ -461,6 +465,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn open_and_validate_hidraw_dev_null_fails_group_or_type_validation() {
         // /dev/null is a character device but is never owned by a FIDO
         // group, so it must be refused, not silently opened.
@@ -476,6 +481,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn open_and_validate_hidraw_missing_path_is_io_error() {
         match open_and_validate_hidraw(Path::new("/nonexistent/hidraw-path"), false).await {
             Err(OpError::Io { .. }) => {}

@@ -2165,6 +2165,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn answer_from(
         dispatcher: &dyn OperationDispatcher,
         operation: &str,
@@ -2238,6 +2239,7 @@ mod tests {
         (ForwardOperationResponse { outcome }, response_fds)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn accept_peer(listener: &OwnedFd) -> io::Result<OwnedFd> {
         nix::sys::socket::accept4(listener.as_raw_fd(), nix::sys::socket::SockFlag::empty())
             .map(crate::sys::owned_fd_from_raw)
@@ -2316,6 +2318,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_unknown_operation_is_refused() {
         let envelope = probe_envelope();
         let refusal = runtime()
@@ -2331,6 +2334,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_uncommitted_row_is_refused() {
         let envelope = probe_envelope();
         // The committed catalog declares the operation; this broker does not
@@ -2348,6 +2352,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_ungranted_caller_is_refused() {
         let envelope = probe_envelope();
         let refusal = runtime()
@@ -2363,6 +2368,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_wire_inherited_operation_is_refused() {
         // The typed wire rows (U12's network-fds family rows among the
         // retired set) keep `payload_provenance: Wire` while the family
@@ -2384,6 +2390,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_payload_outside_the_row_schema_is_refused() {
         let envelope = probe_envelope();
         let undeclared = runtime()
@@ -2407,6 +2414,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_unregistered_handler_is_refused() {
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(HandlerTable::new()))
             .declare(declared_row(
@@ -2448,6 +2456,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_handler_refusal_and_a_handler_error_each_keep_their_own_codes() {
         // A refusal a handler chose and a failure a handler hit are two
         // cases with two codes: the caller can tell a deliberate refusal
@@ -2509,6 +2518,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_forwarded_peer_failure_keeps_its_own_code() {
         // The peer's dispatch failure crosses the socket and back under its
         // own code: a handler refusal in the declaring process is reported
@@ -2545,6 +2555,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_failure_code_outside_the_closed_set_is_refused_as_errored_with_the_code_as_detail() {
         // The caller's vocabulary is the envelope's closed set: a peer code
         // the set does not carry is refused under the envelope's own errored
@@ -2578,6 +2589,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_panicking_local_handler_writes_a_handler_crashed_refusal_and_the_envelope_keeps_serving() {
         // A crash inside a local handler is caught at the task boundary: the
         // caller sees a typed crash refusal carrying the panic's message,
@@ -2625,6 +2637,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_spinning_handler_is_aborted_to_timed_out_while_an_innocent_operation_answers() {
         // A local handler that never awaits is aborted at its effective
         // budget: the call is refused by name while the handler hogs its own
@@ -2715,6 +2728,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_declared_operation_dispatches_with_an_invocation_id() {
         let envelope = probe_envelope();
         let invocation = runtime()
@@ -2735,6 +2749,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_refusal_carries_the_invocation_identifier_it_denied() {
         let envelope = probe_envelope();
         let refusal = runtime()
@@ -2763,6 +2778,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_row_join_keys_the_invocation_on_its_declared_fields() {
         let mut row = declared_row(
             "ProbeOperation",
@@ -2849,6 +2865,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_forwarded_invocation_reaches_the_peer_and_returns_its_result() {
         // The broker links no provider crate: a committed row's handler runs
         // in the declaring process, so the dispatch step crosses to the peer
@@ -2885,6 +2902,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_forwarded_row_whose_peer_serves_nothing_refuses() {
         // The peer is reachable but registered no handler for the row, so the
         // invocation must refuse rather than succeed with the wrong process's
@@ -2914,6 +2932,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_unwired_broker_refuses_every_forwarded_row() {
         // The fail-closed default: no peer configured means no forwarded row
         // is served, named as the missing handler rather than a local guess.
@@ -3064,6 +3083,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_zero_fd_response_to_an_fd_declaring_operation_is_a_valid_empty_set() {
         let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", |_invocation| {
             Box::pin(async move {
@@ -3094,6 +3114,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_oversized_request_fd_set_is_refused_with_the_fd_leg_code_before_dispatch() {
         use nix::unistd::pipe;
         let peer = loopback_peer(echo_table());
@@ -3122,6 +3143,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_row_declaring_more_than_the_frame_ceiling_refuses_an_fd_leg_with_the_fd_leg_code() {
         use nix::unistd::pipe;
         let peer = loopback_peer(echo_table());
@@ -3146,6 +3168,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_request_fd_that_mismatches_the_declared_kind_is_refused_with_the_fd_leg_code() {
         use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
         let peer = loopback_peer(echo_table());
@@ -3176,6 +3199,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_peer_that_returns_an_fd_it_did_not_mint_this_call_is_refused_with_the_fd_leg_code() {
         use nix::unistd::pipe;
         let (request_read, _request_write) = pipe().expect("request pipe");
@@ -3234,6 +3258,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_envelope_refuses_to_mint_until_the_daemon_publishes() {
         // The broker refuses to attest a call into a Zone it holds no
         // published values for: the call is refused with the stale-context
@@ -3430,6 +3455,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_store_cache_is_monotonic_and_durable() {
         let (dir, store) = context_store();
         store
@@ -3466,6 +3492,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_restarting_broker_invalidates_every_previous_context_via_the_epoch() {
         // Any context minted before a restart fails it regardless of
         // generation equality: the reopened store mints under a strictly
@@ -3498,6 +3525,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn concurrent_publishes_never_durably_regress_newer_state() {
         // U6 invariant: publish-as-one-atomic-unit. The single writer
         // serializes monotonic check + in-memory commit + durable persist,
@@ -3742,6 +3770,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_self_reentrant_call_without_a_granting_row_refuses_under_the_initiating_principal() {
         // Graft rule (KTD6): a handler may call another provider's service
         // only when a committed row and its grants cover the call under
@@ -3794,6 +3823,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_nested_loop_trips_the_depth_cap_with_the_loop_code_and_never_a_second_root() {
         // KTD6 loop rule: a chain deeper than the cap refuses with the
         // dedicated closed-set code, every admitted leg recorded exactly
@@ -3939,6 +3969,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn in_broker_refusals_record_exactly_one_root_record_each() {
         // The one-record-per-invocation invariant holds across outcomes:
         // a successful call, a refused call, and an unknown operation

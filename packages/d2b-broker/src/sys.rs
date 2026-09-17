@@ -1951,6 +1951,13 @@ pub mod pidfd_sys {
 
     /// Pure I/O - no syscalls beyond `open`/`read`. Returns `None` if
     /// the file is missing or field 22 isn't parseable.
+    ///
+    /// R11 inventory: this /proc stat reader is shared by the sync
+    /// `PidfdSpawner` trait boundary (`RealPidfdSpawner::spawn` /
+    /// `reconcile`) and the sync `live_open_pidfd` handler, so it cannot
+    /// be async; the async systemd identity path calls it as a bounded
+    /// single-file read. The allow is the sanctioned synchronous-path class.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn read_proc_stat_start_time(pid: i32) -> io::Result<u64> {
         let path = format!("/proc/{pid}/stat");
         let stat = fs::read_to_string(&path)?;
@@ -2166,8 +2173,8 @@ pub mod pidfd_sys {
     const SECCOMP_SET_MODE_FILTER: libc::c_uint = 1;
 
     #[allow(unsafe_code)]
-    pub fn load_seccomp_program(path: &Path) -> io::Result<SeccompProgram> {
-        let bytes = fs::read(path)?;
+    pub async fn load_seccomp_program(path: &Path) -> io::Result<SeccompProgram> {
+        let bytes = tokio::fs::read(path).await?;
         let filter_size = std::mem::size_of::<libc::sock_filter>();
         if bytes.is_empty() || bytes.len() % filter_size != 0 {
             return Err(io::Error::new(
@@ -2348,6 +2355,11 @@ pub mod pidfd_sys {
         }
     }
 
+    // R11 inventory: the stat below feeds the synchronous clone3 child-setup
+    // chain (`clone3_spawn_runner`)); the child waits on the sync pipe until the
+    // parent's setup is complete, so this work cannot move to an async
+    // filesystem path. The allow is the sanctioned synchronous-path class.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn prepare_device_binds(
         policy: &MountPolicy,
     ) -> io::Result<(Vec<OwnedFd>, Vec<PreparedDeviceBind>)> {
@@ -3502,6 +3514,12 @@ pub mod pidfd_sys {
     /// Each io::Error is annotated with the specific /proc path that
     /// failed so operators don't have to guess which of the three writes
     /// errored.
+    // R11 inventory: the three /proc writes must complete before the clone3 child
+    // proceeds past its sync-pipe gate (the child waits on the pipe until the
+    // parent's uid_map / setgroups / gid_map writes are done), so they cannot
+    // move to an async filesystem path. The allow is the sanctioned
+    // synchronous-path class.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn write_user_namespace_maps(child_pid: i32, spec: UserNamespaceSpec) -> io::Result<()> {
         use std::fs;
         let uid_map_path = format!("/proc/{child_pid}/uid_map");
@@ -3678,6 +3696,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn path_safe_atomic_replace_round_trips() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("artifact.txt");
@@ -3705,6 +3724,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn path_safe_atomic_replace_idempotent_on_retry() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("retry.txt");
@@ -3723,6 +3743,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn path_safe_ensure_dir_path_safe_creates_directory() {
         let dir = tempdir().expect("tempdir");
         let parent_fd = super::path_safe::open_dir_path_safe(dir.path()).expect("open safe dir");
@@ -3746,6 +3767,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn path_safe_remove_path_safe_refuses_symlink() {
         let dir = tempdir().expect("tempdir");
         let target = dir.path().join("target");
@@ -4032,6 +4054,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn mknod_device_bind_target_chowns_runner_device_node() {
         if !nix::unistd::Uid::effective().is_root() {
             return;

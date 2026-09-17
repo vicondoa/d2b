@@ -302,6 +302,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn apply_with_readback_records_write_then_confirms() {
         let exec = FakeReconcileExecutor::new();
         apply_with_readback_using(
@@ -324,6 +325,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn apply_with_readback_rejects_drift() {
         let exec = FakeReconcileExecutor::new();
         let err = apply_with_readback_using(

@@ -245,6 +245,7 @@ mod tests {
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
     use nix::unistd::{pipe, read, write};
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fd_test_lock() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
@@ -293,6 +294,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn scm_rights_receipt_fd_does_not_inherit_across_exec() {
         let _guard = fd_test_lock();
         let (left, right) = socketpair(

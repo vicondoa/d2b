@@ -357,12 +357,14 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn template_paths_are_check_only_unless_expanded() {
         assert!(has_unexpanded_template("/run/d2b/vms/<vm>"));
         assert!(!has_unexpanded_template("/run/d2b"));
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn etc_paths_are_apply_check_only() {
         assert!(apply_is_check_only(Path::new("/etc/d2b")));
         assert!(apply_is_check_only(Path::new("/etc/d2b/bundle.json")));
@@ -370,6 +372,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn owned_roots_are_closed() {
         assert!(validate_owned_root(Path::new("/run/d2b"), "x").await.is_ok());
         assert_refused_reason(
@@ -387,6 +390,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn canonical_root_check_rejects_symlink_escape() {
         let tmp = project_scratch("canonical-root-check-rejects-symlink-escape");
         let root = tmp.path().join("root");
@@ -402,6 +406,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn mode_parser_reads_octal() {
         assert_eq!(parse_mode("0750", "x").unwrap(), 0o750);
         assert_eq!(parse_mode("0", "x").unwrap(), 0);
@@ -409,6 +414,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn reconcile_refuses_non_directory_apply_without_mutation() {
         let resolver = resolver_with_storage_path(
             "path:regular-file",
@@ -423,6 +429,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn reconcile_external_grant_skips_filesystem_root_validation() {
         let resolver = resolver_with_storage_path(
             "path:external-grant",
@@ -441,6 +448,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn reconcile_refuses_etc_d2b_apply_attempts() {
         let resolver = resolver_with_storage_path(
             "path:config-root",
@@ -455,6 +463,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn broker_storage_and_sync_requests_are_opaque_id_only() {
         let storage = serde_json::to_value(
             d2b_contracts_broker::broker_wire::ReconcileStorageScopeRequest {
@@ -528,11 +537,13 @@ mod tests {
     }
 
     impl Drop for ScratchDir {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn project_scratch(name: &str) -> ScratchDir {
         let root = crate::test_scratch_root().join("storage-contract-test-scratch");
         std::fs::create_dir_all(&root).unwrap();

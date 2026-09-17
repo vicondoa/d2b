@@ -324,6 +324,7 @@ mod tests {
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
     use tempfile::TempDir;
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn temp_lock_dir() -> TempDir {
         let base = crate::test_scratch_root();
         fs::create_dir_all(&base).expect("create temp base");
@@ -331,6 +332,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn acquire_creates_lock_with_owner_body() {
         let tmp = temp_lock_dir();
         let lock = tmp.path().join("1-2");
@@ -347,6 +349,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn acquire_uses_broker_uid_and_daemon_gid_for_record() {
         let tmp = temp_lock_dir();
         let lock = tmp.path().join("1-2.3");
@@ -361,6 +364,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn acquire_preserves_precreated_lock_root_mode() {
         let tmp = temp_lock_dir();
         fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o750))
@@ -425,6 +429,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn acquire_refuses_symlink_parent() {
         let tmp = temp_lock_dir();
         let real = tmp.path().join("real");

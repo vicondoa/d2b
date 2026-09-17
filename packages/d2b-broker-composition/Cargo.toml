@@ -20,6 +20,17 @@ license = "Apache-2.0"
 [lints.rust]
 unsafe_code = "deny"
 
+# U9 (KTD5): the composition root inherits the workspace lint table, whose
+# `disallowed_methods` still stands at `allow` until the workspace-wide flip
+# (U16). The broker's deny flip is only real in the composed binary if this
+# crate mirrors the same levels locally, so the binary's own code is
+# deny-gated the same way. The dependency-surface audit module keeps its
+# tracked blanket-allow exemption (xtask provider-crate-policy ratchet).
+[lints.clippy]
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+
 [features]
 # Forward the broker's legacy feature set: the layer1-bootstrap feature
 # rebuilds the bootstrap-shaped binary (a probe harness), and fake-backends

@@ -125,6 +125,7 @@ fn open_hidraw_security_key_response_wire_round_trips() {
 /// The production response transport carries the hidraw handle out-of-band
 /// while keeping the JSON body path-free.
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn open_hidraw_security_key_response_passes_one_fd_with_scm_rights() {
     let (sender, receiver): (OwnedFd, OwnedFd) = socketpair(
         AddressFamily::Unix,

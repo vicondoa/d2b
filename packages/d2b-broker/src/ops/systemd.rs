@@ -6,12 +6,10 @@
 //! the system manager or an exact same-UID user manager, performs all manager
 //! calls, and returns only a closed identity tuple plus an optional pidfd.
 
-use std::fs;
 use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use d2b_contracts_broker::broker_wire::{
@@ -20,9 +18,9 @@ use d2b_contracts_broker::broker_wire::{
 };
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent};
 use sha2::{Digest, Sha256};
-use zbus::Address;
-use zbus::blocking::{Connection, Proxy, connection};
+use zbus::connection;
 use zbus::zvariant::{OwnedObjectPath, Value};
+use zbus::{Address, Connection, Proxy};
 
 const SYSTEMD_DESTINATION: &str = "org.freedesktop.systemd1";
 const SYSTEMD_MANAGER_PATH: &str = "/org/freedesktop/systemd1";
@@ -159,20 +157,21 @@ fn user_bus_path(uid: u32) -> PathBuf {
 /// that UID.  This prevents a caller from selecting an arbitrary session bus
 /// while still allowing the broker to keep manager connections out of the
 /// daemon and Provider processes.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn manager_connection(
+async fn manager_connection(
     intent: &ResolvedRunnerIntent,
     domain: SystemdUnitDomain,
 ) -> Result<Connection, SystemdError> {
     match domain {
-        SystemdUnitDomain::System => system_connection(),
+        SystemdUnitDomain::System => system_connection().await,
         SystemdUnitDomain::User => {
             let runtime_dir = PathBuf::from("/run/user").join(intent.uid.to_string());
             let bus_path = user_bus_path(intent.uid);
-            let runtime_metadata = fs::metadata(&runtime_dir)
+            let runtime_metadata = tokio::fs::metadata(&runtime_dir)
+                .await
                 .map_err(|_| SystemdError::UserManagerUnavailable)?;
-            let bus_metadata =
-                fs::metadata(&bus_path).map_err(|_| SystemdError::UserManagerUnavailable)?;
+            let bus_metadata = tokio::fs::metadata(&bus_path)
+                .await
+                .map_err(|_| SystemdError::UserManagerUnavailable)?;
             if !runtime_metadata.is_dir()
                 || runtime_metadata.uid() != intent.uid
                 || !bus_metadata.file_type().is_socket()
@@ -187,6 +186,7 @@ fn manager_connection(
                 .map_err(|_| SystemdError::UserManagerUnavailable)?
                 .method_timeout(SYSTEMD_METHOD_TIMEOUT)
                 .build()
+                .await
                 .map_err(|_| SystemdError::UserManagerUnavailable)
         }
     }
@@ -247,21 +247,23 @@ fn unit_name(request: &d2b_contracts_broker::broker_wire::SystemdUnitRequest) ->
     format!("d2b-process-{suffix}.service")
 }
 
-fn system_connection() -> Result<Connection, SystemdError> {
+async fn system_connection() -> Result<Connection, SystemdError> {
     connection::Builder::system()
         .map_err(|_| SystemdError::Query)?
         .method_timeout(SYSTEMD_METHOD_TIMEOUT)
         .build()
+        .await
         .map_err(|_| SystemdError::Query)
 }
 
-fn manager_proxy(connection: &Connection) -> Result<Proxy<'_>, SystemdError> {
+async fn manager_proxy(connection: &Connection) -> Result<Proxy<'_>, SystemdError> {
     Proxy::new(
         connection,
         SYSTEMD_DESTINATION,
         SYSTEMD_MANAGER_PATH,
         SYSTEMD_MANAGER_INTERFACE,
     )
+    .await
     .map_err(|_| SystemdError::Query)
 }
 
@@ -275,7 +277,7 @@ fn is_no_such_unit(error: &zbus::Error) -> bool {
 
 /// Verify reachability of the trusted per-user systemd manager without
 /// exposing its connection or accepting a caller-supplied bus address.
-pub fn check_user_manager(
+pub async fn check_user_manager(
     resolver: &BundleResolver,
     request: &d2b_contracts_broker::broker_wire::CheckSystemdUserManagerRequest,
 ) -> Result<bool, SystemdError> {
@@ -283,10 +285,10 @@ pub fn check_user_manager(
         return Err(SystemdError::InvalidRequest("user-manager-domain"));
     }
     let intent = validate_request(resolver, request)?;
-    let connection = manager_connection(&intent, request.domain)?;
-    let manager = manager_proxy(&connection)?;
+    let connection = manager_connection(&intent, request.domain).await?;
+    let manager = manager_proxy(&connection).await?;
     let result: Result<OwnedObjectPath, zbus::Error> =
-        manager.call("GetUnit", &(unit_name(request)));
+        manager.call("GetUnit", &(unit_name(request))).await;
     match result {
         Ok(_) => Ok(true),
         Err(error) if is_no_such_unit(&error) => Ok(true),
@@ -294,8 +296,8 @@ pub fn check_user_manager(
     }
 }
 
-fn unit_proxy<'a>(manager: &Proxy<'a>, name: &str) -> Result<OwnedObjectPath, SystemdError> {
-    manager.call("GetUnit", &(name)).map_err(|error| {
+async fn unit_proxy<'a>(manager: &Proxy<'a>, name: &str) -> Result<OwnedObjectPath, SystemdError> {
+    manager.call("GetUnit", &(name)).await.map_err(|error| {
         if is_no_such_unit(&error) {
             SystemdError::BundleIntent
         } else {
@@ -343,14 +345,14 @@ fn cgroup_identity(
     Ok(digest.finalize().into())
 }
 
-fn read_identity(
+async fn read_identity(
     request: &d2b_contracts_broker::broker_wire::SystemdUnitRequest,
     intent: &ResolvedRunnerIntent,
     connection: &Connection,
     name: &str,
 ) -> Result<Option<SystemdUnitIdentity>, SystemdError> {
-    let manager = manager_proxy(connection)?;
-    let unit_path = match unit_proxy(&manager, name) {
+    let manager = manager_proxy(connection).await?;
+    let unit_path = match unit_proxy(&manager, name).await {
         Ok(path) => path,
         Err(SystemdError::BundleIntent) => return Ok(None),
         Err(error) => return Err(error),
@@ -361,25 +363,30 @@ fn read_identity(
         unit_path.as_str(),
         SYSTEMD_UNIT_INTERFACE,
     )
+    .await
     .map_err(|_| SystemdError::Query)?;
     let active_state: String = unit
         .get_property("ActiveState")
+        .await
         .map_err(|_| SystemdError::Query)?;
     if !matches!(active_state.as_str(), "active" | "activating" | "reloading") {
         return Ok(None);
     }
     let invocation: Vec<u8> = unit
         .get_property("InvocationID")
+        .await
         .map_err(|_| SystemdError::Query)?;
     let invocation_id: [u8; 16] = invocation
         .try_into()
         .map_err(|_| SystemdError::IdentityMismatch)?;
     let control_group: String = unit
         .get_property("ControlGroup")
+        .await
         .map_err(|_| SystemdError::Query)?;
     let cgroup_identity = cgroup_identity(&control_group, name, request.domain, intent.uid)?;
     let main_pid: u32 = unit
         .get_property("MainPID")
+        .await
         .map_err(|_| SystemdError::Query)?;
     let main_pid = NonZeroU32::new(main_pid).ok_or(SystemdError::IdentityMismatch)?;
     let start_time_ticks = crate::sys::pidfd_sys::read_proc_stat_start_time(main_pid.get() as i32)
@@ -397,8 +404,7 @@ fn read_identity(
     }))
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn wait_identity(
+async fn wait_identity(
     request: &d2b_contracts_broker::broker_wire::SystemdUnitRequest,
     intent: &ResolvedRunnerIntent,
     connection: &Connection,
@@ -406,13 +412,13 @@ fn wait_identity(
 ) -> Result<SystemdUnitIdentity, SystemdError> {
     let deadline = Instant::now() + IDENTITY_READY_TIMEOUT;
     loop {
-        if let Some(identity) = read_identity(request, intent, connection, name)? {
+        if let Some(identity) = read_identity(request, intent, connection, name).await? {
             return Ok(identity);
         }
         if Instant::now() >= deadline {
             return Err(SystemdError::Timeout);
         }
-        thread::sleep(IDENTITY_RETRY_INTERVAL);
+        tokio::time::sleep(IDENTITY_RETRY_INTERVAL).await;
     }
 }
 
@@ -428,14 +434,14 @@ fn expected_matches(
 }
 
 /// Start a trusted transient system service and open its verified main pidfd.
-pub fn start(
+pub async fn start(
     resolver: &BundleResolver,
     request: &StartTransientUnitRequest,
 ) -> Result<(SystemdUnitIdentity, OwnedFd), SystemdError> {
     let intent = validate_request(resolver, request)?;
     let name = unit_name(request);
-    let connection = manager_connection(&intent, request.domain)?;
-    let manager = manager_proxy(&connection)?;
+    let connection = manager_connection(&intent, request.domain).await?;
+    let manager = manager_proxy(&connection).await?;
     let exec_start = vec![(
         intent.binary_path.to_string_lossy().into_owned(),
         intent.argv.clone(),
@@ -473,8 +479,9 @@ pub fn start(
             "StartTransientUnit",
             &(name.as_str(), "replace", properties, auxiliary),
         )
+        .await
         .map_err(|_| SystemdError::Start)?;
-    let identity = wait_identity(request, &intent, &connection, &name)?;
+    let identity = wait_identity(request, &intent, &connection, &name).await?;
     let pidfd =
         crate::live_handlers::live_open_pidfd(identity.main_pid as i32, identity.start_time_ticks)
             .map_err(|_| SystemdError::Pidfd)?
@@ -483,28 +490,29 @@ pub fn start(
 }
 
 /// Observe a trusted transient unit without opening a pidfd.
-pub fn observe(
+pub async fn observe(
     resolver: &BundleResolver,
     request: &d2b_contracts_broker::broker_wire::ObserveSystemdUnitRequest,
 ) -> Result<Option<SystemdUnitIdentity>, SystemdError> {
     let intent = validate_request(resolver, request)?;
-    let connection = manager_connection(&intent, request.domain)?;
-    read_identity(request, &intent, &connection, &unit_name(request))
+    let connection = manager_connection(&intent, request.domain).await?;
+    read_identity(request, &intent, &connection, &unit_name(request)).await
 }
 
 /// Re-query a trusted unit, verify its identity, and open a fresh pidfd.
-pub fn reopen(
+pub async fn reopen(
     resolver: &BundleResolver,
     request: &OpenSystemdUnitPidfdRequest,
 ) -> Result<(SystemdUnitIdentity, OwnedFd), SystemdError> {
     let intent = validate_request(resolver, &request.unit)?;
-    let connection = manager_connection(&intent, request.unit.domain)?;
+    let connection = manager_connection(&intent, request.unit.domain).await?;
     let actual = wait_identity(
         &request.unit,
         &intent,
         &connection,
         &unit_name(&request.unit),
-    )?;
+    )
+    .await?;
     expected_matches(&actual, &request.expected)?;
     let pidfd =
         crate::live_handlers::live_open_pidfd(actual.main_pid as i32, actual.start_time_ticks)
@@ -514,34 +522,35 @@ pub fn reopen(
 }
 
 /// Stop a trusted transient unit and verify that it becomes inactive.
-pub fn stop(
+pub async fn stop(
     resolver: &BundleResolver,
     request: &StopSystemdUnitRequest,
 ) -> Result<(), SystemdError> {
     let intent = validate_request(resolver, &request.unit)?;
     let name = unit_name(&request.unit);
-    let connection = manager_connection(&intent, request.unit.domain)?;
-    let manager = manager_proxy(&connection)?;
-    let Some(actual) = read_identity(&request.unit, &intent, &connection, &name)? else {
+    let connection = manager_connection(&intent, request.unit.domain).await?;
+    let manager = manager_proxy(&connection).await?;
+    let Some(actual) = read_identity(&request.unit, &intent, &connection, &name).await? else {
         return Ok(());
     };
     expected_matches(&actual, &request.expected)?;
     if request.class == SystemdStopClass::Terminate {
         manager
             .call_method("KillUnit", &(name.as_str(), "all", 9i32))
+            .await
             .map_err(|_| SystemdError::Stop)?;
     }
 
     manager
         .call_method("StopUnit", &(name.as_str(), "replace"))
+        .await
         .map_err(|_| SystemdError::Stop)?;
-    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     let deadline = Instant::now() + IDENTITY_READY_TIMEOUT;
     loop {
-        match read_identity(&request.unit, &intent, &connection, &name) {
+        match read_identity(&request.unit, &intent, &connection, &name).await {
             Ok(None) => return Ok(()),
             Ok(Some(_)) if Instant::now() >= deadline => return Err(SystemdError::Timeout),
-            Ok(Some(_)) => thread::sleep(IDENTITY_RETRY_INTERVAL),
+            Ok(Some(_)) => tokio::time::sleep(IDENTITY_RETRY_INTERVAL).await,
             Err(SystemdError::BundleIntent) => return Ok(()),
             Err(error) => return Err(error),
         }

@@ -2684,6 +2684,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn qmp_query_status_treats_missing_socket_as_shutdown_context() {
         let dir = qmp_tempdir();
         let missing = dir.path().join("missing.sock");

@@ -1708,6 +1708,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_set_bridge_port_flags_fails_closed_on_readback_drift() {
         let req = d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
             vm_id: d2b_contracts::types::VmId::new("corp-vm"),

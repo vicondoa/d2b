@@ -321,6 +321,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn scratch_dir(name: &str) -> PathBuf {
         let dir = std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
@@ -341,6 +342,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn writes_managed_block_into_fresh_file() {
         let dir = scratch_dir("hosts-fresh");
         let path = dir.join("hosts");
@@ -363,6 +365,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn idempotent_when_block_matches() {
         let dir = scratch_dir("hosts-idempotent");
         let path = dir.join("hosts");
@@ -386,6 +389,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn refuses_symlink_target() {
         let dir = scratch_dir("hosts-symlink");
         let real = dir.join("real-hosts");
@@ -398,6 +402,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn write_marker_block_preserves_foreign_lines_in_executor_payload() {
         let dir = scratch_dir("hosts-merge");
         let path = dir.join("hosts");
@@ -440,6 +445,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn network_marker_block_refuses_foreign_existing_block() {
         let dir = scratch_dir("hosts-foreign-marker");
         let path = dir.join("hosts");
@@ -471,6 +477,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn network_marker_block_preserves_another_network_marker() {
         let dir = scratch_dir("hosts-swapped-marker");
         let path = dir.join("hosts");

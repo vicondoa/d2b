@@ -943,6 +943,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn create_bridge_configures_before_success_and_delete_refuses_attached_links() {
         let absent = BridgeReadback {
             present: false,
@@ -1034,6 +1035,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn delete_persistent_tap_checks_both_fences_before_mutation() {
         let backend = FakeTap {
             present: Cell::new(true),
@@ -1053,6 +1055,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn delete_persistent_tap_validated_absence_is_idempotent() {
         let backend = FakeTap {
             present: Cell::new(false),
@@ -1063,6 +1066,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn delete_persistent_tap_foreign_marker_fails_without_deletion() {
         let backend = FakeTap {
             present: Cell::new(true),

@@ -1206,6 +1206,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn projection_stale_generation_refuses_before_any_mutation() {
         let exec = FakeReconcileExecutor::new();
         let script = projection_script("network-a", "forward-a", "ip saddr 10.20.0.0/24 accept");
@@ -1304,6 +1305,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn apply_with_coexistence_drives_executor_when_policy_allows() {
         let exec = FakeReconcileExecutor::new();
         let (script, expected_hash) = parseable_script();
@@ -1332,6 +1334,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn apply_with_coexistence_refuses_on_drift() {
         let exec = FakeReconcileExecutor::new();
         let (script, expected_hash) = parseable_script();
@@ -1357,6 +1360,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn apply_with_coexistence_refuses_on_carveout_misorder() {
         let exec = FakeReconcileExecutor::new();
         let script = concat!(
@@ -1389,6 +1393,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn apply_with_coexistence_accepts_first_apply_no_drift_check() {
         let exec = FakeReconcileExecutor::new();
         let (script, expected_hash) = parseable_script();
@@ -1408,6 +1413,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn apply_with_coexistence_refuses_when_policy_is_refuse() {
         let exec = FakeReconcileExecutor::new();
         let (script, _) = parseable_script();
@@ -1436,6 +1442,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn usbip_batch_can_apply_against_matching_prior_live_hash() {
         let exec = FakeReconcileExecutor::new();
         let (_base_script, base_hash) = parseable_script();

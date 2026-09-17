@@ -136,6 +136,7 @@ fn create_request() -> CreatePersistentTapRequest {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn state_dir(test_name: &str) -> std::path::PathBuf {
     let path = std::env::current_dir()
         .unwrap()
@@ -147,6 +148,7 @@ fn state_dir(test_name: &str) -> std::path::PathBuf {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn failed_create_leaves_no_realization_and_retry_is_safe() {
     let root = state_dir("persistent-tap-lifecycle");
     let create = create_request();
@@ -187,6 +189,7 @@ async fn failed_create_leaves_no_realization_and_retry_is_safe() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn persistence_rejects_a_swapped_tap_identity_before_writing() {
     let root = state_dir("persistent-tap-identity");
     let create = create_request();
@@ -225,6 +228,7 @@ fn delete_persistent_tap_pairs_with_create() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn delete_persistent_tap_absent_is_idempotent_after_ownership_validation() {
     let backend = FakeTap {
         present: Cell::new(false),
@@ -241,6 +245,7 @@ async fn delete_persistent_tap_absent_is_idempotent_after_ownership_validation()
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn delete_persistent_tap_rejects_stale_network_generation() {
     let backend = FakeTap {
         present: Cell::new(true),
@@ -255,6 +260,7 @@ async fn delete_persistent_tap_rejects_stale_network_generation() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn delete_persistent_tap_rejects_stale_attachment_generation() {
     let backend = FakeTap {
         present: Cell::new(true),
@@ -269,6 +275,7 @@ async fn delete_persistent_tap_rejects_stale_attachment_generation() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn delete_persistent_tap_rejects_swapped_network_identity() {
     let backend = FakeTap {
         present: Cell::new(true),
@@ -287,6 +294,7 @@ async fn delete_persistent_tap_rejects_swapped_network_identity() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn delete_persistent_tap_foreign_marker_fails_closed() {
     let backend = FakeTap {
         present: Cell::new(true),
@@ -304,6 +312,7 @@ async fn delete_persistent_tap_foreign_marker_fails_closed() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn delete_persistent_tap_refuses_unmarked_kernel_tap() {
     let backend = FakeTap {
         present: Cell::new(true),

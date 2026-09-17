@@ -12,10 +12,6 @@ use tokio::io::unix::AsyncFd;
 
 pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 
-/// How long a dial that the kernel does not complete on the first attempt
-/// waits before it tries again, bounded by the dial's own budget.
-const DIAL_RETRY_INTERVAL: Duration = Duration::from_millis(5);
-
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn connect_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     let fd = socket(
@@ -315,14 +311,32 @@ pub async fn connect_seqpacket_bounded(
     set_nonblocking(&fd)?;
     let address = UnixAddr::new(path).map_err(io_error)?;
     let deadline = tokio::time::Instant::now() + timeout;
+    // The dial waits in the reactor: the descriptor is non-blocking, so the
+    // connect syscall below never parks the caller, and the in-flight wait
+    // is an AsyncFd writable edge (connect completion) instead of a poll.
+    let io = AsyncFd::new(fd)?;
     loop {
-        match connect(fd.as_raw_fd(), &address) {
-            Ok(()) => return AsyncSeqpacket::from_owned(fd),
+        // R11 inventory: the raw connect is the non-blocking syscall inside
+        // the AsyncFd dial (the deny list's own replacement for
+        // `nix::sys::socket::connect` on a seqpacket socket, which tokio's
+        // `UnixStream` cannot represent). `set_nonblocking` above means this
+        // call never parks: the kernel answers EINPROGRESS/EAGAIN/EALREADY
+        // immediately and the wait happens on the AsyncFd writable edge in
+        // async time, bounded by `deadline`.
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+        match connect(io.get_ref().as_raw_fd(), &address) {
+            Ok(()) => return AsyncSeqpacket::from_owned(io.into_inner()),
+            // The kernel completed the dial between our attempts.
+            Err(nix::errno::Errno::EISCONN) => {
+                return AsyncSeqpacket::from_owned(io.into_inner());
+            }
             Err(nix::errno::Errno::EINTR) => continue,
             // The kernel could not complete the dial yet - its listen queue
             // is full, or the connect is still in flight - but it is not an
             // answer: keep within the budget and try again.
-            Err(nix::errno::Errno::EAGAIN) | Err(nix::errno::Errno::EINPROGRESS) => {}
+            Err(nix::errno::Errno::EAGAIN)
+            | Err(nix::errno::Errno::EINPROGRESS)
+            | Err(nix::errno::Errno::EALREADY) => {}
             Err(err) => return Err(io_error(err)),
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -332,7 +346,11 @@ pub async fn connect_seqpacket_bounded(
                 format!("dial {} exceeded its budget", path.display()),
             ));
         }
-        tokio::time::sleep(DIAL_RETRY_INTERVAL.min(remaining)).await;
+        // Wait for the socket to become writable - the kernel's connect
+        // completion signal - in async time. The guard's drop clears the
+        // readiness, so a still-in-flight dial waits for the next edge
+        // instead of spinning.
+        let _ready = io.writable().await?;
     }
 }
 
@@ -405,6 +423,7 @@ mod tests {
     /// The async path carries what the synchronous one carried: one frame,
     /// with its `SCM_RIGHTS` attachment, over a nonblocking descriptor.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn async_frames_carry_attached_descriptors() {
         let (sender, receiver) = socketpair(
             AddressFamily::Unix,
@@ -444,6 +463,7 @@ mod tests {
     /// A dial nothing is listening on refuses at once; it is the dial that
     /// must not wait forever for a peer, not the caller's budget.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_bounded_dial_to_an_absent_peer_refuses_instead_of_waiting() {
         let dir = tempfile::tempdir().expect("dir");
         let started = std::time::Instant::now();

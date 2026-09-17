@@ -490,6 +490,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn target_substitution_is_refused_before_journal_mutation() {
         let directory = PathBuf::from("target")
             .join(format!("d2b-handoff-substitution-{}", std::process::id()));
@@ -509,6 +510,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn artifact_validation_fails_closed_when_helper_is_unavailable() {
         let helper = PathBuf::from("target")
             .join(format!("missing-activation-helper-{}", std::process::id()));

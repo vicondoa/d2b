@@ -77,6 +77,7 @@ mod broker_tampered {
     // permissive - requires 0o640).
     // ---------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn make_tampered_bundle_dir() -> TempDir {
         let dir = TempDir::new().expect("tempdir");
         let bundle_path = dir.path().join("bundle.json");
@@ -165,6 +166,7 @@ mod broker_tampered {
     // ---------------------------------------------------------------
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn symlink_bundle_returns_bundle_tampered_response() {
         let dir = TempDir::new().expect("tempdir");
         let real_path = dir.path().join("real.json");

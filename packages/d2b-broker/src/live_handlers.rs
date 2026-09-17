@@ -985,12 +985,13 @@ pub(crate) fn policy_ref_device_classes(
     }
 }
 
-fn load_runner_seccomp(
+async fn load_runner_seccomp(
     plan: &SpawnRunnerPlan,
 ) -> Result<Option<crate::sys::pidfd_sys::SeccompProgram>, LiveHandlerError> {
     match plan.seccomp_policy_ref.as_deref() {
         Some(policy_path) if Path::new(policy_path).is_absolute() => {
             crate::sys::pidfd_sys::load_seccomp_program(Path::new(policy_path))
+                .await
                 .map(Some)
                 .map_err(|err| LiveHandlerError::SpawnFailed {
                     detail: format!("load seccomp program {policy_path}: {err}"),
@@ -2827,7 +2828,7 @@ pub async fn live_spawn_runner(
 
     let (binary, argv, env) =
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;
-    let seccomp_program = load_runner_seccomp(&plan)?;
+    let seccomp_program = load_runner_seccomp(&plan).await?;
     let cgroup_fds = prepare_runner_cgroup_fds(&plan.cgroup_placement)?;
     refresh_spawn_runner_acls(&plan, broker_state_dir).await?;
 
@@ -3103,6 +3104,7 @@ mod tests {
     }
 
     impl TestDir {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn new(prefix: &str) -> Self {
             use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -3124,11 +3126,13 @@ mod tests {
     }
 
     impl Drop for TestDir {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fake_usbip_sysfs(root: &TestDir, bus_id: &str) -> PathBuf {
         let sysfs_root = root.join("sys").join("bus").join("usb").join("devices");
         let driver_root = root
@@ -3147,6 +3151,7 @@ mod tests {
         sysfs_root
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fake_unbound_usbip_sysfs(root: &TestDir, bus_id: &str) -> PathBuf {
         let sysfs_root = root.join("sys").join("bus").join("usb").join("devices");
         std::fs::create_dir_all(sysfs_root.join(bus_id)).expect("create fake usb device");
@@ -3193,6 +3198,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_apply_nftables_drives_executor() {
         let exec = FakeReconcileExecutor::new();
         live_apply_nftables(&exec, Path::new("/usr/sbin/nft"), "table inet d2b {}")
@@ -3210,6 +3216,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_apply_sysctl_drives_executor() {
         let exec = FakeReconcileExecutor::new();
         live_apply_sysctl(&exec, "net.ipv4.ip_forward", "1").await.unwrap();
@@ -3222,6 +3229,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_update_hosts_file_drives_executor() {
         let exec = FakeReconcileExecutor::new();
         live_update_hosts_file(
@@ -3240,6 +3248,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_apply_route_drives_executor() {
         let exec = FakeReconcileExecutor::new();
         live_apply_route(
@@ -3265,6 +3274,7 @@ mod tests {
     /// A failing reconcile executor surfaces ReconcileExec
     /// LiveHandlerError variant.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_apply_propagates_executor_error() {
         struct FailExec;
         impl ReconcileExecutor for FailExec {
@@ -3346,6 +3356,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn usbip_unbind_failure_preserves_claim_for_operator_recovery() {
         struct FailUsbipUnbind;
         impl ReconcileExecutor for FailUsbipUnbind {
@@ -3458,6 +3469,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn usbip_bind_same_vm_replay_skips_shellout_and_preserves_claim() {
         let root = TestDir::new("usbip-bind-same-vm-replay");
         let lock_dir = root.join("locks");
@@ -3498,6 +3510,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn usbip_bind_shellout_failure_releases_claim_for_retry() {
         let root = TestDir::new("usbip-bind-failure-releases-claim");
         let lock_dir = root.join("locks");
@@ -3541,6 +3554,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn usbip_bind_initial_driver_inspection_failure_releases_claim() {
         let root = TestDir::new("usbip-bind-initial-inspect-failure");
         let lock_dir = root.join("locks");
@@ -3576,6 +3590,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn usbip_bind_post_bind_driver_inspection_failure_releases_claim() {
         let root = TestDir::new("usbip-bind-post-inspect-failure");
         let lock_dir = root.join("locks");
@@ -3615,6 +3630,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn usbip_bind_non_converged_driver_releases_claim() {
         let root = TestDir::new("usbip-bind-non-converged-releases-claim");
         let lock_dir = root.join("locks");
@@ -3653,6 +3669,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn usbip_unbind_aborts_stream_before_driver_unbind_and_preserves_claim_for_acl_phase() {
         let root = TestDir::new("usbip-unbind-order");
         let lock_dir = root.join("locks");
@@ -3705,6 +3722,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn usbip_unbind_fd_release_timeout_preserves_claim_without_driver_unbind() {
         let root = TestDir::new("usbip-unbind-release-timeout");
         let lock_dir = root.join("locks");
@@ -3762,6 +3780,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_apply_nm_unmanaged_prefers_dbus_reload() {
         let exec = FakeReconcileExecutor::new();
         let root = TestDir::new("nm-unmanaged-dbus");
@@ -3801,6 +3820,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_apply_nm_unmanaged_falls_back_to_systemctl() {
         let exec = FakeReconcileExecutor::new();
         let root = TestDir::new("nm-unmanaged-fallback");
@@ -3827,6 +3847,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_apply_nm_unmanaged_refuses_foreign_file_before_reload() {
         let exec = FakeReconcileExecutor::new();
         let root = TestDir::new("nm-unmanaged-foreign");
@@ -3851,6 +3872,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_apply_nm_unmanaged_refuses_legacy_owned_file() {
         let exec = FakeReconcileExecutor::new();
         let root = TestDir::new("nm-unmanaged-legacy");
@@ -3875,6 +3897,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn update_host_runtime_nft_hash_rewrites_runtime_json() {
         let root = TestDir::new("host-runtime-nft-hash");
         let runtime = sample_host_runtime(root.join("host-runtime.json"));
@@ -3964,6 +3987,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn resource_backed_swtpm_launch_is_fenced_against_the_trusted_identity() {
         use crate::ops::swtpm_dir::{ResourceBackedSwtpm, reasons};
         // The state Volume's layout creates the directory; the fence reads
@@ -4152,6 +4176,7 @@ mod tests {
 
     /// live_spawn_runner preflight failure surfaces SpawnPreflight.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_spawn_runner_propagates_preflight_error() {
         let plan = SpawnRunnerPlanInput {
             binary_path: PathBuf::from("not-absolute"),
@@ -4517,6 +4542,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn dir_traverse_classification_world_x_vs_private() {
         use std::os::unix::fs::PermissionsExt as _;
         // World-traversable dir (0o755) needs no daemon --x grant; a
@@ -4541,6 +4567,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn runner_tree_acl_targets_stop_at_owned_root_and_skip_world_x_ancestors() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -4646,6 +4673,7 @@ mod tests {
     /// points it outside the broker's own runtime directory (or at the
     /// runtime directory itself) is refused before any ACL is applied.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn serving_worker_socket_directory_must_live_inside_the_broker_runtime_root() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -4709,6 +4737,7 @@ mod tests {
     /// An unusable view root refuses the launch before anything is mutated:
     /// neither the socket tree nor the root gets an ACL entry.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn serving_worker_refuses_an_unusable_view_root_before_mutating() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -4764,6 +4793,7 @@ mod tests {
     /// non-world-searchable chain above it - and never above the first
     /// ancestor every principal can already search.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn served_view_root_acl_targets_cover_the_root_and_stop_at_world_search() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -4812,6 +4842,7 @@ mod tests {
     /// up with a per-runner access ACL for the runner principal, so the
     /// worker reaches them as itself rather than as the daemon.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn serving_worker_launch_acls_open_the_ticket_paths_to_the_principal() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -4919,6 +4950,7 @@ mod tests {
     /// socket directory gets - and only after the launch's typed fences
     /// passed, so the grant is applied on the success path alone.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn device_worker_socket_grant_opens_the_socket_directory_to_the_principal() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -5005,6 +5037,7 @@ mod tests {
     /// granted its own - and a launch whose placement carries no trusted
     /// runtime directory at all is refused instead of granted.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn device_worker_socket_grant_never_reads_the_launch_arguments() {
         let dir = TestDir::new("device-worker-grant-argv");
         let runtime_root = dir.join("run").join("d2b");
@@ -5049,6 +5082,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn current_path_dev_ino_tracks_inode_replacement() {
         // Inode pinning relies on re-stat detecting that a path now
         // resolves to a different inode than the one a prior fd mutated.
@@ -5129,6 +5163,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_spawn_runner_applies_capability_and_net_namespace_when_privileged() {
         if rustix::process::geteuid().as_raw() != 0 {
             eprintln!("skipping privileged SpawnRunner isolation test: requires euid 0");
@@ -5231,6 +5266,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn wayland_proxy_acls_error_when_xdg_runtime_dir_not_set() {
         let plan = wayland_proxy_plan(None, None);
         let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
@@ -5251,6 +5287,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn wayland_proxy_acls_error_when_runtime_dir_absent() {
         let root = TestDir::new("wlproxy-absent-dir");
         // Point at a path that does not exist beneath the tempdir.
@@ -5270,6 +5307,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn wayland_proxy_acls_error_when_runtime_dir_owner_mismatch() {
         let root = TestDir::new("wlproxy-owner-mismatch");
         // Create a dir owned by the current user but parsed path uid != current uid.
@@ -5307,6 +5345,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn wayland_proxy_acls_error_when_wayland_socket_absent() {
         let root = TestDir::new("wlproxy-socket-absent");
         // Use the current uid so the owner check passes.
@@ -5336,6 +5375,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn wayland_proxy_acls_error_when_socket_is_regular_file() {
         let root = TestDir::new("wlproxy-socket-wrong-type");
         let current_uid = nix::unistd::Uid::current().as_raw();
@@ -5398,6 +5438,7 @@ mod tests {
     /// attempt reports ready: exactly one attempt runs. Hermetic: the
     /// attempt is injected, so no setfacl shellout happens.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn acl_grant_retry_stops_on_first_success() {
         let background = crate::runtime::BrokerBackground {
             runtime: tokio::runtime::Handle::current(),
@@ -5430,6 +5471,7 @@ mod tests {
     /// lower bounds only - the retry must not give up before the window
     /// elapses and must have attempted more than once.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn acl_grant_retry_respects_deadline() {
         let background = crate::runtime::BrokerBackground {
             runtime: tokio::runtime::Handle::current(),

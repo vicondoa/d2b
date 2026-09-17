@@ -5646,7 +5646,7 @@ fn remove_runner_metadata(runner_id: &str) {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn observe_registered_runner(
+async fn observe_registered_runner(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
 ) -> Result<d2b_contracts_broker::broker_wire::ObserveRunnerResponse, BrokerError> {
@@ -5664,10 +5664,7 @@ fn observe_registered_runner(
         request.zone_uid.as_ref(),
         request.runtime_scope,
     );
-    let registered = (|| -> Result<
-        Option<d2b_contracts_broker::broker_wire::ObserveRunnerResponse>,
-        BrokerError,
-    > {
+    let registered = (|| async move {
         // Keep the lock order aligned with deregistration: pidfd registry
         // first, metadata second. This makes the binding update atomic with
         // the live pidfd registration.
@@ -5739,11 +5736,13 @@ let mut metadata_registry = runner_metadata_registry().try_lock().map_err(|_| {
             let cgroup_verified = proc_cgroup_matches(
                 observed_registration.pid,
                 &observed_registration.cgroup_subtree,
-            );
+            )
+            .await;
             let executable_observation = observe_runner_executable(
-                read_runner_executable(observed_registration.pid),
+                read_runner_executable(observed_registration.pid).await,
                 &observed_registration.binary_path,
-            )?;
+            )
+            .await?;
             if executable_observation == RunnerExecutableObservation::Vanished {
                 let pidfd = runner_pidfds().duplicate(&runner_id);
                 drop(metadata_registry);
@@ -5814,15 +5813,15 @@ let mut metadata_registry = runner_metadata_registry().try_lock().map_err(|_| {
                 },
             ))
         }
-    })()?;
-    registered.map_or_else(
-        || discover_runner_candidate(request, intent, &cgroup_placement.subtree),
-        Ok,
-    )
+    })().await?;
+    match registered {
+        Some(response) => Ok(response),
+        None => discover_runner_candidate(request, intent, &cgroup_placement.subtree).await,
+    }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn discover_runner_candidate(
+async fn discover_runner_candidate(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
     cgroup_subtree: &str,
@@ -5847,15 +5846,19 @@ fn discover_runner_candidate(
         ))
         .map(|registration| registration.binary_path.clone());
     let mut candidates = Vec::new();
-    let entries =
-        fs::read_dir("/proc").map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+    let mut entries = tokio::fs::read_dir("/proc")
+        .await
+        .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|error| BrokerError::LiveHandler(error.to_string()))?
+    {
         let name = entry.file_name();
         let Some(pid) = name.to_str().and_then(|value| value.parse::<i32>().ok()) else {
             continue;
         };
-        let cgroup_verified = pid > 0 && proc_cgroup_matches(pid, cgroup_subtree);
+        let cgroup_verified = pid > 0 && proc_cgroup_matches(pid, cgroup_subtree).await;
         if !cgroup_verified {
             continue;
         }
@@ -5865,9 +5868,9 @@ fn discover_runner_candidate(
         if start_time_ticks == 0 {
             continue;
         }
-        let observed_exe = read_runner_executable(pid);
+        let observed_exe = read_runner_executable(pid).await;
         let expected_binary = registered_binary.as_deref().unwrap_or(&intent.binary_path);
-        let executable_observation = observe_runner_executable(observed_exe, expected_binary)?;
+        let executable_observation = observe_runner_executable(observed_exe, expected_binary).await?;
         if executable_observation == RunnerExecutableObservation::Vanished {
             continue;
         }
@@ -5924,12 +5927,12 @@ impl RunnerExecutableObservation {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn observe_runner_executable(
+async fn observe_runner_executable(
     executable: io::Result<PathBuf>,
     expected: &Path,
 ) -> Result<RunnerExecutableObservation, BrokerError> {
     match executable {
-        Ok(path) => Ok(classify_executable_path(&path, expected)),
+        Ok(path) => Ok(classify_executable_path(&path, expected).await),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             Ok(RunnerExecutableObservation::Vanished)
         }
@@ -5941,15 +5944,15 @@ fn observe_runner_executable(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecutableObservation {
-    let actual = match fs::canonicalize(actual) {
+async fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecutableObservation {
+    let actual = match tokio::fs::canonicalize(actual).await {
         Ok(actual) => actual,
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
             return RunnerExecutableObservation::PermissionDenied;
         }
         Err(_) => return RunnerExecutableObservation::Mismatch,
     };
-    let canon_expected = fs::canonicalize(expected);
+    let canon_expected = tokio::fs::canonicalize(expected).await;
     let Some(expected) = canon_expected.as_deref().ok().map(Path::to_path_buf) else {
         return RunnerExecutableObservation::Mismatch;
     };
@@ -5957,7 +5960,7 @@ fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecutableO
         return RunnerExecutableObservation::Matching;
     }
 
-    let Ok(script) = fs::read_to_string(&expected) else {
+    let Ok(script) = tokio::fs::read_to_string(&expected).await else {
         return RunnerExecutableObservation::Mismatch;
     };
     if !script.starts_with("#!") {
@@ -5987,10 +5990,13 @@ fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecutableO
             return RunnerExecutableObservation::Mismatch;
         }
     }
-    if target
-        .and_then(|target| fs::canonicalize(target).ok())
-        .is_some_and(|target| target == actual)
-    {
+    let Some(canon_target) = target else {
+        return RunnerExecutableObservation::Mismatch;
+    };
+    let Ok(canon_target) = tokio::fs::canonicalize(&canon_target).await else {
+        return RunnerExecutableObservation::Mismatch;
+    };
+    if canon_target == actual {
         RunnerExecutableObservation::Matching
     } else {
         RunnerExecutableObservation::Mismatch
@@ -5998,8 +6004,8 @@ fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecutableO
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
-    classify_executable_path(actual, expected) == RunnerExecutableObservation::Matching
+async fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
+    classify_executable_path(actual, expected).await == RunnerExecutableObservation::Matching
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -6069,11 +6075,18 @@ fn select_runner_candidate(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn read_runner_executable(pid: i32) -> io::Result<PathBuf> {
-    fs::read_link(format!("/proc/{pid}/exe"))
+async fn read_runner_executable(pid: i32) -> io::Result<PathBuf> {
+    tokio::fs::read_link(format!("/proc/{pid}/exe")).await
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+// R11 inventory: `read_proc_start_time_ticks` is the shared /proc stat
+// reader of the runner-identity surface. It stays synchronous because the
+// sync reap-test scaffolding (plain `#[test]` fns driving `Command::spawn` /
+// `kill` / `waitpid` around the pidfd registry) reads it without a runtime;
+// the async discovery chain calls it as a bounded single-file read. The
+// allow is the sanctioned synchronous-path class, not a blanket.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_proc_start_time_ticks(pid: i32) -> Result<Option<u64>, BrokerError> {
     let content = match fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(content) => content,
@@ -6100,11 +6113,11 @@ fn read_proc_start_time_ticks(pid: i32) -> Result<Option<u64>, BrokerError> {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
+async fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
     if expected_subtree.is_empty() {
         return false;
     }
-    let Ok(content) = fs::read_to_string(format!("/proc/{pid}/cgroup")) else {
+    let Ok(content) = tokio::fs::read_to_string(format!("/proc/{pid}/cgroup")).await else {
         return false;
     };
     let expected = expected_subtree.trim_start_matches('/');
@@ -6912,6 +6925,7 @@ impl DispatchBackend for LiveDispatchBackend {
     > {
         Box::pin(async move {
             crate::ops::systemd::start(resolver, request)
+                .await
                 .map_err(|error| BrokerError::LiveHandler(error.to_string()))
         })
     }
@@ -6923,6 +6937,7 @@ impl DispatchBackend for LiveDispatchBackend {
     ) -> Pin<Box<dyn Future<Output = Result<bool, BrokerError>> + Send + 'a>> {
         Box::pin(async move {
             crate::ops::systemd::check_user_manager(resolver, request)
+                .await
                 .map_err(|error| BrokerError::LiveHandler(error.to_string()))
         })
     }
@@ -6940,6 +6955,7 @@ impl DispatchBackend for LiveDispatchBackend {
     > {
         Box::pin(async move {
             crate::ops::systemd::observe(resolver, request)
+                .await
                 .map_err(|error| BrokerError::LiveHandler(error.to_string()))
         })
     }
@@ -6964,6 +6980,7 @@ impl DispatchBackend for LiveDispatchBackend {
     > {
         Box::pin(async move {
             crate::ops::systemd::reopen(resolver, request)
+                .await
                 .map_err(|error| BrokerError::LiveHandler(error.to_string()))
         })
     }
@@ -6975,6 +6992,7 @@ impl DispatchBackend for LiveDispatchBackend {
     ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
         Box::pin(async move {
             crate::ops::systemd::stop(resolver, request)
+                .await
                 .map_err(|error| BrokerError::LiveHandler(error.to_string()))
         })
     }
@@ -8380,6 +8398,7 @@ where
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn grant_usbip_backend_device_acl(
     resolver: &Arc<BundleResolver>,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
@@ -8449,6 +8468,7 @@ async fn grant_usbip_backend_device_acl(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn revoke_usbip_backend_device_acl(
     resolver: &Arc<BundleResolver>,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
@@ -8660,6 +8680,7 @@ fn build_explicit_usbip_rule_body(
 /// vendor/product allowlist; the explicit path carries no bundle allowlist.
 /// Retries up to 20 times with 100ms sleep (same policy as the declared path).
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn grant_explicit_usbip_backend_acl(
     resolver: &Arc<BundleResolver>,
     env: &str,
@@ -8739,6 +8760,7 @@ async fn verify_explicit_usbip_device_stable(
 /// Revoke the per-device ACL from the env's USBIP backend runner for the
 /// explicit attach path rollback. Best-effort; failures are logged only.
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn revoke_explicit_usbip_backend_acl(
     resolver: &Arc<BundleResolver>,
     env: &str,
@@ -10040,7 +10062,7 @@ pub(crate) async fn extend_usbip_backend_device_binds(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn extend_audio_runner_pipewire_props(
+async fn extend_audio_runner_pipewire_props(
     vm_id: &str,
     role_id: &str,
     role: &d2b_contracts_broker::broker_wire::RunnerRole,
@@ -10050,7 +10072,7 @@ fn extend_audio_runner_pipewire_props(
         return Ok(());
     }
     let state_path = PathBuf::from(format!("/var/lib/d2b/vms/{vm_id}/state/audio-state.json"));
-    let bytes = fs::read(&state_path).map_err(|err| {
+    let bytes = tokio::fs::read(&state_path).await.map_err(|err| {
         BrokerError::LiveHandler(format!(
             "audio runner {vm_id}:{role_id} could not read {}: {err}",
             state_path.display()
@@ -12496,6 +12518,7 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usb_sysfs_test_lock() -> MutexGuard<'static, ()> {
         TEST_USB_SYSFS_LOCK
             .get_or_init(|| Mutex::new(()))
@@ -12999,6 +13022,7 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_json_file<T: Serialize>(path: &Path, value: &T) {
         use std::os::unix::fs::PermissionsExt;
         if let Some(parent) = path.parent() {
@@ -13333,6 +13357,7 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn prepare_test_usb_sysfs_device(vendor: &str, product: &str, devpath: &str) -> PathBuf {
         let root = crate::test_scratch_root().join("runtime-usb-sysfs-root");
         TEST_USB_SYSFS_ROOT
@@ -13382,6 +13407,7 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn test_usbip_intent_with_lock(
         root: &Path,
         bundle: &TestBundle,
@@ -13399,6 +13425,7 @@ mod tests {
     /// records plus the raw JSON objects so tests can assert both the
     /// typed shape and the exact serialized key-set.
     #[cfg(not(feature = "layer1-bootstrap"))]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn read_store_sync_export(
         config: &ServerConfig,
     ) -> Vec<(
@@ -13452,40 +13479,48 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn executable_identity_accepts_trusted_symlink_paths() {
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn executable_identity_accepts_trusted_symlink_paths() {
         let expected = Path::new("/proc/self/exe");
-        let actual = fs::read_link(expected).expect("read current executable");
-        assert!(executable_paths_match(&actual, expected));
+        let actual = tokio::fs::read_link(expected).await.expect("read current executable");
+        assert!(executable_paths_match(&actual, expected).await);
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn executable_identity_accepts_static_wrapper_exec_target() {
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn executable_identity_accepts_static_wrapper_exec_target() {
         let root = tempfile::tempdir().expect("tempdir");
         let wrapper = root.path().join("cloud-hypervisor");
         let real = root.path().join(".cloud-hypervisor-real");
-        fs::write(
+        tokio::fs::write(
             &wrapper,
             "#!/bin/sh\nexec \"$here/.cloud-hypervisor-real\" \"$@\"\n",
         )
+        .await
         .expect("write wrapper");
-        fs::write(&real, b"trusted executable").expect("write executable");
+        tokio::fs::write(&real, b"trusted executable")
+            .await
+            .expect("write executable");
 
-        assert!(executable_paths_match(&real, &wrapper));
+        assert!(executable_paths_match(&real, &wrapper).await);
         assert!(!executable_paths_match(
             &root.path().join("other"),
             &wrapper
-        ));
+        )
+        .await);
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn executable_observation_keeps_permission_denied_distinct_from_a_mismatch() {
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn executable_observation_keeps_permission_denied_distinct_from_a_mismatch() {
         let observed = observe_runner_executable(
             Err(io::Error::from(io::ErrorKind::PermissionDenied)),
             Path::new("/nix/store/provider-controller/bin/controller"),
         )
+        .await
         .expect("permission-denied observation");
         assert_eq!(observed, RunnerExecutableObservation::PermissionDenied);
         assert!(!observed.is_verified_for_discovery());
@@ -14108,6 +14143,7 @@ mod tests {
     /// entry point the dispatch arm calls, with the daemon's own ticket argv.
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn serving_worker_launch_runs_as_the_intent_principal() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -14388,6 +14424,7 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn dummy_fd() -> OwnedFd {
         std::fs::File::open("/dev/null")
             .expect("open /dev/null for dummy fd")
@@ -14423,6 +14460,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     impl FakeDispatchBackend {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn remember_runner(&self, runner_id: &str) -> Result<(), BrokerError> {
             self.registered_runners
                 .lock()
@@ -14433,6 +14471,7 @@ mod tests {
             Ok(())
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn has_runner(&self, runner_id: &str) -> Result<bool, BrokerError> {
             Ok(self
                 .registered_runners
@@ -14443,6 +14482,7 @@ mod tests {
                 .contains(runner_id))
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn push_usbip_event(&self, event: FakeUsbipEvent) -> Result<(), BrokerError> {
             self.usbip_events
                 .lock()
@@ -14451,6 +14491,7 @@ mod tests {
             Ok(())
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn take_usbip_events(&self) -> Vec<FakeUsbipEvent> {
             let mut events = self.usbip_events.lock().expect("fake USBIP event lock");
             std::mem::take(&mut *events)
@@ -14802,6 +14843,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn qemu_media_lifecycle_dispatch_audits_mutations_but_not_status_poll() {
         use d2b_contracts::types::{TracingSpanId, VmId};
         use d2b_contracts_broker::broker_wire::{
@@ -14910,6 +14952,7 @@ mod tests {
     /// this kernel seam.
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retired_process_family_kernels_dispatch_through_the_envelope() {
         use crate::envelope::{BrokerEnvelope, ForwardingDispatcher, KernelDispatcher};
         use crate::kernel_ops::{KernelConfig, kernel_table};
@@ -15224,6 +15267,7 @@ mod tests {
     /// their payload refusals.
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retired_network_family_kernels_dispatch_through_the_envelope() {
         use crate::envelope::{BrokerEnvelope, ForwardingDispatcher, KernelDispatcher};
         use crate::kernel_ops::{KernelConfig, kernel_table};
@@ -15669,6 +15713,7 @@ mod tests {
             }
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn invoke(
             &self,
             operation: &str,
@@ -15704,6 +15749,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn consume_cell_and_complete_cell_dispatch_through_the_envelope() {
         let root = test_audit_dir("cell-kernels-envelope");
         fs::create_dir_all(&root).expect("create test root");
@@ -15796,6 +15842,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn consume_cell_concurrent_callers_have_exactly_one_winner() {
         // AE2's concurrency property through the kernel: N callers race the
         // same one-time identity; the cell store's single-process lock
@@ -15986,6 +16033,7 @@ mod tests {
             }
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn invoke(
             &self,
             operation: &str,
@@ -16117,6 +16165,7 @@ mod tests {
     }
 
     impl RegistryTestGuard {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn new() -> Self {
             static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
             let lock = LOCK
@@ -16149,6 +16198,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn spawn_process_usbip_backend_extends_mount_policy_with_device_binds() {
         let _usb_sysfs_guard = usb_sysfs_test_lock();
         let _registry_guard = RegistryTestGuard::new();
@@ -16243,6 +16293,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn spawn_process_serving_worker_grants_ticket_tree_acls() {
         let _registry_guard = RegistryTestGuard::new();
         use std::os::unix::fs::PermissionsExt;
@@ -16322,6 +16373,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn spawn_process_cloud_hypervisor_unlinks_stale_socket_before_spawn() {
         let _registry_guard = RegistryTestGuard::new();
         let root = test_audit_dir("spawn-kernel-stale-socket");
@@ -16387,6 +16439,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn spawn_process_refuses_a_second_live_spawn_for_the_same_runner() {
         let _registry_guard = RegistryTestGuard::new();
         let root = test_audit_dir("spawn-kernel-duplicate-guard");
@@ -16475,6 +16528,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn publish_trusted_context_updates_the_store_and_acks_the_epoch() {
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, PublishTrustedContextResponse,
@@ -16593,6 +16647,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_ownership_matrix_preflight_caller_answers_through_the_envelope_end_to_end() {
         use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
         use crate::forwarding::SocketForwarder;
@@ -16707,6 +16762,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_absent_forwarding_peer_refuses_the_preflight_with_the_unregistered_handler_code() {
         use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
         use d2b_contracts::types::VmId;
@@ -16778,6 +16834,7 @@ mod tests {
     /// grounded in what actually crossed the socket.
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_envelope_invoke_root_call_crosses_the_carrier_and_returns_the_result() {
         use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
         use crate::forwarding::SocketForwarder;
@@ -16896,6 +16953,7 @@ mod tests {
     /// refusal code and the invocation id instead of a transport error.
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_envelope_invoke_call_without_a_serving_peer_refuses_with_the_closed_code() {
         use crate::envelope::{BrokerEnvelope, ForwardingDispatcher};
         use d2b_contracts_broker::broker_wire::{
@@ -16962,6 +17020,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_unwritable_state_dir_refuses_publications_fail_closed_without_taking_the_broker_down() {
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, PublishTrustedContextValues,
@@ -17060,6 +17119,7 @@ mod tests {
         not(test_root),
         ignore = "v1.1.1fu11: requires write access to /var/lib/d2b/runtime/ which only root can do; run with --cfg test_root in a privileged test environment"
     )]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn dispatch_request_writes_typed_op_audit_records_for_all_live_arms() {
         use d2b_contracts::types::{BundleOpId, ScopeId, TracingSpanId, VmId};
         use d2b_contracts_broker::broker_wire::{
@@ -17401,6 +17461,7 @@ mod tests {
     /// a mismatching wire token can deterministically force a pre-lock
     /// failure. Returns the bundle plus the per-VM hardlink-farm root.
     #[cfg(not(feature = "layer1-bootstrap"))]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn store_sync_dispatch_bundle(root: &Path, host_generation: u32) -> (TestBundle, PathBuf) {
         use d2b_contracts_resource::v3::ZoneId;
         use d2b_core::bundle_resolver::{ResolvedStoreViewIntent, intent_id_store_view};
@@ -17502,6 +17563,7 @@ mod tests {
     /// the deferred-cleanup `ok_non_fast_path` shape.
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn store_sync_dispatch_emits_single_success_record() {
         use crate::ops::store_sync_audit::{
             AuthzOutcome, CleanupReason, CleanupStatus, ErrorStage, SyncStatus,
@@ -17603,6 +17665,7 @@ mod tests {
     /// `fast_path`.
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn store_sync_dispatch_fast_path_emits_single_skipped_record() {
         use crate::ops::store_sync_audit::{CleanupReason, CleanupStatus, SyncStatus};
         use d2b_contracts_broker::broker_wire::BrokerCallerRole;
@@ -17701,6 +17764,7 @@ mod tests {
     /// error-audit path runs.
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn store_sync_dispatch_failure_emits_single_signed_failure_record() {
         use crate::ops::store_sync_audit::{
             AuthzOutcome, CleanupReason, CleanupStatus, ErrorStage, SyncStatus,
@@ -17874,6 +17938,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cleanup_otel_host_bridge_stale_socket_noop_for_other_role() {
         use d2b_contracts_broker::broker_wire::RunnerRole;
         // A non-bridge role must short-circuit Ok before touching argv or
@@ -17885,6 +17950,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cleanup_otel_host_bridge_stale_socket_rejects_path_outside_otel_runtime_dir() {
         use d2b_contracts_broker::broker_wire::RunnerRole;
         // The prefix guard must refuse any socket outside the d2b OTel
@@ -17918,6 +17984,7 @@ mod tests {
     // already reaped) is refused with the handler-errored code inside the
     // envelope response.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn signal_pidfd_refuses_a_stale_pidfd() {
         use crate::envelope::{BrokerEnvelope, ForwardingDispatcher, KernelDispatcher};
         use crate::kernel_ops::{KernelConfig, kernel_table};
@@ -18016,6 +18083,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_rejects_device_outside_allowlist() {
         let root = test_audit_dir("usbip-allowlist");
         let mut bundle = build_test_bundle(&root);
@@ -18057,6 +18125,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_rejects_missing_allowlist_as_required_policy() {
         let root = test_audit_dir("usbip-missing-allowlist");
         let mut bundle = build_test_bundle(&root);
@@ -18087,6 +18156,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_rejects_topology_mismatch_as_required_policy() {
         let root = test_audit_dir("usbip-topology-policy");
         let mut bundle = build_test_bundle(&root);
@@ -18136,6 +18206,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usb_broker_ipc_refuses_non_daemon_so_peercred_before_dispatch() {
         use d2b_contracts::types::{BundleOpId, ScopeId};
         use d2b_contracts_broker::broker_wire::{
@@ -18267,6 +18338,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_retired_variant_call_from_an_old_binary_is_refused_with_the_stale_wire_code_and_audited() {
         // Mixed-version matrix fixture (U4 item 4 / KTD10): `ValidateBundle`
         // is the previous protocol's request the current protocol retired
@@ -18360,6 +18432,7 @@ mod tests {
     /// the typed decode did, so the gate is a tax only retired variants pay.
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_current_wire_variant_passes_the_retired_wire_gate() {
         for retired in RETIRED_WIRE_VARIANTS {
             assert!(
@@ -18970,6 +19043,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_audit_failure_rolls_back_backend_bind_and_acl() {
         use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest};
 
@@ -19035,6 +19109,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_acl_grant_failure_releases_lock_after_successful_rollback_unbind() {
         let root = test_audit_dir("usbip-bind-acl-grant-failure-lock-release");
         let bundle = build_test_bundle(&root);
@@ -19077,6 +19152,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_acl_grant_failure_does_not_rollback_same_vm_replay() {
         let root = test_audit_dir("usbip-bind-acl-grant-failure-replay-preserve");
         let bundle = build_test_bundle(&root);
@@ -19117,6 +19193,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_audit_failure_does_not_rollback_same_vm_replay() {
         let _usb_sysfs_guard = usb_sysfs_test_lock();
         let root = test_audit_dir("usbip-bind-audit-failure-replay-preserve");
@@ -19162,6 +19239,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_proxy_reconcile_skips_absent_locked_device_acl_refresh() {
         let _usb_sysfs_guard = usb_sysfs_test_lock();
         let root = test_audit_dir("usbip-proxy-reconcile-absent-device");
@@ -19201,6 +19279,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_unbind_acl_revoke_failure_releases_lock_when_device_is_unbound() {
         let _usb_sysfs_guard = usb_sysfs_test_lock();
         let root = test_audit_dir("usbip-unbind-acl-revoke-failure-release");
@@ -19236,6 +19315,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_unbind_acl_revoke_failure_preserves_lock_when_device_still_bound() {
         use std::os::unix::fs::symlink;
 
@@ -19293,6 +19373,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retry_acl_grant_succeeds_immediately_when_node_is_stable() {
         use std::cell::RefCell;
         let log = RefCell::new(AclCallLog::default());
@@ -19322,6 +19403,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retry_acl_grant_converges_after_transient_node_change() {
         // Simulate a device re-enumeration: first verify returns node A,
         // post-grant verify returns node B (different /dev node, same
@@ -19381,6 +19463,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retry_acl_grant_fails_when_verify_permanently_fails() {
         use std::cell::RefCell;
         let log = RefCell::new(AclCallLog::default());
@@ -19422,6 +19505,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retry_acl_grant_revokes_before_every_retry_on_post_grant_verify_failure() {
         // Grant succeeds, but post-grant verify always returns a different
         // node. The function must revoke on every attempt before giving up.
@@ -19475,6 +19559,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retry_acl_grant_tolerates_benign_enoent_during_revoke() {
         // After a node change the old node may already be gone (kernel
         // removes /dev/bus/usb/B/D during re-enumeration). Revoke errors
@@ -19558,6 +19643,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_with_previous_serial_hmac_key_emits_one_rotation_audit_record_per_key_pair() {
         use d2b_contracts::types::TracingSpanId;
         use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest};
@@ -19762,6 +19848,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn usb_audit_serial_hmac_keyring_creates_root_only_current_key_and_reads_previous() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -19936,6 +20023,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_static_busid_owner_is_global_authority() {
         let root = test_audit_dir("usbip-static-owner");
         let bundle = build_test_bundle(&root);
@@ -19953,6 +20041,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn broker_error_audit_records_error_kind_and_message_for_errored_variants() {
         let audit_dir = test_audit_dir("broker-error-audit");
         fs::create_dir_all(&audit_dir).expect("create audit dir");
@@ -20122,6 +20211,7 @@ mod tests {
         // clobber a spawn test's mid-test registration (and vice versa).
         type ReapTestGuard = RegistryTestGuard;
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn start_test_reaper(test_name: &str) -> tokio::runtime::Runtime {
             let audit_dir = test_audit_dir(test_name);
             fs::create_dir_all(&audit_dir).expect("create reap audit dir");
@@ -20141,6 +20231,7 @@ mod tests {
         /// Run one closure against the runner metadata registry with the
         /// non-blocking `try_lock` (plan U8: the registry is a tokio Mutex
         /// reached from sync test bodies), retrying a Busy collision.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn with_runner_metadata_mut<R>(
             f: impl FnOnce(&mut std::collections::HashMap<String, RunnerRegistration>) -> R,
         ) -> R {
@@ -20152,6 +20243,7 @@ mod tests {
             }
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn wait_for_notification(
             runner_id: &str,
             timeout: Duration,
@@ -20220,6 +20312,7 @@ mod tests {
         }
 
         #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn registered_observation_keeps_live_runner_registered_until_reaped() {
             let _guard = ReapTestGuard::new();
 
@@ -20268,6 +20361,7 @@ mod tests {
         }
 
         #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn registered_observation_reports_absent_only_after_exact_reap() {
             let _guard = ReapTestGuard::new();
 
@@ -20312,6 +20406,7 @@ mod tests {
         }
 
         #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn reap_loop_processes_exited_child() {
             let _guard = ReapTestGuard::new();
             let _rt = start_test_reaper("reap-exited-child");
@@ -20337,6 +20432,7 @@ mod tests {
         }
 
         #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn reap_loop_signaled_sigterm() {
             let _guard = ReapTestGuard::new();
             let _rt = start_test_reaper("reap-signaled-sigterm");
@@ -20363,6 +20459,7 @@ mod tests {
         }
 
         #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn reap_loop_killed_sigkill() {
             let _guard = ReapTestGuard::new();
             let _rt = start_test_reaper("reap-killed-sigkill");
@@ -20389,6 +20486,7 @@ mod tests {
         }
 
         #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn reap_loop_concurrent_stress_8_children() {
             let _guard = ReapTestGuard::new();
             let _rt = start_test_reaper("reap-concurrent-stress");
@@ -20437,6 +20535,7 @@ mod tests {
         }
 
         #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn targeted_reap_reaps_already_exited_child() {
             // No SIGCHLD reaper is started: the targeted post-spawn
             // reap alone must reap a child that has already exited,
@@ -20487,6 +20586,7 @@ mod tests {
         }
 
         #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn targeted_reap_leaves_running_child_for_sigchld_loop() {
             // A still-running child must NOT be reaped by the targeted
             // pass: it stays registered for the SIGCHLD loop.
@@ -20530,6 +20630,7 @@ mod tests {
         }
 
         #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn targeted_reap_reports_signaled_child() {
             let _guard = ReapTestGuard::new();
 
@@ -20574,6 +20675,7 @@ mod tests {
         }
 
         #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn targeted_reap_echild_clears_stale_registry_entry() {
             // If the SIGCHLD loop already reaped the child, a later
             // targeted reap sees ECHILD and must drop the stale entry
@@ -20640,6 +20742,7 @@ mod tests {
     /// blocking worker would keep - never releases the barrier and the join
     /// below times out.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn two_dispatch_jobs_run_at_the_same_time() {
         let dispatches = DispatchPool::new(2);
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -20678,6 +20781,7 @@ mod tests {
     /// until the silent connection closed - and the read below timed out.
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_silent_connection_does_not_hold_the_next_request() {
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequestEnvelope, HelloRequest,

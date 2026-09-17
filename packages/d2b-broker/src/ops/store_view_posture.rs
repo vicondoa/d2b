@@ -555,6 +555,7 @@ mod tests {
     /// farm root plus the broker-created levels above the per-VM state dir,
     /// innermost first. The state dir itself - the daemon's ownership-matrix
     /// root - is `farm.parent()`.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn farm_chain(root: &Path) -> (PathBuf, Vec<PathBuf>) {
         let farm = root
             .join("zones")
@@ -583,6 +584,7 @@ mod tests {
     /// declared `required` level that is absent, so a test that postures a
     /// farm must either provision the matrix first (this helper) or use the
     /// bring-up pass that tolerates levels it is about to create.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn materialize_declared_rows(farm: &Path, vm: &str) {
         for level in
             contract_store_view_levels(&test_principals(), vm).expect("contract rows resolve")
@@ -624,19 +626,23 @@ mod tests {
             .unwrap_or_else(|| Gid::from_raw(current.as_raw().wrapping_add(1)))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn set_mode(path: &Path, mode: u32) {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn mode_of(path: &Path) -> u32 {
         std::fs::symlink_metadata(path).expect("stat").mode() & 0o7777
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn gid_of(path: &Path) -> u32 {
         std::fs::symlink_metadata(path).expect("stat").gid()
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn matrix_posture_makes_the_ancestor_chain_group_traversable() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (farm, ancestors) = farm_chain(dir.path());
@@ -700,6 +706,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn matrix_posture_leaves_an_already_searchable_chain_untouched() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (farm, ancestors) = farm_chain(dir.path());
@@ -742,6 +749,7 @@ mod tests {
     /// fail-closed ownership preflight on every VM start, so the sync itself
     /// tripped the drift check and `OwnershipMatrixDrift` refused the start.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn matrix_posture_leaves_the_matrix_root_ownership_untouched() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (farm, ancestors) = farm_chain(dir.path());
@@ -785,6 +793,7 @@ mod tests {
     /// absent is drift, while an absent optional row (the live marker before
     /// its first plant, the VM-level integrity record) is posture-if-present.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn missing_required_levels_are_drift_and_optional_levels_are_not() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (farm, _ancestors) = farm_chain(dir.path());
@@ -821,6 +830,7 @@ mod tests {
     /// `state-posture-contract.json` declares. If a row's mode is edited in the
     /// declaration without the live posture moving (or vice versa), this fails.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn every_declared_store_view_row_is_the_posture_applied() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (farm, _ancestors) = farm_chain(dir.path());
