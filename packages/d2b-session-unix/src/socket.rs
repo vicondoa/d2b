@@ -373,6 +373,9 @@ pub fn duplicate_to_inherited_fd(
     let _ = nix::unistd::close(target);
     let mut fillers = Vec::new();
     loop {
+        // Test-support fd-filler helper (no runtime, synchronous by
+        // construction); sanctioned cfg(test) helper per plan R11.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let file = std::fs::File::open("/dev/null").map_err(io_error)?;
         if file.as_raw_fd() > target {
             return Err(UnixSessionError::InvalidSocket);
@@ -765,6 +768,8 @@ mod tests {
     use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
     use std::{mem::size_of, os::fd::IntoRawFd};
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn inherited_fd_is_rearmed_before_session_use() {
         let (fd, _peer) = prearmed_seqpacket_pair().unwrap();

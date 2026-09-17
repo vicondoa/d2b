@@ -63,7 +63,13 @@ pub struct ProcSelfFdInfoSource;
 impl PidfdInfoSource for ProcSelfFdInfoSource {
     fn read_fdinfo(&self, pidfd: BorrowedFd<'_>) -> Result<String, UnixSessionError> {
         let path = format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd());
+        // The pidfd identity verifier is a synchronous trait surface (no async
+        // form; consumed by the sync descriptor-validation chain); the /proc
+        // fdinfo read is a short stat on the sanctioned synchronous path (plan
+        // R11 inventory, U18 sync-surface precedent).
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         fs::read_to_string(path).map_err(|_| UnixSessionError::PidfdEvidenceUnavailable)
+
     }
 }
 

@@ -465,6 +465,8 @@ mod tests {
 
     use super::*;
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn in_memory_vsock_adapter_is_framed_and_rejects_attachments() {
         let (left, right) = tokio::io::duplex(512);
@@ -478,6 +480,8 @@ mod tests {
         assert_eq!(sender.descriptor().class, TransportClass::NativeVsock);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn in_memory_vsock_adapter_enforces_frame_limit_and_disconnect() {
         let (left, right) = tokio::io::duplex(512);
@@ -501,6 +505,8 @@ mod tests {
         );
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn cancelled_receive_retains_partial_header_and_body() {
         let (mut writer, right) = tokio::io::duplex(512);
@@ -521,6 +527,8 @@ mod tests {
         assert_eq!(receiver.receive(64).await.unwrap().as_bytes(), b"abcd");
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn full_header_zero_body_eof_is_truncated() {
         let (mut writer, reader) = tokio::io::duplex(16);
@@ -533,6 +541,8 @@ mod tests {
         ));
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn cancelled_partial_send_resumes_the_same_frame() {
         let (left, right) = tokio::io::duplex(5);
@@ -585,6 +595,8 @@ mod tests {
         }
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn expected_cid_accept_discards_repeated_foreign_peers() {
         let dropped = Arc::new(AtomicUsize::new(0));
@@ -602,6 +614,8 @@ mod tests {
         assert_eq!(dropped.load(Ordering::Acquire), 3);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(start_paused = true)]
     async fn foreign_peer_does_not_reset_original_accept_deadline() {
         let dropped = Arc::new(AtomicUsize::new(0));
@@ -633,6 +647,8 @@ mod tests {
         assert_eq!(dropped.load(Ordering::Acquire), 2);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn cancelling_accept_closes_foreign_peer_and_pending_listener() {
         let dropped = Arc::new(AtomicUsize::new(0));

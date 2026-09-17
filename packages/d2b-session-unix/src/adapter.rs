@@ -194,6 +194,12 @@ impl UnixAttachmentPayload {
         &self,
         descriptor: &AttachmentDescriptor,
     ) -> Result<Option<ObjectIdentity>, UnixSessionError> {
+        // The attachment validation surface is a synchronous trait impl
+        // (`AttachmentPayload::validate_descriptor`), consumed from the session
+        // driver's sync descriptor-validation chain; the critical section is a
+        // short cached check with no suspension point, so the std lock is
+        // the sanctioned synchronous path (plan R11 inventory).
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let mut validation = self
             .validation
             .lock()
@@ -315,6 +321,10 @@ impl ReceivedPacketState {
         identity: Option<ObjectIdentity>,
         duplicate_allowed: bool,
     ) -> Result<(), UnixSessionError> {
+        // Called from the sync attachment-validation chain above; the critical
+        // section is a short credit/identity table op with no suspension point,
+        // so the std lock is the sanctioned synchronous path (plan R11).
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let mut inner = self
             .inner
             .lock()
@@ -1104,6 +1114,8 @@ mod tests {
         })
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn unix_stream_cancelled_receive_retains_partial_framing() {
         let (left, right) = socketpair(
@@ -1146,14 +1158,18 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct CaptureObserver(Mutex<Vec<(UnixTransportEvent, UnixTransportFailure)>>);
+    struct CaptureObserver(tokio::sync::Mutex<Vec<(UnixTransportEvent, UnixTransportFailure)>>);
 
     impl UnixTransportObserver for CaptureObserver {
         fn record(&self, event: UnixTransportEvent, reason: UnixTransportFailure) {
-            self.0.lock().unwrap().push((event, reason));
+            // Sync trait surface: non-blocking try_lock fails closed (plan U4
+            // sync-consumer pattern); the critical section is a short push.
+            self.0.try_lock().expect("observer lock").push((event, reason));
         }
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn transport_observer_records_closed_labels_before_returning_failure() {
         let (left, _right) = socketpair(
@@ -1175,7 +1191,7 @@ mod tests {
             TransportError::LimitExceeded
         );
         assert_eq!(
-            observer.0.lock().unwrap().as_slice(),
+            observer.0.lock().await.as_slice(),
             &[(UnixTransportEvent::Receive, UnixTransportFailure::Limit)]
         );
     }

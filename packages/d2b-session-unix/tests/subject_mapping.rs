@@ -2,6 +2,8 @@ use d2b_session::contract::TransportClass;
 use d2b_session_unix::{SeqpacketSocket, StreamSocket, VerifiedUnixPeer, prearmed_seqpacket_pair};
 use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn so_peercred_produces_claim_free_peer_evidence() {
     let (left, _right) = socketpair(
@@ -19,6 +21,8 @@ async fn so_peercred_produces_claim_free_peer_evidence() {
     peer.validate_transport(TransportClass::UnixStream).unwrap();
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn unix_peer_evidence_rejects_transport_rebinding() {
     let (left, _right) = prearmed_seqpacket_pair().unwrap();

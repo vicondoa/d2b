@@ -259,6 +259,8 @@ fn staged_credit_reservations_release_once_at_each_scope() {
     assert!(pools.iter().all(|pool| pool.used() == 0));
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn inherited_passcred_is_verified_but_never_repaired() {
     let _serial = serialize_fd_test().await;
@@ -281,12 +283,17 @@ async fn inherited_passcred_is_verified_but_never_repaired() {
 
 #[test]
 fn invalid_inherited_fd_is_not_taken_on_validation_failure() {
+    // Plain #[test] harness (no runtime, synchronous by construction);
+    // sanctioned cfg(test) helper per plan R11.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     let file = fs::File::open("/dev/null").unwrap();
     let raw_fd = file.as_raw_fd();
     assert!(SeqpacketSocket::from_inherited_fd(raw_fd).is_err());
     assert!(fcntl_getfd(&file).is_ok());
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn controller_bootstrap_handoff_accepts_exact_marker_fd_and_credentials() {
     let _serial = serialize_fd_test().await;
@@ -325,6 +332,8 @@ async fn controller_bootstrap_handoff_accepts_exact_marker_fd_and_credentials() 
     assert!(SeqpacketSocket::from_parent_prearmed(resource_fd).is_ok());
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn controller_bootstrap_handoff_rejects_missing_extra_and_malformed_packets() {
     let _serial = serialize_fd_test().await;
@@ -440,6 +449,8 @@ async fn controller_bootstrap_handoff_rejects_missing_extra_and_malformed_packet
     );
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn first_packet_has_exact_directional_credentials() {
     let _serial = serialize_fd_test().await;
@@ -481,6 +492,8 @@ async fn first_packet_has_exact_directional_credentials() {
     );
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn seqpacket_transfer_is_atomic_cloexec_and_object_exact() {
     let _serial = serialize_fd_test().await;
@@ -541,6 +554,8 @@ async fn seqpacket_transfer_is_atomic_cloexec_and_object_exact() {
     assert!(sender_pools.iter().all(|pool| pool.used() == 0));
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn duplicate_kernel_objects_are_rejected_and_cleaned_up() {
     let _serial = serialize_fd_test().await;
@@ -605,6 +620,8 @@ async fn duplicate_kernel_objects_are_rejected_and_cleaned_up() {
     assert!(sender_pools.iter().all(|pool| pool.used() == 0));
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() {
     let _serial = serialize_fd_test().await;
@@ -679,7 +696,7 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
         .await
         .unwrap();
     assert!(sender_pools.iter().all(|pool| pool.used() == 0));
-    assert_eq!(pipe_handle_count(pipe_inode), 1);
+    assert_eq!(pipe_handle_count(pipe_inode).await, 1);
     let received = receiver
         .receive(LimitProfile::local_default().protected_ciphertext_bytes as usize)
         .await
@@ -694,7 +711,7 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
         .unwrap();
     AttachmentPayload::validate_descriptor(unix_payload, &metadata).unwrap();
     assert!(receiver_pools.iter().all(|pool| pool.used() == 1));
-    assert_eq!(pipe_handle_count(pipe_inode), 2);
+    assert_eq!(pipe_handle_count(pipe_inode).await, 2);
     let received_read_end = unix_payload.file().unwrap();
     rustix::io::write(&write_end, b"x").unwrap();
     let mut byte = [0_u8; 1];
@@ -702,7 +719,7 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
     assert_eq!(byte, *b"x");
     drop(attachments);
     assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
-    assert_eq!(pipe_handle_count(pipe_inode), 1);
+    assert_eq!(pipe_handle_count(pipe_inode).await, 1);
 
     let foreign_closes = Arc::new(AtomicUsize::new(0));
     let foreign = OwnedAttachment::new(
@@ -770,6 +787,8 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
     stream_receiver.close().await.unwrap();
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn seqpacket_transport_waits_out_a_drained_readiness_instead_of_disconnecting() {
     let (sender_socket, receiver_socket) = seqpacket_pair();
@@ -854,6 +873,8 @@ async fn seqpacket_transport_waits_out_a_drained_readiness_instead_of_disconnect
     ));
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn stream_transport_reassembles_partial_and_coalesced_records() {
     let (sender, receiver) = stream_pair();
@@ -877,6 +898,8 @@ async fn stream_transport_reassembles_partial_and_coalesced_records() {
     sender_task.await.unwrap();
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn stream_transport_distinguishes_clean_and_partial_eof() {
     let (sender, receiver) = stream_pair();
@@ -919,6 +942,8 @@ async fn stream_transport_distinguishes_clean_and_partial_eof() {
     ));
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn stream_transport_resumes_a_cancelled_partial_frame() {
     let (left, right) = socketpair(
@@ -956,6 +981,8 @@ async fn stream_transport_resumes_a_cancelled_partial_frame() {
     assert_eq!(received.unwrap().as_bytes(), payload);
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn stream_socket_zero_byte_read_is_exact_graceful_eof() {
     let (sender, receiver) = stream_pair();
@@ -981,6 +1008,8 @@ async fn stream_socket_zero_byte_read_is_exact_graceful_eof() {
     }
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn seqpacket_zero_byte_read_is_a_clean_disconnect() {
     let (sender, receiver) = seqpacket_pair();
@@ -996,6 +1025,8 @@ async fn seqpacket_zero_byte_read_is_a_clean_disconnect() {
     );
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn stream_transport_rejects_oversize_and_incomplete_records() {
     let mut limits = LimitProfile::local_default();
@@ -1023,6 +1054,8 @@ async fn stream_transport_rejects_oversize_and_incomplete_records() {
     );
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn inherited_transport_consumes_stable_credentials_as_identity_evidence() {
     let _serial = serialize_fd_test().await;
@@ -1073,6 +1106,8 @@ async fn inherited_transport_consumes_stable_credentials_as_identity_evidence() 
     assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn inherited_transport_handshakes_with_zero_semantic_fd_capacity() {
     let _serial = serialize_fd_test().await;
@@ -1118,6 +1153,8 @@ async fn inherited_transport_handshakes_with_zero_semantic_fd_capacity() {
     assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn pathname_transport_verifies_provenance_and_accepts_attachment_free_preface() {
     let _serial = serialize_fd_test().await;
@@ -1171,6 +1208,8 @@ async fn pathname_transport_verifies_provenance_and_accepts_attachment_free_pref
     assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn unix_semantic_credential_descriptor_is_rejected_and_closed() {
     let _serial = serialize_fd_test().await;
@@ -1193,10 +1232,12 @@ async fn unix_semantic_credential_descriptor_is_rejected_and_closed() {
         OwnedUnixAttachment::file(metadata, read_end, DescriptorPolicy::File(identity)),
         Err(UnixSessionError::DescriptorMismatch)
     ));
-    assert_eq!(pipe_handle_count(inode), 1);
+    assert_eq!(pipe_handle_count(inode).await, 1);
     drop(write_end);
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn session_engine_transfers_and_binds_seqpacket_attachments_end_to_end() {
     let _serial = serialize_fd_test().await;
@@ -1285,7 +1326,7 @@ async fn session_engine_transfers_and_binds_seqpacket_attachments_end_to_end() {
         OwnedUnixAttachment::file(metadata, read_end, DescriptorPolicy::File(identity)).unwrap();
     initiator.send_attachments(vec![attachment]).await.unwrap();
     assert!(sender_pools.iter().all(|pool| pool.used() == 0));
-    assert_eq!(pipe_handle_count(pipe_inode), 1);
+    assert_eq!(pipe_handle_count(pipe_inode).await, 1);
 
     let attachments = match responder.receive().await.unwrap() {
         SessionEvent::Attachments(attachments) => attachments,
@@ -1305,7 +1346,7 @@ async fn session_engine_transfers_and_binds_seqpacket_attachments_end_to_end() {
     assert_eq!(byte, *b"y");
     drop(attachments);
     assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
-    assert_eq!(pipe_handle_count(pipe_inode), 1);
+    assert_eq!(pipe_handle_count(pipe_inode).await, 1);
     assert!(matches!(
         initiator.receive().await.unwrap(),
         SessionEvent::AttachmentAcknowledged { count: 1 }
@@ -1335,6 +1376,8 @@ impl AttachmentPayload for CountingPayload {
     }
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_process() {
     let _serial = serialize_fd_test().await;
@@ -1411,7 +1454,7 @@ async fn pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_proc
     );
     let recycled_verifier = Arc::new(ProcPidfdIdentityVerifier::new(
         SequencePidfdInfo {
-            contents: std::sync::Mutex::new(VecDeque::from([
+            contents: tokio::sync::Mutex::new(VecDeque::from([
                 format!("Pid:\t{}\n", expected_pid.as_raw_nonzero()),
                 "Pid:\t-1\n".to_owned(),
             ])),
@@ -1472,13 +1515,17 @@ impl PidfdInfoSource for FixedPidfdInfo {
 }
 
 struct SequencePidfdInfo {
-    contents: std::sync::Mutex<VecDeque<String>>,
+    contents: tokio::sync::Mutex<VecDeque<String>>,
 }
 
 impl PidfdInfoSource for SequencePidfdInfo {
+
     fn read_fdinfo(&self, _pidfd: BorrowedFd<'_>) -> Result<String, UnixSessionError> {
+        // Sync trait fake (no await possible): non-blocking try_lock fails
+        // closed (plan U4 sync-consumer pattern); single-threaded test means
+        // no contention.
         self.contents
-            .lock()
+            .try_lock()
             .expect("pidfd sequence lock")
             .pop_front()
             .ok_or(UnixSessionError::PidfdEvidenceUnavailable)
@@ -1515,6 +1562,8 @@ fn io_errors_retain_only_the_actionable_errno() {
     );
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn payload_and_control_truncation_scavenge_received_files() {
     let _serial = serialize_fd_test().await;
@@ -1569,7 +1618,7 @@ async fn payload_and_control_truncation_scavenge_received_files() {
             .send_burst(&mut queue, sender_capacity, 8)
             .await
             .unwrap();
-        let before_receive = pipe_handle_count(pipe_inode);
+        let before_receive = pipe_handle_count(pipe_inode).await;
         assert!(matches!(
             receiver
                 .recv_burst(
@@ -1581,10 +1630,12 @@ async fn payload_and_control_truncation_scavenge_received_files() {
                 .await,
             Err(UnixSessionError::ControlTruncated)
         ));
-        assert_eq!(pipe_handle_count(pipe_inode), before_receive);
+        assert_eq!(pipe_handle_count(pipe_inode).await, before_receive);
     }
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn readiness_drains_bursts_and_preserves_cached_continuation() {
     let _serial = serialize_fd_test().await;
@@ -1608,6 +1659,8 @@ async fn readiness_drains_bursts_and_preserves_cached_continuation() {
     assert_eq!(output, b"abcdefgh");
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn fd_reuse_does_not_defeat_object_identity() {
     let _serial = serialize_fd_test().await;
@@ -1647,12 +1700,14 @@ async fn fd_reuse_does_not_defeat_object_identity() {
     );
 }
 
-fn pipe_handle_count(inode: u64) -> usize {
+async fn pipe_handle_count(inode: u64) -> usize {
     let expected = format!("pipe:[{inode}]");
-    fs::read_dir("/proc/self/fd")
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter_map(|entry| fs::read_link(entry.path()).ok())
-        .filter(|target| target.to_string_lossy() == expected)
-        .count()
+    let mut entries = tokio::fs::read_dir("/proc/self/fd").await.unwrap();
+    let mut count = 0;
+    while let Some(entry) = entries.next_entry().await.unwrap() {
+        if tokio::fs::read_link(entry.path()).await.is_ok_and(|target| target.to_string_lossy() == expected) {
+            count += 1;
+        }
+    }
+    count
 }

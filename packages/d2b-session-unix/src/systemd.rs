@@ -409,6 +409,10 @@ mod tests {
         let listener = unix_listener(SocketType::SEQPACKET);
         fcntl_setfd(&listener, FdFlags::empty()).expect("inherit listener in helper");
         let inherited_fd = listener.as_raw_fd();
+        // Plain #[test] helper re-invoking the test binary as a subprocess
+        // (no runtime, synchronous by construction); sanctioned cfg(test)
+        // helper per plan R11.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let output = Command::new(env::current_exe().unwrap())
             .args([
                 "--exact",
