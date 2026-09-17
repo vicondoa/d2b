@@ -237,6 +237,14 @@ impl GatewayGuestZoneLinkRuntime {
 
     /// Persist a non-secret marker after the sealed credential and Guest
     /// runtime have been successfully composed.
+    // Synchronous path: the observation write is a short create-temp-rename
+    // at the Gateway bootstrap composition boundary; `d2bd`'s composition
+    // flow consumes this pub sync surface before executor workers exist, so
+    // there is no async form reachable on that path.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "synchronous path"
+    )]
     pub fn write_open_observation(
         &self,
         path: impl AsRef<Path>,
@@ -405,6 +413,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn sealed_runtime(dir: &Path) -> GatewayGuestZoneLinkRuntime {
         let credential_path = dir.join("credential.sealed.json");
         let seal_key = crate::guest_credential::sealing_key();
@@ -500,6 +509,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn open_observation_is_emitted_only_after_successful_sealed_open() {
         let dir = tempfile::tempdir().expect("temporary Guest state");
@@ -525,6 +535,7 @@ mod tests {
         assert!(!marker_text.contains("send-secret"));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn missing_or_invalid_sealed_open_emits_no_observation() {
         let dir = tempfile::tempdir().expect("temporary Guest state");

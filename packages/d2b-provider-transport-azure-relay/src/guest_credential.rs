@@ -12,7 +12,8 @@ use std::fs::OpenOptions;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::{
     MAX_ACTIVE_RELAY_LEASES, MAX_RELAY_LEASE_TTL_MS, RelayCredentialBinding, RelayCredentialError,
@@ -344,8 +345,12 @@ impl GatewayGuestCredentialPort {
     }
 
     /// Return the number of currently revocable leases.
+    ///
+    /// Diagnostic read reachable from `Debug` (a sync surface); a
+    /// fail-closed `try_lock` keeps this from parking an executor worker while
+    /// an async acquire/revoke holds the lock, reporting 0 when contended.
     pub fn active_lease_count(&self) -> usize {
-        self.active.lock().map(|leases| leases.len()).unwrap_or(0)
+        self.active.try_lock().map(|leases| leases.len()).unwrap_or(0)
     }
 
     fn material_for(
@@ -428,16 +433,7 @@ impl RelayCredentialPort for GatewayGuestCredentialPort {
             binding.clone(),
         )?;
         let lease_id = lease.lease_id();
-        let mut active = self
-            .active
-            .lock()
-            .map_err(|_| {
-                tracing::warn!(
-                    provider = "transport-azure-relay",
-                    "credential lease acquire rejected: lease registry lock poisoned"
-                );
-                RelayCredentialError::Unavailable
-            })?;
+        let mut active = self.active.lock().await;
         if active.len() >= MAX_ACTIVE_RELAY_LEASES {
             tracing::warn!(
                 provider = "transport-azure-relay",
@@ -455,7 +451,11 @@ impl RelayCredentialPort for GatewayGuestCredentialPort {
         );
         let active_for_drop = Arc::clone(&self.active);
         lease.set_drop_hook(Arc::new(move |lease_id| {
-            if let Ok(mut active) = active_for_drop.lock() {
+            // Drop hooks run on a sync surface: a blocking std lock would park an
+            // executor worker, so best-effort `try_lock` fail-closed removes the row
+            // when uncontended. Revocation and the `MAX_ACTIVE_RELAY_LEASES` budget still
+            // bound the table when a contended drop misses.
+            if let Ok(mut active) = active_for_drop.try_lock() {
                 active.remove(&lease_id);
             }
         }));
@@ -466,10 +466,7 @@ impl RelayCredentialPort for GatewayGuestCredentialPort {
         let binding = lease
             .binding()
             .ok_or(RelayCredentialError::BindingRequired)?;
-        let mut active = self
-            .active
-            .lock()
-            .map_err(|_| RelayCredentialError::Unavailable)?;
+        let mut active = self.active.lock().await;
         let result = match active.get(&lease.lease_id()) {
             Some(record) if record.role == lease.role() && record.binding == *binding => {
                 active.remove(&lease.lease_id());
@@ -583,6 +580,15 @@ impl core::fmt::Display for CredentialError {
 
 impl std::error::Error for CredentialError {}
 
+// Synchronous path: the Gateway opens its single sealed credential envelope
+// during bootstrap composition via the public sync loaders, which are consumed
+// by `d2bd`'s composition flow before executor workers exist, so an async form
+// is unreachable on that path; keep this leaf read sync.
+
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 fn read_policy_file(
     path: &Path,
     required_mode: u32,
@@ -674,6 +680,10 @@ fn valid_material_text(value: &str) -> bool {
 /// The Guest never authors envelopes: it only opens the envelope the gateway
 /// bootstrap delivers. Unit tests build that fixture through the same
 /// envelope primitives the read path verifies.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "cfg(test) helper"
+)]
 #[cfg(test)]
 pub(crate) fn seal_envelope_for_test(
     path: &Path,
@@ -727,6 +737,10 @@ pub(crate) fn seal_envelope_for_test(
 
 /// Key-length entropy for the tests. The sealing key material is generated at
 /// run time, so none of it lives in the source tree.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "cfg(test) helper"
+)]
 #[cfg(test)]
 pub(crate) fn sealing_key_bytes() -> [u8; GATEWAY_SEAL_KEY_LEN] {
     static BYTES: std::sync::LazyLock<[u8; GATEWAY_SEAL_KEY_LEN]> =
@@ -758,6 +772,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fixture(dir: &Path) -> PathBuf {
         let path = dir.join("credential.json");
         fs::write(
@@ -793,6 +808,7 @@ mod tests {
         assert!(!dbg.contains("send-secret"));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn rejects_group_or_other_readable_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -816,6 +832,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn rejects_owner_mismatch_when_policy_requires_uid() {
         let dir = tempfile::tempdir().unwrap();
@@ -832,6 +849,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn unseals_gateway_owned_credential_envelope() {
         let dir = tempfile::tempdir().unwrap();
@@ -895,6 +913,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn guest_port_requires_exact_binding_and_revokes_exact_lease() {
         let dir = tempfile::tempdir().unwrap();
@@ -930,6 +949,7 @@ mod tests {
         assert_eq!(port.active_lease_count(), 0);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn guest_port_removes_active_row_when_lease_drops() {
         let dir = tempfile::tempdir().unwrap();
@@ -955,6 +975,7 @@ mod tests {
         assert_eq!(port.active_lease_count(), 0);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn sealed_guest_port_does_not_materialize_canary_in_file_or_debug() {
         let dir = tempfile::tempdir().unwrap();
@@ -976,6 +997,7 @@ mod tests {
         assert!(!debug.contains(path.to_string_lossy().as_ref()));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn guest_port_rejects_legacy_plaintext_credentials() {
         let dir = tempfile::tempdir().unwrap();
@@ -992,6 +1014,7 @@ mod tests {
         assert_eq!(port.active_lease_count(), 0);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn guest_port_rejects_expired_envelope_without_materializing_a_lease() {
         let dir = tempfile::tempdir().unwrap();

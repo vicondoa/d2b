@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicUsize, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
@@ -20,7 +20,7 @@ use d2b_provider_transport_azure_relay::{
     ScopedCredentialClient, ScopedCredentialRequest,
 };
 use d2b_session::{OwnedTransport, TransportPacket};
-use tokio::sync::Notify;
+use tokio::sync::{Mutex, Notify};
 
 #[derive(Default)]
 struct FakeSocket {
@@ -30,12 +30,12 @@ struct FakeSocket {
 #[async_trait]
 impl RelaySocket for FakeSocket {
     async fn send(&self, frame: RelayFrame) -> Result<(), RelayTransportError> {
-        self.frames.lock().unwrap().push_back(frame);
+        self.frames.lock().await.push_back(frame);
         Ok(())
     }
 
     async fn receive(&self) -> Result<Option<RelayFrame>, RelayTransportError> {
-        Ok(self.frames.lock().unwrap().pop_front())
+        Ok(self.frames.lock().await.pop_front())
     }
 
     async fn close(&self) -> Result<(), RelayTransportError> {
@@ -178,7 +178,7 @@ impl ScopedCredentialClient for ScopedOnlyCredentials {
         &self,
         request: &ScopedCredentialRequest,
     ) -> Result<RelayCredentialLease, RelayCredentialError> {
-        *self.calls.lock().unwrap() += 1;
+        *self.calls.lock().await += 1;
         assert_eq!(request.zone(), &ZoneId::parse("work").unwrap());
         assert_eq!(
             request.credential_ref(),
@@ -275,7 +275,7 @@ impl RelaySocket for TrackingSocket {
     }
 
     async fn close(&self) -> Result<(), RelayTransportError> {
-        *self.closed.lock().unwrap() = true;
+        *self.closed.lock().await = true;
         Ok(())
     }
 }
@@ -387,6 +387,7 @@ fn endpoint() -> RelayEndpoint {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn scoped_open_uses_only_the_same_zone_guest_credential_boundary() {
     let provider = provider();
@@ -399,6 +400,7 @@ async fn scoped_open_uses_only_the_same_zone_guest_credential_boundary() {
     connection.close().await.unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn scoped_open_dispatches_only_the_scoped_resource_client_method() {
     let calls = Arc::new(Mutex::new(0));
@@ -414,7 +416,7 @@ async fn scoped_open_dispatches_only_the_scoped_resource_client_method() {
     )
     .unwrap();
     let connection = provider.open_scoped(scoped_request(1)).await.unwrap();
-    assert_eq!(*calls.lock().unwrap(), 1);
+    assert_eq!(*calls.lock().await, 1);
     connection.close().await.unwrap();
 }
 
@@ -466,6 +468,7 @@ fn relay_provider_configuration_rejects_host_execution_or_non_network_egress() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn sender_roundtrip_is_bounded_and_relay_has_no_local_admin() {
     let provider = provider();
@@ -496,6 +499,7 @@ async fn sender_roundtrip_is_bounded_and_relay_has_no_local_admin() {
     assert!(!peer.local_admin());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn enrolled_relay_connection_is_a_component_session_transport() {
     let provider = provider();
@@ -531,6 +535,7 @@ async fn enrolled_relay_connection_is_a_component_session_transport() {
     assert_eq!(packet.as_bytes(), b"encrypted-session-record");
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn unauthenticated_connection_cannot_send() {
     let connection = open_for(&provider(), RelayRole::Sender, &test_binding(), 1_000)
@@ -544,6 +549,7 @@ async fn unauthenticated_connection_cannot_send() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn unauthenticated_connection_cannot_receive() {
     let provider = provider();
@@ -556,6 +562,7 @@ async fn unauthenticated_connection_cannot_receive() {
     ));
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn failed_credential_revoke_closes_connected_socket() {
     let closed = Arc::new(Mutex::new(false));
@@ -590,9 +597,10 @@ async fn failed_credential_revoke_closes_connected_socket() {
         open_for(&provider, RelayRole::Sender, &test_binding(), 1_000).await,
         Err(RelayTransportError::CredentialUnavailable)
     ));
-    assert!(*closed.lock().unwrap());
+    assert!(*closed.lock().await);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn session_slot_wait_is_bounded_by_open_deadline() {
     let provider = AzureRelayTransportProvider::new(
@@ -641,8 +649,8 @@ impl RelayCredentialPort for TrackingCredentials {
         binding: &RelayCredentialBinding,
         _: u32,
     ) -> Result<RelayCredentialLease, RelayCredentialError> {
-        *self.acquired.lock().unwrap() += 1;
-        *self.binding.lock().unwrap() = Some(binding.clone());
+        *self.acquired.lock().await += 1;
+        *self.binding.lock().await = Some(binding.clone());
         Ok(RelayCredentialLease::new_bound(
             RelayCredentialMaterial::SasToken(
                 RelaySecret::new(b"connection-token".to_vec()).unwrap(),
@@ -655,13 +663,14 @@ impl RelayCredentialPort for TrackingCredentials {
     }
 
     async fn revoke(&self, _: RelayCredentialLease) -> Result<(), RelayCredentialError> {
-        *self.revoked.lock().unwrap() += 1;
+        *self.revoked.lock().await += 1;
         Ok(())
     }
 }
 
 legacy_scoped_adapter!(TrackingCredentials);
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn bound_open_acquires_and_revokes_one_lease_per_connection() {
     let acquired = Arc::new(Mutex::new(0));
@@ -684,10 +693,10 @@ async fn bound_open_acquires_and_revokes_one_lease_per_connection() {
     let connection = open_for(&provider, RelayRole::Sender, &binding, 1_000)
         .await
         .unwrap();
-    assert_eq!(*acquired.lock().unwrap(), 1);
-    assert_eq!(*revoked.lock().unwrap(), 1);
+    assert_eq!(*acquired.lock().await, 1);
+    assert_eq!(*revoked.lock().await, 1);
     assert_eq!(
-        seen_binding.lock().unwrap().as_ref().map(|value| {
+        seen_binding.lock().await.as_ref().map(|value| {
             (
                 value.zone_link_uid().to_owned(),
                 value.session_id().to_owned(),
@@ -703,6 +712,7 @@ async fn bound_open_acquires_and_revokes_one_lease_per_connection() {
     connection.close().await.unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn failed_new_generation_leaves_the_live_current_connection_usable() {
     let socket = Arc::new(FakeSocket::default());
@@ -743,6 +753,7 @@ async fn failed_new_generation_leaves_the_live_current_connection_usable() {
     first.close().await.unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn cancelled_connect_releases_the_active_lease_row() {
     let active = Arc::new(AtomicUsize::new(0));
@@ -777,6 +788,7 @@ async fn cancelled_connect_releases_the_active_lease_row() {
     wait_for_zero(&active).await;
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn timed_out_connect_releases_the_active_lease_row() {
     let active = Arc::new(AtomicUsize::new(0));
@@ -798,6 +810,7 @@ async fn timed_out_connect_releases_the_active_lease_row() {
     wait_for_zero(&active).await;
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn connector_error_releases_the_active_lease_row() {
     let active = Arc::new(AtomicUsize::new(0));
@@ -819,10 +832,11 @@ async fn connector_error_releases_the_active_lease_row() {
         open_for(&provider, RelayRole::Sender, &binding, 1_000).await,
         Err(RelayTransportError::Unavailable)
     ));
-    assert_eq!(*calls.lock().unwrap(), 1);
+    assert_eq!(*calls.lock().await, 1);
     wait_for_zero(&active).await;
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn timed_out_revoke_releases_the_active_lease_row() {
     let active = Arc::new(AtomicUsize::new(0));
@@ -846,6 +860,7 @@ async fn timed_out_revoke_releases_the_active_lease_row() {
     wait_for_zero(&active).await;
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn convenience_opens_release_generation_capacity() {
     let provider = provider();
@@ -905,7 +920,7 @@ impl RelayCredentialPort for WrongBindingCredentials {
     }
 
     async fn revoke(&self, _: RelayCredentialLease) -> Result<(), RelayCredentialError> {
-        *self.revoked.lock().unwrap() += 1;
+        *self.revoked.lock().await += 1;
         Ok(())
     }
 }
@@ -924,11 +939,12 @@ impl RelaySocketConnector for CountingConnector {
         _: RelayRole,
         _: &RelayCredentialLease,
     ) -> Result<Arc<dyn RelaySocket>, RelayTransportError> {
-        *self.calls.lock().unwrap() += 1;
+        *self.calls.lock().await += 1;
         Err(RelayTransportError::Unavailable)
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn mismatched_bound_lease_is_revoked_before_connector_dispatch() {
     let revoked = Arc::new(Mutex::new(0));
@@ -956,10 +972,11 @@ async fn mismatched_bound_lease_is_revoked_before_connector_dispatch() {
         open_for(&provider, RelayRole::Sender, &binding, 1_000).await,
         Err(RelayTransportError::CredentialBindingMismatch)
     ));
-    assert_eq!(*revoked.lock().unwrap(), 1);
-    assert_eq!(*calls.lock().unwrap(), 0);
+    assert_eq!(*revoked.lock().await, 1);
+    assert_eq!(*calls.lock().await, 0);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn stale_reconnect_generation_closes_the_old_connection_before_io() {
     let provider = provider();
@@ -993,6 +1010,7 @@ async fn stale_reconnect_generation_closes_the_old_connection_before_io() {
     second.close().await.unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn newer_success_remains_authoritative_after_older_cleanup() {
     let started = Arc::new(Notify::new());
@@ -1175,13 +1193,14 @@ impl RelayCredentialPort for RoleAndExpiryCredentials {
     }
 
     async fn revoke(&self, _: RelayCredentialLease) -> Result<(), RelayCredentialError> {
-        *self.revoked.lock().unwrap() += 1;
+        *self.revoked.lock().await += 1;
         Ok(())
     }
 }
 
 legacy_scoped_adapter!(RoleAndExpiryCredentials);
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn invalid_lease_role_and_expiry_never_reach_connector() {
     let revoked = Arc::new(Mutex::new(0));
@@ -1202,7 +1221,7 @@ async fn invalid_lease_role_and_expiry_never_reach_connector() {
         open_for(&provider, RelayRole::Sender, &test_binding(), 1_000).await,
         Err(RelayTransportError::CredentialRoleMismatch)
     ));
-    assert_eq!(*revoked.lock().unwrap(), 1);
+    assert_eq!(*revoked.lock().await, 1);
 
     let revoked = Arc::new(Mutex::new(0));
     let provider = AzureRelayTransportProvider::new(
@@ -1222,7 +1241,7 @@ async fn invalid_lease_role_and_expiry_never_reach_connector() {
         open_for(&provider, RelayRole::Sender, &test_binding(), 1_000).await,
         Err(RelayTransportError::CredentialExpired)
     ));
-    assert_eq!(*revoked.lock().unwrap(), 1);
+    assert_eq!(*revoked.lock().await, 1);
 }
 
 struct FailingSocket {
@@ -1240,7 +1259,7 @@ impl RelaySocket for FailingSocket {
     }
 
     async fn close(&self) -> Result<(), RelayTransportError> {
-        *self.closed.lock().unwrap() = true;
+        *self.closed.lock().await = true;
         Ok(())
     }
 }
@@ -1276,7 +1295,7 @@ impl RelaySocket for EofSocket {
     }
 
     async fn close(&self) -> Result<(), RelayTransportError> {
-        *self.closed.lock().unwrap() = true;
+        *self.closed.lock().await = true;
         Ok(())
     }
 }
@@ -1297,6 +1316,7 @@ impl RelaySocketConnector for EofConnector {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn failed_send_closes_the_session() {
     let closed = Arc::new(Mutex::new(false));
@@ -1333,13 +1353,14 @@ async fn failed_send_closes_the_session() {
         connection.phase().await,
         d2b_provider_transport_azure_relay::RelaySessionPhase::Closed
     );
-    assert!(*closed.lock().unwrap());
+    assert!(*closed.lock().await);
     let connection = open_for(&provider, RelayRole::Sender, &test_binding(), 1_000)
         .await
         .unwrap();
     connection.close().await.unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn eof_closes_the_session_and_releases_the_slot() {
     let closed = Arc::new(Mutex::new(false));
@@ -1374,7 +1395,7 @@ async fn eof_closes_the_session_and_releases_the_slot() {
         connection.phase().await,
         d2b_provider_transport_azure_relay::RelaySessionPhase::Closed
     );
-    assert!(*closed.lock().unwrap());
+    assert!(*closed.lock().await);
     open_for(&provider, RelayRole::Sender, &test_binding(), 1_000)
         .await
         .unwrap()

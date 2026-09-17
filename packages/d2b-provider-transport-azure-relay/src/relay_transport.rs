@@ -535,6 +535,15 @@ struct RelayGenerationLease {
 }
 
 impl RelayGenerationFence {
+    // Synchronous path: the generation fence is an in-memory state machine
+    // whose critical sections are non-blocking map updates, consumed also from
+    // `Drop` impls (`RelayGenerationAttempt`/`RelayGenerationLease`) that cannot
+    // await; converting it to `tokio::sync::Mutex` would force abort/release
+    // cleanup onto an async path and lose noexcept-drop cleanup.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "synchronous path"
+    )]
     fn lock_states(&self) -> StdMutexGuard<'_, RelayGenerationStates> {
         match self.states.lock() {
             Ok(states) => states,
@@ -725,7 +734,7 @@ pub struct RelayConnection {
     challenge: RelayEnrollmentChallenge,
     binding: RelayCredentialBinding,
     generation_fence: Arc<RelayGenerationFence>,
-    generation_lease: StdMutex<Option<RelayGenerationLease>>,
+    generation_lease: Mutex<Option<RelayGenerationLease>>,
     session_permit: Mutex<Option<OwnedSemaphorePermit>>,
 }
 
@@ -749,23 +758,19 @@ impl RelayConnection {
             challenge: next_connection_challenge(),
             binding,
             generation_fence,
-            generation_lease: StdMutex::new(Some(generation_lease)),
+            generation_lease: Mutex::new(Some(generation_lease)),
             session_permit: Mutex::new(Some(session_permit)),
         })
     }
 
-    fn release_generation_lease(&self) {
-        let lease = match self.generation_lease.lock() {
-            Ok(mut lease) => lease.take(),
-            Err(poisoned) => poisoned.into_inner().take(),
-        };
-        drop(lease);
+    async fn release_generation_lease(&self) {
+        self.generation_lease.lock().await.take();
     }
 
     async fn reject_stale_generation(&self) -> RelayTransportError {
         *self.phase.lock().await = RelaySessionPhase::Closed;
         self.session_permit.lock().await.take();
-        self.release_generation_lease();
+        self.release_generation_lease().await;
         let _ = self.socket.close().await;
         RelayTransportError::StaleGeneration
     }
@@ -828,7 +833,7 @@ impl RelayConnection {
             self.credits.lock().await.rollback(size);
             *self.phase.lock().await = RelaySessionPhase::Closed;
             self.session_permit.lock().await.take();
-            self.release_generation_lease();
+            self.release_generation_lease().await;
             let _ = self.socket.close().await;
         }
         result
@@ -844,7 +849,7 @@ impl RelayConnection {
         if result.as_ref().is_ok_and(Option::is_none) || result.is_err() {
             *self.phase.lock().await = RelaySessionPhase::Closed;
             self.session_permit.lock().await.take();
-            self.release_generation_lease();
+            self.release_generation_lease().await;
             let _ = self.socket.close().await;
         }
         result
@@ -870,7 +875,7 @@ impl RelayConnection {
     pub async fn close(&self) -> Result<(), RelayTransportError> {
         *self.phase.lock().await = RelaySessionPhase::Closed;
         self.session_permit.lock().await.take();
-        self.release_generation_lease();
+        self.release_generation_lease().await;
         self.socket.close().await
     }
 
