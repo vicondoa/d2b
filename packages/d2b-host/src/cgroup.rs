@@ -881,6 +881,7 @@ pub mod fake {
 
         /// Seed a stock unified hierarchy with the canonical controller
         /// set advertised at `root`.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub fn seed_unified(&self, root: &Path) {
             let mut inner = self.inner.lock().unwrap();
             inner.dirs.insert(root.to_path_buf());
@@ -906,6 +907,7 @@ pub mod fake {
 
         /// Seed only a partial controller set for the missing-controllers
         /// canary.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub fn seed_unified_with_controllers(&self, root: &Path, controllers: &str) {
             let mut inner = self.inner.lock().unwrap();
             inner.dirs.insert(root.to_path_buf());
@@ -930,6 +932,7 @@ pub mod fake {
 
         /// Inject a running pid into a cgroup (used to exercise the
         /// no-internal-process gate).
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub fn inject_procs(&self, dir: &Path, pids: &[u32]) {
             let mut inner = self.inner.lock().unwrap();
             let body = pids
@@ -942,20 +945,24 @@ pub mod fake {
 
         /// Snapshot of the leaf kill events recorded by
         /// [`super::cgroup_kill_leaf_only`].
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub fn kill_log(&self) -> Vec<PathBuf> {
             self.inner.lock().unwrap().kill_log.clone()
         }
 
         /// Snapshot of `(uid, gid)` owners for a path; `None` if the
         /// path has not been chowned.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub fn owner(&self, path: &Path) -> Option<(u32, u32)> {
             self.inner.lock().unwrap().owners.get(path).copied()
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub fn directory_exists(&self, path: &Path) -> bool {
             self.inner.lock().unwrap().dirs.contains(path)
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub fn file_contents(&self, path: &Path) -> Option<String> {
             self.inner.lock().unwrap().files.get(path).cloned()
         }
@@ -966,6 +973,7 @@ pub mod fake {
             self.uid
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn read_file(&self, path: &Path) -> Result<String, CgroupError> {
             let inner = self.inner.lock().unwrap();
             inner
@@ -977,6 +985,7 @@ pub mod fake {
                 })
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_file(&self, path: &Path, contents: &str) -> Result<(), CgroupError> {
             super::assert_partition_member_only(
                 path.parent().unwrap_or(path),
@@ -1025,11 +1034,13 @@ pub mod fake {
             Ok(())
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn exists(&self, path: &Path) -> bool {
             let inner = self.inner.lock().unwrap();
             inner.files.contains_key(path) || inner.dirs.contains(path)
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn mkdir(&self, path: &Path) -> Result<(), CgroupError> {
             let mut inner = self.inner.lock().unwrap();
             inner.dirs.insert(path.to_path_buf());
@@ -1063,6 +1074,7 @@ pub mod fake {
             Ok(())
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn fchown(&self, path: &Path, uid: u32, gid: u32) -> Result<(), CgroupError> {
             self.inner
                 .lock()

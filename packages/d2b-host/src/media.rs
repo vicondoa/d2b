@@ -274,6 +274,11 @@ pub struct SafeUsbCandidate {
 /// as enrollment candidates. Raw by-id names stay inside the return value for
 /// tests and broker-side matching; callers that render operator output should
 /// expose only `bus_id`.
+// Deliberately synchronous: this is the crate's public USB-candidate
+// preflight surface consumed by d2b-broker and d2bd from their own
+// sync call paths; the signature is a published contract. Sysfs
+// device enumeration is a bounded shallow scan at the sync boundary.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn safe_usb_block_candidates(sysfs_root: &Path, by_id_root: &Path) -> Vec<SafeUsbCandidate> {
     let devices_root = sysfs_root.join("bus/usb/devices");
     let Ok(entries) = std::fs::read_dir(&devices_root) else {
@@ -326,6 +331,9 @@ pub fn safe_usb_block_candidates(sysfs_root: &Path, by_id_root: &Path) -> Vec<Sa
     candidates
 }
 
+// Sync companion of `safe_usb_block_candidates` (same public-surface
+// boundary): depth-bounded sysfs walk.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn collect_block_devices_under(path: &Path, depth: u8, out: &mut BTreeSet<String>) {
     if depth > 12 {
         return;
@@ -360,6 +368,9 @@ fn collect_block_devices_under(path: &Path, depth: u8, out: &mut BTreeSet<String
     }
 }
 
+// Sync companion of `safe_usb_block_candidates` (same public-surface
+// boundary): one `/dev/disk/by-id` scan with per-entry canonicalize.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn by_id_names_for_block(by_id_root: &Path, block_device: &str) -> Vec<String> {
     let expected = PathBuf::from("/dev").join(block_device);
     let mut names = Vec::new();
@@ -560,6 +571,7 @@ mod tests {
         assert!(!summary.contains("/dev/"));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn block_scan_does_not_promote_nested_usb_device_to_parent_candidate() {
         let root = std::env::temp_dir().join(format!(

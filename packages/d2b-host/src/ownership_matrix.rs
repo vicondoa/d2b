@@ -208,6 +208,11 @@ pub fn should_recurse(entry: &OwnershipEntry) -> bool {
 /// `_vm` is currently informational (it's already baked into `base`
 /// by the caller). It's retained in the signature so future audit
 /// records can carry the VM name without a downstream refactor.
+// Deliberately synchronous: this is the crate's public ownership
+// preflight surface consumed synchronously by d2bd-runtime's
+// `ownership_preflight` before broker dispatch. The per-entry stats
+// and bounded walk have no async caller in this crate's contract.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn check_ownership_matrix(
     _vm: &str,
     base: &Path,
@@ -323,6 +328,9 @@ fn actual_kind_str(meta: &fs::Metadata) -> &'static str {
 /// NOT cross filesystem boundaries (the per-VM tree is required to
 /// live on a single FS by the `hardlink_farm::assert_same_filesystem`
 /// invariant).
+// Sync companion of `check_ownership_matrix` (same public-surface
+// boundary): bounded shallow walk of recursively-managed entries.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn walk_children(root: &Path, expected: &Ownership, out: &mut Vec<OwnershipMismatch>) {
     let read = match fs::read_dir(root) {
         Ok(it) => it,
@@ -416,6 +424,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn prepare(base: &Path, sub: &str, mode: u32) -> PathBuf {
         let p = if sub == "." {
             base.to_path_buf()
@@ -524,6 +533,7 @@ mod tests {
     /// 2. [`check_ownership_matrix`] does not emit any
     ///    `ChildDrift` for files under `store/`, even when those
     ///    files have intentionally bad ownership.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn hardlink_farm_carve_out_holds_for_legacy_store() {
         let tmp = tempfile::tempdir().unwrap();
@@ -586,6 +596,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn recursive_walk_reports_child_drift_outside_carve_out() {
         let tmp = tempfile::tempdir().unwrap();
@@ -648,6 +659,7 @@ mod tests {
         assert_eq!(m.kind(), "ownership-matrix-drift");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn file_kind_happy_path_no_drift() {
         let tmp = tempfile::tempdir().unwrap();
@@ -661,6 +673,7 @@ mod tests {
         assert!(drifts.is_empty(), "unexpected drift: {drifts:?}");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn file_kind_reasserts_mode() {
         let tmp = tempfile::tempdir().unwrap();
@@ -682,6 +695,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn file_kind_on_directory_is_kind_mismatch() {
         let tmp = tempfile::tempdir().unwrap();
@@ -706,6 +720,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn dir_kind_on_file_is_kind_mismatch() {
         let tmp = tempfile::tempdir().unwrap();
@@ -763,6 +778,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn no_follow_symlink_at_leaf_is_kind_mismatch() {
         use std::os::unix::fs::symlink;

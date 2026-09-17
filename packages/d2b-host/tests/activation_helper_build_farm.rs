@@ -15,6 +15,7 @@ use std::process::{Command, Stdio};
 use d2b_host::hardlink_farm::{BuildStoreViewFarmRequest, GenerationMarker, HardlinkFarmError};
 use tempfile::tempdir;
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn fake_closure(root: &Path, n: usize) -> Vec<PathBuf> {
     let store = root.join("nix-store-mock");
     std::fs::create_dir_all(&store).unwrap();
@@ -38,6 +39,9 @@ fn marker(closure_hash: &str) -> GenerationMarker {
     }
 }
 
+// Plain #[test] harness helper driving the helper binary synchronously
+// (no async runtime exists in this integration test).
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_helper(request: &BuildStoreViewFarmRequest) -> std::process::Output {
     let payload = serde_json::to_vec(request).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_d2b-activation-helper"))
@@ -56,6 +60,7 @@ fn run_helper(request: &BuildStoreViewFarmRequest) -> std::process::Output {
     child.wait_with_output().expect("await helper")
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn build_store_view_farm_verb_populates_farm_from_stdin_request() {
     let tmp = tempdir().unwrap();
@@ -90,6 +95,7 @@ fn build_store_view_farm_verb_populates_farm_from_stdin_request() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn private_store_requires_nested_verb_before_unshare() {
     let output = Command::new(env!("CARGO_BIN_EXE_d2b-activation-helper"))
@@ -106,6 +112,7 @@ fn private_store_requires_nested_verb_before_unshare() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn build_store_view_farm_verb_emits_typed_error_json_on_collision() {
     let tmp = tempdir().unwrap();
@@ -144,6 +151,9 @@ fn build_store_view_farm_verb_emits_typed_error_json_on_collision() {
 
 use d2b_host::hardlink_farm::{self, BuildStoreViewRequest, StoreViewLinkCounts};
 
+// Plain #[test] harness helper driving the helper binary synchronously
+// (no async runtime exists in this integration test).
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_store_view_helper(request: &BuildStoreViewRequest) -> std::process::Output {
     let payload = serde_json::to_vec(request).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_d2b-activation-helper"))
@@ -162,6 +172,7 @@ fn run_store_view_helper(request: &BuildStoreViewRequest) -> std::process::Outpu
     child.wait_with_output().expect("await helper")
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn build_store_view_verb_writes_split_tree_and_emits_counts() {
     let tmp = tempdir().unwrap();
@@ -218,6 +229,7 @@ fn build_store_view_verb_writes_split_tree_and_emits_counts() {
     assert!(!farm_root.join("meta/current").exists());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn build_store_view_verb_emits_typed_error_json_on_collision() {
     let tmp = tempdir().unwrap();

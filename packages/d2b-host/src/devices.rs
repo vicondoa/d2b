@@ -162,6 +162,11 @@ impl DeviceNodeReadback {
 /// Reads metadata for one declared entry. Real-host wrapper; the L1c
 /// canary uses [`DeviceNodeReadback::from_metadata`] directly with a
 /// fake group resolver.
+// Deliberately synchronous: this is the crate's public device-metadata
+// surface consumed by d2b-broker's device preflight from a sync call
+// path; the signature is a published contract. The per-entry stat is a
+// single short syscall at the sync boundary.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn read_device_metadata(path: &Path) -> DeviceNodeReadback {
     match fs::symlink_metadata(path) {
         Ok(metadata) => DeviceNodeReadback::from_metadata(path, &metadata, real_group_name),
@@ -169,6 +174,10 @@ pub fn read_device_metadata(path: &Path) -> DeviceNodeReadback {
     }
 }
 
+// Sync companion of `read_device_metadata`: one short /etc/group read
+// at the same sync boundary (NSS-free gid→name resolution; dlopen of
+// NSS plugins is blocked inside sandboxed activation contexts).
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn real_group_name(gid: u32) -> Option<String> {
     // gid → name resolution via parsing `/etc/group` directly. We
     // intentionally avoid `libc::getgrgid_r` (which would trigger NSS
@@ -506,6 +515,7 @@ fuse:x:128:
     }
 
     #[cfg(target_os = "linux")]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn real_host_dev_kvm_validates_when_kvm_group_exists() {
         // Skip when /etc/group has no `kvm` row (CI containers).

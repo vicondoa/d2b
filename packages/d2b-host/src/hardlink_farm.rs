@@ -555,6 +555,12 @@ fn write_all_at(fd: impl std::os::fd::AsFd, bytes: &[u8]) -> Result<(), SyncLock
 }
 
 /// The current boot id, as the kernel reports it.
+///
+/// Deliberately synchronous: one short `/proc` read at the sync lock-
+/// owner boundary (see the [`SyncLockOwnerRecord`] module docs); the
+/// multi-process exclusion is the broker's flock(2) and survives
+/// unchanged.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn current_boot_id() -> Result<String, SyncLockOwnerError> {
     let raw = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
         .map_err(|_| SyncLockOwnerError::Io)?;
@@ -565,6 +571,9 @@ pub fn current_boot_id() -> Result<String, SyncLockOwnerError> {
 /// `/proc/<pid>/stat`. Field 2 is the parenthesized `comm` (which may
 /// itself contain spaces and parentheses, so the parse splits at the
 /// last `)`) and field 22 is the start time in clock ticks.
+// Sync companion of `current_boot_id`: one short /proc/<pid>/stat
+// read at the same sync lock-owner boundary.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn process_identity(pid: i32) -> Result<(String, u64), SyncLockOwnerError> {
     if pid <= 1 {
         return Err(SyncLockOwnerError::ProcessGone);
@@ -2190,6 +2199,7 @@ mod tests {
         write_generation_marker(&dir, &make_marker(r#gen)).await.unwrap();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn assert_same_filesystem_matches_self() {
         let dir = tempdir().unwrap();
@@ -2198,6 +2208,7 @@ mod tests {
         assert!(assert_same_filesystem(dir.path(), &p).await.is_ok());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn assert_same_filesystem_surfaces_io_error_when_missing() {
         let dir = tempdir().unwrap();
@@ -2205,6 +2216,7 @@ mod tests {
         assert!(matches!(result, Err(HardlinkFarmError::Io { .. })));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn build_farm_creates_generation_with_marker_and_hardlinks() {
         let dir = tempdir().unwrap();
@@ -2258,6 +2270,7 @@ mod tests {
         assert!(generation_dir.join("system").exists());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn live_marker_is_zero_length() {
         let dir = tempdir().unwrap();
@@ -2278,6 +2291,7 @@ mod tests {
         assert_eq!(meta.len(), 0, "live readiness marker must be zero-length");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn guest_meta_json_has_exact_allow_list() {
         let dir = tempdir().unwrap();
@@ -2335,6 +2349,7 @@ mod tests {
         assert_eq!(typed.closure_count, 2);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn build_farm_idempotent_for_same_closure() {
         let dir = tempdir().unwrap();
@@ -2360,6 +2375,7 @@ mod tests {
             .unwrap();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn build_farm_refuses_generation_collision() {
         let dir = tempdir().unwrap();
@@ -2413,6 +2429,7 @@ mod tests {
         assert!(!live_dir(&farm_root).join("bbb-system/payload").exists());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn build_farm_rebuilds_markerless_partial_generation() {
         let dir = tempdir().unwrap();
@@ -2453,6 +2470,7 @@ mod tests {
         assert_eq!(marker.closure_hash, "toplevel:ccc-system");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn build_farm_preserves_symlink_target_for_new_live_path() {
         let dir = tempdir().unwrap();
@@ -2496,6 +2514,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn build_farm_preserves_broken_symlink_target_for_new_live_path() {
         let dir = tempdir().unwrap();
@@ -2535,6 +2554,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn marker_round_trip() {
         let dir = tempdir().unwrap();
@@ -2544,6 +2564,7 @@ mod tests {
         assert_eq!(read, make_marker(1));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn marker_missing_is_typed_error() {
         let dir = tempdir().unwrap();
@@ -2557,6 +2578,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn marker_unparseable_is_typed_error() {
         let dir = tempdir().unwrap();
@@ -2572,6 +2594,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn marker_rejects_unknown_fields() {
         let dir = tempdir().unwrap();
@@ -2597,6 +2620,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn swap_current_creates_symlink_to_target_generation() {
         let dir = tempdir().unwrap();
@@ -2612,6 +2636,7 @@ mod tests {
         assert_eq!(target, PathBuf::from("generations/1"));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn swap_current_overwrites_existing_symlink() {
         let dir = tempdir().unwrap();
@@ -2627,6 +2652,7 @@ mod tests {
         assert_eq!(target, PathBuf::from("generations/2"));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn swap_current_refuses_marker_less_generation() {
         let dir = tempdir().unwrap();
@@ -2643,6 +2669,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn swap_current_refuses_marker_with_wrong_generation_number() {
         let dir = tempdir().unwrap();
@@ -2661,6 +2688,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_removes_stale_swap_tmp() {
         let dir = tempdir().unwrap();
@@ -2681,6 +2709,7 @@ mod tests {
             .is_err());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_is_idempotent() {
         let dir = tempdir().unwrap();
@@ -2692,6 +2721,7 @@ mod tests {
         reconcile_stale_swap_tmp(&store).await.unwrap();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn sweep_live_pool_keeps_retained_generations_and_removes_stale_entries() {
         let dir = tempdir().unwrap();
@@ -2744,6 +2774,7 @@ mod tests {
         assert!(live_dir(&farm_root).join(".d2b-marker-corp-vm").exists());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn swap_current_cleans_up_stale_tmp_before_writing_new_one() {
         let dir = tempdir().unwrap();
@@ -2766,6 +2797,7 @@ mod tests {
         assert_eq!(parsed, m);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn split_closure(root: &Path) -> Vec<PathBuf> {
         let store = root.join("source-store");
         let system = store.join("zzz-nixos-system-host");
@@ -2796,6 +2828,7 @@ mod tests {
         assert_ne!(forward, other);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn build_store_view_writes_split_tree_with_guest_host_split() {
         let dir = tempdir().unwrap();
@@ -2884,6 +2917,7 @@ mod tests {
         assert_eq!(host.closure_count, 2);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn hardlink_tree_preserves_directory_modes() {
         let dir = tempdir().unwrap();
@@ -2913,6 +2947,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn split_publish_swaps_currents_and_plants_marker_last() {
         let dir = tempdir().unwrap();
@@ -2958,6 +2993,7 @@ mod tests {
         assert!(!split_fast_path_ready(&farm, &gid, "other-vm", &closure).await);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn build_store_view_refuses_generation_id_collision() {
         let dir = tempdir().unwrap();
@@ -2991,6 +3027,7 @@ mod tests {
             .expect("idempotent rebuild");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn replace_live_top_level_paths_exchanges_existing_tree() {
         let dir = tempdir().unwrap();
@@ -3037,6 +3074,7 @@ mod tests {
 
     // -- sync.lock owner record ----------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn locked_lock_file(dir: &Path) -> std::fs::File {
         let path = sync_lock_path(dir);
         std::fs::OpenOptions::new()
@@ -3067,6 +3105,7 @@ mod tests {
         assert_eq!(read.process_start_time_ticks, ticks);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn sync_lock_owner_record_rewrite_leaves_no_trailing_bytes() {
         let dir = tempdir().unwrap();
@@ -3085,6 +3124,7 @@ mod tests {
         assert_eq!(SyncLockOwnerRecord::read_locked(&file).unwrap(), short);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn sync_lock_owner_record_refuses_foreign_and_stale_owners() {
         let dir = tempdir().unwrap();
@@ -3129,6 +3169,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn sync_lock_owner_record_caps_oversize_payloads() {
         let dir = tempdir().unwrap();
@@ -3152,6 +3193,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn sync_lock_owner_record_reads_the_kernel_stat_shape() {
         // Field 2 (comm) is parenthesized and may itself contain spaces and

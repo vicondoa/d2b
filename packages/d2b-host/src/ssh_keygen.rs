@@ -83,6 +83,14 @@ impl std::fmt::Display for SshKeygenError {
 impl std::error::Error for SshKeygenError {}
 
 /// Run `ssh-keygen -lf <key_path>` and parse the result.
+///
+/// Deliberately synchronous: this is the crate's public `ssh-keygen`
+/// probe surface consumed by d2b-broker / d2bd from their own sync
+/// call paths; the signature is a published contract. The
+/// `tokio::process` form replaces it in those crates' own async-purity
+/// conversions; this crate keeps the sync wrapper with an inline
+/// allow rather than breaking external callers.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn probe_fingerprint(
     ssh_keygen_binary_path: &Path,
     key_path: &Path,
@@ -178,6 +186,7 @@ pub fn parse_ssh_keygen_lf(stdout: &str) -> Result<SshKeyFingerprint, SshKeygenE
 /// Run `ssh-keygen -y -f <private_key_path>` to extract the
 /// public-key line. Broker-side only: the private key path is
 /// root-readable only.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn probe_public_key(
     ssh_keygen_binary_path: &Path,
     private_key_path: &Path,

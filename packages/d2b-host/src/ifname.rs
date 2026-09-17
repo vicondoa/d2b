@@ -492,6 +492,7 @@ mod tests {
     /// and this side fails closed second as the per-process oracle.
     /// When the env var is UNSET the test still returns early so plain
     /// `cargo test` runs remain unaffected.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn nix_emitted_ifnames_pass_looks_d2b_owned() {
         let path = match std::env::var("D2B_IFNAME_PARITY_HOST_JSON") {

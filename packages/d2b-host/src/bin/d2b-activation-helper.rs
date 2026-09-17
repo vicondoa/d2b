@@ -154,6 +154,10 @@ fn framed_digest(domain: &str, payload: &[u8]) -> Result<String, CatalogError> {
     Ok(format!("sha256:{:x}", Sha256::digest(encoded)))
 }
 
+// CLI-only helper: bounded catalog read (O_NOFOLLOW fd + bounded
+// read_to_end) runs only from the activation-helper entry point, never
+// on an executor worker shared with other tasks.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_private_catalog(path: &std::path::Path) -> Result<ArtifactCatalog, CatalogError> {
     let fd = open_no_symlinks(path, OFlags::RDONLY).map_err(|_| CatalogError::Unsafe)?;
     let file = File::from(fd);
@@ -224,6 +228,11 @@ fn digest_store_path(path: &std::path::Path) -> Result<String, CatalogError> {
     digest_store_path_with_root(path, std::path::Path::new("/nix/store"))
 }
 
+// CLI-only helper: the recursive store-path digest (read_dir /
+// canonicalize / File::open / read_to_end, including the nested
+// `visit` walker) runs only from the activation-helper entry point,
+// never on an executor worker shared with other tasks.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn digest_store_path_with_root(
     path: &std::path::Path,
     store_root: &std::path::Path,
@@ -293,6 +302,9 @@ fn boot_default_system_path() -> Result<std::path::PathBuf, CatalogError> {
     system_profile_path("/nix/var/nix/profiles/system")
 }
 
+// CLI-only helper: single readlink(2) at the activation-helper entry
+// point, never on an executor worker shared with other tasks.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn system_profile_path(path: &str) -> Result<std::path::PathBuf, CatalogError> {
     let target = std::fs::read_link(path).map_err(|_| CatalogError::ActiveGeneration)?;
     let absolute = if target.is_absolute() {
@@ -723,6 +735,10 @@ fn cmd_enforce_dir_posture(args: &Args) -> ExitCode {
 /// different path and the target fd is not inherited by setfacl. The
 /// `--setfacl-bin` flag pins the setfacl binary (typically
 /// `${pkgs.acl}/bin/setfacl`) so $PATH is not consulted.
+// CLI-only verb: synchronous `setfacl` status wait at the
+// activation-helper entry point, never on an executor worker shared
+// with other tasks.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn cmd_setfacl_on_path(args: &Args) -> ExitCode {
     let path = match require("path", args.path.as_ref()) {
         Ok(p) => p,
@@ -842,6 +858,10 @@ fn cmd_setfacl_on_path(args: &Args) -> ExitCode {
     }
 }
 
+// CLI-only verb: synchronous `setfacl -b` status wait at the
+// activation-helper entry point, never on an executor worker shared
+// with other tasks.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn cmd_clear_acl_on_path(args: &Args) -> ExitCode {
     let path = match require("path", args.path.as_ref()) {
         Ok(p) => p,
@@ -1035,10 +1055,10 @@ fn cmd_chown_if_orphan(args: &Args) -> ExitCode {
 }
 
 async fn cmd_build_store_view_farm() -> ExitCode {
-    use std::io::Read;
+    use tokio::io::AsyncReadExt;
 
     let mut buf = Vec::new();
-    if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
+    if let Err(e) = tokio::io::stdin().read_to_end(&mut buf).await {
         eprintln!("build-store-view-farm: read stdin: {e}");
         return ExitCode::from(1);
     }
@@ -1077,6 +1097,10 @@ async fn cmd_build_store_view_farm() -> ExitCode {
     }
 }
 
+// CLI-only verb: synchronous stdin read + path resolution at the
+// activation-helper entry point, never on an executor worker shared
+// with other tasks.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn cmd_validate_artifact() -> ExitCode {
     let mut bytes = Vec::new();
     if std::io::stdin().read_to_end(&mut bytes).is_err() {
@@ -1103,6 +1127,10 @@ fn cmd_validate_artifact() -> ExitCode {
     }
 }
 
+// CLI-only verb: synchronous stdin read, switch-script status wait,
+// and profile-path resolution at the activation-helper entry point,
+// never on an executor worker shared with other tasks.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn cmd_apply_generation() -> ExitCode {
     use std::io::Read;
 
@@ -1188,10 +1216,10 @@ fn cmd_apply_generation() -> ExitCode {
 }
 
 async fn cmd_build_store_view() -> ExitCode {
-    use std::io::Read;
+    use tokio::io::AsyncReadExt;
 
     let mut buf = Vec::new();
-    if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
+    if let Err(e) = tokio::io::stdin().read_to_end(&mut buf).await {
         eprintln!("build-store-view: read stdin: {e}");
         return ExitCode::from(1);
     }
@@ -1235,10 +1263,10 @@ async fn cmd_build_store_view() -> ExitCode {
 }
 
 async fn cmd_replace_store_view_live() -> ExitCode {
-    use std::io::Read;
+    use tokio::io::AsyncReadExt;
 
     let mut buf = Vec::new();
-    if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
+    if let Err(e) = tokio::io::stdin().read_to_end(&mut buf).await {
         eprintln!("replace-store-view-live: read stdin: {e}");
         return ExitCode::from(1);
     }
@@ -1297,7 +1325,11 @@ async fn run_private_store_verb(verb: &str) -> ExitCode {
 // point drives a current-thread runtime - the sanctioned "process entry
 // point drives the runtime" shape from the async-purity policy. No
 // mid-call-graph `block_on` exists anywhere: main is the only runtime
-// driver, and the sync verbs below simply run inside it.
+// driver, and the sync verbs below simply run inside it. The
+// `#[tokio::main]` macro itself expands to `Runtime::block_on` at the
+// process entry point (no executor worker exists before it), which is
+// the CLI-only carve-out in the deny list.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     // `build-store-view-farm` takes its (potentially large) request as
@@ -1361,6 +1393,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn package_digest_includes_bytes_read_through_store_symlinks() {
         let directory = PathBuf::from("target")

@@ -5,8 +5,13 @@ edition = "2024"
 publish = false
 license.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
 
 # d2b-host is the W3 disjoint host-prepare API surface consumed by
 # d2bd and d2b-broker. Stub modules land in the integrator
@@ -50,7 +55,9 @@ sha2 = { workspace = true }
 # farm verbs (the sanctioned entry-point shape; no mid-call-graph
 # `block_on`). `spawn_blocking` stays unused: the only no-async-form
 # syscall (renameat2 RENAME_EXCHANGE) runs inline as a short syscall.
-tokio = { workspace = true, features = ["fs", "rt", "macros", "io-util"] }
+# `io-std` serves the async activation-helper verbs that read their
+# JSON request from stdin (`tokio::io::stdin`).
+tokio = { workspace = true, features = ["fs", "rt", "macros", "io-util", "io-std"] }
 # `miniz_oxide` is a raw-DEFLATE decoder; d2b-host wraps it in a
 # tiny inline gzip header/trailer skipper so the W3 kernel-module
 # probe can read `/proc/config.gz` as a secondary kernel-config

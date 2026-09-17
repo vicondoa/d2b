@@ -182,6 +182,12 @@ pub fn probe_modules_disabled() -> bool {
 
 /// Test-shim variant of [`probe_modules_disabled`] reading a caller-
 /// supplied path.
+// Deliberately synchronous: these are the crate's public kernel-module
+// probe surfaces consumed by d2b-broker's modprobe op and d2bd-runtime's
+// kernel-module check from sync call paths. Each probe is a short
+// /proc or sysfs read at the sync boundary; the signature set is a
+// published contract (test-shim `_at` variants included).
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn probe_modules_disabled_at(path: &Path) -> bool {
     matches!(fs::read_to_string(path), Ok(s) if s.trim() == "1")
 }
@@ -193,6 +199,7 @@ pub fn read_loaded_modules() -> LoadedModuleSet {
 }
 
 /// Test-shim variant of [`read_loaded_modules`].
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn read_loaded_modules_at(proc_modules: &Path, sys_module_dir: &Path) -> LoadedModuleSet {
     let mut set = match fs::read_to_string(proc_modules) {
         Ok(contents) => LoadedModuleSet::parse_proc_modules(&contents),
@@ -230,6 +237,7 @@ pub fn read_builtin_modules_with_fallback() -> BuiltinModuleSet {
 }
 
 /// Test-shim variant of [`read_builtin_modules`].
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn read_builtin_modules_at(path: &Path) -> BuiltinModuleSet {
     match fs::read_to_string(path) {
         Ok(contents) => BuiltinModuleSet::parse_modules_builtin(&contents),
@@ -238,6 +246,7 @@ pub fn read_builtin_modules_at(path: &Path) -> BuiltinModuleSet {
 }
 
 /// Test-shim variant of [`read_builtin_modules_with_fallback`].
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn read_builtin_modules_with_fallback_at(primary: &Path, fallback: &Path) -> BuiltinModuleSet {
     let primary_set = match fs::read_to_string(primary) {
         Ok(contents) => BuiltinModuleSet::parse_modules_builtin(&contents),
@@ -264,6 +273,7 @@ pub fn read_kernel_config() -> Option<KernelConfig> {
 }
 
 /// Test-shim variant of [`read_kernel_config`].
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn read_kernel_config_at(path: &Path) -> Option<KernelConfig> {
     fs::read_to_string(path)
         .ok()
@@ -273,6 +283,7 @@ pub fn read_kernel_config_at(path: &Path) -> Option<KernelConfig> {
 /// Two-stage kernel-config probe: prefers `<primary>` (uncompressed),
 /// falls back to a `<fallback>` gzip-encoded blob (`/proc/config.gz`).
 /// Returns `None` only if neither source yields a parseable config.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn read_kernel_config_with_fallback_at(
     primary: &Path,
     fallback: &Path,
@@ -709,6 +720,7 @@ mod tests {
         assert!(set.contains("fuse"));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn read_builtin_modules_with_fallback_uses_bin_when_text_missing() {
         // Drive the test-shim variant with a non-existent primary so
@@ -771,6 +783,7 @@ mod tests {
         assert_eq!(err, GzipError::MissingMagic);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn read_kernel_config_with_fallback_prefers_primary() {
         let dir = std::env::temp_dir().join(format!(

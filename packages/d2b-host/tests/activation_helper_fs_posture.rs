@@ -24,6 +24,7 @@ const HELPER: &str = env!("CARGO_BIN_EXE_d2b-activation-helper");
 
 /// Run the helper with `args` and return its exit code (`None` if killed by a
 /// signal, which the no-hang FIFO cases assert against).
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run(args: &[&str]) -> Option<i32> {
     Command::new(HELPER)
         .args(args)
@@ -41,10 +42,12 @@ fn gid() -> String {
     nix::unistd::Gid::current().as_raw().to_string()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn mode_of(path: &Path) -> u32 {
     fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn help_exits_zero_and_missing_verb_exits_one() {
     let out = Command::new(HELPER)
@@ -62,6 +65,7 @@ fn help_exits_zero_and_missing_verb_exits_one() {
     assert_eq!(run(&[]), Some(1), "missing verb must exit 1");
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn ensure_regular_file_happy_path_and_re_assert() {
     let dir = tempdir().unwrap();
@@ -117,6 +121,7 @@ fn ensure_regular_file_happy_path_and_re_assert() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn ensure_regular_file_refuses_wrong_types_with_exit_2() {
     let dir = tempdir().unwrap();
@@ -187,6 +192,7 @@ fn ensure_regular_file_refuses_wrong_types_with_exit_2() {
     assert_eq!(rc, Some(2), "must refuse FIFO with exit 2 and not hang");
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn enforce_dir_posture_happy_refusals_and_idempotent_noop() {
     let dir = tempdir().unwrap();
@@ -240,6 +246,7 @@ fn enforce_dir_posture_happy_refusals_and_idempotent_noop() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn chown_if_orphan_known_owner_noop_and_symlink_refusal() {
     let dir = tempdir().unwrap();
@@ -282,6 +289,7 @@ fn chown_if_orphan_known_owner_noop_and_symlink_refusal() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn setfacl_and_clear_acl_refusals() {
     let setfacl = match which("setfacl") {
@@ -392,6 +400,7 @@ fn mkfifo(path: &Path) {
 /// Run the helper with a wall-clock ceiling, returning the exit code. Returns
 /// `None` if the process had to be killed (i.e. it hung past the ceiling),
 /// which the no-hang assertions treat as a failure distinct from exit 2.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_with_timeout(args: &[&str], ceiling: std::time::Duration) -> Option<i32> {
     let mut child = Command::new(HELPER)
         .args(args)
