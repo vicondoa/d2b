@@ -127,6 +127,7 @@ impl AuditSink {
         )
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn open_with_writer(
         directory: impl AsRef<Path>,
         max_segment_bytes: u64,
@@ -170,6 +171,7 @@ impl AuditSink {
     }
 
     /// Append one record under its durability class.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn append(
         &self,
         class: AuditWriteClass,
@@ -235,6 +237,7 @@ impl AuditSink {
     }
 
     /// Prune old immutable segments.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn prune_old(&self, now_ms: u64) -> Result<usize, AuditSinkError> {
         let mut state = self
             .state
@@ -259,6 +262,7 @@ impl AuditSink {
     /// Export while holding the same writer/pruner lock used by append and
     /// retention. This prevents a page from observing a half-published
     /// checkpoint or a segment set that changes during the read.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn export_segments(
         &self,
         after: Option<&str>,
@@ -276,6 +280,7 @@ impl AuditSink {
     }
 
     /// Return the hash of the record currently at the end of the sink.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn chain_head(&self) -> Result<AuditHash, AuditSinkError> {
         self.state
             .lock()
@@ -284,6 +289,7 @@ impl AuditSink {
     }
 
     /// Whether automatic retention needs a retry.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn retention_degraded(&self) -> Result<bool, AuditSinkError> {
         self.state
             .lock()
@@ -296,6 +302,7 @@ impl AuditSink {
     /// Recovery uses this lookup after an append-before-clear crash so it can
     /// advance from the already durable record instead of rebuilding it with
     /// the current chain head.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn mutation_record_hash(
         &self,
         key: &ZoneOperationKey,
@@ -313,6 +320,7 @@ impl AuditSink {
     }
 
     /// Return the predecessor hash recorded for one durable mutation.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn mutation_record_predecessor(
         &self,
         key: &ZoneOperationKey,
@@ -336,6 +344,7 @@ struct ScanState {
     mutation_predecessors: BTreeMap<(ZoneOperationKey, String), AuditHash>,
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn scan_chain_state(directory: &Path) -> Result<ScanState, AuditSinkError> {
     let mut paths = Vec::new();
     for (index, entry) in fs::read_dir(directory)
@@ -483,6 +492,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn privileged_writes_are_not_rate_limited() {
         let directory = writable_manifest_dir()
             .join("target")
@@ -502,6 +512,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn sink_serializes_each_append_once() {
         let directory = writable_manifest_dir().join("target").join(format!(
             "d2b-audit-sink-serialization-{}",
@@ -525,6 +536,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn sink_rejects_an_invalid_predecessor_chain() {
         let directory = writable_manifest_dir()
             .join("target")
@@ -545,6 +557,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn privileged_success_requires_every_segment_durability_step() {
         for point in [
             FailurePoint::Append,
@@ -570,6 +583,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn startup_retention_rebuilds_chain_head_from_retained_segments() {
         let directory = writable_manifest_dir().join("target").join(format!(
             "d2b-audit-startup-retention-{}",
@@ -587,6 +601,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn post_write_failure_rolls_back_chain_and_allows_retry() {
         for point in [FailurePoint::DataSync, FailurePoint::ParentSync] {
             let directory = writable_manifest_dir()
@@ -611,6 +626,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn durable_append_is_success_even_when_automatic_retention_degrades() {
         let directory = writable_manifest_dir().join("target").join(format!(
             "d2b-audit-retention-success-{}",
@@ -646,6 +662,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn restart_refuses_a_corrupt_hash_chain() {
         let directory = writable_manifest_dir()
             .join("target")
@@ -684,6 +701,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn replay_after_append_before_clear_is_idempotent() {
         let directory = writable_manifest_dir()
             .join("target")
@@ -739,6 +757,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn sink_uses_one_lifetime_writer_lock_per_directory() {
         let directory = writable_manifest_dir()
             .join("target")

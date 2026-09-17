@@ -16,12 +16,12 @@ serde_json = "1"
 # posture), but `clippy.toml` at the workspace root arms
 # `clippy::disallowed_methods` for every crate clippy checks - the lint is
 # warn-by-default and the blocking-API list is what makes it fire, so the
-# workspace lint table is not what turns it on. Without the levels below the
-# workspace's pre-existing blocking calls would fail this crate's build under
-# the repo's `-D warnings`. TEMPORARY: the `disallowed_methods` allowance goes
-# away together with the workspace-level one in the root manifest - see the
-# removal condition there; `await_holding_lock` is already a live denial.
+# workspace lint table is not what turns it on. KTD5 (U15): the crate's
+# blocking-API census is zero (the synchronous library surface's surviving
+# sites carry policy-tracked "synchronous path" / "cfg(test) helper" allows),
+# so `disallowed_methods` flips to deny ahead of the workspace-wide flip;
+# `await_holding_lock` is already a live denial.
 [lints.clippy]
-disallowed_methods = "allow"
+disallowed_methods = "deny"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"

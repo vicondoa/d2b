@@ -154,6 +154,7 @@ impl core::fmt::Debug for SegmentWriter {
 
 impl SegmentWriter {
     /// Open the current segment in a directory.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn open(
         directory: impl AsRef<Path>,
         max_bytes: u64,
@@ -164,6 +165,7 @@ impl SegmentWriter {
     }
 
     /// Open at a supplied timestamp, useful for deterministic tests.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn open_at(
         directory: impl AsRef<Path>,
         max_bytes: u64,
@@ -258,6 +260,7 @@ impl SegmentWriter {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn append_serialized_at(&mut self, line: &[u8], timestamp_ms: u64) -> io::Result<PathBuf> {
         let current_day = day_number(timestamp_ms);
         let rotated = current_day != self.opened_day
@@ -302,6 +305,7 @@ impl SegmentWriter {
     }
 
     /// Force the current segment to disk.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn sync(&self) -> io::Result<()> {
         self.file.sync_all()?;
         self.directory_file.sync_all()
@@ -340,6 +344,7 @@ impl SegmentWriter {
         result
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn prune_old_inner(&self, now_ms: u64) -> io::Result<usize> {
         if self.retention_days == 0 {
             return Ok(0);
@@ -446,6 +451,7 @@ impl SegmentWriter {
         Ok(removed)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn rotate(&mut self, timestamp_ms: u64) -> io::Result<()> {
         if self
             .injector
@@ -490,6 +496,7 @@ impl SegmentWriter {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn open_append(path: &Path) -> io::Result<File> {
     OpenOptions::new()
         .create(true)
@@ -500,6 +507,7 @@ fn open_append(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn open_directory(directory: &Path) -> io::Result<File> {
     let directory_fd = OpenOptions::new()
         .read(true)
@@ -508,6 +516,7 @@ fn open_directory(directory: &Path) -> io::Result<File> {
     Ok(directory_fd)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn open_lock(directory: &Path, expected_gid: u32) -> io::Result<File> {
     let path = directory.join("audit.lock");
     let file = OpenOptions::new()
@@ -553,6 +562,7 @@ fn validate_segment_metadata(metadata: &std::fs::Metadata) -> io::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn rollback_append(file: &mut File, offset: u64, directory: &File) -> io::Result<()> {
     file.set_len(offset)?;
     file.seek(SeekFrom::Start(offset))?;
@@ -598,6 +608,7 @@ struct RetentionSegment {
     tail: AuditHash,
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_checkpoint_file(path: &Path) -> io::Result<Option<RetentionCheckpoint>> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -688,6 +699,7 @@ fn is_discardable_checkpoint_scratch_error(error: &io::Error) -> bool {
     )
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn discard_checkpoint_scratch(directory: &Path, directory_file: Option<&File>) -> io::Result<()> {
     let path = checkpoint_next_path(directory);
     let metadata = match fs::symlink_metadata(&path) {
@@ -742,6 +754,7 @@ fn validate_checkpoint(checkpoint: &RetentionCheckpoint) -> io::Result<()> {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn repair_pending_checkpoint(directory: &Path, directory_file: &File) -> io::Result<()> {
     match fs::symlink_metadata(checkpoint_next_path(directory)) {
         Ok(metadata) => {
@@ -808,6 +821,7 @@ fn repair_pending_checkpoint(directory: &Path, directory_file: &File) -> io::Res
     directory_file.sync_all()
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn remove_checkpoint_segment(directory: &Path, segment: &RetentionSegment) -> io::Result<bool> {
     let path = directory.join(&segment.name);
     let metadata = match fs::symlink_metadata(&path) {
@@ -837,6 +851,7 @@ pub(crate) fn checkpoint_anchor(directory: &Path) -> io::Result<AuditHash> {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn write_checkpoint(
     directory: &Path,
     start_anchor: &AuditHash,
@@ -871,6 +886,7 @@ fn write_checkpoint(
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn clear_checkpoint(directory: &Path, anchor: &AuditHash) -> io::Result<()> {
     let path = checkpoint_path(directory);
     let tmp = checkpoint_next_path(directory);
@@ -898,6 +914,7 @@ fn clear_checkpoint(directory: &Path, anchor: &AuditHash) -> io::Result<()> {
         .sync_all()
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn owned_segment_inventory(directory: &Path, active_path: &Path) -> io::Result<Vec<OwnedSegment>> {
     let mut inventory = Vec::new();
     let mut scanned = 0usize;
@@ -933,6 +950,7 @@ fn owned_segment_inventory(directory: &Path, active_path: &Path) -> io::Result<V
     Ok(inventory)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn segment_tail_hash(
     path: &Path,
     previous: &AuditHash,
@@ -984,6 +1002,7 @@ fn read_bounded_line<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<u8>>> 
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn next_sequence(directory: &Path, timestamp_ms: u64) -> io::Result<u32> {
     let prefix = format!("audit-{}", utc_stamp(timestamp_ms));
     let mut max = 0;
@@ -1089,6 +1108,7 @@ mod tests {
         .unwrap()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn old_segment(directory: &Path) -> PathBuf {
         let path = directory.join("audit-19700101000000000000.jsonl");
         fs::write(&path, b"").unwrap();
@@ -1101,6 +1121,7 @@ mod tests {
             .join(format!("d2b-audit-{name}-{}", std::process::id()))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_staged_checkpoint(
         directory: &Path,
         start_anchor: &AuditHash,
@@ -1120,6 +1141,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn names_are_owned_and_rotation_is_size_bounded() {
         let directory = writable_manifest_dir()
             .join("target")
@@ -1141,6 +1163,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn pruning_ignores_unowned_jsonl_names() {
         let directory = writable_manifest_dir()
             .join("target")
@@ -1156,6 +1179,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn pruning_rejects_invalid_owned_artifacts() {
         for kind in ["directory", "symlink"] {
             let directory = writable_manifest_dir()
@@ -1176,6 +1200,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn pruning_excludes_the_active_segment() {
         let directory = writable_manifest_dir()
             .join("target")
@@ -1196,6 +1221,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn pruning_stops_at_the_first_non_expired_segment() {
         let directory = writable_manifest_dir()
             .join("target")
@@ -1214,6 +1240,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn pruning_fails_closed_when_directory_scan_budget_is_exceeded() {
         let directory = writable_manifest_dir()
             .join("target")
@@ -1234,6 +1261,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn durability_failures_never_report_a_successful_append() {
         let directory = writable_manifest_dir()
             .join("target")
@@ -1269,6 +1297,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn durable_append_survives_retention_failure_and_reports_degradation() {
         let directory = writable_manifest_dir().join("target").join(format!(
             "d2b-audit-retention-after-append-{}",
@@ -1298,6 +1327,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn pending_retention_checkpoint_repairs_on_restart_across_delete_boundaries() {
         for point in [FailurePoint::PruneDelete, FailurePoint::PruneFinalize] {
             let directory = writable_manifest_dir().join("target").join(format!(
@@ -1330,6 +1360,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn truncated_checkpoint_scratch_is_discarded_before_recovery() {
         let directory = test_directory("truncated-checkpoint-next");
         let _ = fs::remove_dir_all(&directory);
@@ -1346,6 +1377,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn garbage_checkpoint_scratch_without_commit_is_discarded() {
         let directory = test_directory("garbage-checkpoint-next");
         let _ = fs::remove_dir_all(&directory);
@@ -1362,6 +1394,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn unsafe_checkpoint_scratch_identity_fails_closed() {
         for kind in ["directory", "symlink"] {
             let directory = test_directory(&format!("unsafe-checkpoint-next-{kind}"));
@@ -1384,6 +1417,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn invalid_committed_checkpoint_fails_closed_even_with_garbage_scratch() {
         let directory = test_directory("invalid-committed-checkpoint");
         let _ = fs::remove_dir_all(&directory);
@@ -1399,6 +1433,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn staged_checkpoint_publish_wins_atomically() {
         let directory = test_directory("staged-checkpoint-publish");
         let _ = fs::remove_dir_all(&directory);
@@ -1436,6 +1471,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn unverifiable_pending_retention_checkpoint_fails_closed_on_restart() {
         let directory = writable_manifest_dir()
             .join("target")
@@ -1455,6 +1491,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn utc_day_rotation_occurs_for_an_empty_segment() {
         let directory = writable_manifest_dir()
             .join("target")
@@ -1481,6 +1518,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn ordinary_append_does_not_run_a_retention_scan() {
         let directory = writable_manifest_dir()
             .join("target")

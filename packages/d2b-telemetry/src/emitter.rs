@@ -230,6 +230,9 @@ impl BoundedEmitter {
     }
 
     /// Emit one bounded frame.
+    // The emitter is a synchronous library surface (frozen public API, no
+    // async form); the state lock is a short non-suspending critical section.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn emit(&self, signal: Signal, frame: &[u8]) -> Result<EmitOutcome, EmitterError> {
         if frame.len() > MAX_FRAME_BYTES {
             self.drops.increment(signal);
@@ -331,6 +334,9 @@ impl BoundedEmitter {
     }
 
     /// Try to reconnect and drain buffered frames in FIFO order.
+    // Synchronous library surface (no async form); the state lock is a short
+    // non-suspending critical section.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn drain(&self) -> Result<usize, EmitterError> {
         let mut state = self.state.lock().map_err(|_| EmitterError::StatePoisoned)?;
         self.prune_expired(&mut state);
@@ -374,6 +380,8 @@ impl BoundedEmitter {
     }
 
     /// Number of frames currently buffered.
+    // Synchronous library surface (no async form); short non-suspending lock.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn buffered_frames(&self) -> Result<usize, EmitterError> {
         self.state
             .lock()
@@ -382,6 +390,8 @@ impl BoundedEmitter {
     }
 
     /// Number of bytes currently retained in the ring.
+    // Synchronous library surface (no async form); short non-suspending lock.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn buffered_bytes(&self) -> Result<usize, EmitterError> {
         self.state
             .lock()
@@ -438,6 +448,9 @@ impl BoundedEmitter {
         }
     }
 
+    // Synchronous library surface (no async form); one stat pair on the
+    // socket path at connect time.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn trusted_socket_identity(path: &Path) -> Option<(u64, u64, u32, u32)> {
         let metadata = std::fs::symlink_metadata(path).ok()?;
         let parent = path
@@ -554,6 +567,8 @@ mod tests {
         directory.join(format!("e-{label}.sock"))
     }
 
+    // Plain #[test] helper (no runtime); blocking fs cleanup is fine here.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cleanup_socket(path: PathBuf) {
         let parent = path.parent().map(Path::to_path_buf);
         let _ = fs::remove_file(path);
@@ -569,6 +584,8 @@ mod tests {
     }
 
     #[test]
+    // Plain #[test] helper (no runtime); blocking fs setup is fine here.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn frames_buffer_then_drain_fifo_when_socket_appears() {
         let path = socket_path("fifo");
         let emitter = BoundedEmitter::new(&path, 512).unwrap();
@@ -817,6 +834,8 @@ mod tests {
     }
 
     #[test]
+    // Plain #[test] helper (no runtime); blocking fs setup is fine here.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn identity_values_are_redacted_before_socket_export() {
         let path = socket_path("redaction");
         let emitter = BoundedEmitter::new(&path, 512).unwrap();
@@ -847,6 +866,9 @@ mod tests {
     }
 
     #[test]
+    // Plain #[test] helper (no runtime); the 2ms wall-clock sleep is the
+    // age-bound probe and has no async form in this harness.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn count_and_age_bounds_prune_deterministically() {
         let path = socket_path("bounds");
         let emitter =

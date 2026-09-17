@@ -27,6 +27,7 @@ fn schema_root() -> String {
         .into_owned()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run(input: &serde_json::Value, strict: bool) -> std::process::Output {
     let directory = tempdir().expect("temporary compiler directory");
     let input_path = directory.path().join("input.json");
@@ -69,6 +70,7 @@ fn empty_input() -> serde_json::Value {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn cli_emits_a_stable_bundle_from_declared_inputs() {
     let input = empty_input();
     let directory = tempdir().expect("temporary compiler directory");

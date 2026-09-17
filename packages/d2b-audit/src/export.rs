@@ -70,6 +70,7 @@ pub fn export_segments(directory: impl AsRef<Path>) -> io::Result<Vec<ExportLine
 /// the basename shape produced by [`SegmentWriter`](crate::SegmentWriter);
 /// accepting a path here would turn an export filter into a filesystem
 /// traversal surface.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn export_segments_range(
     directory: impl AsRef<Path>,
     after: Option<&str>,
@@ -308,6 +309,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn export_reports_hash_breaks_inline_without_old_fields() {
         let directory = writable_manifest_dir()
             .join("target")

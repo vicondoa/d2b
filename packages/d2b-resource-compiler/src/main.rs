@@ -211,6 +211,7 @@ fn main() -> ExitCode {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn run() -> Result<(), CliError> {
     let (input_path, output_path, strict_override) = parse_args()?;
     let input_bytes = fs::read(&input_path).map_err(|_| {
@@ -273,6 +274,7 @@ fn usage(program: &std::ffi::OsStr) -> CliError {
     )
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn compile(
     input: CompileInput,
     strict_override: Option<bool>,
@@ -376,6 +378,7 @@ fn compile(
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn verify_artifact_catalog(input: &CompileInput) -> Result<String, CliError> {
     let Some(path) = input.artifact_catalog_path.as_deref() else {
         return input
@@ -548,6 +551,7 @@ fn clone_provider_input(input: &ProviderInput) -> ProviderInput {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_public_key(value: &str) -> Result<Vec<u8>, CliError> {
     if value.starts_with("-----BEGIN ") {
         return Ok(value.as_bytes().to_vec());
@@ -1601,6 +1605,7 @@ fn valid_digest(value: &str) -> bool {
 }
 
 impl SchemaCache {
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn new(root: Option<&Path>) -> Result<Self, CliError> {
         if let Some(root) = root {
             let metadata = fs::metadata(root).map_err(|_| {
@@ -1622,6 +1627,7 @@ impl SchemaCache {
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn schema(&self, resource_type: &str) -> Result<Option<Value>, CliError> {
         if let Some(schema) = self.schemas.borrow().get(resource_type) {
             return Ok(Some(schema.clone()));
@@ -2188,6 +2194,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn every_committed_v3_schema_passes_integrity_validation() {
         let root = schema_root();
         let mut count = 0;

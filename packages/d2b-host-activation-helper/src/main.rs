@@ -361,6 +361,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn migrate_then_fail_closed_scan_reopens_root_for_full_walk() {
         let dir = tempdir().expect("test dir");
         let nested = dir.path().join("nested");
@@ -391,6 +392,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn held_lock_fail_closed_runs_postscan_and_exits_nonzero() {
         let dir = tempdir().expect("test dir");
         let legacy_path = dir.path().join("legacy");

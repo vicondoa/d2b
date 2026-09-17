@@ -353,6 +353,7 @@ mod tests {
 
     use super::*;
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_file(path: &Path, bytes: &[u8], mode: u32) {
         let mut file = fs::File::create(path).expect("create fixture");
         file.write_all(bytes).expect("write fixture");
@@ -360,6 +361,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn anchored_read_rejects_symlink_and_escape() {
         let root = tempdir().expect("temporary root");
         fs::create_dir_all(root.path().join("share/d2b/provider")).expect("metadata directory");
@@ -405,6 +407,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn anchored_read_checks_regular_file_and_execute_mode() {
         let root = tempdir().expect("temporary root");
         fs::create_dir(root.path().join("bin")).expect("bin directory");

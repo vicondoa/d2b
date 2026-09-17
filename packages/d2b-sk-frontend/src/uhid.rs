@@ -20,8 +20,7 @@
 //! documented packed C layout.
 
 use std::fmt;
-use std::io::{self, Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::io;
 use std::path::Path;
 
 use tokio::io::unix::AsyncFd;
@@ -160,11 +159,14 @@ impl UhidDevice {
     /// immediately after this returns. The caller is responsible for the relay
     /// loop (see [`Self::read_event`] and [`Self::send_input_report`]).
     pub async fn create(uhid_path: &Path, vm_id: &str) -> io::Result<Self> {
-        let file = std::fs::OpenOptions::new()
+        let file = tokio::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .custom_flags(libc::O_NONBLOCK)
-            .open(uhid_path)?;
+            .open(uhid_path)
+            .await?
+            .into_std()
+            .await;
         let mut dev = UhidDevice {
             file: AsyncFd::new(file)?,
         };
@@ -248,8 +250,8 @@ impl UhidDevice {
         loop {
             let mut guard = self.file.readable().await?;
             match guard.try_io(|inner| {
-                let mut file = inner.get_ref();
-                file.read(buf)
+                rustix::io::read(inner.get_ref(), buf)
+                    .map_err(|errno| io::Error::from_raw_os_error(errno.raw_os_error()))
             }) {
                 Ok(result) => return result,
                 Err(_would_block) => continue,
@@ -261,8 +263,8 @@ impl UhidDevice {
         while !buf.is_empty() {
             let mut guard = self.file.writable().await?;
             match guard.try_io(|inner| {
-                let mut file = inner.get_ref();
-                file.write(buf)
+                rustix::io::write(inner.get_ref(), buf)
+                    .map_err(|errno| io::Error::from_raw_os_error(errno.raw_os_error()))
             }) {
                 Ok(Ok(0)) => return Err(io::ErrorKind::WriteZero.into()),
                 Ok(Ok(n)) => buf = &buf[n..],
