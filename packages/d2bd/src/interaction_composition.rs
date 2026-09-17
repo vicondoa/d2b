@@ -15,7 +15,6 @@ use std::{
         Arc, LazyLock, OnceLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -3752,9 +3751,8 @@ where
             if Instant::now() >= deadline {
                 return Err(WorkerEffectError::CleanupIncomplete);
             }
-            // U13: sync `WorkerEffectPort` trait poll; converts to
-            // `tokio::time::sleep` with the run_effect bridge in U13.
-            thread::sleep(Duration::from_millis(50));
+            // U13: async-timer poll through the effect bridge.
+            effect_poll();
         }
     }
 
@@ -4085,9 +4083,8 @@ where
             if Instant::now() >= deadline {
                 break observed_state;
             }
-            // U13: sync `WorkerEffectPort` trait poll; converts to
-            // `tokio::time::sleep` with the run_effect bridge in U13.
-            thread::sleep(Duration::from_millis(50));
+            // U13: async-timer poll through the effect bridge.
+            effect_poll();
         };
         let mut process_deleted = false;
         if state.is_terminal() {
@@ -4150,9 +4147,8 @@ where
                     if Instant::now() >= deadline {
                         break;
                     }
-                    // U13: sync `WorkerEffectPort` trait poll; converts to
-                    // `tokio::time::sleep` with the run_effect bridge in U13.
-                    thread::sleep(Duration::from_millis(50));
+                    // U13: async-timer poll through the effect bridge.
+                    effect_poll();
                 }
             }
         }
@@ -6346,11 +6342,14 @@ const MAX_INFLIGHT_EFFECTS: usize = 64;
 static EFFECT_ADMISSION: LazyLock<d2bd_runtime::concurrency::ConnSemaphore> =
     LazyLock::new(|| d2bd_runtime::concurrency::ConnSemaphore::new(MAX_INFLIGHT_EFFECTS));
 
-// U13 bridge: the desktop-effect run bridge (spawn_blocking + sync_channel +
-// `block_on_future` + `Handle::try_current` fallback) is deleted in plan U13
-// and replaced by direct await end-to-end; the ConnSemaphore cap (64) stays
-// the sole refusal point. The sync `WorkerEffectPort` trait methods that call
-// it (and their 50ms poll sleeps) convert in the same unit.
+// U13: the desktop-effect run bridge (the spawned-worker + sync-channel +
+// async-to-sync barrier with its ambient-runtime fallback) is deleted and
+// the effect is driven directly on the caller's own daemon runtime from a
+// blocking section (the sync `DisplayProcessEffectPort` boundary lives in the
+// Provider crate and cannot become async); the ConnSemaphore cap (64) stays
+// the sole refusal point. The 13 worker-effect callers keep their shape -
+// the closure API is unchanged - and their 50ms poll sleeps convert to
+// async timers through the same bridge.
 fn run_effect<T, F, Fut>(operation: F) -> Result<T, WorkerEffectError>
 where
     T: Send + 'static,
@@ -6360,24 +6359,43 @@ where
     let permit = EFFECT_ADMISSION
         .try_acquire()
         .ok_or(WorkerEffectError::WorkerUnavailable)?;
-    // No runtime to hand the effect to: drive it on the process-wide fallback
-    // runtime (the seat `block_on_future` names) instead of building one for
-    // this call.
-    if tokio::runtime::Handle::try_current().is_err() {
-        let _permit = permit;
-        return crate::block_on_future(operation());
+    // The permit is held for the whole effect, so the cap counts calls that
+    // are actually running rather than calls that have been handed off.
+    let _permit = permit;
+    // R11 synchronous-path inventory note: the Provider crate's
+    // `DisplayProcessEffectPort` is synchronous, so the effect drives on the
+    // ambient daemon runtime from a blocking section - never a spawned
+    // worker and never the fallback runtime. The caller always runs inside
+    // the daemon runtime (interaction dispatch task or VM-start reconcile).
+    // `block_in_place` is required: the caller is a runtime worker, and a
+    // bare `block_on` on a runtime worker panics. The daemon runtime is
+    // multi-threaded; tests that exercise this path must use
+    // `#[tokio::test(flavor = "multi_thread")]`.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    tokio::task::block_in_place(|| {
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+        tokio::runtime::Handle::current().block_on(operation())
+    })
+}
+
+/// One bounded poll between sync effect observations, driven through the
+/// effect bridge so the wait is an async timer on the daemon runtime, never
+/// a `std::thread::sleep` on the caller's thread (U13).
+///
+/// R13 equivalence note: the poll holds an effect admission slot for its
+/// duration (the retired synchronous sleep did not); under a saturated cap
+/// the poll refuses and falls back to a sanctioned synchronous sleep so the
+/// bounded poll latency is preserved and the loop never spins.
+fn effect_poll() {
+    if run_effect(|| async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        Ok::<(), WorkerEffectError>(())
+    })
+    .is_err()
+    {
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+        std::thread::sleep(Duration::from_millis(50));
     }
-    let (done, outcome) = std::sync::mpsc::sync_channel(1);
-    tokio::task::spawn_blocking(move || {
-        // The permit is held for the whole effect, so the cap counts calls
-        // that are actually running rather than calls that have been handed
-        // off.
-        let _permit = permit;
-        let _ = done.send(crate::block_on_future(operation()));
-    });
-    outcome
-        .recv()
-        .map_err(|_| WorkerEffectError::WorkerUnavailable)?
 }
 
 #[cfg(test)]
@@ -7059,20 +7077,17 @@ mod tests {
         let target = ResourceRef::parse(&format!("Guest/uid-{uid}")).unwrap();
         let guard = runtime.lock().await;
         let lookup_runtime = Arc::clone(&runtime);
-        // U13 test site (plan U13): the sync driver's `blocking_lock` may
-        // only run off-runtime, so the lookup rides the blocking pool until
-        // U13 converts the sync driver itself; the contention assertion is
-        // unchanged (R13: no timing change).
+        // U13: the contended-lookup assertion now drives the async lock
+        // directly (the sync `blocking_lock` seat stays for the sync
+        // dispatch caller at composition.rs:3322); the contention semantics
+        // are unchanged (R13: no timing change).
         let mut lookup = tokio::spawn(async move {
-            tokio::task::spawn_blocking(move || {
-                blocking_component_session_driver_for_service(
-                    &lookup_runtime,
-                    PROCESS_ATTACH_SERVICE,
-                    &target,
-                )
-            })
-            .await
-            .unwrap()
+            let runtime = lookup_runtime.lock().await;
+            runtime
+                .as_ref()
+                .and_then(|runtime| {
+                    runtime.component_session_driver_for_target(PROCESS_ATTACH_SERVICE, &target)
+                })
         });
         assert!(
             tokio::time::timeout(Duration::from_millis(20), &mut lookup)
@@ -7305,7 +7320,7 @@ mod tests {
         runtimes
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "multi_thread")]
     async fn vm_start_display_reconcile_uses_the_committed_session_route() {
         let directory = tempfile::tempdir().expect("display reconciliation directory");
         let zone = ZoneId::parse("work").expect("zone");
@@ -7549,7 +7564,7 @@ mod tests {
                 SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
             ) {
                 Ok(accepted) => break accepted,
-                Err(rustix::io::Errno::AGAIN) => thread::yield_now(),
+                Err(rustix::io::Errno::AGAIN) => std::thread::yield_now(),
                 Err(error) => panic!("accept failed: {error}"),
             }
         };
@@ -7605,7 +7620,7 @@ mod tests {
         TtrpcResponse::parse_from_bytes(&response[ttrpc::proto::MESSAGE_HEADER_LENGTH..]).unwrap()
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "multi_thread")]
     async fn hermetic_production_composition_dispatches_committed_interactions_and_ordered_shutdown()
      {
         let directory = tempfile::tempdir().unwrap();
@@ -7943,7 +7958,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "multi_thread")]
     async fn picker_materialize_rejects_guest_or_zone_without_consuming_receipt() {
         let directory = tempfile::tempdir().unwrap();
         let zone = ZoneId::parse("work").unwrap();
@@ -8121,7 +8136,7 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "multi_thread")]
     async fn provider_transport_authorizes_each_committed_guest_and_preserves_display() {
         let directory = tempfile::tempdir().unwrap();
         let zone = ZoneId::parse("work").unwrap();
@@ -8359,7 +8374,7 @@ mod tests {
         assert_ne!(wrong.subject_uid(), &wrong_uid);
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "multi_thread")]
     async fn display_only_composition_is_ready_from_committed_wayland_identity() {
         let directory = tempfile::tempdir().unwrap();
         let zone = ZoneId::parse("work").unwrap();
@@ -8524,8 +8539,11 @@ mod tests {
 
     /// A provider effect past the admission cap is refused instead of being
     /// handed another thread, and a released slot is usable again.
-    #[test]
-    fn effects_past_the_admission_cap_are_refused() {
+    ///
+    /// `run_effect` drives the effect on the ambient daemon runtime (U13),
+    /// so the released-slot call needs a runtime context.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn effects_past_the_admission_cap_are_refused() {
         let held: Vec<_> = (0..MAX_INFLIGHT_EFFECTS)
             .map(|_| {
                 EFFECT_ADMISSION

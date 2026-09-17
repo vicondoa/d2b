@@ -604,9 +604,11 @@ impl ProductionGuestDriverEffects {
     }
 
     fn runtime(&self) -> Result<Arc<ZoneResourceRuntime>, GuestEffectError> {
+        // Synchronous caller: non-blocking `try_lock` per plan U4. A
+        // collision reports Unavailable (fail-closed), never a stall.
         self.state
             .resource_plane
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(&self.zone).ok()))
             .ok_or(GuestEffectError::Unavailable)

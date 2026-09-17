@@ -7,6 +7,7 @@ use std::future::Future;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::FileTypeExt;
 #[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -25,7 +26,6 @@ type DaemonResourceApiClient = d2b_resource_api::ResourceApiClient<
     d2bd_runtime::resource_runtime_support::ZoneApiBackend,
     d2b_resource_api::service::UnavailableUpgradeDispatcher,
 >;
-use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -186,9 +186,39 @@ pub use d2bd_runtime::runtime_process::{
     sd_notify_payload, sd_notify_ready, sd_notify_status, validate_lock_parent,
     write_daemon_version_file,
 };
-use d2bd_runtime::runtime_util::{
-    block_on_future, hex_bytes, projection_digest_bytes,
-};
+use d2bd_runtime::runtime_util::{hex_bytes, projection_digest_bytes};
+
+/// Drive one async operation from a genuinely synchronous boundary.
+///
+/// Plan R5's bridge ban targets async-to-sync bridges that park a runtime
+/// the caller may not own. This helper is the sanctioned synchronous-path
+/// seat for the daemon's dedicated-thread surfaces and the sync trait
+/// boundaries whose traits live in crates outside U13's scope: the future
+/// drives on the caller's own daemon runtime from a blocking section -
+/// exactly the behaviour the retired bridge had inside a runtime - with no
+/// fallback runtime and no spawned worker. The caller must hold a live
+/// runtime handle ([`ServerState`] carries the daemon's; sync trait impls
+/// capture one at construction).
+///
+/// R11 inventory note: the inline allow is the sanctioned "synchronous
+/// path" exception; every call site is a dedicated daemon thread (conn
+/// handler, autostart worker) or a sync trait boundary defined outside this
+/// unit's scope.
+///
+/// The future may borrow the caller's state: `block_on` drives it to
+/// completion synchronously on the calling thread, so no borrow outlives
+/// the call and nothing is moved across a thread. `block_in_place` is a
+/// no-op on dedicated daemon threads and the correct escape from a
+/// multi-threaded runtime worker; callers never run on a current-thread
+/// runtime (tests that do must use `flavor = "multi_thread"`).
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+pub(crate) fn drive_sync<T>(
+    handle: &tokio::runtime::Handle,
+    future: impl Future<Output = T>,
+) -> T {
+    tokio::task::block_in_place(|| handle.block_on(future))
+}
+
 #[cfg(test)]
 use d2bd_runtime::shell_backend::shell_poll_timeout;
 use d2bd_runtime::shell_backend::{
@@ -583,6 +613,30 @@ struct ServerState {
     v3_planes: std::sync::Arc<
         tokio::sync::Mutex<HashMap<String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>>>,
     >,
+    /// The daemon's tokio runtime handle, captured at construction. The
+    /// thread-per-connection handler threads and the sync trait boundaries
+    /// drive their async work on this handle (U13 synchronous path,
+    /// [`drive_sync`]); async callers never touch it.
+    runtime_handle: tokio::runtime::Handle,
+}
+
+/// The runtime handle for test [`ServerState`] constructions: the ambient
+/// handle when the test runs on a tokio runtime, otherwise a process-wide
+/// fallback runtime kept alive for the suite (sync `#[test]` harnesses
+/// drive their async helpers through [`drive_sync`]).
+#[cfg(test)]
+fn test_runtime_handle() -> tokio::runtime::Handle {
+    tokio::runtime::Handle::try_current().unwrap_or_else(|_| {
+        static TEST_FALLBACK_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
+            std::sync::LazyLock::new(|| {
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .thread_name("d2b-test-fallback")
+                    .build()
+                    .expect("build the test fallback tokio runtime")
+            });
+        TEST_FALLBACK_RUNTIME.handle().clone()
+    })
 }
 
 /// Closed failures while composing one Zone-owned Gateway Guest route.
@@ -1802,6 +1856,10 @@ const PROCESS_RUNTIME_FINALIZER: &str = "process-runtime.d2bus.org/cleanup";
 struct DaemonShellAuthority {
     ledger: Arc<ShellAuthorityLedger>,
     resource_plane: Arc<tokio::sync::Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
+    /// The daemon's runtime handle, captured at construction: the sync
+    /// `ShellAuthorityPort` boundary drives the Resource API client on it
+    /// (U13 synchronous path).
+    runtime_handle: tokio::runtime::Handle,
 }
 
 impl std::fmt::Debug for DaemonShellAuthority {
@@ -1811,10 +1869,14 @@ impl std::fmt::Debug for DaemonShellAuthority {
 }
 
 impl DaemonShellAuthority {
-    fn new(resource_plane: Arc<tokio::sync::Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>) -> Self {
+    fn new(
+        resource_plane: Arc<tokio::sync::Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
+        runtime_handle: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             ledger: Arc::new(ShellAuthorityLedger::new()),
             resource_plane,
+            runtime_handle,
         }
     }
 
@@ -1855,10 +1917,11 @@ impl DaemonShellAuthority {
         zone: &ZoneId,
         process: &SupervisorProcessResource,
     ) -> Result<Option<d2b_contracts_resource::v3::ResourceEnvelope>, ShellTerminalError> {
-        Self::get_resource(client, zone, process.resource_ref(), "shell-process-get")
+        Self::get_resource(&self.runtime_handle, client, zone, process.resource_ref(), "shell-process-get")
     }
 
     fn get_resource(
+        handle: &tokio::runtime::Handle,
         client: &DaemonResourceApiClient,
         zone: &ZoneId,
         resource_ref: &ResourceRef,
@@ -1872,7 +1935,7 @@ impl DaemonShellAuthority {
         request.meta = protobuf::MessageField::some(Self::shell_resource_request_meta(operation));
         request.target = protobuf::MessageField::some(target);
         request.projection = protobuf::MessageField::some(projection);
-        let response = block_on_future(client.get(request));
+        let response = drive_sync(handle, client.get(request));
         let Some(resource) = response.resource.as_ref() else {
             return match response
                 .error
@@ -1899,6 +1962,7 @@ impl DaemonShellAuthority {
         payload: Vec<u8>,
         operation: &str,
     ) -> Result<(), ShellTerminalError> {
+        let handle = &self.runtime_handle;
         let target = Self::shell_resource_identity(zone, resource_ref);
         let mut body = resource_wire::ResourceEnvelopeBytes::new();
         body.identity = protobuf::MessageField::some(target.clone());
@@ -1924,7 +1988,7 @@ impl DaemonShellAuthority {
         let mut request = resource_wire::CreateRequest::new();
         request.meta = protobuf::MessageField::some(Self::shell_resource_request_meta(operation));
         request.mutation = protobuf::MessageField::some(mutation);
-        let response = block_on_future(client.create(request));
+        let response = drive_sync(handle, client.create(request));
         if response.error.is_some() {
             return Err(ShellTerminalError::SupervisorAmbiguous);
         }
@@ -1973,6 +2037,7 @@ impl DaemonShellAuthority {
         process: &SupervisorProcessResource,
         envelope: &d2b_contracts_resource::v3::ResourceEnvelope,
     ) -> Result<(), ShellTerminalError> {
+        let handle = &self.runtime_handle;
         let mut mutation = resource_wire::Mutation::new();
         mutation.kind = protobuf::EnumOrUnknown::new(
             resource_wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS,
@@ -2003,7 +2068,7 @@ impl DaemonShellAuthority {
         );
         request.meta = protobuf::MessageField::some(Self::shell_resource_request_meta(&operation));
         request.mutation = protobuf::MessageField::some(mutation);
-        let response = block_on_future(client.update_finalizers(request));
+        let response = drive_sync(handle, client.update_finalizers(request));
         if response.error.is_some() {
             return Err(ShellTerminalError::SupervisorAmbiguous);
         }
@@ -2051,6 +2116,7 @@ impl DaemonShellAuthority {
         process: &SupervisorProcessResource,
         envelope: &d2b_contracts_resource::v3::ResourceEnvelope,
     ) -> Result<(), ShellTerminalError> {
+        let handle = &self.runtime_handle;
         let mut mutation = resource_wire::Mutation::new();
         mutation.kind =
             protobuf::EnumOrUnknown::new(resource_wire::MutationKind::MUTATION_KIND_DELETE);
@@ -2075,7 +2141,7 @@ impl DaemonShellAuthority {
         );
         request.meta = protobuf::MessageField::some(Self::shell_resource_request_meta(&operation));
         request.mutation = protobuf::MessageField::some(mutation);
-        let response = block_on_future(client.delete(request));
+        let response = drive_sync(handle, client.delete(request));
         match response
             .error
             .as_ref()
@@ -2269,7 +2335,7 @@ impl DaemonShellAuthority {
         let session_ref =
             ResourceRef::parse(&format!("{}/{}", session.resource_type(), session.name()))
                 .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?;
-        if Self::get_resource(client, zone, &session_ref, "shell-session-anchor-get")?.is_some() {
+        if Self::get_resource(&self.runtime_handle, client, zone, &session_ref, "shell-session-anchor-get")?.is_some() {
             return Ok(());
         }
         let spec = json!({
@@ -2288,7 +2354,7 @@ impl DaemonShellAuthority {
         let payload = Self::shell_resource_payload(zone, &session_ref, None, spec, &[])?;
         match self.create_resource(client, zone, &session_ref, None, payload, &operation) {
             Ok(()) => Ok(()),
-            Err(_) => Self::get_resource(client, zone, &session_ref, &operation)
+            Err(_) => Self::get_resource(&self.runtime_handle, client, zone, &session_ref, &operation)
                 .map(|resource| resource.is_some())
                 .and_then(|present| {
                     present
@@ -2396,7 +2462,7 @@ impl DaemonShellAuthority {
                     .ok()
                     .is_some_and(|actual| actual == expected_spec)
         };
-        match Self::get_resource(client, zone, resource_ref, operation) {
+        match Self::get_resource(&self.runtime_handle, client, zone, resource_ref, operation) {
             Ok(Some(envelope)) if matches(&envelope) => return Ok(false),
             Ok(Some(_)) => return Err(ShellTerminalError::SupervisorAmbiguous),
             Ok(None) => {}
@@ -2405,7 +2471,7 @@ impl DaemonShellAuthority {
         let payload = Self::shell_resource_payload(zone, resource_ref, owner_ref, spec, &[])?;
         match self.create_resource(client, zone, resource_ref, owner_ref, payload, operation) {
             Ok(()) => Ok(true),
-            Err(_) => match Self::get_resource(client, zone, resource_ref, operation)? {
+            Err(_) => match Self::get_resource(&self.runtime_handle, client, zone, resource_ref, operation)? {
                 Some(envelope) if matches(&envelope) => Ok(false),
                 _ => Err(ShellTerminalError::SupervisorAmbiguous),
             },
@@ -3573,7 +3639,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         #[cfg(test)]
         resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
         #[cfg(not(test))]
-        shell_authority: Arc::new(DaemonShellAuthority::new(Arc::clone(&resource_plane))),
+        shell_authority: Arc::new(DaemonShellAuthority::new(
+            Arc::clone(&resource_plane),
+            tokio::runtime::Handle::current(),
+        )),
         interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
         interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
         typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
@@ -3586,6 +3655,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         )),
         unsafe_local_helpers: Arc::clone(&unsafe_local_helpers),
         v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_handle: tokio::runtime::Handle::current(),
     };
     if let Some(helper_listener) = unsafe_local_helper_listener {
         std::thread::Builder::new()
@@ -3657,7 +3727,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                     "resource plane disabled by daemon config; skipping Zone runtime publication",
                 );
             } else {
-                restore_configuration_staging_on_startup(&state);
+                restore_configuration_staging_on_startup(&state).await;
                 match open_resource_plane(&state, &resolver, provider_ready, &forward_rendezvous).await
                 {
                     Ok(plane) => {
@@ -3855,17 +3925,9 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             // Fail closed for doctor/status consumers if the replacement
             // report cannot be written below: stale clean evidence is worse
             // than an absent report.
-            // KTD9: the removal is a blocking fs call; never run it on a
-            // runtime worker.
-            let removed = tokio::task::spawn_blocking({
-                let report_path = report_path.clone();
-                move || std::fs::remove_file(&report_path)
-            })
-            .await
-            .unwrap_or_else(|join| {
-                Err(std::io::Error::other(join.to_string()))
-            });
-            match removed {
+            // KTD9: the removal is a blocking fs call; the tokio fs driver
+            // keeps it off the runtime workers.
+            match tokio::fs::remove_file(&report_path).await {
                 Ok(()) => {}
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => {
@@ -3887,7 +3949,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             );
         }
     }
-    adopt_orphaned_runners_on_startup(&state);
+    adopt_orphaned_runners_on_startup(&state).await;
 
     // Startup self-check on the kernel-module matrix the bundle requires.
     // Fatal misses
@@ -4378,19 +4440,13 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     if options.validate_only {
         return Ok(());
     }
-    // KTD9: the mkdir is a blocking fs call; never run it on a runtime
-    // worker.
-    tokio::task::spawn_blocking({
-        let state_dir = options.state_dir.clone();
-        move || fs::create_dir_all(&state_dir)
-    })
-    .await
-    .map_err(|join| TypedError::InternalConfig {
-        detail: format!("guest state root unavailable: {join}"),
-    })?
-    .map_err(|_| TypedError::InternalConfig {
-        detail: "guest state root unavailable".to_owned(),
-    })?;
+    // KTD9: the mkdir is a blocking fs call; the tokio fs driver keeps it
+    // off the runtime workers.
+    tokio::fs::create_dir_all(&options.state_dir)
+        .await
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "guest state root unavailable".to_owned(),
+        })?;
     let runtime = d2bd_runtime::guest_mode::GuestRuntime::new(
         identity.clone(),
         options.broker_socket_path.clone(),
@@ -4850,7 +4906,7 @@ impl d2bd_runtime::supervisor::state::PidfdOpener for BrokerPidfdOpener<'_> {
     }
 }
 
-fn adopt_orphaned_runners_on_startup(state: &ServerState) {
+async fn adopt_orphaned_runners_on_startup(state: &ServerState) {
     if let Some(providers) = state.provider_runtime.process_providers() {
         let store =
             d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(&state.daemon_state_dir);
@@ -4864,9 +4920,9 @@ fn adopt_orphaned_runners_on_startup(state: &ServerState) {
                 return;
             }
         };
-        let result = block_on_future(async move {
+        let result = async {
             for vm in providers.vm_ids() {
-                let expected = current_runner_lifecycle_identity(state, &vm);
+                let expected = current_runner_lifecycle_identity(state, &vm).await;
                 let managed_roles = providers
                     .managed_role_ids(&vm)
                     .into_iter()
@@ -4900,7 +4956,8 @@ fn adopt_orphaned_runners_on_startup(state: &ServerState) {
                     .map_err(|error| format!("provider-legacy-authority-cleanup:{error}"))?;
             }
             Ok::<(), String>(())
-        });
+        }
+        .await;
         if let Err(error) = result {
             tracing::warn!(
                 error = %error,
@@ -4913,13 +4970,13 @@ fn adopt_orphaned_runners_on_startup(state: &ServerState) {
         d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(&state.daemon_state_dir);
     let proc_reader = d2bd_runtime::supervisor::state::SystemProcReader;
     let opener = BrokerPidfdOpener { state };
-    if let Err(error) = adopt_orphaned_runners_on_startup_with(state, &store, &proc_reader, &opener)
+    if let Err(error) = adopt_orphaned_runners_on_startup_with(state, &store, &proc_reader, &opener).await
     {
         tracing::warn!(error = ?error, "startup orphan adoption failed");
     }
 }
 
-fn adopt_orphaned_runners_on_startup_with(
+async fn adopt_orphaned_runners_on_startup_with(
     state: &ServerState,
     store: &dyn d2bd_runtime::supervisor::state::SnapshotStore,
     proc_reader: &dyn d2bd_runtime::supervisor::state::ProcReader,
@@ -4947,7 +5004,7 @@ fn adopt_orphaned_runners_on_startup_with(
         }
         if !runner_snapshot_is_eligible(
             snapshot,
-            current_runner_lifecycle_identity(state, &snapshot.vm).as_ref(),
+            current_runner_lifecycle_identity(state, &snapshot.vm).await.as_ref(),
         ) {
             tracing::warn!(
                 vm = %snapshot.vm,
@@ -5105,7 +5162,7 @@ fn adopt_orphaned_runners_on_startup_with(
     Ok(())
 }
 
-fn current_runner_lifecycle_identity(
+async fn current_runner_lifecycle_identity(
     state: &ServerState,
     vm: &str,
 ) -> Option<(
@@ -5115,16 +5172,17 @@ fn current_runner_lifecycle_identity(
     ResourceGeneration,
     u64,
 )> {
-    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         vm,
-    ))
+    )
+    .await
         .ok()?;
     let plane = state.resource_plane.try_lock().ok()?.clone()?;
     let runtime = plane.zone(&zone).ok()?;
     let target = ResourceRef::parse(&format!("Guest/{vm}")).ok()?;
     let (zone_uid, guest_uid, guest_generation, provider_generation) =
-        block_on_future(runtime.guest_lifecycle_identity(&target)).ok()?;
+        runtime.guest_lifecycle_identity(&target).await.ok()?;
     let policy_revision = runtime.committed_policy_snapshot().policy_revision;
     Some((
         zone_uid,
@@ -5827,7 +5885,7 @@ fn process_resource_execution_ref_from_resource(
     ));
     get.target = protobuf::MessageField::some(target);
     get.projection = protobuf::MessageField::some(projection);
-    let response = block_on_future(client.get(get));
+    let response = drive_sync(&state.runtime_handle, client.get(get));
     let resource = response.resource.as_ref().ok_or_else(|| {
         response
             .error
@@ -5892,7 +5950,7 @@ fn dispatch_resource_exec_request(
     let method = request.get("method").and_then(Value::as_str);
     let response = match method {
         Some("List") => {
-            let result = block_on_future(client.list())
+            let result = drive_sync(&state.runtime_handle, client.list())
                 .map_err(|error| map_resource_exec_error(error, &vm))?;
             public_wire::ExecOpResponse::List(result)
         }
@@ -5901,7 +5959,7 @@ fn dispatch_resource_exec_request(
             let process_ref = process_ref.ok_or(TypedError::ProcessExecFailed {
                 kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
             })?;
-            let result = block_on_future(client.status(&process_ref))
+            let result = drive_sync(&state.runtime_handle, client.status(&process_ref))
                 .map_err(|error| map_resource_exec_error(error, &vm))?;
             public_wire::ExecOpResponse::Status(result)
         }
@@ -5913,7 +5971,7 @@ fn dispatch_resource_exec_request(
             let stderr_offset = request.get("stderrOffset").and_then(Value::as_u64);
             let max_len = request.get("maxLen").and_then(Value::as_u64);
             let result =
-                block_on_future(client.logs(&process_ref, stdout_offset, stderr_offset, max_len))
+                drive_sync(&state.runtime_handle, client.logs(&process_ref, stdout_offset, stderr_offset, max_len))
                     .map_err(|error| map_resource_exec_error(error, &vm))?;
             public_wire::ExecOpResponse::Logs(result)
         }
@@ -5921,7 +5979,7 @@ fn dispatch_resource_exec_request(
             let process_ref = process_ref.ok_or(TypedError::ProcessExecFailed {
                 kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
             })?;
-            let result = block_on_future(client.kill(&process_ref))
+            let result = drive_sync(&state.runtime_handle, client.kill(&process_ref))
                 .map_err(|error| map_resource_exec_error(error, &vm))?;
             public_wire::ExecOpResponse::Kill(result)
         }
@@ -6002,7 +6060,7 @@ fn dispatch_resource_exec_create_request(
         execution_ref,
     )
     .map_err(|error| map_resource_exec_error(error, &vm))?;
-    let result = block_on_future(client.create(&spec))
+    let result = drive_sync(&state.runtime_handle, client.create(&spec))
         .map_err(|error| map_resource_exec_error(error, &vm))?;
     Ok(d2bd_runtime::wire::exec_response(
         &public_wire::ExecOpResponse::DetachedCreate(result),
@@ -6077,7 +6135,7 @@ fn dispatch_config_nixos_service_request(
         "method": "Get",
         "resourceRef": guest_ref.to_canonical_string(),
     });
-    let guest = block_on_future(runtime.dispatch_public_cli_request(&guest_lookup, peer.uid))
+    let guest = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&guest_lookup, peer.uid))
         .map_err(|_| TypedError::InternalConfig {
             detail: "config-nixos Guest lookup failed".to_owned(),
         })?;
@@ -6288,7 +6346,7 @@ fn dispatch_resource_request(
                 dispatch_guest_lifecycle_resource_request(state, peer, runtime, &request.value())
             }
             Some("Process") => {
-                dispatch_process_lifecycle_resource_request(peer, runtime, &request.value())
+                dispatch_process_lifecycle_resource_request(&state.runtime_handle, peer, runtime, &request.value())
             }
             _ => Err(TypedError::WireInvalidFrame {
                 detail: "lifecycle requires a Guest or Process resourceRef".to_owned(),
@@ -6341,7 +6399,7 @@ fn dispatch_resource_request(
     // Admission has authenticated this local peer with SO_PEERCRED and
     // assigned its daemon role. The runtime binds that credential into the
     // request-scoped ComponentSession subject before invoking Resource API.
-    match block_on_future(runtime.dispatch_public_cli_request(&request.value(), peer.uid)) {
+    match drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&request.value(), peer.uid)) {
         Ok(value) => Ok(value),
         Err(error) => {
             tracing::warn!(
@@ -6485,7 +6543,7 @@ fn admit_gateway_zone_request(
     let composition = plane
         .gateway_zone_link(runtime.zone())
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let gateway_guest = block_on_future(gateway_guest_for_provider(
+    let gateway_guest = drive_sync(&state.runtime_handle, gateway_guest_for_provider(
         runtime,
         composition.transport_provider_ref(),
     ))
@@ -6496,7 +6554,7 @@ fn admit_gateway_zone_request(
         .is_some_and(|previous| !previous.same_guest_identity(&gateway_guest))
     {
         if let Some(previous) = composition.last_gateway_guest() {
-            block_on_future(invalidate_guest_component_session_for_guest(
+            drive_sync(&state.runtime_handle, invalidate_guest_component_session_for_guest(
                 state, &previous,
             ));
         }
@@ -6519,7 +6577,7 @@ fn admit_gateway_zone_request(
         composition.set_gateway_guest(gateway_guest.clone());
     }
     if !composition.has_gateway_session() {
-        let session = block_on_future(connect_guest_component_session_for_guest(
+        let session = drive_sync(&state.runtime_handle, connect_guest_component_session_for_guest(
             state,
             &gateway_guest,
         ))
@@ -6569,7 +6627,7 @@ fn admit_gateway_zone_request(
     let session = composition
         .gateway_session()
         .ok_or(resource_runtime::ResourceRuntimeError::AuthenticationUnavailable)?;
-    let result = block_on_future(runtime.dispatch_gateway_resource_request(
+    let result = drive_sync(&state.runtime_handle, runtime.dispatch_gateway_resource_request(
         &session,
         request,
         &operation_id,
@@ -6585,7 +6643,7 @@ fn admit_gateway_zone_request(
         // while desired resources and assignments stay exactly as they are.
         unbind_plane_guest_target(state, &session);
         composition.fence_gateway_session();
-        block_on_future(invalidate_guest_component_session_for_guest(
+        drive_sync(&state.runtime_handle, invalidate_guest_component_session_for_guest(
             state,
             &gateway_guest_for_invalidation,
         ));
@@ -6753,7 +6811,8 @@ fn dispatch_guest_lifecycle_resource_request(
         target.name().as_str(),
         &request_operation_id,
     );
-    let provider_ref = match block_on_future(runtime.guest_provider_ref(&target)) {
+    let handle = state.runtime_handle.clone();
+    let provider_ref = match drive_sync(&handle, runtime.guest_provider_ref(&target)) {
         Ok(provider_ref) => provider_ref,
         Err(error) => return Ok(resource_runtime_error_frame(error)),
     };
@@ -6763,7 +6822,7 @@ fn dispatch_guest_lifecycle_resource_request(
         (Value, Option<provider_effects::LifecycleAuthorization>),
         TypedError,
     > {
-        let admission = match block_on_future(runtime.admit_guest_lifecycle(
+        let admission = match drive_sync(&handle, runtime.admit_guest_lifecycle(
             peer.uid,
             target.clone(),
             operation_id,
@@ -6893,6 +6952,7 @@ fn resource_runtime_failure(error: resource_runtime::ResourceRuntimeError) -> Ty
 }
 
 fn dispatch_process_lifecycle_resource_request(
+    handle: &tokio::runtime::Handle,
     peer: &PeerIdentity,
     runtime: Arc<resource_runtime::ZoneResourceRuntime>,
     request: &Value,
@@ -6945,7 +7005,7 @@ fn dispatch_process_lifecycle_resource_request(
             "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
             "resourceRef": target.to_canonical_string(),
         });
-        let current = block_on_future(runtime.dispatch_public_cli_request(&get_request, peer.uid))
+        let current = drive_sync(handle, runtime.dispatch_public_cli_request(&get_request, peer.uid))
             .map_err(resource_runtime_failure)?;
         if current.get("type").and_then(Value::as_str) == Some("error") {
             return Ok(current);
@@ -6981,7 +7041,7 @@ fn dispatch_process_lifecycle_resource_request(
             "spec": spec,
             "waitForReconcile": request.get("waitForReady").and_then(Value::as_bool).unwrap_or(true),
         });
-        block_on_future(runtime.dispatch_public_cli_request(&update_request, peer.uid))
+        drive_sync(handle, runtime.dispatch_public_cli_request(&update_request, peer.uid))
             .map_err(resource_runtime_failure)
     };
     if desired == "restart" {
@@ -7038,7 +7098,7 @@ fn dispatch_device_usb_resource_request(
             verb: verb.to_owned(),
         }
     })?;
-    let device = block_on_future(runtime.dispatch_public_cli_request(
+    let device = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(
         &json!({
             "method": "Get",
             "service": "d2b.resource.v3",
@@ -7350,7 +7410,7 @@ fn authoritative_unsafe_local_resource_identity(
         .cloned()
         .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
     let runtime = plane.zone(&root_zone)?;
-    let hosts = block_on_future(runtime.committed_resources_of_type("Host"))?;
+    let hosts = drive_sync(&state.runtime_handle, runtime.committed_resources_of_type("Host"))?;
     let [host] = hosts.as_slice() else {
         return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
     };
@@ -8029,7 +8089,7 @@ fn dispatch_local_vm_launcher(
         execution_ref,
     )
     .map_err(|error| map_resource_exec_error(error, vm))?;
-    let result = block_on_future(client.create(&spec))
+    let result = drive_sync(&state.runtime_handle, client.create(&spec))
         .map_err(|error| map_resource_exec_error(error, vm))?;
     emit_detached_create_audit(state, requester_uid, vm, &result.exec_id);
     Ok((
@@ -8353,6 +8413,7 @@ mod workload_observability_tests {
                 [],
             )),
             v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_handle: test_runtime_handle(),
         };
         (state, dir)
     }
@@ -9062,7 +9123,7 @@ fn resolve_console_provider_kind(
     let resolver = load_bundle_resolver(state)
         .map_err(|_| TypedError::ConsoleVmNotFound { vm: vm.to_owned() })?;
 
-    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    let zone = drive_sync(&state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         vm,
     ))
@@ -9242,7 +9303,7 @@ fn guest_runtime_provider_ref<'a>(
     resolver: &'a BundleResolver,
     vm: &str,
 ) -> Option<&'a str> {
-    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    let zone = drive_sync(&state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         vm,
     ))
@@ -9258,7 +9319,7 @@ fn guest_runtime_provider_ref<'a>(
 /// v2 manifest's `env` surface. Returns `None` when the zone is unknown,
 /// the Guest resource is absent, or the spec carries no `env` key.
 fn guest_runtime_env(state: &ServerState, resolver: &BundleResolver, vm: &str) -> Option<String> {
-    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    let zone = drive_sync(&state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         vm,
     ))
@@ -10088,7 +10149,7 @@ impl RunnerLookup for PidfdRunnerLookup {
 /// daemon's zone coordinator bound the VM to (the same plane zones the
 /// composition point published to the rendezvous).
 fn kernel_zone_for_vm(state: &ServerState, vm: &str) -> Result<String, String> {
-    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    let zone = drive_sync(&state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         vm,
     ))
@@ -10608,11 +10669,51 @@ pub(crate) async fn resolve_component_session_endpoint_for_guest(
     let api_socket = cloud_hypervisor_api_socket(&intent.argv)
         .ok_or_else(|| "guest-session:vmm-api-socket-unavailable".to_owned())?;
     let api_socket = api_socket.to_string_lossy().into_owned();
-    let api_ready = tokio::task::spawn_blocking(move || {
-        d2bd_runtime::readiness::api_socket_info_ready(&api_socket)
-    })
-    .await
-    .map_err(|_| "guest-session:vmm-api-socket-probe-failed".to_owned())?;
+    // U13: the readiness probe (socket exists + HTTP GET answers 200) is
+    // driven on the reactor instead of a blocking worker; each leg keeps
+    // the sync probe's 250ms bound.
+    let api_ready = async {
+        let exists = tokio::fs::metadata(&api_socket)
+            .await
+            .map(|metadata| metadata.file_type().is_socket())
+            .unwrap_or(false);
+        if !exists {
+            return false;
+        }
+        let mut socket = match tokio::time::timeout(
+            Duration::from_millis(250),
+            tokio::net::UnixStream::connect(&api_socket),
+        )
+        .await
+        {
+            Ok(Ok(socket)) => socket,
+            _ => return false,
+        };
+        use tokio::io::AsyncWriteExt;
+        if tokio::time::timeout(
+            Duration::from_millis(250),
+            socket.write_all(
+                b"GET /api/v1/vm.info HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            ),
+        )
+        .await
+        .is_err()
+        {
+            return false;
+        }
+        let mut buffer = [0_u8; 4096];
+        use tokio::io::AsyncReadExt;
+        let Ok(Ok(read)) = tokio::time::timeout(Duration::from_millis(250), socket.read(&mut buffer)).await
+        else {
+            return false;
+        };
+        if read == 0 {
+            return false;
+        }
+        let response = String::from_utf8_lossy(&buffer[..read]);
+        response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200")
+    }
+    .await;
     if !api_ready {
         return Err("guest-session:vmm-api-socket-not-ready".to_owned());
     }
@@ -11444,7 +11545,7 @@ fn read_guest_config_typed(
     zone: &ZoneId,
     vm: &str,
 ) -> Result<d2b_provider_config_nixos::ConfigSyncResponse, TypedError> {
-    if block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    if drive_sync(&state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         vm,
     ))
@@ -11467,7 +11568,7 @@ fn read_guest_config_typed(
             kind: d2bd_runtime::typed_error::ConfigReadErrorKind::AuthFailed,
         }
     })?;
-    let response: d2b_provider_config_nixos::ConfigSyncResponse = block_on_future(async {
+    let response: d2b_provider_config_nixos::ConfigSyncResponse = drive_sync(&state.runtime_handle, async {
         let session = connect_guest_component_session(state, vm)
             .await
             .map_err(|_| d2bd_runtime::typed_error::ConfigReadErrorKind::Transport)?;
@@ -11673,7 +11774,12 @@ fn daemon_shell_authority(state: &ServerState) -> Arc<DaemonShellAuthority> {
     }
     #[cfg(test)]
     {
-        Arc::new(DaemonShellAuthority::new(Arc::clone(&state.resource_plane)))
+        // Test harnesses may construct the authority off-runtime; the test
+        // seat falls back to the suite runtime.
+        Arc::new(DaemonShellAuthority::new(
+            Arc::clone(&state.resource_plane),
+            test_runtime_handle(),
+        ))
     }
 }
 
@@ -11709,6 +11815,7 @@ fn require_guest_component_session(
 }
 
 fn shell_resource_get(
+    handle: &tokio::runtime::Handle,
     client: &DaemonResourceApiClient,
     zone: &ZoneId,
     name: &public_wire::ShellName,
@@ -11730,7 +11837,7 @@ fn shell_resource_get(
     projection.kind =
         protobuf::EnumOrUnknown::new(resource_wire::ProjectionKind::PROJECTION_KIND_FULL);
     request.projection = protobuf::MessageField::some(projection);
-    let response = block_on_future(client.get(request));
+    let response = drive_sync(handle, client.get(request));
     let Some(resource) = response.resource.as_ref() else {
         return match response
             .error
@@ -11856,7 +11963,7 @@ fn production_guest_shell_list(
     projection.kind =
         protobuf::EnumOrUnknown::new(resource_wire::ProjectionKind::PROJECTION_KIND_FULL);
     request.projection = protobuf::MessageField::some(projection);
-    let response = block_on_future(client.list(request));
+    let response = drive_sync(&state.runtime_handle, client.list(request));
     if let Some(error) = response.error.as_ref() {
         return Err(shell_resource_api_error(error));
     }
@@ -11880,7 +11987,7 @@ fn production_guest_shell_detach(
     let _driver = require_guest_component_session(state, vm)?;
     let (zone, client) = shell_resource_client(state)?;
     let name = name.unwrap_or_else(|| public_wire::ShellName::new("primary").expect("default"));
-    let Some(envelope) = shell_resource_get(&client, &zone, &name)? else {
+    let Some(envelope) = shell_resource_get(&state.runtime_handle, &client, &zone, &name)? else {
         return Err(TypedError::WorkloadTargetNotFound {
             target: format!("shell-terminal.d2bus.org.ShellSession/{}", name.as_str()),
         });
@@ -11900,7 +12007,7 @@ fn production_guest_shell_kill(
 ) -> Result<public_wire::ShellKillResult, TypedError> {
     let _driver = require_guest_component_session(state, vm)?;
     let (zone, client) = shell_resource_client(state)?;
-    let Some(envelope) = shell_resource_get(&client, &zone, &name)? else {
+    let Some(envelope) = shell_resource_get(&state.runtime_handle, &client, &zone, &name)? else {
         return Err(TypedError::WorkloadTargetNotFound {
             target: format!("shell-terminal.d2bus.org.ShellSession/{}", name.as_str()),
         });
@@ -11935,7 +12042,7 @@ fn production_guest_shell_kill(
         "shell-session-kill",
     ));
     request.mutation = protobuf::MessageField::some(mutation);
-    let response = block_on_future(client.delete(request));
+    let response = drive_sync(&state.runtime_handle, client.delete(request));
     if let Some(error) = response.error.as_ref() {
         return Err(shell_resource_api_error(error));
     }
@@ -12749,8 +12856,8 @@ fn spawn_typed_shell_owner(
     peer: PeerIdentity,
     request: Value,
     permit: Option<d2bd_runtime::concurrency::ConnPermit>,
-) -> io::Result<thread::JoinHandle<()>> {
-    thread::Builder::new()
+) -> io::Result<std::thread::JoinHandle<()>> {
+    std::thread::Builder::new()
         .name("d2b-typed-shell-owner".to_owned())
         .spawn(move || {
             run_typed_shell_owner(stream, state, peer, request, permit);
@@ -15102,7 +15209,7 @@ fn network_tap_context_for_vm(
         let Ok(runtime) = plane.zone(&zone) else {
             continue;
         };
-        let Ok(guests) = block_on_future(runtime.committed_resources_of_type("Guest")) else {
+        let Ok(guests) = drive_sync(&state.runtime_handle, runtime.committed_resources_of_type("Guest")) else {
             continue;
         };
         let Some(guest) = guests.into_iter().find(|guest| {
@@ -15134,7 +15241,7 @@ fn network_tap_context_for_vm(
         else {
             continue;
         };
-        let Ok(networks) = block_on_future(runtime.committed_resources_of_type("Network")) else {
+        let Ok(networks) = drive_sync(&state.runtime_handle, runtime.committed_resources_of_type("Network")) else {
             continue;
         };
         let Some(network) = networks.into_iter().find(|network| {
@@ -15156,7 +15263,7 @@ fn network_tap_context_for_vm(
             .and_then(|metadata| metadata.get("generation"))
             .and_then(Value::as_u64)
             .and_then(|value| ResourceGeneration::new(value).ok())?;
-        let Ok(zone_resources) = block_on_future(runtime.committed_resources_of_type("Zone"))
+        let Ok(zone_resources) = drive_sync(&state.runtime_handle, runtime.committed_resources_of_type("Zone"))
         else {
             continue;
         };
@@ -15171,7 +15278,7 @@ fn network_tap_context_for_vm(
         let admission_index = plane.network_admission_index();
         let admission_zone_uid = zone_uid.clone();
         let admission_network_uid = network_uid.clone();
-        let Some(admission) = block_on_future(async move {
+        let Some(admission) = drive_sync(&state.runtime_handle, async {
             admission_index
                 .lock()
                 .await
@@ -15214,7 +15321,7 @@ struct VmStartRunner<'a> {
 impl VmStartRunner<'_> {
     fn sync_store_view(&self, vm: &str) -> Result<(), String> {
         let zone =
-            block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+            drive_sync(&self.state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
             &self.state.zone_coordinator,
             vm,
         ))
@@ -15736,7 +15843,7 @@ fn reconcile_display_before_vm_start(
     if !dag.nodes.iter().any(is_durable_wayland_process_node) {
         return Ok(());
     }
-    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    let zone = drive_sync(&state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         vm,
     ))
@@ -15751,13 +15858,13 @@ fn reconcile_display_before_vm_start(
         .zone(&zone)
         .map_err(|_| "display-resource-runtime-unavailable".to_owned())?;
     let Some((session_ref, session_uid, spec)) =
-        block_on_future(runtime.committed_wayland_session_for_vm(vm))
+        drive_sync(&state.runtime_handle, runtime.committed_wayland_session_for_vm(vm))
             .map_err(|_| "display-session-unavailable".to_owned())?
     else {
         return Err("display-session-missing".to_owned());
     };
     let result = {
-        let mut interactions = block_on_future(state.interaction_runtime.lock());
+        let mut interactions = drive_sync(&state.runtime_handle, state.interaction_runtime.lock());
         let runtime_set = interactions
             .as_mut()
             .ok_or_else(|| "display-interaction-runtime-unavailable".to_owned())?;
@@ -15983,7 +16090,7 @@ fn force_shutdown_generation(state: &ServerState, vm: &str) -> u64 {
     // (the shutdown handler threads), so the short lookup rides the existing
     // bridge, exactly like the other async hops in this path (removed at U13
     // when the chain converts to async end-to-end).
-    let Ok(zone) = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    let Ok(zone) = drive_sync(&state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         vm,
     )) else {
@@ -15999,7 +16106,7 @@ fn force_shutdown_generation(state: &ServerState, vm: &str) -> u64 {
 }
 
 fn note_force_shutdown_request(state: &ServerState, vm: &str) {
-    let Ok(zone) = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    let Ok(zone) = drive_sync(&state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         vm,
     )) else {
@@ -16809,14 +16916,23 @@ async fn raw_broker_round_trip_async(
     caller_role: BrokerCallerRole,
     timeout: Duration,
 ) -> Result<Value, TypedError> {
-    tokio::task::spawn_blocking(move || {
+    // U13/R11 documented fd-boundary site: the QemuMedia shutdown path's
+    // raw SOCK_SEQPACKET round trip is deadline-bounded blocking socket I/O
+    // (connect_timeout + read/write timeouts) that stays on a blocking
+    // worker rather than a reactor worker. A full AsyncFd conversion would
+    // duplicate the broker protocol.rs seqpacket transport here for a
+    // shutdown-only caller; the spawn_blocking seat is the sanctioned
+    // blocking-I/O pattern and is kept with the synchronous-path allow.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    let result = tokio::task::spawn_blocking(move || {
         dispatch_raw_broker_value_to_socket(&socket_path, request, caller_role, timeout)
     })
     .await
     .map_err(|err| TypedError::InternalIo {
         context: "join raw broker round trip".to_owned(),
         detail: err.to_string(),
-    })?
+    })?;
+    result
 }
 
 fn dispatch_raw_broker_value_to_socket(
@@ -17292,7 +17408,7 @@ fn stop_vmm_runner_with_provider(
             timeout: d2bd_runtime::ch_api::DEFAULT_TIMEOUT,
         }),
     };
-    let (outcome, report) = block_on_future(run_provider_graceful_shutdown(
+    let (outcome, report) = drive_sync(&state.runtime_handle, run_provider_graceful_shutdown(
         state,
         ProviderGracefulInputs {
             provider: provider.as_ref(),
@@ -17438,7 +17554,7 @@ fn stop_vm_pidfd_role(
             )
         })?;
         let required_sigkill =
-            match block_on_future(providers.stop_node(vm, &node, term_timeout, kill_timeout)) {
+            match drive_sync(&state.runtime_handle, providers.stop_node(vm, &node, term_timeout, kill_timeout)) {
                 Ok(required_sigkill) => required_sigkill,
                 Err(error) if error == "provider-process-not-found" => {
                     return Err(invalid_request_response(
@@ -18447,7 +18563,7 @@ struct DaemonGuestLifecycleEffect<'a> {
 impl DaemonGuestLifecycleEffect<'_> {
     fn verify_identity(&self) -> Result<(), provider_effects::ProviderEffectError> {
         let (zone_uid, guest_uid, guest_generation, provider_generation) =
-            block_on_future(self.runtime.guest_lifecycle_identity(&self.guest))
+            drive_sync(&self.state.runtime_handle, self.runtime.guest_lifecycle_identity(&self.guest))
                 .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
         if zone_uid != *self.authorization.zone_uid()
             || guest_uid != *self.authorization.guest_uid()
@@ -18470,7 +18586,8 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
         _request: &provider_effects::GuestLifecycleRequest,
     ) -> Result<provider_effects::GuestLifecycleState, provider_effects::ProviderEffectError> {
         self.verify_identity()?;
-        block_on_future(
+        drive_sync(
+            &self.state.runtime_handle,
             self.runtime
                 .cloud_hypervisor_lifecycle_state(Arc::new(self.state.clone()), &self.guest),
         )
@@ -18489,7 +18606,7 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
             &self.caller_role,
         )?;
         let _ = self.force;
-        block_on_future(self.runtime.apply_cloud_hypervisor_lifecycle(
+        drive_sync(&self.state.runtime_handle, self.runtime.apply_cloud_hypervisor_lifecycle(
             Arc::new(self.state.clone()),
             &self.guest,
             self.authorization.guest_uid(),
@@ -18498,7 +18615,7 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
         ))
         .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
         if self.wait_for_ready {
-            block_on_future(self.runtime.wait_cloud_hypervisor_lifecycle(
+            drive_sync(&self.state.runtime_handle, self.runtime.wait_cloud_hypervisor_lifecycle(
                 Arc::new(self.state.clone()),
                 &self.guest,
                 self.authorization.guest_uid(),
@@ -18730,7 +18847,7 @@ fn provider_lifecycle_authorization(
         ResourceRef::parse(&format!("Guest/{guest}")).map_err(|_| TypedError::InternalConfig {
             detail: "Guest lifecycle target is invalid".to_owned(),
         })?;
-    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    let zone = drive_sync(&state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         guest,
     ))
@@ -18780,7 +18897,7 @@ fn provider_lifecycle_authorization(
     };
     if matches!(caller_role, BrokerCallerRole::RootUid { .. }) {
         let admission =
-            block_on_future(runtime.admit_internal_guest_lifecycle(target.clone(), operation_id))
+            drive_sync(&state.runtime_handle, runtime.admit_internal_guest_lifecycle(target.clone(), operation_id))
                 .map_err(|_| TypedError::InternalConfig {
                 detail: "internal Guest lifecycle authorization is unavailable".to_owned(),
             })?;
@@ -18796,7 +18913,7 @@ fn provider_lifecycle_authorization(
         });
     }
     let (zone_uid, guest_uid, guest_generation, provider_generation) =
-        block_on_future(runtime.guest_lifecycle_identity(&target)).map_err(|_| {
+        drive_sync(&state.runtime_handle, runtime.guest_lifecycle_identity(&target)).map_err(|_| {
             TypedError::InternalConfig {
                 detail: "Guest lifecycle identity is unavailable".to_owned(),
             }
@@ -18815,7 +18932,7 @@ fn provider_lifecycle_authorization(
             detail: "Host shutdown lifecycle lease is invalid".to_owned(),
         });
     }
-    let admission = block_on_future(runtime.admit_guest_lifecycle(
+    let admission = drive_sync(&state.runtime_handle, runtime.admit_guest_lifecycle(
         broker_caller_uid(caller_role),
         target,
         operation_id,
@@ -19121,7 +19238,8 @@ fn dispatch_broker_vm_start_inner(
         ..d2bd_runtime::supervisor::dag::NodeBudget::default()
     };
     let dag_start = Instant::now();
-    let report = match block_on_future(
+    let report = match drive_sync(
+        &state.runtime_handle,
         d2bd_runtime::supervisor::dag::DagExecutor::with_budget(runner, budget).run_split(
             &dag,
             split_mode,
@@ -19999,7 +20117,7 @@ fn try_acquire_activation_lock(
     state: &ServerState,
     vm: &str,
 ) -> Result<ActivationLockGuard, Value> {
-    let zone = match block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    let zone = match drive_sync(&state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         vm,
     )) {
@@ -20091,7 +20209,7 @@ fn refresh_activation_marker_metrics_on_startup(state: &ServerState) {
     }
 }
 
-fn restore_configuration_staging_on_startup(state: &ServerState) {
+async fn restore_configuration_staging_on_startup(state: &ServerState) {
     let dir = activation_marker_dir(state);
     let Ok(entries) = fs::read_dir(&dir) else {
         return;
@@ -20106,12 +20224,12 @@ fn restore_configuration_staging_on_startup(state: &ServerState) {
         let Some(ordinal) = marker.generation_number else {
             continue;
         };
-        let Ok(zone) = block_on_future(
-            d2bd_runtime::zone_authority::authoritative_zone_for_vm(
-                &state.zone_coordinator,
-                &marker.vm,
-            ),
-        ) else {
+        let Ok(zone) = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+            &state.zone_coordinator,
+            &marker.vm,
+        )
+        .await
+        else {
             tracing::warn!(
                 vm = %marker.vm,
                 "activation marker could not be adopted because its VM has no authoritative Zone",
@@ -20231,7 +20349,7 @@ fn dispatch_live_guest_activation_resource(
         "method": "Get",
         "resourceRef": guest_ref_canonical,
     });
-    let guest = block_on_future(runtime.dispatch_public_cli_request(&get_guest, peer_uid))
+    let guest = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&get_guest, peer_uid))
         .map_err(|_| TypedError::InternalConfig {
             detail: "activation Guest resource unavailable".to_owned(),
         })?;
@@ -20254,7 +20372,7 @@ fn dispatch_live_guest_activation_resource(
             "executionRef": guest_ref.to_canonical_string(),
             "limit": 256,
         });
-        let resources = block_on_future(runtime.dispatch_public_cli_request(&list, peer_uid))
+        let resources = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&list, peer_uid))
             .map_err(|_| TypedError::InternalConfig {
                 detail: "rollback generations unavailable".to_owned(),
             })?;
@@ -20298,7 +20416,7 @@ fn dispatch_live_guest_activation_resource(
             "executionRef": guest_ref.to_canonical_string(),
             "limit": 256,
         });
-        let resources = block_on_future(runtime.dispatch_public_cli_request(&list, peer_uid))
+        let resources = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&list, peer_uid))
             .map_err(|_| TypedError::InternalConfig {
                 detail: "activation generations unavailable".to_owned(),
             })?;
@@ -20350,7 +20468,7 @@ fn dispatch_live_guest_activation_resource(
         "waitForReconcile": false,
     });
     let created =
-        block_on_future(runtime.dispatch_public_cli_request(&create, peer_uid)).map_err(|_| {
+        drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&create, peer_uid)).map_err(|_| {
             TypedError::InternalConfig {
                 detail: "activation resource create failed".to_owned(),
             }
@@ -20383,7 +20501,7 @@ fn dispatch_live_guest_activation_resource(
             "method": "Get",
             "resourceRef": generation_ref,
         });
-        let current = block_on_future(runtime.dispatch_public_cli_request(&get, peer_uid))
+        let current = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&get, peer_uid))
             .map_err(|_| TypedError::InternalConfig {
                 detail: "activation resource status unavailable".to_owned(),
             })?;
@@ -21189,6 +21307,7 @@ mod public_status_tests {
                 [],
             )),
             v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_handle: test_runtime_handle(),
         };
         (state, dir)
     }
@@ -23151,6 +23270,7 @@ pub(crate) mod detached_exec_routing_tests {
                 [],
             )),
             v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_handle: test_runtime_handle(),
         }
     }
 
@@ -23250,6 +23370,7 @@ mod accept_loop_concurrency_tests {
                 crate::console_session::ConsoleSessionTable::new(),
             )),
             v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_handle: test_runtime_handle(),
         };
         (state, dir)
     }
@@ -23879,7 +24000,7 @@ mod broker_dispatch_tests {
         ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ProviderGracefulInputs,
         QemuBrokerShutdownProvider, ServerState, SnapshotLifecycle, VM_RUNNER_ROLE_ID,
         VmShutdownOutcome, VmStartNodeMode, adopt_orphaned_runners_on_startup_with,
-        block_on_future, dispatch_broker_host_destroy_as,
+        dispatch_broker_host_destroy_as,
         dispatch_broker_host_prepare_as, dispatch_broker_vm_restart,
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
         dispatch_request, force_shutdown_generation, note_force_shutdown_request,
@@ -23887,7 +24008,7 @@ mod broker_dispatch_tests {
         redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
         resolve_store_view_intent_for_guest, rollback_failed_vm_start, run_provider_graceful_shutdown,
         runner_snapshot_is_eligible, stale_qemu_media_dependency_roles_from_entries,
-        vm_start_node_mode, write_runner_snapshot_with_authorization,
+        test_runtime_handle, vm_start_node_mode, write_runner_snapshot_with_authorization,
     };
     use d2bd_runtime::supervisor::pidfd_table::{
         BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, WaitTermination,
@@ -23989,6 +24110,7 @@ mod broker_dispatch_tests {
                 [],
             )),
             v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_handle: test_runtime_handle(),
         }
     }
 
@@ -24049,6 +24171,7 @@ mod broker_dispatch_tests {
                 [],
             )),
             v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_handle: test_runtime_handle(),
         }
     }
 
@@ -25296,6 +25419,7 @@ mod broker_dispatch_tests {
                 [],
             )),
             v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_handle: test_runtime_handle(),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -25561,6 +25685,7 @@ mod broker_dispatch_tests {
                 [],
             )),
             v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_handle: test_runtime_handle(),
         };
 
         let listener = socket(
@@ -25762,8 +25887,8 @@ mod broker_dispatch_tests {
         fs::remove_file(&api_socket).ok();
     }
 
-    #[test]
-    fn startup_adoption_quarantines_without_authoritative_lifecycle_identity() {
+    #[tokio::test]
+    async fn startup_adoption_quarantines_without_authoritative_lifecycle_identity() {
         struct FixedProcReader;
 
         impl ProcReader for FixedProcReader {
@@ -25874,9 +25999,11 @@ mod broker_dispatch_tests {
                 [],
             )),
             v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_handle: test_runtime_handle(),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
+            .await
             .expect("quarantine startup snapshots");
 
         assert!(
@@ -26289,8 +26416,8 @@ mod broker_dispatch_tests {
         }
     }
 
-    #[test]
-    fn provider_graceful_shutdown_observes_concurrent_force_request() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn provider_graceful_shutdown_observes_concurrent_force_request() {
         let state = test_state_with_broker_socket(unreachable_broker_socket_path(
             "provider-force-interrupt",
         ));
@@ -26309,7 +26436,7 @@ mod broker_dispatch_tests {
             vmm_exit_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         };
 
-        let (outcome, report) = block_on_future(run_provider_graceful_shutdown(
+        let (outcome, report) = run_provider_graceful_shutdown(
             &state,
             ProviderGracefulInputs {
                 provider: &provider,
@@ -26320,7 +26447,8 @@ mod broker_dispatch_tests {
                 force_generation_baseline: baseline,
                 caller_role: BrokerCallerRole::LauncherUid { uid: 0 },
             },
-        ));
+        )
+        .await;
 
         assert_eq!(outcome, VmShutdownOutcome::ForceRequested);
         assert!(
@@ -26392,8 +26520,8 @@ mod broker_dispatch_tests {
         (socket_path, join)
     }
 
-    #[test]
-    fn qemu_broker_shutdown_provider_drives_powerdown_status_and_quit() {
+    #[tokio::test]
+    async fn qemu_broker_shutdown_provider_drives_powerdown_status_and_quit() {
         let (socket_path, broker) = start_raw_value_broker_server(
             "qemu-shutdown-state-machine",
             3,
@@ -26473,15 +26601,15 @@ mod broker_dispatch_tests {
         };
 
         assert_eq!(
-            block_on_future(provider.request_shutdown(&target)),
+            provider.request_shutdown(&target).await,
             provider_shutdown::ProviderRequestOutcome::Requested
         );
         assert_eq!(
-            block_on_future(provider.poll_state(&target)),
+            provider.poll_state(&target).await,
             provider_shutdown::ProviderGuestState::GuestStopped
         );
         assert_eq!(
-            block_on_future(provider.request_vmm_exit(&target)),
+            provider.request_vmm_exit(&target).await,
             provider_shutdown::ProviderVmmExitOutcome::Requested
         );
         broker.join().expect("broker join");
@@ -28198,6 +28326,7 @@ mod broker_dispatch_tests {
                 [],
             )),
             v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_handle: test_runtime_handle(),
         };
 
         // Emit the same event that the timeout handler in
@@ -29334,6 +29463,7 @@ mod broker_dispatch_tests {
                 [],
             )),
             v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_handle: test_runtime_handle(),
         };
 
         let response = dispatch_broker_vm_start(
@@ -29524,7 +29654,6 @@ mod g5_provider_identity_seed_tests {
 mod loader_worker_refusal_tests {
     use super::*;
     use d2b_core::loader_worker::{self, LoaderRefusal, MAX_LOADER_QUEUE_DEPTH};
-    use d2bd_runtime::runtime_util::block_on_future;
     use std::{
         pin::Pin,
         process::Command,
@@ -29644,12 +29773,13 @@ mod loader_worker_refusal_tests {
 
     /// A saturated load seat refuses the daemon's own bundle load, and the
     /// operator sees the worker's named `bundle-loader-busy` refusal.
-    #[test]
-    fn busy_load_seat_surfaces_bundle_loader_busy_to_the_daemon() {
+    #[tokio::test]
+    async fn busy_load_seat_surfaces_bundle_loader_busy_to_the_daemon() {
         let _lock = seat_lock();
         let state = refusal_state();
         let (_release, _parked, _queued) = saturate(Seat::Load);
-        let error = block_on_future(load_bundle_resolver_on_worker(&state))
+        let error = load_bundle_resolver_on_worker(&state)
+            .await
             .expect_err("a saturated load seat must refuse the daemon's bundle load");
         assert_bundle_loader_refusal(error, "bundle-loader-busy");
     }
@@ -29658,8 +29788,8 @@ mod loader_worker_refusal_tests {
     /// surface the named `bundle-loader-unavailable`. The kill lands in this
     /// process on purpose - the seat is process-wide - and is inert unless
     /// the parent spawned this binary for it.
-    #[test]
-    fn seat_death_child_load() {
+    #[tokio::test]
+    async fn seat_death_child_load() {
         if std::env::var_os(SEAT_DEATH_CHILD_ENV).is_none() {
             return;
         }
@@ -29671,7 +29801,8 @@ mod loader_worker_refusal_tests {
             Err(LoaderRefusal::Unavailable),
             "a panicked job must refuse its waiter instead of hanging it"
         );
-        let error = block_on_future(load_bundle_resolver_on_worker(&state))
+        let error = load_bundle_resolver_on_worker(&state)
+            .await
             .expect_err("a dead load seat must refuse the daemon's bundle load");
         assert_bundle_loader_refusal(error, "bundle-loader-unavailable");
     }

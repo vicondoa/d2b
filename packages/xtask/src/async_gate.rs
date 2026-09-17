@@ -13,11 +13,14 @@
 //! * A `{` whose enclosing statement names `async fn` opens an async context;
 //!   an `async`/`async move` block opens one too. A nested block inside an
 //!   async context stays async - it still runs on the worker.
-//! * The one sanctioned escape is the KTD9 adapter: a `spawn_blocking(...)`
-//!   argument runs on a blocking thread, so its body is exempt. Every other
-//!   blocking call inside an async context is reported, including one inside
-//!   a `std::thread::spawn` closure (a raw thread per call is itself the
-//!   shape the deny list's replacement vocabulary rejects).
+//! * A `spawn_blocking(...)` argument body runs on a blocking thread, but the
+//!   CALL itself is the banned thread-per-call shape that reaches the runtime's
+//!   shared blocking pool (plan KD2), so since U13 the argument body is no
+//!   longer exempt: it is still the caller's code and it parks the worker on the
+//!   spawn/await rendezvous. Every blocking call inside an async context is
+//!   reported, including one inside a `std::thread::spawn` closure (a raw
+//!   thread per call is itself the shape the deny list's replacement vocabulary
+//!   rejects).
 //! * `#[allow(clippy::disallowed_methods)]` does not exempt a call: the
 //!   deny list reserves that allow for genuinely synchronous paths, and no
 //!   synchronous path belongs inside an async context.
@@ -104,17 +107,12 @@ enum BraceKind {
     AsyncFn,
     /// The body of an `async { ... }` / `async move { ... }` block.
     AsyncBlock,
-    /// A level inside a `spawn_blocking(...)` argument; runs on a blocking
-    /// thread, never on a worker.
-    Blocking,
 }
 
 /// Lexical scanner state across a file's lines.
 struct ScanState {
     /// One entry per open brace level, innermost last.
     braces: Vec<BraceKind>,
-    /// One entry per open parenthesis: whether it is a `spawn_blocking` call.
-    parens: Vec<bool>,
     /// Whether the scanner is inside a `/* ... */` comment spanning lines.
     in_block_comment: bool,
     /// Hash count of an unterminated `r#"..."#` string spanning lines.
@@ -128,7 +126,6 @@ impl ScanState {
     fn new() -> Self {
         Self {
             braces: Vec::new(),
-            parens: Vec::new(),
             in_block_comment: false,
             raw_hashes: None,
             segment: String::new(),
@@ -170,14 +167,6 @@ fn scan_line(
                 state.braces.pop();
                 state.segment.clear();
             }
-            b'(' => {
-                state
-                    .parens
-                    .push(last_token(&state.segment) == Some("spawn_blocking"));
-            }
-            b')' => {
-                state.parens.pop();
-            }
             b';' => {
                 state.segment.clear();
             }
@@ -187,10 +176,8 @@ fn scan_line(
                     Some(BraceKind::AsyncBlock) => Some("async block"),
                     _ => None,
                 };
-                let on_worker = !state.parens.iter().any(|blocking| *blocking);
-                let token_start = i == 0 || !is_ident_char(bytes[i - 1]);
+let token_start = i == 0 || !is_ident_char(bytes[i - 1]);
                 if let Some(context) = context
-                    && on_worker
                     && token_start
                 {
                     for entry in entries {
@@ -256,9 +243,6 @@ fn matches_at(code: &str, i: usize, entry: &DeniedApi) -> bool {
 
 /// The kind of a `{` opening at the current scanner position.
 fn brace_kind(state: &ScanState) -> BraceKind {
-    if state.parens.iter().any(|blocking| *blocking) {
-        return BraceKind::Blocking;
-    }
     if segment_has_async_fn(&state.segment) {
         return BraceKind::AsyncFn;
     }
@@ -626,23 +610,25 @@ mod tests {
             .map(|violation| (violation.api.as_str(), violation.context))
             .collect();
         found.sort_unstable();
-        // Each of the fixture's four denied `std::` calls must be flagged
-        // exactly once in its async context. The set comparison is presence-
-        // per-API, not a whole-result equality: the deny list is the single
-        // source of truth, so once the U1 entries land the `spawn_blocking`
-        // call in `via_spawn_blocking` is additionally flagged (KD2) while the
-        // exemption keeps its argument body clean - a whole-set equality here
-        // would pin deny-list content instead of scanner behavior.
-        for (api, context) in [
-            ("std::fs::read", "async fn"),
-            ("std::fs::write", "async block"),
-            ("std::sync::Mutex::lock", "async fn"),
-            ("std::thread::sleep", "async fn"),
+        // Each of the fixture's denied calls must be flagged exactly once in
+        // its async context. Since U13 the `spawn_blocking` call and the
+        // `std::fs::read` inside its argument body are both flagged (KD2: the
+        // exemption is gone), so `std::fs::read` appears twice in `async fn`
+        // contexts (load_config + via_spawn_blocking). The set comparison is
+        // presence-per-API, not a whole-result equality: the deny list is the
+        // single source of truth, and a whole-set equality here would pin
+        // deny-list content instead of scanner behavior.
+        for (api, context, expected) in [
+            ("std::fs::read", "async fn", 2),
+            ("std::fs::write", "async block", 1),
+            ("std::sync::Mutex::lock", "async fn", 1),
+            ("std::thread::sleep", "async fn", 1),
+            ("tokio::task::spawn_blocking", "async fn", 1),
         ] {
             assert_eq!(
                 found.iter().filter(|(a, c)| *a == api && *c == context).count(),
-                1,
-                "{api} must be flagged exactly once in context {context}, found: {found:?}"
+                expected,
+                "{api} must be flagged {expected} time(s) in context {context}, found: {found:?}"
             );
         }
         for violation in &violations {
@@ -687,18 +673,25 @@ mod tests {
     }
 
     #[test]
-    fn spawn_blocking_bodies_are_exempt_even_on_one_line() {
-        // The `spawn_blocking` argument body runs on a blocking thread (U3
-        // keeps the `BraceKind::Blocking` exemption; U13 removes it). The
-        // body's `std::fs::read` must never be flagged. The top-level
-        // `spawn_blocking` CALL itself is not asserted either way: it is
-        // flagged only once the U1 deny-list entry lands (KD2 bans the call;
-        // the exemption covers the argument body, not the call).
+    fn spawn_blocking_argument_bodies_are_flagged_like_async_code() {
+        // U13 removed the `BraceKind::Blocking` exemption (the U3 split):
+        // a `spawn_blocking` argument body is the caller's code and the call
+        // itself is the banned thread-per-call shape, so the body's
+        // `std::fs::read` and the `tokio::task::spawn_blocking` call must
+        // both be flagged in the async fn.
         let source = "pub async fn load(path: &Path) -> Vec<u8> {\n    tokio::task::spawn_blocking(|| std::fs::read(path)).await.unwrap_or_default()\n}\n";
         let violations = scan_source("x.rs", source, &deny_list());
         assert!(
-            violations.iter().all(|violation| violation.api != "std::fs::read"),
-            "a spawn_blocking argument body is exempt from the gate: {violations:?}"
+            violations
+                .iter()
+                .any(|violation| violation.api == "std::fs::read"),
+            "a spawn_blocking argument body must flag: {violations:?}"
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.api == "tokio::task::spawn_blocking"),
+            "the spawn_blocking call itself must flag: {violations:?}"
         );
     }
 

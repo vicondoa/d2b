@@ -1,11 +1,12 @@
 //! Fixture for the async-discipline gate (U13, KTD9): blocking calls inside
 //! async contexts.
 //!
-//! Every `std::` call in the four async contexts below runs on a Tokio
+//! Every `std::` call in the five async contexts below runs on a Tokio
 //! runtime worker and must be flagged with the named violation
-//! `blocking-call-in-async-context`. The `spawn_blocking` body and the
-//! synchronous function run off the worker and must not be flagged, and a
-//! comment mention must not flag either.
+//! `blocking-call-in-async-context`. Since U13 the `spawn_blocking` call AND
+//! its argument body are flagged too (KD2 bans the thread-per-call shape, so
+//! the body is no longer exempt); only the synchronous function runs off the
+//! worker and must not be flagged, and a comment mention must not flag either.
 
 use std::future::Future;
 use std::path::Path;
@@ -35,8 +36,8 @@ pub fn write_free() -> impl Future<Output = ()> {
     }
 }
 
-/// The sanctioned adapter: the closure runs on a blocking thread, so the
-/// `std::fs::read` inside it must NOT be flagged.
+/// The banned thread-per-call adapter (plan KD2): the call itself and the
+/// `std::fs::read` inside its argument body must BOTH be flagged since U13.
 pub async fn via_spawn_blocking(path: &Path) -> Vec<u8> {
     tokio::task::spawn_blocking(move || std::fs::read(path))
         .await

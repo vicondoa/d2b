@@ -301,7 +301,9 @@ impl LiveTpmResourceEffectPort<'_> {
     /// that no Guest lifecycle lease covers, so they must not be gated behind
     /// this admission: the state directory its worker opens is provisioned
     /// first, and the launch fails closed here instead.
-    fn lifecycle_authorization(&self) -> Result<LifecycleAuthorization, TpmResourceEffectError> {
+    async fn lifecycle_authorization(
+        &self,
+    ) -> Result<LifecycleAuthorization, TpmResourceEffectError> {
         let mut slot = self
             .lifecycle_admission
             .try_lock()
@@ -315,8 +317,8 @@ impl LiveTpmResourceEffectPort<'_> {
         let operation_id = operation_id.clone();
         let zone = ZoneId::parse(self.rows.zone.as_str())
             .map_err(|_| TpmResourceEffectError::InvalidDevice)?;
-        // Synchronous caller: non-blocking `try_lock` per plan U4. A
-        // collision reports Transient (fail-closed), never a stall.
+        // Non-blocking `try_lock` per plan U4: a collision reports Transient
+        // (fail-closed), never a stall.
         let runtime = self
             .state
             .resource_plane
@@ -326,10 +328,10 @@ impl LiveTpmResourceEffectPort<'_> {
             .ok_or(TpmResourceEffectError::Transient)?;
         let guest_ref = ResourceRef::parse(&format!("Guest/{}", self.vm_id.as_str()))
             .map_err(|_| TpmResourceEffectError::InvalidDevice)?;
-        let admission = crate::block_on_future(
-            runtime.admit_internal_guest_lifecycle(guest_ref.clone(), &operation_id),
-        )
-        .map_err(|_| TpmResourceEffectError::Transient)?;
+        let admission = runtime
+            .admit_internal_guest_lifecycle(guest_ref.clone(), &operation_id)
+            .await
+            .map_err(|_| TpmResourceEffectError::Transient)?;
         let authorization = LifecycleAuthorization::from_lease(
             admission.lease,
             guest_ref,
@@ -345,7 +347,7 @@ impl LiveTpmResourceEffectPort<'_> {
     /// Consume the Core-issued guest lifecycle lease exactly once. The lease
     /// authorized this Device's start operation; the row's Process controller
     /// owns the process from here, so the port only retires the admission.
-    fn consume_lifecycle_lease(&self) -> Result<(), TpmResourceEffectError> {
+    async fn consume_lifecycle_lease(&self) -> Result<(), TpmResourceEffectError> {
         let mut consumed = self
             .lifecycle_lease_consumed
             .try_lock()
@@ -353,7 +355,7 @@ impl LiveTpmResourceEffectPort<'_> {
         if *consumed {
             return Ok(());
         }
-        let authorization = self.lifecycle_authorization()?;
+        let authorization = self.lifecycle_authorization().await?;
         crate::consume_lifecycle_lease(
             self.state,
             &authorization,
@@ -378,14 +380,13 @@ impl LiveTpmResourceEffectPort<'_> {
     /// storage row roots - the same row the worker derivation, the
     /// spawn-time swtpm-dir fence and the volume-local controller's root all
     /// agree on.
-    fn prepare_state_dir(&self) -> Result<(), TpmResourceEffectError> {
-        let resolver = d2bd_runtime::runtime_util::block_on_future(
-            crate::load_bundle_resolver_on_worker(self.state),
-        )
-        .map_err(|error| {
-            tracing::warn!(error = ?error, "tpm prepare: bundle resolver load failed");
-            TpmResourceEffectError::Transient
-        })?;
+    async fn prepare_state_dir(&self) -> Result<(), TpmResourceEffectError> {
+        let resolver = crate::load_bundle_resolver_on_worker(self.state)
+            .await
+            .map_err(|error| {
+                tracing::warn!(error = ?error, "tpm prepare: bundle resolver load failed");
+                TpmResourceEffectError::Transient
+            })?;
         let (base_dir, owner_uid, owner_gid, mode) = match resolver
             .resolve_prepare_dir_intent(self.vm_id.as_str(), false)
         {
@@ -516,7 +517,7 @@ impl TpmResourceEffectPort for LiveTpmResourceEffectPort<'_> {
         {
             return Err(TpmResourceEffectError::StateIntegrity);
         }
-        self.prepare_state_dir()?;
+        self.prepare_state_dir().await?;
         // The Volume row is committed before the flush and swtpm rows can use
         // it, so the caller waits for its own controller here.
         self.rows.ensure_state_volume().await
@@ -561,7 +562,7 @@ impl TpmResourceEffectPort for LiveTpmResourceEffectPort<'_> {
         self.rows.wait_ready(&expected_volume).await?;
         let process = self.rows.process_ref()?;
         self.rows.wait_ready(&process).await?;
-        self.consume_lifecycle_lease()?;
+        self.consume_lifecycle_lease().await?;
         Ok(process)
     }
 
@@ -668,7 +669,7 @@ impl AdmittedTpmDevice {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn reconcile_device_tpm_controller(
+pub(crate) async fn reconcile_device_tpm_controller(
     state: &crate::ServerState,
     vm_id: VmId,
     migration_intent_ref: BundleOpId,
@@ -686,11 +687,11 @@ pub(crate) fn reconcile_device_tpm_controller(
         caller_role,
         children,
     );
-    crate::block_on_future(controller.reconcile(&resource_effect))
+    controller.reconcile(&resource_effect).await
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn finalize_device_tpm_controller(
+pub(crate) async fn finalize_device_tpm_controller(
     state: &crate::ServerState,
     vm_id: VmId,
     migration_intent_ref: BundleOpId,
@@ -708,7 +709,7 @@ pub(crate) fn finalize_device_tpm_controller(
         caller_role,
         children,
     );
-    crate::block_on_future(controller.finalize(&resource_effect))
+    controller.finalize(&resource_effect).await
 }
 
 #[cfg(test)]

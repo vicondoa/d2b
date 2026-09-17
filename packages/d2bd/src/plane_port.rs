@@ -356,12 +356,7 @@ impl ZonePlanePort for ProductionPlanePort {
         }
         let resolved = self.state_root.join(root.path);
         if root.provider_owned {
-            let create_path = resolved.clone();
-            let created =
-                tokio::task::spawn_blocking(move || std::fs::create_dir_all(&create_path))
-                    .await
-                    .expect("storage root create task panicked");
-            if let Err(error) = created {
+            if let Err(error) = tokio::fs::create_dir_all(&resolved).await {
                 tracing::warn!(
                     zone = %self.zone.as_str(),
                     provider = provider_ref,

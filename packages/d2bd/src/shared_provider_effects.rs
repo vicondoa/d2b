@@ -1225,6 +1225,11 @@ struct DaemonGpuLifecyclePort<'a> {
     /// zone-wide maps, now per-resource).
     state_maps: &'a DeviceResourceState,
     runtime: Arc<ZoneResourceRuntime>,
+    /// The daemon's runtime, captured at construction: the sync
+    /// `GpuLifecycleEffectPort` boundary (the Provider crate's controller is
+    /// synchronous) drives its async work on this handle (U13 synchronous
+    /// path, R11 inventory note).
+    runtime_handle: tokio::runtime::Handle,
     /// Manager-routed child surface of the requiring Device.
     children: &'a dyn SharedProviderChildSurface,
     zone: String,
@@ -1322,7 +1327,10 @@ impl<'a> DaemonGpuLifecyclePort<'a> {
         role: d2b_provider_device_gpu::GpuProcessRole,
     ) -> Result<Option<ResourceView>, d2b_provider_device_gpu::GpuEffectError> {
         let key = self.worker_key(role)?;
-        let view = crate::block_on_future(self.children.view(&key))
+        // Sync `GpuLifecycleEffectPort` boundary (U13 synchronous path): the
+        // Provider crate's controller is synchronous, so the async child
+        // surface drives on the daemon runtime captured at construction.
+        let view = crate::drive_sync(&self.runtime_handle, self.children.view(&key))
             .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?;
         let Some(view) = view else {
             return Ok(None);
@@ -1442,7 +1450,7 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<
             admission.max_holders() as usize,
         )
         .map_err(|_| d2b_provider_device_gpu::GpuEffectError::AuthorityConflict)?;
-        let lease = crate::block_on_future(async {
+        let lease = crate::drive_sync(&self.runtime_handle, async {
             self.runtime
                 .authority_index()
                 .lock()
@@ -1579,7 +1587,7 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<
                 return Err(d2b_provider_device_gpu::GpuEffectError::StaleDeviceIdentity);
             }
             let key = self.worker_key(identity.role())?;
-            crate::block_on_future(self.children.delete(&key))
+            crate::drive_sync(&self.runtime_handle, self.children.delete(&key))
                 .map_err(|_| d2b_provider_device_gpu::GpuEffectError::CloseUnconfirmed)?;
         }
         // The closure proof is the row's absence: the manager's delete runs
@@ -1605,7 +1613,7 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<
             .map_err(|_| d2b_provider_device_gpu::GpuEffectError::AuthorityConflict)?
             .remove(&token)
             .ok_or(d2b_provider_device_gpu::GpuEffectError::AuthorityConflict)?;
-        let result = crate::block_on_future(async {
+        let result = crate::drive_sync(&self.runtime_handle, async {
             self.runtime
                 .authority_index()
                 .lock()
@@ -1894,17 +1902,20 @@ impl ProductionSharedProviderEffects {
                 );
                 SharedProviderEffectError::Unavailable
             })?;
-        let mut controllers = state.tpm_controllers
-            .lock()
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let mut controller = match controllers.remove(&request.uid) {
-            Some(controller) => controller,
-            None => d2b_provider_device_tpm::TpmResourceController::new(
-                request.uid.clone(),
-                key_ref(&request.target).clone(),
-                execution_ref.clone(),
-            )
-            .map_err(|_| SharedProviderEffectError::InvalidResource)?,
+        let mut controller = {
+            let mut controllers = state
+                .tpm_controllers
+                .lock()
+                .map_err(|_| SharedProviderEffectError::Unavailable)?;
+            match controllers.remove(&request.uid) {
+                Some(controller) => controller,
+                None => d2b_provider_device_tpm::TpmResourceController::new(
+                    request.uid.clone(),
+                    key_ref(&request.target).clone(),
+                    execution_ref.clone(),
+                )
+                .map_err(|_| SharedProviderEffectError::InvalidResource)?,
+            }
         };
         let result = crate::tpm_effect_port::reconcile_device_tpm_controller(
             &self.state,
@@ -1924,6 +1935,7 @@ impl ProductionSharedProviderEffects {
             request.children,
             &mut controller,
         )
+        .await
         .map_err(|error| {
             tracing::warn!(
                 error = ?error,
@@ -1934,7 +1946,13 @@ impl ProductionSharedProviderEffects {
         });
         match result {
             Ok(outcome) => {
-                controllers.insert(request.uid.clone(), controller);
+                {
+                    let mut controllers = state
+                        .tpm_controllers
+                        .lock()
+                        .map_err(|_| SharedProviderEffectError::Unavailable)?;
+                    controllers.insert(request.uid.clone(), controller);
+                }
                 match outcome {
                     d2b_provider_device_tpm::TpmResourceOutcome::Ready => {
                         Ok(SharedProviderEffectOutcome::phase(
@@ -1953,7 +1971,13 @@ impl ProductionSharedProviderEffects {
                 }
             }
             Err(error) => {
-                controllers.insert(request.uid.clone(), controller);
+                {
+                    let mut controllers = state
+                        .tpm_controllers
+                        .lock()
+                        .map_err(|_| SharedProviderEffectError::Unavailable)?;
+                    controllers.insert(request.uid.clone(), controller);
+                }
                 Err(error)
             }
         }
@@ -2404,6 +2428,7 @@ impl ProductionSharedProviderEffects {
         }
         let mut port = DaemonGpuLifecyclePort {
             runtime,
+            runtime_handle: tokio::runtime::Handle::current(),
             children: request.children,
             zone: self.zone.as_str().to_owned(),
             device_ref: key_ref(&request.target).clone(),
@@ -2740,12 +2765,15 @@ impl ProductionSharedProviderEffects {
             )
             .await
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let mut controllers = state.tpm_controllers
-            .lock()
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let mut controller = controllers
-            .remove(&request.uid)
-            .ok_or(SharedProviderEffectError::Unavailable)?;
+        let mut controller = {
+            let mut controllers = state
+                .tpm_controllers
+                .lock()
+                .map_err(|_| SharedProviderEffectError::Unavailable)?;
+            controllers
+                .remove(&request.uid)
+                .ok_or(SharedProviderEffectError::Unavailable)?
+        };
         let result = crate::tpm_effect_port::finalize_device_tpm_controller(
             &self.state,
             vm_id.clone(),
@@ -2763,11 +2791,18 @@ impl ProductionSharedProviderEffects {
             },
             request.children,
             &mut controller,
-        );
+        )
+        .await;
         match result {
             Ok(_) => Ok(SharedProviderFinalize::Complete),
             Err(error) => {
-                controllers.insert(request.uid.clone(), controller);
+                {
+                    let mut controllers = state
+                        .tpm_controllers
+                        .lock()
+                        .map_err(|_| SharedProviderEffectError::Unavailable)?;
+                    controllers.insert(request.uid.clone(), controller);
+                }
                 tracing::warn!(
                     error = ?error,
                     device = %key_ref(&request.target).to_canonical_string(),
@@ -2831,6 +2866,7 @@ impl ProductionSharedProviderEffects {
             .ok_or(SharedProviderEffectError::Unavailable)?;
         let mut port = DaemonGpuLifecyclePort {
             runtime,
+            runtime_handle: tokio::runtime::Handle::current(),
             children: request.children,
             zone: self.zone.as_str().to_owned(),
             device_ref: key_ref(&request.target).clone(),

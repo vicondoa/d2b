@@ -2103,20 +2103,25 @@ impl ResourcePlaneV3 {
     /// the worker this call would otherwise park.
     pub async fn prepare(inputs: ConstructionInputs) -> Result<Self, PlaneError> {
         let readiness = Arc::new(NewPlaneReadinessState::new());
-        // Stage 1: durable spec store.
+        // Stage 1: durable spec store. The directory create is async
+        // (`tokio::fs`);the SQLite open + migration has no async form and runs
+        // once on the daemon's reused bounded loader seat (plan KTD2: zero
+        // new seats;d2bd already drives bundle resolution on the same
+        // shipped bounded worker). A saturated seat refuses the plane start
+        // with a named Authority error instead of parking the worker.
         let store_path = Self::spec_store_path(&inputs.spec_store_dir);
+        if let Some(parent) = store_path.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(|error| {
+                PlaneError::Authority(format!("spec store dir create failed: {error}"))
+            })?;
+        }
         let store = Arc::new(
-            tokio::task::spawn_blocking(move || {
-                if let Some(parent) = store_path.parent() {
-                    std::fs::create_dir_all(parent).map_err(|error| {
-                        PlaneError::Authority(format!("spec store dir create failed: {error}"))
-                    })?;
-                }
+            d2b_core::loader_worker::run(move || {
                 SpecStore::open(store_path.clone()).map_err(PlaneError::from)
             })
             .await
             .map_err(|error| {
-                PlaneError::Authority(format!("spec store open join failed: {error}"))
+                PlaneError::Authority(format!("spec store open refused: {error:?}"))
             })??,
         );
         // The registry caches store-derived rows for the production effects;

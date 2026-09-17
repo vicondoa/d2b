@@ -811,12 +811,17 @@ impl ControllerBootstrapMarker {
 /// path, which is async, so it has a seat for each readiness wait: the async
 /// wait awaits [`Self::probe_async`] and never drives a runtime from inside
 /// the caller's, while the synchronous wait drives [`Self::probe`] on the
-/// process-wide runtime [`crate::block_on_future`] falls back to (one per
-/// process, not one per poll).
+/// daemon runtime captured at construction (U13 synchronous path).
 pub struct ProviderLivenessProbe {
     providers: Arc<ProductionProcessProviders>,
     vm: String,
     node: ProcessNode,
+    /// The daemon's runtime, captured at construction (all constructors run
+    /// on the runtime): the trait's mandatory sync `probe` seat drives its
+    /// async observation on this handle (U13 synchronous path, R11 inventory
+    /// note). Production readiness waits use `probe_async`; this sync seat
+    /// exists for the sync `wait_for_readiness` caller.
+    runtime_handle: tokio::runtime::Handle,
 }
 
 impl ProviderLivenessProbe {
@@ -830,6 +835,7 @@ impl ProviderLivenessProbe {
             providers,
             vm: vm.into(),
             node: node.clone(),
+            runtime_handle: tokio::runtime::Handle::current(),
         }
     }
 
@@ -844,11 +850,13 @@ impl ProviderLivenessProbe {
 
 #[async_trait::async_trait]
 impl d2bd_runtime::supervisor::readiness_liveness::LivenessProbe for ProviderLivenessProbe {
-    // U13 bridge: `block_on_future` sync probe is deleted when the
-    // readiness-loop caller converts to `probe_async` end-to-end (plan U13,
-    // bridge elimination). `probe_async` below is the async form.
+    // U13: the sync seat is the trait's mandatory synchronous observation
+    // (the sync `wait_for_readiness` caller), driven on the daemon runtime
+    // captured at construction (R11 synchronous path inventory note);
+    // production readiness waits use `probe_async` below.
     fn probe(&self) -> RunnerLiveness {
-        Self::classify(crate::block_on_future(
+        Self::classify(crate::drive_sync(
+            &self.runtime_handle,
             self.providers.probe_node(&self.vm, &self.node),
         ))
     }
