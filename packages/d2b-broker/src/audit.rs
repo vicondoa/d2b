@@ -5,9 +5,10 @@ use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, SyncSender};
 #[cfg(test)]
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nix::libc;
@@ -15,6 +16,7 @@ use nix::unistd::{Gid, Uid};
 use rustix::fs::{FlockOperation, Mode, OFlags, ResolveFlags, flock};
 use serde::Serialize;
 use serde_json::Value;
+
 
 #[cfg(test)]
 use crate::ops::audit_op::OwnedOpAuditRecord;
@@ -48,6 +50,10 @@ pub(crate) fn result_for_decision(decision: &str) -> &'static str {
 
 const DEFAULT_AUDIT_WRITES_PER_SECOND: u32 = 4096;
 const AUDIT_WRITE_WINDOW: Duration = Duration::from_secs(1);
+/// The bound on admitted-but-unstarted audit worker commands (plan U6: the
+/// append queue is bounded; a full queue drops unprivileged appends with
+/// accounting and backpressures privileged ones).
+const AUDIT_WORKER_QUEUE_DEPTH: usize = 256;
 const MAX_EXPORTED_AUDIT_BYTES: usize = 768 * 1024;
 const MAX_EXPORTED_AUDIT_LINE_BYTES: usize = 64 * 1024;
 const MAX_EXPORTED_AUDIT_PAGE_RECORDS: u32 = 1024;
@@ -85,7 +91,7 @@ struct AuditDropWarning {
     dropped_since_previous_warning: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct AuditDropWarningState {
     privileged_reported: u64,
     unprivileged_reported: u64,
@@ -183,13 +189,6 @@ pub struct AuditLog {
     /// Directory holding the daily-rotated records
     /// (`<audit_dir>/broker-<utc-date>.jsonl`).
     audit_dir: PathBuf,
-    /// Exclusive directory ownership lock held for the lifetime of the log.
-    /// Reconciliation, pruning, export, and append therefore share one
-    /// cross-process mutation boundary.
-    _directory_lock: File,
-    /// Open append-fd for the current UTC day's record file. Refreshed
-    /// on day-boundary crossings via [`Self::append_to_daily`].
-    daily: Mutex<DailyAppender>,
     /// `0640 root:d2bd` group target for the daily files.
     expected_gid: u32,
     test_mode: bool,
@@ -201,9 +200,10 @@ pub struct AuditLog {
     /// `open()`. Pruning is best-effort - errors are logged via the
     /// broker tracing but do not fail the write path.
     retention_days: u32,
-    write_limiter: Mutex<AuditWriteLimiter>,
-    drop_summary: Mutex<AuditDropSummary>,
-    drop_warning_state: Mutex<AuditDropWarningState>,
+    /// The bounded channel to the dedicated audit worker (plan U6 / R4):
+    /// the worker owns the daily appender, limiter, drop accounting, and
+    /// the directory lock, and executes every append transaction serially.
+    writer: AuditWriter,
     #[cfg(test)]
     captured_records: Option<Arc<Mutex<Vec<OwnedOpAuditRecord>>>>,
 }
@@ -218,6 +218,117 @@ impl core::fmt::Debug for AuditLog {
     }
 }
 
+/// The caller-side handle of the dedicated audit worker.
+///
+/// The worker owns limiter-check, drop-accounting, write, fsync,
+/// rollback/poison, and rotation+prune as one serialized FIFO unit, so a
+/// caller cancelled mid-append can never leak a partial JSONL line and a
+/// record is fsynced before the next write starts (crash preserves a
+/// prefix). The queue is bounded; a full queue drops unprivileged appends
+/// with accounting (matching [`AuditDropSummary`]) and backpressures
+/// privileged appends (the mutation-success boundary never drops).
+struct AuditWriter {
+    commands: SyncSender<AuditCommand>,
+    /// Caller-side queue-full drop accounting (the worker cannot see an
+    /// append that never reached it). Merged into [`AuditDropSummary`] on
+    /// read.
+    dropped_privileged: AtomicU64,
+    dropped_unprivileged: AtomicU64,
+}
+
+/// One serialized command the audit worker executes in FIFO order.
+enum AuditCommand {
+    /// Open the directory lock, reconcile owned daily files, open the
+    /// current day's appender, and prune - the whole `open()` barrier on
+    /// the worker, so a fresh writer is usable only after the reply.
+    Bootstrap {
+        audit_dir: PathBuf,
+        expected_gid: u32,
+        test_mode: bool,
+        retention_days: u32,
+        #[cfg(test)]
+        capture: Option<Arc<Mutex<Vec<OwnedOpAuditRecord>>>>,
+        reply: SyncSender<io::Result<()>>,
+    },
+    /// One append transaction: limiter-check, rotation, write, flush,
+    /// fsync, directory sync, rollback/poison on failure, then prune.
+    Append {
+        audit_class: AuditWriteClass,
+        operation: String,
+        bytes: Vec<u8>,
+        #[cfg(test)]
+        capture_record: Option<OwnedOpAuditRecord>,
+        reply: SyncSender<io::Result<()>>,
+    },
+    ExportPage {
+        since: Option<String>,
+        filter: Option<String>,
+        cursor: Option<AuditExportCursor>,
+        limit: u32,
+        reply: SyncSender<io::Result<ExportBrokerAuditResponse>>,
+    },
+    Prune {
+        reply: SyncSender<io::Result<usize>>,
+    },
+    DropSummary {
+        reply: SyncSender<AuditDropSummary>,
+    },
+    #[cfg(test)]
+    DropWarningState {
+        reply: SyncSender<AuditDropWarningState>,
+    },
+    CurrentDailyPath {
+        reply: SyncSender<PathBuf>,
+    },
+    Metadata {
+        reply: SyncSender<io::Result<(u32, u32, u32)>>,
+    },
+    #[cfg(test)]
+    SetWriteLimit {
+        writes_per_second: u32,
+        reply: SyncSender<io::Result<()>>,
+    },
+    #[cfg(test)]
+    InjectIoFailure {
+        failure: InjectedAuditIoFailure,
+        reply: SyncSender<io::Result<()>>,
+    },
+    /// Arm a crash between two records (U6 invariant test): the next append
+    /// writes a partial line and the worker exits without sync, rollback, or
+    /// reply - the durable prefix is all that survives a restart.
+    #[cfg(test)]
+    InjectCrashAfterWrite {
+        reply: SyncSender<io::Result<()>>,
+    },
+    Shutdown {
+        exited: SyncSender<()>,
+    },
+}
+
+/// The audit worker's whole state: every field below is touched only on the
+/// worker thread, so the append transaction never tears.
+struct AuditWorkerState {
+    audit_dir: PathBuf,
+    expected_gid: u32,
+    test_mode: bool,
+    retention_days: u32,
+    /// Exclusive directory ownership lock held for the lifetime of the
+    /// worker. Reconciliation, pruning, export, and append therefore share
+    /// one cross-process mutation boundary; the lock releases only when the
+    /// worker exits (after the Shutdown ack).
+    directory_lock: File,
+    /// Open append-fd for the current UTC day's record file. Refreshed on
+    /// day-boundary crossings.
+    daily: DailyAppender,
+    write_limiter: AuditWriteLimiter,
+    drop_summary: AuditDropSummary,
+    drop_warning_state: AuditDropWarningState,
+    #[cfg(test)]
+    capture: Option<Arc<Mutex<Vec<OwnedOpAuditRecord>>>>,
+    #[cfg(test)]
+    crash_after_write: bool,
+}
+
 #[derive(Debug)]
 struct DailyAppender {
     file: File,
@@ -228,15 +339,36 @@ struct DailyAppender {
 }
 
 #[cfg(test)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 enum InjectedAuditIoFailure {
     PartialWrite,
     Flush,
     Sync { remaining: u32 },
+    /// Park the worker inside the append transaction until the test releases
+    /// it: the caller can then cancel (drop its reply) mid-append and prove
+    /// the worker owns the append to completion.
+    Stall {
+        stalled: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    },
 }
 
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 impl DailyAppender {
     fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        #[cfg(test)]
+        {
+            let stalling = matches!(self.io_failure, Some(InjectedAuditIoFailure::Stall { .. }));
+            if stalling {
+                let Some(InjectedAuditIoFailure::Stall { stalled, release }) =
+                    self.io_failure.take()
+                else {
+                    unreachable!("stalling implies the stall variant")
+                };
+                let _ = stalled.send(());
+                let _ = release.blocking_recv();
+            }
+        }
         #[cfg(test)]
         if matches!(self.io_failure, Some(InjectedAuditIoFailure::PartialWrite)) {
             self.io_failure = None;
@@ -258,10 +390,10 @@ impl DailyAppender {
 
     fn sync_all(&mut self) -> io::Result<()> {
         #[cfg(test)]
-        if let Some(InjectedAuditIoFailure::Sync { remaining }) = self.io_failure
-            && remaining > 0
+        if let Some(InjectedAuditIoFailure::Sync { remaining }) = &self.io_failure
+            && *remaining > 0
         {
-            self.io_failure = (remaining > 1).then_some(InjectedAuditIoFailure::Sync {
+            self.io_failure = (*remaining > 1).then_some(InjectedAuditIoFailure::Sync {
                 remaining: remaining - 1,
             });
             return Err(io::Error::other("injected-audit-sync-failure"));
@@ -283,72 +415,62 @@ impl AuditLog {
         test_mode: bool,
         retention_days: u32,
     ) -> io::Result<Self> {
-        // Refuse symlink on the audit dir.
-        if let Ok(metadata) = fs::symlink_metadata(audit_dir)
-            && metadata.file_type().is_symlink()
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "audit directory rejected",
-            ));
-        }
-
-        crate::sys::path_safe::ensure_dir(
+        Self::open_inner(
             audit_dir,
-            0o2750,
-            if test_mode {
-                None
-            } else {
-                Some(Uid::from_raw(0).as_raw())
-            },
-            if test_mode { None } else { Some(expected_gid) },
-        )?;
-
-        let directory_lock = open_audit_directory_lock(audit_dir, expected_gid, test_mode)?;
-        let owned_daily_files = scan_owned_daily_files(audit_dir)?;
-        for (_, path) in &owned_daily_files {
-            reconcile_truncated_final_line(path, audit_dir, expected_gid, test_mode)?;
-        }
-
-        let today = utc_date_string();
-        let daily_path = audit_dir.join(format!("broker-{today}.jsonl"));
-        let daily_file = open_append_cloexec(&daily_path, expected_gid, test_mode)?;
-        sync_directory(audit_dir)?;
-
-        let log = Self {
-            audit_dir: audit_dir.to_path_buf(),
-            _directory_lock: directory_lock,
-            daily: Mutex::new(DailyAppender {
-                file: daily_file,
-                date_utc: today,
-                poisoned: false,
-                #[cfg(test)]
-                io_failure: None,
-            }),
             expected_gid,
             test_mode,
             retention_days,
-            write_limiter: Mutex::new(AuditWriteLimiter::new(DEFAULT_AUDIT_WRITES_PER_SECOND)),
-            drop_summary: Mutex::new(AuditDropSummary::default()),
-            drop_warning_state: Mutex::new(AuditDropWarningState::default()),
             #[cfg(test)]
-            captured_records: None,
-        };
+            None,
+        )
+    }
 
-        // Prune on open so a long-stopped daemon catches up. Best-effort:
-        // log + ignore errors (caller should not fail to start the daemon
-        // because of a stale-file cleanup hiccup).
-        if let Err(err) = log.prune_expired_daily_files() {
-            if err.to_string() == "audit-owned-file-identity-invalid" {
-                return Err(err);
-            }
-            // We don't have tracing in scope here; rely on the broker
-            // runtime to surface this via its own log if it cares.
-            // The append path is unaffected.
-            let _ = err;
-        }
-
-        Ok(log)
+    /// Spawn the audit worker and run the whole `open()` barrier on it:
+    /// symlink refusal, directory lock, reconciliation of every owned daily
+    /// file, the current day's appender, and prune-on-open. The store is
+    /// usable only after the bootstrap reply, so a fresh writer can never
+    /// observe a half-opened directory.
+    fn open_inner(
+        audit_dir: &Path,
+        expected_gid: u32,
+        test_mode: bool,
+        retention_days: u32,
+        #[cfg(test)]
+        capture: Option<Arc<Mutex<Vec<OwnedOpAuditRecord>>>>,
+    ) -> io::Result<Self> {
+        let (commands, receiver) = mpsc::sync_channel::<AuditCommand>(AUDIT_WORKER_QUEUE_DEPTH);
+        std::thread::Builder::new()
+            .name("d2b-broker-audit-writer".to_owned())
+            .spawn(move || audit_worker_loop(receiver))
+            .map_err(|error| io::Error::other(format!("audit worker spawn failed: {error}")))?;
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        commands
+            .send(AuditCommand::Bootstrap {
+                audit_dir: audit_dir.to_path_buf(),
+                expected_gid,
+                test_mode,
+                retention_days,
+                #[cfg(test)]
+                capture: capture.clone(),
+                reply: reply_tx,
+            })
+            .map_err(|_| io::Error::other("audit worker unavailable"))?;
+        reply_rx
+            .recv()
+            .map_err(|_| io::Error::other("audit worker unavailable"))??;
+        Ok(Self {
+            audit_dir: audit_dir.to_path_buf(),
+            expected_gid,
+            test_mode,
+            retention_days,
+            writer: AuditWriter {
+                commands,
+                dropped_privileged: AtomicU64::new(0),
+                dropped_unprivileged: AtomicU64::new(0),
+            },
+            #[cfg(test)]
+            captured_records: capture,
+        })
     }
 
     #[cfg(test)]
@@ -359,8 +481,13 @@ impl AuditLog {
         retention_days: u32,
     ) -> io::Result<(Self, Arc<Mutex<Vec<OwnedOpAuditRecord>>>)> {
         let capture = Arc::new(Mutex::new(Vec::new()));
-        let mut log = Self::open(audit_dir, expected_gid, test_mode, retention_days)?;
-        log.captured_records = Some(Arc::clone(&capture));
+        let log = Self::open_inner(
+            audit_dir,
+            expected_gid,
+            test_mode,
+            retention_days,
+            Some(Arc::clone(&capture)),
+        )?;
         Ok((log, capture))
     }
 
@@ -373,21 +500,53 @@ impl AuditLog {
         writes_per_second: u32,
     ) -> io::Result<Self> {
         let log = Self::open(audit_dir, expected_gid, test_mode, retention_days)?;
-        *log.write_limiter
-            .lock()
-            .map_err(|_| io::Error::other("audit limiter mutex poisoned"))? =
-            AuditWriteLimiter::new(writes_per_second);
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        log.submit(
+            AuditCommand::SetWriteLimit {
+                writes_per_second,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )??;
         Ok(log)
     }
 
     #[cfg(test)]
     fn inject_io_failure(&self, failure: InjectedAuditIoFailure) -> io::Result<()> {
-        self.daily
-            .lock()
-            .map(|mut daily| {
-                daily.io_failure = Some(failure);
-            })
-            .map_err(|_| io::Error::other("audit daily mutex poisoned"))
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.submit(
+            AuditCommand::InjectIoFailure {
+                failure,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )?
+
+    }
+
+    /// Arm a crash between two records (U6 invariant test): the next append
+    /// writes a partial line and the worker exits without sync, rollback, or
+    /// reply, so only the durable prefix survives a restart.
+    #[cfg(test)]
+    fn inject_crash_after_write(&self) -> io::Result<()> {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.submit(
+            AuditCommand::InjectCrashAfterWrite { reply: reply_tx },
+            reply_rx,
+        )?
+
+    }
+
+    /// The worker's drop-warning cursors (U6 test hook; the warning state is
+    /// worker-owned).
+    #[cfg(test)]
+    fn drop_warning_state_snapshot(&self) -> AuditDropWarningState {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.submit(
+            AuditCommand::DropWarningState { reply: reply_tx },
+            reply_rx,
+        )
+        .unwrap_or_default()
     }
 
     /// Returns the path of the audit directory holding daily
@@ -406,12 +565,15 @@ impl AuditLog {
     /// this to address the actually-active file for fd / mode
     /// assertions.
     pub fn current_daily_path(&self) -> PathBuf {
-        let date = self
-            .daily
-            .lock()
-            .map(|g| g.date_utc.clone())
-            .unwrap_or_else(|_| utc_date_string());
-        self.audit_dir.join(format!("broker-{date}.jsonl"))
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.submit(
+            AuditCommand::CurrentDailyPath { reply: reply_tx },
+            reply_rx,
+        )
+        .unwrap_or_else(|_| {
+            self.audit_dir
+                .join(format!("broker-{}.jsonl", utc_date_string()))
+        })
     }
 
     /// Legacy short-record writer. New op dispatch arms call
@@ -610,7 +772,13 @@ impl AuditLog {
         let mut line = serde_json::to_string(&sanitize_audit_value(value))
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         line.push('\n');
-        self.append_to_daily(audit_class, operation, line.as_bytes())
+        self.append_to_daily(
+            audit_class,
+            operation,
+            line.as_bytes(),
+            #[cfg(test)]
+            None,
+        )
     }
 
     /// Append one [`OpAuditRecord`] to the day's daily file.
@@ -637,19 +805,20 @@ impl AuditLog {
             line
         })
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        // The capture push happens on the worker after the durable append
+        // (same ordering the daily lock gave it before the U6 conversion).
+        #[cfg(test)]
+        let capture_record = self
+            .captured_records
+            .as_ref()
+            .map(|_| OwnedOpAuditRecord::from(record));
         self.append_to_daily(
             AuditWriteClass::Privileged,
             record.operation,
             line.as_bytes(),
-        )?;
-        #[cfg(test)]
-        if let Some(capture) = &self.captured_records {
-            capture
-                .lock()
-                .map_err(|_| io::Error::other("audit capture mutex poisoned"))?
-                .push(OwnedOpAuditRecord::from(record));
-        }
-        Ok(())
+            #[cfg(test)]
+            capture_record,
+        )
     }
 
     /// Append one nested-call evidence-chain record (KTD6) to the day's
@@ -848,103 +1017,123 @@ impl AuditLog {
     }
 
     pub fn audit_drop_summary(&self) -> io::Result<AuditDropSummary> {
-        self.drop_summary
-            .lock()
-            .map(|summary| *summary)
-            .map_err(|_| io::Error::other("audit drop summary mutex poisoned"))
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        let mut summary = self.submit(
+            AuditCommand::DropSummary { reply: reply_tx },
+            reply_rx,
+        )?;
+        // Merge the caller-side queue-full drops the worker never saw.
+        summary.privileged_rate_limited = summary
+            .privileged_rate_limited
+            .saturating_add(self.writer.dropped_privileged.load(Ordering::Relaxed));
+        summary.unprivileged_rate_limited = summary
+            .unprivileged_rate_limited
+            .saturating_add(self.writer.dropped_unprivileged.load(Ordering::Relaxed));
+        Ok(summary)
     }
 
+    /// Submit one append transaction to the worker.
+    ///
+    /// The worker owns limiter-check, drop-accounting, write, fsync,
+    /// rollback/poison, and rotation+prune as one serialized FIFO unit, so a
+    /// caller cancelled mid-append cannot leak a partial JSONL line. The
+    /// queue is bounded: a full queue drops unprivileged appends with
+    /// accounting (matching [`AuditDropSummary`]) and backpressures
+    /// privileged appends - the mutation-success boundary never drops.
     fn append_to_daily(
         &self,
         audit_class: AuditWriteClass,
         operation: &str,
         bytes: &[u8],
+        #[cfg(test)]
+        capture_record: Option<OwnedOpAuditRecord>,
     ) -> io::Result<()> {
-        let mut guard = self
-            .daily
-            .lock()
-            .map_err(|_| io::Error::other("audit daily mutex poisoned"))?;
-        if guard.poisoned {
-            return Err(io::Error::other("audit-writer-poisoned"));
-        }
-        if let Err(err) = self
-            .write_limiter
-            .lock()
-            .map_err(|_| io::Error::other("audit limiter mutex poisoned"))?
-            .check(audit_class)
-        {
-            self.record_rate_limited_drop(audit_class, operation);
-            return Err(err);
-        }
-        let today = utc_date_string();
-        let rotated = today != guard.date_utc;
-        if rotated {
-            // Rotations swap the fd via reopen + atomic rename. We
-            // reopen the new day's file in O_APPEND; the old file is
-            // closed by replacing it (drop runs).
-            guard.sync_all()?;
-            let new_path = self.audit_dir.join(format!("broker-{today}.jsonl"));
-            let new_file = open_append_cloexec(&new_path, self.expected_gid, self.test_mode)?;
-            guard.file = new_file;
-            guard.date_utc = today;
-        }
-
-        let pre_append_offset = guard.file.metadata()?.len();
-        let append_result = (|| {
-            guard.write_all(bytes)?;
-            guard.flush()?;
-            guard.sync_all()?;
-            sync_directory(&self.audit_dir)?;
-            Ok(())
-        })();
-        if let Err(err) = append_result {
-            if guard
-                .rollback_to(pre_append_offset, &self.audit_dir)
-                .is_err()
-            {
-                guard.poisoned = true;
-                return Err(io::Error::other("audit-writer-poisoned"));
-            }
-            return Err(err);
-        }
-
-        // Keep the daily lock through the bounded retention scan so export
-        // cannot observe a file set while rotation or pruning is in flight.
-        if let Err(err) = self.prune_expired_daily_files_unlocked() {
-            // Same swallow as open(): pruning failures must not
-            // break the write path. The next rotation retries.
-            let _ = err;
-        }
-        Ok(())
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        let command = AuditCommand::Append {
+            audit_class,
+            operation: operation.to_owned(),
+            bytes: bytes.to_vec(),
+            #[cfg(test)]
+            capture_record,
+            reply: reply_tx,
+        };
+        self.enqueue_append(audit_class, operation, command, reply_rx)
     }
 
-    fn record_rate_limited_drop(&self, audit_class: AuditWriteClass, operation: &str) {
-        let Ok(mut summary) = self.drop_summary.lock() else {
-            return;
-        };
-        let counter = match audit_class {
-            AuditWriteClass::Privileged => &mut summary.privileged_rate_limited,
-            AuditWriteClass::Unprivileged => &mut summary.unprivileged_rate_limited,
-        };
-        *counter = counter.saturating_add(1);
-        let dropped_total = *counter;
-        drop(summary);
+    /// Submit one command and wait for its reply over the dedicated bounded
+    /// worker boundary (plan R4: the caller side of the audit worker's
+    /// `sync_channel`, with one bounded reply channel per request).
+    #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+    fn submit<T>(&self, command: AuditCommand, reply: mpsc::Receiver<T>) -> io::Result<T> {
+        self.writer
+            .commands
+            .send(command)
+            .map_err(|_| io::Error::other("audit worker unavailable"))?;
+        reply
+            .recv()
+            .map_err(|_| io::Error::other("audit worker unavailable"))
+    }
 
-        let warning = self
-            .drop_warning_state
-            .lock()
-            .ok()
-            .and_then(|mut state| state.observe(audit_class, dropped_total));
-        if let Some(warning) = warning {
-            tracing::warn!(
-                audit_drop_reason = "rate_limited",
-                audit_class = audit_class.as_str(),
-                operation = %operation,
-                dropped_total = warning.dropped_total,
-                dropped_since_previous_warning = warning.dropped_since_previous_warning,
-                "broker audit records dropped by write limiter"
-            );
+    /// Enqueue one append on the bounded worker boundary.
+    ///
+    /// Privileged appends use the blocking send (backpressure: the
+    /// mutation-success boundary never drops a record). Unprivileged appends
+    /// use the non-blocking send; a full queue drops them with accounting
+    /// (matching [`AuditDropSummary`]) and the caller sees the WouldBlock
+    /// refusal immediately.
+    #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+    fn enqueue_append(
+        &self,
+        audit_class: AuditWriteClass,
+        operation: &str,
+        command: AuditCommand,
+        reply: mpsc::Receiver<io::Result<()>>,
+    ) -> io::Result<()> {
+        match audit_class {
+            AuditWriteClass::Privileged => {
+                self.writer
+                    .commands
+                    .send(command)
+                    .map_err(|_| io::Error::other("audit-writer-poisoned"))?;
+            }
+            AuditWriteClass::Unprivileged => {
+                match self.writer.commands.try_send(command) {
+                    Ok(()) => {}
+                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                        return Err(io::Error::other("audit-writer-poisoned"));
+                    }
+                    Err(mpsc::TrySendError::Full(_)) => {
+                        self.account_queue_full_drop(audit_class, operation);
+                        return Err(io::Error::new(
+                            io::ErrorKind::WouldBlock,
+                            "audit write rate limit exceeded",
+                        ));
+                    }
+                }
+            }
         }
+        reply
+            .recv()
+            .map_err(|_| io::Error::other("audit-writer-poisoned"))?
+    }
+
+    /// Account one append the bounded queue refused (drop-with-accounting,
+    /// matching [`AuditDropSummary`]). The worker cannot see an append that
+    /// never reached it, so the counter lives caller-side and is merged on
+    /// read.
+    fn account_queue_full_drop(&self, audit_class: AuditWriteClass, operation: &str) {
+        let counter = match audit_class {
+            AuditWriteClass::Privileged => &self.writer.dropped_privileged,
+            AuditWriteClass::Unprivileged => &self.writer.dropped_unprivileged,
+        };
+        let dropped_total = counter.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+        tracing::warn!(
+            audit_drop_reason = "worker_queue_full",
+            audit_class = audit_class.as_str(),
+            operation = %operation,
+            dropped_total,
+            "broker audit record dropped by the bounded audit worker queue"
+        );
     }
 
     /// Delete any `broker-YYYY-MM-DD.jsonl` files whose date stamp is
@@ -963,77 +1152,15 @@ impl AuditLog {
     ///
     /// `retention_days == 0` disables pruning entirely.
     pub fn prune_expired_daily_files(&self) -> io::Result<usize> {
-        let _guard = self
-            .daily
-            .lock()
-            .map_err(|_| io::Error::other("audit daily mutex poisoned"))?;
-        self.prune_expired_daily_files_unlocked()
-    }
-
-    fn prune_expired_daily_files_unlocked(&self) -> io::Result<usize> {
-        if self.retention_days == 0 {
-            return Ok(0);
-        }
-        let cutoff_days = self.retention_days as i64;
-        let today_unix_days = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64
-            / 86_400;
-
-        let mut pruned = 0usize;
-        let entries = match fs::read_dir(&self.audit_dir) {
-            Ok(it) => it,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
-            Err(err) => return Err(err),
-        };
-        for (index, entry) in entries.enumerate() {
-            if index >= MAX_AUDIT_DIRECTORY_ENTRIES {
-                return Err(io::Error::other("audit-directory-scan-limit"));
-            }
-            let entry = entry?;
-            let name = entry.file_name();
-            let Some(stem) = dated_audit_artifact_date(&name)? else {
-                continue;
-            };
-            // Expect `YYYY-MM-DD`.
-            let parts: Vec<&str> = stem.split('-').collect();
-            if parts.len() != 3 {
-                continue;
-            }
-            let Ok(y) = parts[0].parse::<i32>() else {
-                continue;
-            };
-            let Ok(m) = parts[1].parse::<u32>() else {
-                continue;
-            };
-            let Ok(d) = parts[2].parse::<u32>() else {
-                continue;
-            };
-            if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-                continue;
-            }
-            let file_unix_days = match unix_days_from_ymd(y, m, d) {
-                Some(v) => v,
-                None => continue,
-            };
-            let age_days = today_unix_days - file_unix_days;
-            if age_days > cutoff_days {
-                // Best-effort: remove failures don't propagate as
-                // hard errors (e.g. file vanished between readdir
-                // and remove, permission denied on a stray file).
-                if path_safe::remove_nofollow(&entry.path()).is_ok() {
-                    pruned += 1;
-                }
-            }
-        }
-        if pruned > 0 {
-            sync_directory(&self.audit_dir)?;
-        }
-        Ok(pruned)
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.submit(AuditCommand::Prune { reply: reply_tx }, reply_rx)?
     }
 
     /// Reads one bounded, typed page from the broker audit chain.
+    ///
+    /// The read runs on the audit worker, so it cannot observe a file set
+    /// while rotation or pruning is in flight (the serialization the daily
+    /// lock used to give before the U6 conversion).
     pub fn export_page(
         &self,
         since: Option<&str>,
@@ -1041,210 +1168,17 @@ impl AuditLog {
         cursor: Option<&AuditExportCursor>,
         limit: u32,
     ) -> io::Result<ExportBrokerAuditResponse> {
-        let _daily_guard = self
-            .daily
-            .lock()
-            .map_err(|_| io::Error::other("audit daily mutex poisoned"))?;
-        let limit = usize::try_from(limit)
-            .ok()
-            .filter(|limit| {
-                (1..=usize::try_from(MAX_EXPORTED_AUDIT_PAGE_RECORDS).unwrap_or(usize::MAX))
-                    .contains(limit)
-            })
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "audit-export-limit-invalid")
-            })?;
-        let typed_filter = filter
-            .map(serde_json::from_str::<BrokerAuditFilter>)
-            .transpose()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "audit-filter-invalid"))?;
-        if cursor.is_some_and(|cursor| !is_valid_audit_day(&cursor.day)) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "audit-export-cursor-invalid",
-            ));
-        }
-        let daily_paths = scan_owned_daily_files(&self.audit_dir)?;
-
-        let mut output = Vec::new();
-        let mut bytes = 0_usize;
-        let mut sequence = cursor
-            .map(|cursor| cursor.sequence.saturating_add(1))
-            .unwrap_or(0);
-        let mut next_cursor = None;
-        let mut complete = true;
-        'files: for (day, path) in daily_paths {
-            if cursor.is_some_and(|cursor| {
-                day < cursor.day || (day == cursor.day && cursor.line == u64::MAX)
-            }) {
-                continue;
-            }
-            let file = match OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
-                .open(&path)
-            {
-                Ok(file) => file,
-                Err(_) => {
-                    let entry = AuditExportEntry {
-                        sequence,
-                        record: None,
-                        error: Some(AuditExportErrorCode::ReadFailed),
-                    };
-                    if !append_export_entry(
-                        &mut output,
-                        &mut bytes,
-                        &mut sequence,
-                        &mut next_cursor,
-                        &day,
-                        u64::MAX,
-                        limit,
-                        entry,
-                    )? {
-                        complete = false;
-                        break 'files;
-                    }
-                    continue;
-                }
-            };
-            let mut reader = BufReader::new(file);
-            let mut line_number = 0_u64;
-            loop {
-                let current_line = line_number;
-                let line_bytes = match read_bounded_line(&mut reader) {
-                    Ok(BoundedLine::EndOfFile) => break,
-                    Ok(BoundedLine::Record(line)) => {
-                        line_number = line_number.saturating_add(1);
-                        line
-                    }
-                    Ok(BoundedLine::ReadFailed {
-                        consumed,
-                        end_of_file,
-                    }) => {
-                        if !consumed {
-                            // The physical line is still pending. Do not
-                            // manufacture a cursor that would skip it.
-                            return Err(io::Error::other("audit-export-line-discard-limit"));
-                        }
-                        line_number = line_number.saturating_add(1);
-                        if cursor.is_some_and(|cursor| {
-                            day < cursor.day || (day == cursor.day && current_line <= cursor.line)
-                        }) {
-                            continue;
-                        }
-                        let entry = AuditExportEntry {
-                            sequence,
-                            record: None,
-                            error: Some(AuditExportErrorCode::ReadFailed),
-                        };
-                        if !append_export_entry(
-                            &mut output,
-                            &mut bytes,
-                            &mut sequence,
-                            &mut next_cursor,
-                            &day,
-                            current_line,
-                            limit,
-                            entry,
-                        )? {
-                            complete = false;
-                            break 'files;
-                        }
-                        if end_of_file {
-                            break;
-                        }
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                };
-                if cursor.is_some_and(|cursor| {
-                    day < cursor.day || (day == cursor.day && current_line <= cursor.line)
-                }) {
-                    continue;
-                }
-                let line = match String::from_utf8(line_bytes) {
-                    Ok(line) => line,
-                    Err(_) => {
-                        let entry = AuditExportEntry {
-                            sequence,
-                            record: None,
-                            error: Some(AuditExportErrorCode::ReadFailed),
-                        };
-                        if !append_export_entry(
-                            &mut output,
-                            &mut bytes,
-                            &mut sequence,
-                            &mut next_cursor,
-                            &day,
-                            current_line,
-                            limit,
-                            entry,
-                        )? {
-                            complete = false;
-                            break 'files;
-                        }
-                        continue;
-                    }
-                };
-                let raw_record = serde_json::from_str::<Value>(&line).ok();
-                let is_corrupt = raw_record.is_none();
-                if !is_corrupt
-                    && since.is_some_and(|since| {
-                        !raw_record
-                            .as_ref()
-                            .is_some_and(|record| ts_at_least(record, since))
-                    })
-                {
-                    continue;
-                }
-                if !is_corrupt
-                    && typed_filter.as_ref().is_some_and(|filter| {
-                        !raw_record
-                            .as_ref()
-                            .is_some_and(|record| record_matches_filter(record, filter))
-                    })
-                {
-                    continue;
-                }
-                let entry = match raw_record.map(sanitize_audit_value) {
-                    Some(Value::Object(record)) => AuditExportEntry {
-                        sequence,
-                        record: Some(Value::Object(record)),
-                        error: None,
-                    },
-                    _ => AuditExportEntry {
-                        sequence,
-                        record: None,
-                        error: Some(AuditExportErrorCode::RecordInvalid),
-                    },
-                };
-                if !append_export_entry(
-                    &mut output,
-                    &mut bytes,
-                    &mut sequence,
-                    &mut next_cursor,
-                    &day,
-                    current_line,
-                    limit,
-                    entry,
-                )? {
-                    complete = false;
-                    break 'files;
-                }
-                if output.len() >= limit {
-                    complete = false;
-                    break 'files;
-                }
-            }
-        }
-        if complete {
-            next_cursor = None;
-        }
-        Ok(ExportBrokerAuditResponse {
-            entries: output,
-            next_cursor,
-            complete,
-        })
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.submit(
+            AuditCommand::ExportPage {
+                since: since.map(str::to_owned),
+                filter: filter.map(str::to_owned),
+                cursor: cursor.cloned(),
+                limit,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )?
     }
 
     /// Compatibility projection for the legacy bootstrap probe.
@@ -1302,13 +1236,636 @@ impl AuditLog {
 
     /// Returns `(uid, gid, mode)` of the current day's daily file.
     pub fn metadata(&self) -> io::Result<(u32, u32, u32)> {
-        let metadata = fs::metadata(self.current_daily_path())?;
-        Ok((
-            metadata.uid(),
-            metadata.gid(),
-            metadata.permissions().mode() & 0o777,
-        ))
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.submit(AuditCommand::Metadata { reply: reply_tx }, reply_rx)?
     }
+}
+
+impl Drop for AuditLog {
+    /// Stop the audit worker deterministically: the Shutdown ack arrives only
+    /// after the worker dropped its state (daily appender and the exclusive
+    /// directory lock), so a fresh writer can never observe a half-closed
+    /// directory and the cross-process mutation boundary holds until the very
+    /// last append finished.
+    fn drop(&mut self) {
+        let (exited_tx, exited_rx) = mpsc::sync_channel(1);
+        if self
+            .writer
+            .commands
+            .send(AuditCommand::Shutdown { exited: exited_tx })
+            .is_ok()
+        {
+            let _ = exited_rx.recv();
+        }
+    }
+}
+
+/// The audit worker's recv loop: every command is one serialized FIFO unit,
+/// so appends, rotation, pruning, and exports can never interleave. The
+/// blocking recv is the sanctioned bounded-worker channel boundary (plan R4).
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn audit_worker_loop(receiver: mpsc::Receiver<AuditCommand>) {
+    let Ok(AuditCommand::Bootstrap {
+        audit_dir,
+        expected_gid,
+        test_mode,
+        retention_days,
+        #[cfg(test)]
+        capture,
+        reply,
+    }) = receiver.recv()
+    else {
+        return;
+    };
+    let mut state = match audit_bootstrap(
+        &audit_dir,
+        expected_gid,
+        test_mode,
+        retention_days,
+        #[cfg(test)]
+        capture,
+    ) {
+        Ok(state) => state,
+        Err(error) => {
+            let _ = reply.send(Err(error));
+            return;
+        }
+    };
+    let _ = reply.send(Ok(()));
+    while let Ok(command) = receiver.recv() {
+        match command {
+            AuditCommand::Append {
+                audit_class,
+                operation,
+                bytes,
+                #[cfg(test)]
+                capture_record,
+                reply,
+            } => {
+                #[cfg(test)]
+                if state.crash_after_write {
+                    // Simulated process death between two records: half the
+                    // next line reaches the page cache, then the worker dies
+                    // without sync, rollback, or reply. The durable prefix is
+                    // all a restart sees.
+                    state.crash_after_write = false;
+                    let partial_len = (bytes.len() / 2).max(1).min(bytes.len());
+                    let _ = state.daily.file.write_all(&bytes[..partial_len]);
+                    return;
+                }
+                let result = append_locked(
+                    &mut state,
+                    audit_class,
+                    &operation,
+                    &bytes,
+                    #[cfg(test)]
+                    capture_record,
+                );
+                let _ = reply.send(result);
+            }
+            AuditCommand::ExportPage {
+                since,
+                filter,
+                cursor,
+                limit,
+                reply,
+            } => {
+                let result = export_page_locked(
+                    &state.audit_dir,
+                    since.as_deref(),
+                    filter.as_deref(),
+                    cursor.as_ref(),
+                    limit,
+                );
+                let _ = reply.send(result);
+            }
+            AuditCommand::Prune { reply } => {
+                let result =
+                    prune_expired_daily_files_locked(&state.audit_dir, state.retention_days);
+                let _ = reply.send(result);
+            }
+            AuditCommand::DropSummary { reply } => {
+                let _ = reply.send(state.drop_summary);
+            }
+            #[cfg(test)]
+            AuditCommand::DropWarningState { reply } => {
+                let _ = reply.send(state.drop_warning_state.clone());
+            }
+            AuditCommand::CurrentDailyPath { reply } => {
+                let _ = reply.send(current_daily_path_locked(&state));
+            }
+            AuditCommand::Metadata { reply } => {
+                let result = metadata_locked(&state);
+                let _ = reply.send(result);
+            }
+            #[cfg(test)]
+            AuditCommand::SetWriteLimit {
+                writes_per_second,
+                reply,
+            } => {
+                state.write_limiter = AuditWriteLimiter::new(writes_per_second);
+                let _ = reply.send(Ok(()));
+            }
+            #[cfg(test)]
+            AuditCommand::InjectIoFailure { failure, reply } => {
+                state.daily.io_failure = Some(failure);
+                let _ = reply.send(Ok(()));
+            }
+            #[cfg(test)]
+            AuditCommand::InjectCrashAfterWrite { reply } => {
+                state.crash_after_write = true;
+                let _ = reply.send(Ok(()));
+            }
+            AuditCommand::Shutdown { exited } => {
+                drop(state);
+                let _ = exited.send(());
+                return;
+            }
+            AuditCommand::Bootstrap { .. } => {}
+        }
+    }
+}
+
+/// The whole `open()` barrier on the worker: symlink refusal, directory
+/// lock, reconciliation of every owned daily file, the current day's
+/// appender, and prune-on-open.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn audit_bootstrap(
+    audit_dir: &Path,
+    expected_gid: u32,
+    test_mode: bool,
+    retention_days: u32,
+    #[cfg(test)]
+    capture: Option<Arc<Mutex<Vec<OwnedOpAuditRecord>>>>,
+) -> io::Result<AuditWorkerState> {
+    // Refuse symlink on the audit dir.
+    if let Ok(metadata) = fs::symlink_metadata(audit_dir)
+        && metadata.file_type().is_symlink()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "audit directory rejected",
+        ));
+    }
+
+    crate::sys::path_safe::ensure_dir(
+        audit_dir,
+        0o2750,
+        if test_mode {
+            None
+        } else {
+            Some(Uid::from_raw(0).as_raw())
+        },
+        if test_mode { None } else { Some(expected_gid) },
+    )?;
+
+    let directory_lock = open_audit_directory_lock(audit_dir, expected_gid, test_mode)?;
+    let owned_daily_files = scan_owned_daily_files(audit_dir)?;
+    for (_, path) in &owned_daily_files {
+        reconcile_truncated_final_line(path, audit_dir, expected_gid, test_mode)?;
+    }
+
+    let today = utc_date_string();
+    let daily_path = audit_dir.join(format!("broker-{today}.jsonl"));
+    let daily_file = open_append_cloexec(&daily_path, expected_gid, test_mode)?;
+    sync_directory(audit_dir)?;
+
+    let state = AuditWorkerState {
+        audit_dir: audit_dir.to_path_buf(),
+        expected_gid,
+        test_mode,
+        retention_days,
+        directory_lock,
+        daily: DailyAppender {
+            file: daily_file,
+            date_utc: today,
+            poisoned: false,
+            #[cfg(test)]
+            io_failure: None,
+        },
+        write_limiter: AuditWriteLimiter::new(DEFAULT_AUDIT_WRITES_PER_SECOND),
+        drop_summary: AuditDropSummary::default(),
+        drop_warning_state: AuditDropWarningState::default(),
+        #[cfg(test)]
+        capture,
+        #[cfg(test)]
+        crash_after_write: false,
+    };
+
+    // Prune on open so a long-stopped daemon catches up. Best-effort:
+    // log + ignore errors (caller should not fail to start the daemon
+    // because of a stale-file cleanup hiccup).
+    if let Err(err) = prune_expired_daily_files_locked(&state.audit_dir, state.retention_days) {
+        if err.to_string() == "audit-owned-file-identity-invalid" {
+            return Err(err);
+        }
+        // We don't have tracing in scope here; rely on the broker
+        // runtime to surface this via its own log if it cares.
+        // The append path is unaffected.
+        let _ = err;
+    }
+
+    Ok(state)
+}
+
+/// One append transaction, owned by the worker: limiter-check, rotation,
+/// write, flush, fsync, directory sync, rollback/poison on failure, then the
+/// bounded retention scan - all one serialized unit.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn append_locked(
+    state: &mut AuditWorkerState,
+    audit_class: AuditWriteClass,
+    operation: &str,
+    bytes: &[u8],
+    #[cfg(test)]
+    capture_record: Option<OwnedOpAuditRecord>,
+) -> io::Result<()> {
+    if state.daily.poisoned {
+        return Err(io::Error::other("audit-writer-poisoned"));
+    }
+    if let Err(err) = state.write_limiter.check(audit_class) {
+        record_rate_limited_drop(state, audit_class, operation);
+        return Err(err);
+    }
+    let today = utc_date_string();
+    let rotated = today != state.daily.date_utc;
+    if rotated {
+        // Rotations swap the fd via reopen + atomic rename. We
+        // reopen the new day's file in O_APPEND; the old file is
+        // closed by replacing it (drop runs).
+        state.daily.sync_all()?;
+        let new_path = state.audit_dir.join(format!("broker-{today}.jsonl"));
+        let new_file = open_append_cloexec(&new_path, state.expected_gid, state.test_mode)?;
+        state.daily.file = new_file;
+        state.daily.date_utc = today;
+    }
+
+    let pre_append_offset = state.daily.file.metadata()?.len();
+    let append_result = (|| {
+        state.daily.write_all(bytes)?;
+        state.daily.flush()?;
+        state.daily.sync_all()?;
+        sync_directory(&state.audit_dir)?;
+        Ok(())
+    })();
+    if let Err(err) = append_result {
+        if state.daily.rollback_to(pre_append_offset, &state.audit_dir).is_err() {
+            state.daily.poisoned = true;
+            return Err(io::Error::other("audit-writer-poisoned"));
+        }
+        return Err(err);
+    }
+
+    // The typed capture push lands after the durable append, before the
+    // reply - the ordering the daily lock gave it before the U6 conversion.
+    #[cfg(test)]
+    if let Some(capture) = &state.capture
+        && let Some(record) = capture_record
+    {
+        if let Ok(mut records) = capture.lock() {
+            records.push(record);
+        }
+    }
+
+    // Keep the worker's serial position through the bounded retention scan
+    // so export cannot observe a file set while rotation or pruning is in
+    // flight.
+    if let Err(err) = prune_expired_daily_files_locked(&state.audit_dir, state.retention_days) {
+        // Same swallow as open(): pruning failures must not
+        // break the write path. The next rotation retries.
+        let _ = err;
+    }
+    Ok(())
+}
+
+/// Worker-side drop accounting: the limiter refused one append.
+fn record_rate_limited_drop(
+    state: &mut AuditWorkerState,
+    audit_class: AuditWriteClass,
+    operation: &str,
+) {
+    let counter = match audit_class {
+        AuditWriteClass::Privileged => &mut state.drop_summary.privileged_rate_limited,
+        AuditWriteClass::Unprivileged => &mut state.drop_summary.unprivileged_rate_limited,
+    };
+    *counter = counter.saturating_add(1);
+    let dropped_total = *counter;
+
+    if let Some(warning) = state.drop_warning_state.observe(audit_class, dropped_total) {
+        tracing::warn!(
+            audit_drop_reason = "rate_limited",
+            audit_class = audit_class.as_str(),
+            operation = %operation,
+            dropped_total = warning.dropped_total,
+            dropped_since_previous_warning = warning.dropped_since_previous_warning,
+            "broker audit records dropped by write limiter"
+        );
+    }
+}
+
+/// The current day's file path, resolved on the worker (the date is the
+/// worker's authoritative rotation state).
+fn current_daily_path_locked(state: &AuditWorkerState) -> PathBuf {
+    state
+        .audit_dir
+        .join(format!("broker-{}.jsonl", state.daily.date_utc))
+}
+
+/// `(uid, gid, mode)` of the current day's daily file, on the worker.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn metadata_locked(state: &AuditWorkerState) -> io::Result<(u32, u32, u32)> {
+    let metadata = fs::metadata(current_daily_path_locked(state))?;
+    Ok((
+        metadata.uid(),
+        metadata.gid(),
+        metadata.permissions().mode() & 0o777,
+    ))
+}
+
+/// Delete any `broker-YYYY-MM-DD.jsonl` files whose date stamp is older than
+/// `retention_days` days ago in UTC, on the worker. Returns the number of
+/// files removed.
+///
+/// Filename is the source of truth - we never parse JSON to inspect record
+/// timestamps. Operators who manually drop in `broker-<utc-date>.jsonl`
+/// files retain the same semantics. Foreign files that don't enter the owned
+/// namespace are left alone so out-of-band artifacts (export tarballs,
+/// operator notes, etc.) survive. An invalid name in the owned namespace
+/// fails closed. Reconciled truncated tails use the dated quarantine form
+/// and follow the same retention window.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn prune_expired_daily_files_locked(audit_dir: &Path, retention_days: u32) -> io::Result<usize> {
+    if retention_days == 0 {
+        return Ok(0);
+    }
+    let cutoff_days = retention_days as i64;
+    let today_unix_days = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+        / 86_400;
+
+    let mut pruned = 0usize;
+    let entries = match fs::read_dir(audit_dir) {
+        Ok(it) => it,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err),
+    };
+    for (index, entry) in entries.enumerate() {
+        if index >= MAX_AUDIT_DIRECTORY_ENTRIES {
+            return Err(io::Error::other("audit-directory-scan-limit"));
+        }
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(stem) = dated_audit_artifact_date(&name)? else {
+            continue;
+        };
+        // Expect `YYYY-MM-DD`.
+        let parts: Vec<&str> = stem.split('-').collect();
+        if parts.len() != 3 {
+            continue;
+        }
+        let Ok(y) = parts[0].parse::<i32>() else {
+            continue;
+        };
+        let Ok(m) = parts[1].parse::<u32>() else {
+            continue;
+        };
+        let Ok(d) = parts[2].parse::<u32>() else {
+            continue;
+        };
+        if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+            continue;
+        }
+        let file_unix_days = match unix_days_from_ymd(y, m, d) {
+            Some(v) => v,
+            None => continue,
+        };
+        let age_days = today_unix_days - file_unix_days;
+        if age_days > cutoff_days {
+            // Best-effort: remove failures don't propagate as
+            // hard errors (e.g. file vanished between readdir
+            // and remove, permission denied on a stray file).
+            if path_safe::remove_nofollow(&entry.path()).is_ok() {
+                pruned += 1;
+            }
+        }
+    }
+    if pruned > 0 {
+        sync_directory(audit_dir)?;
+    }
+    Ok(pruned)
+}
+
+/// Reads one bounded, typed page from the broker audit chain, on the worker.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn export_page_locked(
+    audit_dir: &Path,
+    since: Option<&str>,
+    filter: Option<&str>,
+    cursor: Option<&AuditExportCursor>,
+    limit: u32,
+) -> io::Result<ExportBrokerAuditResponse> {
+    let limit = usize::try_from(limit)
+        .ok()
+        .filter(|limit| {
+            (1..=usize::try_from(MAX_EXPORTED_AUDIT_PAGE_RECORDS).unwrap_or(usize::MAX))
+                .contains(limit)
+        })
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "audit-export-limit-invalid")
+        })?;
+    let typed_filter = filter
+        .map(serde_json::from_str::<BrokerAuditFilter>)
+        .transpose()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "audit-filter-invalid"))?;
+    if cursor.is_some_and(|cursor| !is_valid_audit_day(&cursor.day)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "audit-export-cursor-invalid",
+        ));
+    }
+    let daily_paths = scan_owned_daily_files(audit_dir)?;
+
+    let mut output = Vec::new();
+    let mut bytes = 0_usize;
+    let mut sequence = cursor
+        .map(|cursor| cursor.sequence.saturating_add(1))
+        .unwrap_or(0);
+    let mut next_cursor = None;
+    let mut complete = true;
+    'files: for (day, path) in daily_paths {
+        if cursor.is_some_and(|cursor| {
+            day < cursor.day || (day == cursor.day && cursor.line == u64::MAX)
+        }) {
+            continue;
+        }
+        let file = match OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(_) => {
+                let entry = AuditExportEntry {
+                    sequence,
+                    record: None,
+                    error: Some(AuditExportErrorCode::ReadFailed),
+                };
+                if !append_export_entry(
+                    &mut output,
+                    &mut bytes,
+                    &mut sequence,
+                    &mut next_cursor,
+                    &day,
+                    u64::MAX,
+                    limit,
+                    entry,
+                )? {
+                    complete = false;
+                    break 'files;
+                }
+                continue;
+            }
+        };
+        let mut reader = BufReader::new(file);
+        let mut line_number = 0_u64;
+        loop {
+            let current_line = line_number;
+            let line_bytes = match read_bounded_line(&mut reader) {
+                Ok(BoundedLine::EndOfFile) => break,
+                Ok(BoundedLine::Record(line)) => {
+                    line_number = line_number.saturating_add(1);
+                    line
+                }
+                Ok(BoundedLine::ReadFailed {
+                    consumed,
+                    end_of_file,
+                }) => {
+                    if !consumed {
+                        // The physical line is still pending. Do not
+                        // manufacture a cursor that would skip it.
+                        return Err(io::Error::other("audit-export-line-discard-limit"));
+                    }
+                    line_number = line_number.saturating_add(1);
+                    if cursor.is_some_and(|cursor| {
+                        day < cursor.day || (day == cursor.day && current_line <= cursor.line)
+                    }) {
+                        continue;
+                    }
+                    let entry = AuditExportEntry {
+                        sequence,
+                        record: None,
+                        error: Some(AuditExportErrorCode::ReadFailed),
+                    };
+                    if !append_export_entry(
+                        &mut output,
+                        &mut bytes,
+                        &mut sequence,
+                        &mut next_cursor,
+                        &day,
+                        current_line,
+                        limit,
+                        entry,
+                    )? {
+                        complete = false;
+                        break 'files;
+                    }
+                    if end_of_file {
+                        break;
+                    }
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            if cursor.is_some_and(|cursor| {
+                day < cursor.day || (day == cursor.day && current_line <= cursor.line)
+            }) {
+                continue;
+            }
+            let line = match String::from_utf8(line_bytes) {
+                Ok(line) => line,
+                Err(_) => {
+                    let entry = AuditExportEntry {
+                        sequence,
+                        record: None,
+                        error: Some(AuditExportErrorCode::ReadFailed),
+                    };
+                    if !append_export_entry(
+                        &mut output,
+                        &mut bytes,
+                        &mut sequence,
+                        &mut next_cursor,
+                        &day,
+                        current_line,
+                        limit,
+                        entry,
+                    )? {
+                        complete = false;
+                        break 'files;
+                    }
+                    continue;
+                }
+            };
+            let raw_record = serde_json::from_str::<Value>(&line).ok();
+            let is_corrupt = raw_record.is_none();
+            if !is_corrupt
+                && since.is_some_and(|since| {
+                    !raw_record
+                        .as_ref()
+                        .is_some_and(|record| ts_at_least(record, since))
+                })
+            {
+                continue;
+            }
+            if !is_corrupt
+                && typed_filter.as_ref().is_some_and(|filter| {
+                    !raw_record
+                        .as_ref()
+                        .is_some_and(|record| record_matches_filter(record, filter))
+                })
+            {
+                continue;
+            }
+            let entry = match raw_record.map(sanitize_audit_value) {
+                Some(Value::Object(record)) => AuditExportEntry {
+                    sequence,
+                    record: Some(Value::Object(record)),
+                    error: None,
+                },
+                _ => AuditExportEntry {
+                    sequence,
+                    record: None,
+                    error: Some(AuditExportErrorCode::RecordInvalid),
+                },
+            };
+            if !append_export_entry(
+                &mut output,
+                &mut bytes,
+                &mut sequence,
+                &mut next_cursor,
+                &day,
+                current_line,
+                limit,
+                entry,
+            )? {
+                complete = false;
+                break 'files;
+            }
+            if output.len() >= limit {
+                complete = false;
+                break 'files;
+            }
+        }
+    }
+    if complete {
+        next_cursor = None;
+    }
+    Ok(ExportBrokerAuditResponse {
+        entries: output,
+        next_cursor,
+        complete,
+    })
 }
 
 #[derive(Debug)]
@@ -1379,6 +1936,7 @@ impl AuditWriteBucket {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn open_append_cloexec(path: &Path, expected_gid: u32, test_mode: bool) -> io::Result<File> {
     let file = OpenOptions::new()
         .create(true)
@@ -1401,6 +1959,7 @@ fn open_append_cloexec(path: &Path, expected_gid: u32, test_mode: bool) -> io::R
     Ok(file)
 }
 
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn open_audit_directory_lock(
     audit_dir: &Path,
     expected_gid: u32,
@@ -1462,6 +2021,7 @@ fn open_audit_directory_lock(
     Ok(file)
 }
 
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn scan_owned_daily_files(audit_dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
     let mut daily_paths = Vec::new();
     for (index, entry) in fs::read_dir(audit_dir)?.enumerate() {
@@ -1481,6 +2041,7 @@ fn scan_owned_daily_files(audit_dir: &Path) -> io::Result<Vec<(String, PathBuf)>
     Ok(daily_paths)
 }
 
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn reconcile_truncated_final_line(
     path: &Path,
     audit_dir: &Path,
@@ -1539,6 +2100,7 @@ fn reconcile_truncated_final_line(
     sync_directory(audit_dir)
 }
 
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn last_newline_offset(file: &mut File, file_len: u64) -> io::Result<Option<u64>> {
     let mut cursor = file_len;
     let mut buffer = [0_u8; AUDIT_RECONCILE_CHUNK_BYTES];
@@ -1556,6 +2118,7 @@ fn last_newline_offset(file: &mut File, file_len: u64) -> io::Result<Option<u64>
     Ok(None)
 }
 
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn quarantine_truncated_tail(
     source: &mut File,
     daily_path: &Path,
@@ -1625,6 +2188,7 @@ fn quarantine_truncated_tail(
     ))
 }
 
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn sync_directory(directory: &Path) -> io::Result<()> {
     let file = OpenOptions::new()
         .read(true)
@@ -2235,6 +2799,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn make_audit_with_files(retention_days: u32, file_dates: &[(i32, u32, u32)]) -> AuditLog {
         let dir = target_scratch_root("d2bd-broker-audit-prune");
         let audit_dir = dir.join("audit");
@@ -2251,6 +2816,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn prune_keeps_recent_and_deletes_old() {
         let today_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2287,6 +2853,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn prune_disabled_when_retention_zero() {
         let today_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2303,6 +2870,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn prune_ignores_non_matching_filenames() {
         let today_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2330,6 +2898,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn prune_removes_expired_truncated_quarantines() {
         let today_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2353,6 +2922,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn privileged_audit_is_not_rate_limited() {
         let root = target_scratch_root("audit-rate-limit");
         let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4)
@@ -2370,6 +2940,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn typed_export_is_bounded_and_cursor_paginated() {
         let root = target_scratch_root("audit-typed-export");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
@@ -2401,6 +2972,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn append_failures_roll_back_and_keep_writer_usable() {
         let root = target_scratch_root("audit-append-rollback");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
@@ -2455,6 +3027,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn append_failure_poisons_writer_when_rollback_sync_fails() {
         let root = target_scratch_root("audit-append-poison");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
@@ -2514,6 +3087,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn reopen_quarantines_truncated_final_line_before_appending() {
         let root = target_scratch_root("audit-reopen-truncated");
         fs::create_dir_all(&root).expect("create audit root");
@@ -2563,6 +3137,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn open_reconciles_prior_day_tail_and_ignores_foreign_files() {
         let root = target_scratch_root("audit-reopen-prior-day");
         fs::create_dir_all(&root).expect("create audit root");
@@ -2617,6 +3192,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn open_fails_closed_for_invalid_or_unsafe_owned_files() {
         let root = target_scratch_root("audit-invalid-owned-file");
         fs::create_dir_all(&root).expect("create audit root");
@@ -2645,6 +3221,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn audit_directory_lock_is_held_until_log_drop() {
         let root = target_scratch_root("audit-directory-lock");
         let log =
@@ -2660,6 +3237,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn full_page_before_unreadable_file_keeps_last_emitted_cursor() {
         let root = target_scratch_root("audit-full-page-unreadable");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30).expect("open audit log");
@@ -2700,6 +3278,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn oversized_line_is_reported_once_and_valid_continuation_is_preserved() {
         let root = target_scratch_root("audit-oversized-line");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
@@ -2764,6 +3343,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn truncated_export_line_is_typed_once_after_consuming_eof() {
         let root = target_scratch_root("audit-export-truncated-line");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
@@ -2792,6 +3372,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn oversized_line_without_bounded_newline_fails_closed() {
         let root = target_scratch_root("audit-oversized-no-newline");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
@@ -2819,6 +3400,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn legacy_export_follows_all_pages_above_1024_in_order() {
         let root = target_scratch_root("audit-legacy-export-pages");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
@@ -2852,6 +3434,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn legacy_export_refuses_records_beyond_compatibility_cap() {
         let root = target_scratch_root("audit-legacy-export-cap");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
@@ -2880,6 +3463,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn typed_export_applies_record_predicates_and_numeric_since() {
         let root = target_scratch_root("audit-typed-filter");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
@@ -2920,6 +3504,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn typed_export_surfaces_corruption_and_advances_past_failed_physical_records() {
         let root = target_scratch_root("audit-corrupt-export");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
@@ -2982,6 +3567,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn typed_export_filters_redacted_identity_fields_and_severity() {
         let root = target_scratch_root("audit-redacted-filter");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
@@ -3041,6 +3627,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn record_with_join_uses_one_authoritative_operation_key() {
         let root = target_scratch_root("audit-record-join");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
@@ -3139,6 +3726,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn unprivileged_drop_counters_remain_exact_when_warnings_are_suppressed() {
         let root = target_scratch_root("audit-drop-summary-aggregate");
         let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4)
@@ -3170,7 +3758,7 @@ mod tests {
         let summary = log.audit_drop_summary().expect("drop summary");
         assert_eq!(summary.privileged_rate_limited, 0);
         assert_eq!(summary.unprivileged_rate_limited, 8);
-        let warning_state = log.drop_warning_state.lock().expect("drop warning state");
+        let warning_state = log.drop_warning_state_snapshot();
         assert_eq!(warning_state.privileged_reported, 0);
         assert_eq!(warning_state.unprivileged_reported, 8);
 
@@ -3178,6 +3766,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn privileged_usb_op_records_are_not_rate_limited() {
         let root = target_scratch_root("audit-usb-op-rate-limit");
         let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 1)
@@ -3245,6 +3834,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn unprivileged_audit_drops_do_not_starve_privileged_usb_records() {
         let root = target_scratch_root("audit-unprivileged-drop-reserve");
         let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4)
@@ -3401,6 +3991,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn audit_output_redacts_peer_identity_paths_and_attacker_text() {
         let root = target_scratch_root("audit-redaction-canary");
         let log = AuditLog::open(&root, Gid::current().as_raw(), true, 14).expect("open audit log");
@@ -3469,6 +4060,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_chain_record_round_trips_through_the_daily_file_with_its_correlation_key() {
         // KTD6 writer contract: a chain record lands as one JSON line in
         // the day's file under the broker's typed write path, and reading
@@ -3517,6 +4109,220 @@ mod tests {
         );
         assert_eq!(record.correlation_key(), ("invocation-chain-1", 2));
         assert!(!record.is_root());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn cancelled_append_completes_without_partial_line() {
+        // U6 invariant: the audit worker owns the append transaction to
+        // completion. A caller that cancels mid-append (drops its reply
+        // before the worker finishes) must not leak a partial JSONL line:
+        // the worker finishes the write+fsync unit and the next append
+        // proceeds normally.
+        let root = target_scratch_root("audit-cancel-append");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open audit log");
+        log.write_entry("Baseline", 1000, "allowed", "t", "success")
+            .expect("baseline record");
+
+        // Stall the worker inside the next append transaction.
+        let (stalled_tx, stalled_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        log.inject_io_failure(InjectedAuditIoFailure::Stall {
+            stalled: stalled_tx,
+            release: release_rx,
+        })
+        .expect("install stall");
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        log.writer
+            .commands
+            .send(AuditCommand::Append {
+                audit_class: AuditWriteClass::Privileged,
+                operation: "CancelledOperation".to_owned(),
+                bytes: b"{\"ts\":2,\"op\":\"cancelled\"}\n".to_vec(),
+                #[cfg(test)]
+                capture_record: None,
+                reply: reply_tx,
+            })
+            .expect("send append");
+        // The worker is now mid-append, parked inside the transaction.
+        stalled_rx.blocking_recv().expect("append started");
+        // The caller cancels: drop the reply receiver before the append
+        // finishes. The worker still owns the append to completion.
+        drop(reply_rx);
+        release_tx.send(()).expect("release the append");
+
+        // A barrier append proves the worker continued and drained.
+        log.write_entry("AfterCancellation", 1000, "allowed", "t", "success")
+            .expect("worker continues after the cancelled caller");
+        let contents = fs::read_to_string(log.current_daily_path()).expect("read audit");
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 3, "baseline + cancelled + barrier, all complete");
+        assert!(
+            lines
+                .iter()
+                .all(|line| serde_json::from_str::<Value>(line).is_ok()),
+            "no partial line may survive a cancelled caller: {contents}"
+        );
+        assert!(contents.contains("\"op\":\"cancelled\""), "{contents}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn crash_between_records_leaves_durable_prefix_only() {
+        // U6 invariant: per-record durability barrier. A crash between two
+        // records (the next append dies mid-write, before sync) leaves only
+        // the fsynced prefix as authoritative; the partial tail is
+        // quarantined on reopen, never mistaken for a record.
+        let root = target_scratch_root("audit-crash-prefix");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open audit log");
+        log.write_entry("First", 1000, "allowed", "t", "success")
+            .expect("first record");
+        let before = fs::read(log.current_daily_path()).expect("read durable prefix");
+
+        log.inject_crash_after_write().expect("arm crash");
+        let (reply_tx, _reply_rx) = mpsc::sync_channel(1);
+        log.writer
+            .commands
+            .send(AuditCommand::Append {
+                audit_class: AuditWriteClass::Privileged,
+                operation: "CrashingOperation".to_owned(),
+                bytes: b"{\"ts\":2,\"op\":\"crashing\"}\n".to_vec(),
+                #[cfg(test)]
+                capture_record: None,
+                reply: reply_tx,
+            })
+            .expect("send crashing append");
+        // The worker died mid-append: half the line is in the page cache,
+        // no sync, no rollback, no reply - the channel is closed.
+        drop(log);
+
+        // Restart: the durable prefix is all that survives, and the partial
+        // tail is quarantined.
+        let reopened = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("reopen after crash");
+        assert_eq!(
+            fs::read(reopened.current_daily_path()).expect("read reconciled audit"),
+            before,
+            "only the fsynced prefix survives the crash"
+        );
+        let quarantines: Vec<_> = fs::read_dir(&root)
+            .expect("read audit directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".quarantine"))
+            .collect();
+        assert_eq!(
+            quarantines.len(),
+            1,
+            "the partial tail must be quarantined, not appended to"
+        );
+        reopened
+            .write_entry("AfterCrash", 1000, "allowed", "t", "success")
+            .expect("append after restart");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn queue_full_unprivileged_appends_are_dropped_with_accounting() {
+        // U6 invariant: the append queue is bounded. A full queue drops
+        // unprivileged appends with accounting (matching AuditDropSummary)
+        // instead of growing or silently losing the count; privileged
+        // appends (the mutation-success boundary) are never dropped.
+        let root = target_scratch_root("audit-queue-full-accounting");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open audit log");
+
+        // Stall the worker inside one append so the bounded queue fills.
+        let (stalled_tx, stalled_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        log.inject_io_failure(InjectedAuditIoFailure::Stall {
+            stalled: stalled_tx,
+            release: release_rx,
+        })
+        .expect("install stall");
+        let (reply_tx, _reply_rx) = mpsc::sync_channel(1);
+        log.writer
+            .commands
+            .send(AuditCommand::Append {
+                audit_class: AuditWriteClass::Privileged,
+                operation: "StalledOperation".to_owned(),
+                bytes: b"{\"ts\":1,\"op\":\"stalled\"}\n".to_vec(),
+                #[cfg(test)]
+                capture_record: None,
+                reply: reply_tx,
+            })
+            .expect("send stalled append");
+        stalled_rx.blocking_recv().expect("append stalled");
+
+        // Fill the bounded queue with raw append commands (their replies are
+        // dropped: the worker is stalled, so nobody waits on them). The
+        // overflow is refused by the queue, never enqueued.
+        let mut admitted = 0usize;
+        for _ in 0..(AUDIT_WORKER_QUEUE_DEPTH + 1) {
+            let (reply_tx, _reply_rx) = mpsc::sync_channel(1);
+            match log.writer.commands.try_send(AuditCommand::Append {
+                audit_class: AuditWriteClass::Unprivileged,
+                operation: "UsbipBind".to_owned(),
+                bytes: b"{\"ts\":1,\"op\":\"queued\"}\n".to_vec(),
+                #[cfg(test)]
+                capture_record: None,
+                reply: reply_tx,
+            }) {
+                Ok(()) => admitted += 1,
+                Err(mpsc::TrySendError::Full(_)) => break,
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    panic!("audit worker died while the queue filled")
+                }
+            }
+        }
+        assert_eq!(
+            admitted, AUDIT_WORKER_QUEUE_DEPTH,
+            "the bounded queue admits exactly its depth"
+        );
+        // One more append through the public path: the full queue drops it
+        // with accounting (drop-with-accounting matching AuditDropSummary)
+        // and the caller sees the WouldBlock refusal immediately.
+        let err = log
+            .write_entry_with_class(
+                AuditWriteClass::Unprivileged,
+                "UsbipBind",
+                2000,
+                "peer-refused",
+                "operation",
+                "closed",
+            )
+            .expect_err("a full queue refuses the next unprivileged append");
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        release_tx.send(()).expect("release the stall");
+
+        // Drain barrier: every admitted append lands as a complete line.
+        log.write_entry("DrainBarrier", 1000, "allowed", "t", "success")
+            .expect("barrier after drain");
+        let summary = log.audit_drop_summary().expect("drop summary");
+        assert_eq!(
+            summary.unprivileged_rate_limited, 1,
+            "exactly one queue-full drop is accounted"
+        );
+        assert_eq!(summary.privileged_rate_limited, 0);
+        let contents = fs::read_to_string(log.current_daily_path()).expect("read audit");
+        assert_eq!(
+            contents.lines().count(),
+            admitted + 2,
+            "stalled + admitted + barrier, all complete lines"
+        );
+        assert!(
+            contents
+                .lines()
+                .all(|line| serde_json::from_str::<Value>(line).is_ok()),
+            "no partial line may survive the queue-full drain: {contents}"
+        );
+
         let _ = fs::remove_dir_all(&root);
     }
 }

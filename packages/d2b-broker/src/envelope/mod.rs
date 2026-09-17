@@ -28,8 +28,10 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use tokio::sync::{mpsc, oneshot};
 
 use d2b_audit::evidence_chain::{
     ChainAuditSink, ChainLeg, ChainOutcome, ChainRecord, ChainRecordClass, EvidenceChain,
@@ -363,60 +365,113 @@ impl TrustedContextStoreError {
 /// previously minted context can be re-minted into validity, because the
 /// old context still carries the old epoch.
 pub struct TrustedContextStore {
+    writer: ContextWriter,
+}
+
+/// The caller-side handle of the single-writer worker (plan U6:
+/// publish-as-one-atomic-unit). Channel order is commit order: the worker
+/// runs the monotonic check, the in-memory commit, and the durable persist
+/// (tmp+fsync+rename+dir-fsync) as one serialized unit, so concurrent
+/// publishes can never durably regress newer state with a stale one.
+struct ContextWriter {
+    commands: mpsc::Sender<ContextCommand>,
+}
+
+/// One serialized command the trusted-context worker executes in FIFO order.
+enum ContextCommand {
+    /// Load the durable state, bump the epoch, and persist the bump - the
+    /// open() epoch-bump-persist-before-usable startup barrier, on the
+    /// worker. The store is usable only after the reply.
+    Bootstrap {
+        root: PathBuf,
+        reply: oneshot::Sender<Result<PersistedTrustedContext, TrustedContextStoreError>>,
+    },
+    /// One publish-as-one-atomic-unit: monotonic check + in-memory commit +
+    /// durable persist.
+    Publish {
+        values: PublishTrustedContextValues,
+        reply: oneshot::Sender<Result<u64, TrustedContextStoreError>>,
+    },
+    Mint {
+        zone: String,
+        initiating_identity: String,
+        deadline_ms: u64,
+        reply: oneshot::Sender<Result<ForwardContext, &'static str>>,
+    },
+    Epoch {
+        reply: oneshot::Sender<u64>,
+    },
+    HoldsZone {
+        zone: String,
+        reply: oneshot::Sender<bool>,
+    },
+    Shutdown {
+        exited: oneshot::Sender<()>,
+    },
+}
+
+/// The worker's whole state: touched only on the worker thread.
+struct ContextWorkerState {
     root: PathBuf,
-    state: Mutex<PersistedTrustedContext>,
+    state: PersistedTrustedContext,
 }
 
 impl TrustedContextStore {
     /// The directory name under the store root the durable state lives in.
     const STATE_DIR: &'static str = "trusted-context";
 
+    /// The bound on admitted-but-unstarted trusted-context commands.
+    const WORKER_QUEUE_DEPTH: usize = 64;
+
     /// Open the store under `root`, claiming a fresh broker epoch.
     ///
     /// The epoch is loaded from the durable state when one exists and
     /// strictly incremented before anything mints, so no two broker
     /// instances ever mint under one epoch; the fresh epoch is persisted
-    /// before the store is usable. The daemon's last-published values are
+    /// before the store is usable (the open() barrier runs on the worker and
+    /// the reply gates the handle). The daemon's last-published values are
     /// loaded with it, so a restarting broker still holds the values it
     /// published for while minting under a nonce no prior context carries.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, TrustedContextStoreError> {
         let root = root.into();
-        let directory = root.join(Self::STATE_DIR);
-        fs::create_dir_all(&directory).map_err(|error| TrustedContextStoreError::Io {
-            detail: format!("create {}: {error}", directory.display()),
-        })?;
-        let path = directory.join("state.json");
-        let mut state = if path.exists() {
-            let bytes = fs::read(&path).map_err(|error| TrustedContextStoreError::Io {
-                detail: format!("read {}: {error}", path.display()),
+        let (commands, receiver) = mpsc::channel::<ContextCommand>(Self::WORKER_QUEUE_DEPTH);
+        std::thread::Builder::new()
+            .name("d2b-broker-trusted-context".to_owned())
+            .spawn(move || context_worker_loop(receiver))
+            .map_err(|error| TrustedContextStoreError::Io {
+                detail: format!("spawn trusted-context worker: {error}"),
             })?;
-            serde_json::from_slice(&bytes).map_err(|error| TrustedContextStoreError::Corrupt {
-                detail: format!("{}: {error}", path.display()),
-            })?
-        } else {
-            PersistedTrustedContext {
-                epoch: 0,
-                zones: BTreeMap::new(),
-            }
-        };
-        // A fresh instance is a fresh attestation lineage: strictly bump the
-        // durable counter before the store can mint, and persist the bump so
-        // even a crash before the first mint cannot make the next instance
-        // reuse this epoch.
-        state.epoch = state.epoch.saturating_add(1);
-        Self::persist(&path, &state)?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        commands
+            .blocking_send(ContextCommand::Bootstrap {
+                root: root.clone(),
+                reply: reply_tx,
+            })
+            .map_err(|_| TrustedContextStoreError::Io {
+                detail: "trusted-context worker unavailable".to_owned(),
+            })?;
+        reply_rx
+            .blocking_recv()
+            .map_err(|_| TrustedContextStoreError::Io {
+                detail: "trusted-context worker unavailable".to_owned(),
+            })??;
         Ok(Self {
-            root,
-            state: Mutex::new(state),
+            writer: ContextWriter { commands },
         })
     }
 
     /// The epoch this store is currently minting with.
     pub fn epoch(&self) -> u64 {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .epoch
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if self
+            .writer
+            .commands
+            .blocking_send(ContextCommand::Epoch { reply: reply_tx })
+            .is_err()
+        {
+            return 0;
+        }
+        reply_rx.blocking_recv().unwrap_or(0)
     }
 
     /// Whether the broker holds published values for one Zone.
@@ -425,11 +480,19 @@ impl TrustedContextStore {
     /// published is a Zone the broker cannot attest, so the envelope refuses
     /// to mint for it rather than attest blind.
     pub fn holds_zone(&self, zone: &str) -> bool {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .zones
-            .contains_key(zone)
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if self
+            .writer
+            .commands
+            .blocking_send(ContextCommand::HoldsZone {
+                zone: zone.to_owned(),
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return false;
+        }
+        reply_rx.blocking_recv().unwrap_or(false)
     }
 
     /// Cache one daemon publication, monotonically.
@@ -441,32 +504,29 @@ impl TrustedContextStore {
     /// code rather than attested. Returns the epoch the broker is currently
     /// minting with, so the daemon's receiving leg learns the nonce every
     /// context it validates must carry.
+    ///
+    /// The whole unit (monotonic check + in-memory commit + durable persist)
+    /// runs on the single writer, so channel order is commit order and a
+    /// concurrent stale publication can never durably regress newer state.
     pub fn publish(
         &self,
         values: &PublishTrustedContextValues,
     ) -> Result<u64, TrustedContextStoreError> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(existing) = state.zones.get(&values.zone)
-            && (existing.provider_set_revision > values.provider_set_revision
-                || existing.controller_generation > values.controller_generation
-                || existing.guest_generation > values.guest_generation)
-        {
-            return Err(TrustedContextStoreError::StaleFreshness(STALE_CONTEXT));
-        }
-        let inserted = ZoneAttestation {
-            provider_set_revision: values.provider_set_revision,
-            controller_generation: values.controller_generation,
-            guest_generation: values.guest_generation,
-        };
-        let changed = state.zones.get(&values.zone) != Some(&inserted);
-        if changed {
-            state.zones.insert(values.zone.clone(), inserted);
-            self.persist_locked(&state)?;
-        }
-        Ok(state.epoch)
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.writer
+            .commands
+            .blocking_send(ContextCommand::Publish {
+                values: values.clone(),
+                reply: reply_tx,
+            })
+            .map_err(|_| TrustedContextStoreError::Io {
+                detail: "trusted-context worker unavailable".to_owned(),
+            })?;
+        reply_rx
+            .blocking_recv()
+            .map_err(|_| TrustedContextStoreError::Io {
+                detail: "trusted-context worker unavailable".to_owned(),
+            })?
     }
 
     /// Mint one context block for a Zone the broker holds values for.
@@ -475,40 +535,35 @@ impl TrustedContextStore {
     /// the daemon has published the Zone, then attests the Zone's cached
     /// revision and generations under the store's current epoch with the
     /// broker's own classification of the caller and the operation's
-    /// deadline budget.
-    pub fn mint(
+    /// deadline budget. Async: the envelope calls it from the async dispatch
+    /// path, so the reply is awaited rather than blocking the executor.
+    pub async fn mint(
         &self,
         zone: &str,
         initiating_identity: &str,
         deadline_ms: u64,
     ) -> Result<ForwardContext, &'static str> {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(attestation) = state.zones.get(zone) else {
-            // Nothing published for this Zone: the broker cannot attest a
-            // call it holds no values for, so the call is refused with the
-            // dedicated code - the same code the receiving leg refuses a
-            // stale or mismatched context with.
-            return Err(STALE_CONTEXT);
-        };
-        Ok(ForwardContext {
-            broker_epoch: state.epoch,
-            zone: zone.to_owned(),
-            provider_set_revision: attestation.provider_set_revision,
-            controller_generation: attestation.controller_generation,
-            guest_generation: attestation.guest_generation,
-            initiating_identity: initiating_identity.to_owned(),
-            deadline_ms,
-        })
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.writer
+            .commands
+            .send(ContextCommand::Mint {
+                zone: zone.to_owned(),
+                initiating_identity: initiating_identity.to_owned(),
+                deadline_ms,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| STALE_CONTEXT)?;
+        reply_rx.await.map_err(|_| STALE_CONTEXT)?
     }
 
     /// A publication ack a daemon-side receiver hands back to its caller.
     ///
     /// The wire shape is the acknowledgement the daemon reads its epoch
     /// from; production dispatch routes the publish variant through this
-    /// same method, so the wire and the store never disagree.
+    /// same method, so the wire and the store never disagree. Runs on the
+    /// dispatch worker's thread (a dedicated blocking worker per plan R4),
+    /// so the blocking channel boundary is the sanctioned one.
     pub fn publication_reply(
         &self,
         values: &PublishTrustedContextValues,
@@ -518,52 +573,199 @@ impl TrustedContextStore {
             broker_epoch: epoch,
         })
     }
+}
 
-    fn persist_locked(
-        &self,
-        state: &PersistedTrustedContext,
-    ) -> Result<(), TrustedContextStoreError> {
-        Self::persist(&self.root.join(Self::STATE_DIR).join("state.json"), state)
-    }
-
-    fn persist(
-        path: &Path,
-        state: &PersistedTrustedContext,
-    ) -> Result<(), TrustedContextStoreError> {
-        let bytes = serde_json::to_vec(state).map_err(|error| TrustedContextStoreError::Io {
-            detail: format!("serialize {}: {error}", path.display()),
-        })?;
-        let tmp = path.with_extension("json.tmp");
+impl Drop for TrustedContextStore {
+    /// Stop the single writer deterministically: the Shutdown ack arrives
+    /// only after the worker's state (including any in-flight persist) is
+    /// gone.
+    fn drop(&mut self) {
+        let (exited_tx, exited_rx) = oneshot::channel();
+        if self
+            .writer
+            .commands
+            .blocking_send(ContextCommand::Shutdown { exited: exited_tx })
+            .is_ok()
         {
-            let mut file = fs::OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(&tmp)
-                .map_err(|error| TrustedContextStoreError::Io {
-                    detail: format!("open {}: {error}", tmp.display()),
-                })?;
-            file.write_all(&bytes)
-                .map_err(|error| TrustedContextStoreError::Io {
-                    detail: format!("write {}: {error}", tmp.display()),
-                })?;
-            file.sync_all()
-                .map_err(|error| TrustedContextStoreError::Io {
-                    detail: format!("sync {}: {error}", tmp.display()),
-                })?;
+            let _ = exited_rx.blocking_recv();
         }
-        fs::rename(&tmp, path).map_err(|error| TrustedContextStoreError::Io {
-            detail: format!("rename {} -> {}: {error}", tmp.display(), path.display()),
-        })?;
-        if let Some(parent) = path.parent() {
-            fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|error| TrustedContextStoreError::Io {
-                    detail: format!("sync {}: {error}", parent.display()),
-                })?;
-        }
-        Ok(())
     }
+}
+
+fn context_worker_loop(mut receiver: mpsc::Receiver<ContextCommand>) {
+    let Some(ContextCommand::Bootstrap { root, reply }) = receiver.blocking_recv() else {
+        return;
+    };
+    let mut state = match context_bootstrap(&root) {
+        Ok(state) => state,
+        Err(error) => {
+            let _ = reply.send(Err(error));
+            return;
+        }
+    };
+    let _ = reply.send(Ok(state.state.clone()));
+    while let Some(command) = receiver.blocking_recv() {
+        match command {
+            ContextCommand::Publish { values, reply } => {
+                let result = publish_locked(&mut state, &values);
+                let _ = reply.send(result);
+            }
+            ContextCommand::Mint {
+                zone,
+                initiating_identity,
+                deadline_ms,
+                reply,
+            } => {
+                let result = mint_locked(&state, &zone, &initiating_identity, deadline_ms);
+                let _ = reply.send(result);
+            }
+            ContextCommand::Epoch { reply } => {
+                let _ = reply.send(state.state.epoch);
+            }
+            ContextCommand::HoldsZone { zone, reply } => {
+                let _ = reply.send(state.state.zones.contains_key(&zone));
+            }
+            ContextCommand::Shutdown { exited } => {
+                drop(state);
+                let _ = exited.send(());
+                return;
+            }
+            ContextCommand::Bootstrap { .. } => {}
+        }
+    }
+}
+
+/// The open() epoch-bump-persist-before-usable barrier, on the worker: load
+/// the durable state, strictly increment the epoch, and persist the bump
+/// before the store can mint.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn context_bootstrap(root: &Path) -> Result<ContextWorkerState, TrustedContextStoreError> {
+    let directory = root.join(TrustedContextStore::STATE_DIR);
+    fs::create_dir_all(&directory).map_err(|error| TrustedContextStoreError::Io {
+        detail: format!("create {}: {error}", directory.display()),
+    })?;
+    let path = directory.join("state.json");
+    let mut state = if path.exists() {
+        let bytes = fs::read(&path).map_err(|error| TrustedContextStoreError::Io {
+            detail: format!("read {}: {error}", path.display()),
+        })?;
+        serde_json::from_slice(&bytes).map_err(|error| TrustedContextStoreError::Corrupt {
+            detail: format!("{}: {error}", path.display()),
+        })?
+    } else {
+        PersistedTrustedContext {
+            epoch: 0,
+            zones: BTreeMap::new(),
+        }
+    };
+    // A fresh instance is a fresh attestation lineage: strictly bump the
+    // durable counter before the store can mint, and persist the bump so
+    // even a crash before the first mint cannot make the next instance
+    // reuse this epoch.
+    state.epoch = state.epoch.saturating_add(1);
+    persist(&path, &state)?;
+    Ok(ContextWorkerState {
+        root: root.to_path_buf(),
+        state,
+    })
+}
+
+/// One publish-as-one-atomic-unit on the single writer: monotonic check +
+/// in-memory commit + durable persist (tmp+fsync+rename+dir-fsync).
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn publish_locked(
+    state: &mut ContextWorkerState,
+    values: &PublishTrustedContextValues,
+) -> Result<u64, TrustedContextStoreError> {
+    if let Some(existing) = state.state.zones.get(&values.zone)
+        && (existing.provider_set_revision > values.provider_set_revision
+            || existing.controller_generation > values.controller_generation
+            || existing.guest_generation > values.guest_generation)
+    {
+        return Err(TrustedContextStoreError::StaleFreshness(STALE_CONTEXT));
+    }
+    let inserted = ZoneAttestation {
+        provider_set_revision: values.provider_set_revision,
+        controller_generation: values.controller_generation,
+        guest_generation: values.guest_generation,
+    };
+    let changed = state.state.zones.get(&values.zone) != Some(&inserted);
+    if changed {
+        state.state.zones.insert(values.zone.clone(), inserted);
+        persist(
+            &state
+                .root
+                .join(TrustedContextStore::STATE_DIR)
+                .join("state.json"),
+            &state.state,
+        )?;
+    }
+    Ok(state.state.epoch)
+}
+
+/// Mint one context block for a Zone the broker holds values for, on the
+/// single writer.
+fn mint_locked(
+    state: &ContextWorkerState,
+    zone: &str,
+    initiating_identity: &str,
+    deadline_ms: u64,
+) -> Result<ForwardContext, &'static str> {
+    let Some(attestation) = state.state.zones.get(zone) else {
+        // Nothing published for this Zone: the broker cannot attest a
+        // call it holds no values for, so the call is refused with the
+        // dedicated code - the same code the receiving leg refuses a
+        // stale or mismatched context with.
+        return Err(STALE_CONTEXT);
+    };
+    Ok(ForwardContext {
+        broker_epoch: state.state.epoch,
+        zone: zone.to_owned(),
+        provider_set_revision: attestation.provider_set_revision,
+        controller_generation: attestation.controller_generation,
+        guest_generation: attestation.guest_generation,
+        initiating_identity: initiating_identity.to_owned(),
+        deadline_ms,
+    })
+}
+
+/// The durable persist: tmp file + fsync + rename + directory fsync, on the
+/// single writer.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn persist(path: &Path, state: &PersistedTrustedContext) -> Result<(), TrustedContextStoreError> {
+    let bytes = serde_json::to_vec(state).map_err(|error| TrustedContextStoreError::Io {
+        detail: format!("serialize {}: {error}", path.display()),
+    })?;
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&tmp)
+            .map_err(|error| TrustedContextStoreError::Io {
+                detail: format!("open {}: {error}", tmp.display()),
+            })?;
+        file.write_all(&bytes)
+            .map_err(|error| TrustedContextStoreError::Io {
+                detail: format!("write {}: {error}", tmp.display()),
+            })?;
+        file.sync_all()
+            .map_err(|error| TrustedContextStoreError::Io {
+                detail: format!("sync {}: {error}", tmp.display()),
+            })?;
+    }
+    fs::rename(&tmp, path).map_err(|error| TrustedContextStoreError::Io {
+        detail: format!("rename {} -> {}: {error}", tmp.display(), path.display()),
+    })?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| TrustedContextStoreError::Io {
+                detail: format!("sync {}: {error}", parent.display()),
+            })?;
+    }
+    Ok(())
 }
 
 /// The broker process's trusted-context store.
@@ -1043,6 +1245,7 @@ impl BrokerEnvelope {
                             chain.invoking_identity(),
                             row.deadline_tier.budget_ms(),
                         )
+                        .await
                         .map_err(|_| {
                             EnvelopeRefusal::new(
                                 chain.root_invocation_id().to_owned(),
@@ -1786,6 +1989,7 @@ mod tests {
     use std::os::fd::{AsRawFd, OwnedFd};
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// One multi-thread runtime for these tests: the envelope's call is async
@@ -2673,6 +2877,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fd_round_trips_through_the_loopback_peer_and_reads_back() {
         use nix::unistd::{pipe, read, write};
         let (request_read, request_write) = pipe().expect("request pipe");
@@ -2961,6 +3166,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_minted_context_reaches_the_forwarding_peer_verbatim() {
         use d2b_contracts_broker::broker_wire::DEFAULT_CONTEXT_DEADLINE_MS;
         // The context the broker mints must cross the socket and reach the
@@ -3027,6 +3233,7 @@ mod tests {
     /// tier-less broker would use, because KTD4 puts the budget on the
     /// context block, where both execution legs read it.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_row_deadline_tier_is_the_budget_the_mint_attests() {
         use d2b_contracts_broker::broker_wire::{
             DEFAULT_CONTEXT_DEADLINE_MS, MAX_CONTEXT_DEADLINE_MS,
@@ -3113,8 +3320,9 @@ mod tests {
             reopened.holds_zone("zone-a"),
             "published values survive restart"
         );
-        let context = reopened
-            .mint("zone-a", "daemon", DEFAULT_CONTEXT_DEADLINE_MS)
+        let context = runtime()
+
+            .block_on(reopened.mint("zone-a", "daemon", DEFAULT_CONTEXT_DEADLINE_MS))
             .expect("the reopened store mints the Zone");
         assert_eq!(context.broker_epoch, 2);
         assert_eq!(context.provider_set_revision, 2);
@@ -3131,8 +3339,9 @@ mod tests {
         store
             .publish(&published("zone-a"))
             .expect("the daemon published the Zone");
-        let before = store
-            .mint("zone-a", "daemon", DEFAULT_CONTEXT_DEADLINE_MS)
+        let before = runtime()
+
+            .block_on(store.mint("zone-a", "daemon", DEFAULT_CONTEXT_DEADLINE_MS))
             .expect("the store mints before restart");
         assert_eq!(before.broker_epoch, 1);
         drop(store);
@@ -3143,12 +3352,95 @@ mod tests {
         // broker's epoch is two, so the old block can never be admitted
         // again - re-minting it is the restarted broker's mint, which
         // carries the fresh nonce.
-        let after = reopened
-            .mint("zone-a", "daemon", DEFAULT_CONTEXT_DEADLINE_MS)
+        let after = runtime()
+
+            .block_on(reopened.mint("zone-a", "daemon", DEFAULT_CONTEXT_DEADLINE_MS))
             .expect("the restarted broker mints");
         assert_eq!(after.broker_epoch, 2);
         assert_ne!(before.broker_epoch, after.broker_epoch);
         assert_ne!(before, after, "the contexts differ in the epoch alone");
+    }
+
+    #[test]
+    fn concurrent_publishes_never_durably_regress_newer_state() {
+        // U6 invariant: publish-as-one-atomic-unit. The single writer
+        // serializes monotonic check + in-memory commit + durable persist,
+        // so concurrent publications can never durably regress newer state
+        // with a stale one, and the stale-freshness refusal still fires when
+        // stale and newer publishes interleave.
+        let (dir, store) = context_store();
+
+        const PUBLISHERS: usize = 8;
+
+        // Phase 1: concurrent newer publications. Every submission obeys
+        // the monotonic check on the single writer: a publication that
+        // arrives after a higher revision is refused (correct monotonic
+        // behavior), and the maximum can never be refused - the durable
+        // state must end at it.
+        let mut committed = 0u64;
+        std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for index in 0..PUBLISHERS {
+                let store = Arc::clone(&store);
+                handles.push(scope.spawn(move || {
+                    let mut values = published("zone-a");
+                    values.provider_set_revision = 100 + index as u64;
+                    match store.publish(&values) {
+                        Ok(_) => Ok(values.provider_set_revision),
+                        Err(error) if error.code() == STALE_CONTEXT => Err(()),
+                        Err(other) => panic!("unexpected publish error: {other:?}"),
+                    }
+                }));
+            }
+            for handle in handles {
+                if let Ok(revision) = handle.join().expect("newer publisher") {
+                    committed = committed.max(revision);
+                }
+            }
+        });
+        assert_eq!(
+            committed,
+            100 + (PUBLISHERS - 1) as u64,
+            "the maximum revision always commits under the monotonic check"
+        );
+
+        // Phase 2: concurrent stale publications are all refused - the
+        // durable cache never regresses.
+        std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for index in 0..PUBLISHERS {
+                let store = Arc::clone(&store);
+                handles.push(scope.spawn(move || {
+                    let mut values = published("zone-a");
+                    values.provider_set_revision = 1 + index as u64;
+                    store.publish(&values)
+                }));
+            }
+            for handle in handles {
+                let error = handle
+                    .join()
+                    .expect("stale publisher")
+                    .expect_err("a stale publication is refused");
+                assert_eq!(error.code(), STALE_CONTEXT);
+            }
+        });
+
+        // The durable file never regressed: a fresh instance reads the
+        // newest committed revision under a fresh epoch.
+        drop(store);
+        let reopened = TrustedContextStore::open(dir.path()).expect("reopen");
+        assert_eq!(reopened.epoch(), 2);
+        let context = runtime()
+
+            .block_on(reopened.mint("zone-a", "daemon", DEFAULT_CONTEXT_DEADLINE_MS))
+            .expect("the reopened store mints");
+        assert_eq!(
+            context.provider_set_revision,
+            100 + (PUBLISHERS - 1) as u64,
+            "the durable state holds the newest committed revision"
+        );
+        assert_eq!(context.controller_generation, 4);
+        assert_eq!(context.guest_generation, 7);
     }
 
     /// An in-memory chain audit sink that accumulates records for
@@ -3157,12 +3449,14 @@ mod tests {
     struct RecordingChainSink(Arc<Mutex<Vec<ChainRecord>>>);
 
     impl RecordingChainSink {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn snapshot(&self) -> Vec<ChainRecord> {
             self.0.lock().expect("chain sink").clone()
         }
     }
 
     impl ChainAuditSink for RecordingChainSink {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn record(&self, record: &ChainRecord) -> io::Result<()> {
             self.0.lock().expect("chain sink").push(record.clone());
             Ok(())
@@ -3177,6 +3471,7 @@ mod tests {
     }
 
     impl OperationForwarder for CapturingForwarder {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn forward<'a>(&'a self, invocation: ForwardedOperation<'a>) -> ForwardFuture<'a> {
             self.chains
                 .lock()
@@ -3193,6 +3488,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_nested_call_records_one_root_and_one_correlation_under_the_initiating_provider() {
         // KTD6 happy path: a handler calls another provider's service and
         // the audit records name the initiating provider - the root record
@@ -3427,6 +3723,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_mixed_leg_chain_records_one_root_for_the_in_broker_leg_only() {
         // KTD6 mixed-leg shape (in-broker root, forwarded nested leg): the
         // in-broker leg writes the one root record; the forwarded leg
