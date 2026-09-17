@@ -1435,6 +1435,7 @@ impl ProductionGuestDriverEffects {
                 );
                 GuestEffectError::Unavailable
             })?;
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let published = request
             .status_sink
             .lock()

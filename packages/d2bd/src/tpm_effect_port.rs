@@ -744,6 +744,7 @@ mod tests {
         owner: ResourceKey,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl RecordingChildSurface {
         fn for_device(device_ref: &ResourceRef) -> Self {
             Self {
@@ -826,6 +827,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl SharedProviderChildSurface for RecordingChildSurface {
         async fn ensure(
             &self,

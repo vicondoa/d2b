@@ -2519,7 +2519,10 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 let _ = &payload;
                 let _ = &operation_id;
                 if let Some(sink) = self.status_sink.as_ref() {
-                    *sink.lock() = Some(desired_status);
+                    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+                    {
+                        *sink.lock() = Some(desired_status);
+                    }
                 } else {
                     tracing::debug!(
                         zone = %self.zone.as_str(),
@@ -3675,6 +3678,7 @@ impl ZoneResourceRuntime {
     /// The registry remains the single owner of target conflicts; callers
     /// conflicts; callers never receive a store handle. The session must
     /// already be present in the active controller-session table.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn admit_controller_assignment(
         &self,
         request: AssignmentRequest<'_>,
@@ -3707,6 +3711,7 @@ impl ZoneResourceRuntime {
     }
 
     /// Revoke assignments bound to one exact controller session.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn revoke_controller_assignments(&self, binding: &ControllerSessionBinding) {
         if !d2b_provider_guest_cloud_hypervisor::is_provider_ref(binding.provider_ref()) {
             return;
@@ -3750,6 +3755,7 @@ impl ZoneResourceRuntime {
     }
 
     /// Mark one assignment as draining before a target or generation handoff.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn drain_controller_assignment(
         &self,
         identity: &AssignmentIdentity,
@@ -3766,6 +3772,7 @@ impl ZoneResourceRuntime {
     }
 
     /// Release a drained assignment after Core has verified its child index.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn release_controller_assignment(
         &self,
         identity: &AssignmentIdentity,
@@ -6554,6 +6561,7 @@ impl ControllerSessionCoordinator {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn revoke_controller_assignments(&self, binding: &ControllerSessionBinding) {
         if d2b_provider_guest_cloud_hypervisor::is_provider_ref(binding.provider_ref()) {
             self.assignments
@@ -7619,6 +7627,7 @@ impl ControllerSessionCoordinator {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn revoke_unrecorded_assignment_local(&self, lease: &ResourceClientLease) {
         self.assignments
             .lock()
@@ -7647,6 +7656,7 @@ impl ControllerSessionCoordinator {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     async fn revoke_recorded_assignment(
         &self,
         binding: &ControllerSessionBinding,
@@ -8872,6 +8882,7 @@ impl ZoneResourceRuntime {
 
     /// Close the production Zone runtime's background tasks before it is
     /// discarded.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub async fn shutdown(self) -> Result<(), ResourceRuntimeError> {
         let ZoneResourceRuntime {
             bus,
@@ -9667,8 +9678,9 @@ fn validate_assignment_row(
     Ok((envelope.spec().provider_ref() == Some(provider_ref)).then_some(envelope))
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn admit_assignment_or_skip(
-    assignments: &AssignmentRegistry,
+    assignments:&AssignmentRegistry,
     request: AssignmentRequest<'_>,
 ) -> Result<Option<ResourceClientLease>, ResourceRuntimeError> {
     let mut registry = assignments

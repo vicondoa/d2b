@@ -1199,7 +1199,7 @@ async fn refuse(connection: &AsyncSeqpacket, code: &str) {
 /// nothing about a call owns a thread. The session crate drives its own
 /// seqpacket endpoints the same way, so the daemon has one pattern for kernel
 /// I/O on an async path rather than a second one here.
-struct AsyncSeqpacket {
+pub(crate) struct AsyncSeqpacket {
     io: AsyncFd<Socket>,
 }
 
@@ -1209,7 +1209,7 @@ impl AsyncSeqpacket {
     /// The socket is switched to nonblocking mode first: the reactor owns
     /// readiness, and a blocking descriptor would stall the worker that
     /// awaited it.
-    fn register(socket: Socket) -> Result<Self, TypedError> {
+    pub(crate) fn register(socket: Socket) -> Result<Self, TypedError> {
         socket
             .set_nonblocking(true)
             .map_err(|error| TypedError::InternalIo {
@@ -1248,7 +1248,7 @@ impl AsyncSeqpacket {
     }
 
     /// Read one frame, waiting at most `deadline` for it to arrive.
-    async fn read_frame(&self, deadline: Duration) -> Result<Vec<u8>, TypedError> {
+    pub(crate) async fn read_frame(&self, deadline: Duration) -> Result<Vec<u8>, TypedError> {
         let mut datagram = vec![0u8; MAX_FRAME_SIZE + 5];
         let read = match tokio::time::timeout(deadline, self.recv_datagram(&mut datagram)).await {
             Ok(Ok(read)) => read,
@@ -1259,7 +1259,7 @@ impl AsyncSeqpacket {
     }
 
     /// Write one frame, waiting at most `deadline` for the peer to take it.
-    async fn write_frame(&self, body: &[u8], deadline: Duration) -> Result<(), TypedError> {
+    pub(crate) async fn write_frame(&self, body: &[u8], deadline: Duration) -> Result<(), TypedError> {
         let frame = encode_frame(body)?;
         let written = match tokio::time::timeout(deadline, self.send_datagram(&frame)).await {
             Ok(Ok(written)) => written,

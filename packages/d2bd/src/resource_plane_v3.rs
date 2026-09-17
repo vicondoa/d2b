@@ -652,14 +652,15 @@ pub(crate) fn virtiofs_socket_path(
     Some(PathBuf::from(rendered))
 }
 
-fn socket_is_present(path: &Path) -> bool {
-    std::fs::metadata(path)
+async fn socket_is_present(path: &Path) -> bool {
+    tokio::fs::metadata(path)
+        .await
         .map(|metadata| metadata.file_type().is_socket())
         .unwrap_or(false)
 }
 
-fn remove_socket_file(path: &Path) -> Result<(), String> {
-    match std::fs::remove_file(path) {
+async fn remove_socket_file(path: &Path) -> Result<(), String> {
+    match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.to_string()),
@@ -721,13 +722,14 @@ impl SocketWaitEffect {
 
     /// Whether the producer's socket is resolved and bound on the host
     /// target.
-    async fn present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
-        purpose == VIRTIOFSD_PURPOSE
-            && self
-                .path_for(producer_ref)
-                .await
-                .map(|path| socket_is_present(&path))
-                .unwrap_or(false)
+async fn present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
+        if purpose != VIRTIOFSD_PURPOSE {
+            return false;
+        }
+        let Some(path) = self.path_for(producer_ref).await else {
+            return false;
+        };
+        socket_is_present(&path).await
     }
 }
 
@@ -742,8 +744,10 @@ impl AsyncSocketEffect for SocketWaitEffect {
         let path = self.path_for(producer_ref).await;
         let deadline = tokio::time::Instant::now() + SOCKET_REALIZE_BUDGET;
         loop {
-            if path.as_deref().map(socket_is_present).unwrap_or(false) {
-                return Ok(());
+if let Some(path) = path.as_deref() {
+                if socket_is_present(path).await {
+                    return Ok(());
+                }
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err("virtiofsd socket not bound within its realize budget".to_owned());
@@ -985,7 +989,7 @@ impl AsyncSocketEffect for SocketRemoveEffect {
             return Err(format!("endpoint purpose {purpose:?} is not realized by the v3 plane"));
         }
         match self.path_for(producer_ref).await {
-            Some(path) => remove_socket_file(&path),
+            Some(path) => remove_socket_file(&path).await,
             // Unknown producer: nothing was realized on this target.
             None => Ok(()),
         }
@@ -1519,12 +1523,11 @@ impl ConstructionInputs {
                     let probe = probe.clone();
                     move |socket: &SocketIdentity| {
                         let probe = probe.clone();
-                        Box::pin(async move {
-                            probe
-                                .path_for(socket)
-                                .await
-                                .map(|path| socket_is_present(&path))
-                                .unwrap_or(false)
+Box::pin(async move {
+                            match probe.path_for(socket).await {
+                                Some(path) => socket_is_present(&path).await,
+                                None => false,
+                            }
                         })
                     }
                 }),
@@ -1534,7 +1537,7 @@ impl ConstructionInputs {
                         let probe = probe.clone();
                         Box::pin(async move {
                             match probe.path_for(socket).await {
-                                Some(path) => remove_socket_file(&path),
+                                Some(path) => remove_socket_file(&path).await,
                                 None => Ok(()),
                             }
                         })

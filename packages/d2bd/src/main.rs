@@ -138,6 +138,7 @@ struct GuestArgs {
     once: bool,
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     // v1.1.1 live-deploy fu9: route tracing to stderr so

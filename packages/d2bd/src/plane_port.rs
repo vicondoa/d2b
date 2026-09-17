@@ -688,6 +688,7 @@ mod tests {
                 .enable_all()
                 .build()
                 .expect("a current-thread runtime");
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
             let message = runtime.block_on(async {
                 claim
                     .claim_storage_root("volume", &ROOTS[0])

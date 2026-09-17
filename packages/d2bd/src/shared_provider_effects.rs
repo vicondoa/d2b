@@ -1429,6 +1429,7 @@ impl<'a> DaemonGpuLifecyclePort<'a> {
 }
 
 impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<'_> {
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn reserve_authority(
         &mut self,
         admission: &d2b_provider_device_gpu::GpuAuthorityAdmission,
@@ -1601,6 +1602,7 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<
         ))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn release_authority(
         &mut self,
         lease: d2b_provider_device_gpu::GpuAuthorityLease,
@@ -1856,6 +1858,7 @@ impl ProductionSharedProviderEffects {
     }
 
     /// Reconcile one TPM Device through the persistent TPM controller.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     async fn reconcile_tpm(
         &self,
         request: &SharedProviderEffectRequest<'_>,
@@ -2393,6 +2396,7 @@ impl ProductionSharedProviderEffects {
     }
 
     /// Reconcile one GPU Device through the authority-fenced lifecycle.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     async fn reconcile_gpu(
         &self,
         request: &SharedProviderEffectRequest<'_>,
@@ -2737,6 +2741,7 @@ impl ProductionSharedProviderEffects {
         Ok(SharedProviderFinalize::Complete)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     async fn finalize_tpm(
         &self,
         request: &SharedProviderEffectRequest<'_>,
@@ -2848,6 +2853,7 @@ impl ProductionSharedProviderEffects {
         Ok(SharedProviderFinalize::Complete)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     async fn finalize_gpu(
         &self,
         request: &SharedProviderEffectRequest<'_>,

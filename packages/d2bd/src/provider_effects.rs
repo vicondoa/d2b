@@ -707,6 +707,7 @@ impl ProviderLifecycleDispatch {
     }
 
     /// Construct a dispatcher backed by a daemon-owned durable state file.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn new_persistent(
         zone: ZoneId,
         state_path: impl Into<PathBuf>,
@@ -1213,9 +1214,10 @@ impl ProviderLifecycleDispatch {
         });
     }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn persist_locked(
         &self,
-        mutations: &BTreeMap<String, LifecycleMutation>,
+        mutations:&BTreeMap<String, LifecycleMutation>,
     ) -> Result<(), ProviderEffectError> {
         let Some(path) = self.state_path.as_deref() else {
             return Ok(());
@@ -1594,6 +1596,7 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl ProviderLifecycleEffectPort for BlockingEffect {
         type Output = usize;
 
@@ -1653,6 +1656,7 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl ProviderLifecycleEffectPort for LongRunningEffect {
         type Output = usize;
 
@@ -1680,6 +1684,7 @@ mod tests {
     impl ProviderLifecycleEffectPort for StatefulEffect {
         type Output = usize;
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn actual_state(
             &self,
             _request: &GuestLifecycleRequest,
@@ -1687,6 +1692,7 @@ mod tests {
             Ok(*self.state.lock().expect("state lock"))
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn apply(
             &self,
             request: &GuestLifecycleRequest,

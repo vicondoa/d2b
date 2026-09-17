@@ -3666,7 +3666,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 detail: error.to_string(),
             })?;
     }
-    refresh_activation_marker_metrics_on_startup(&state);
+    refresh_activation_marker_metrics_on_startup(&state).await;
     refresh_broker_reap_log(&state, "startup");
 
     let mut startup_resource_plane_ready = !state.config.enable_resource_plane;
@@ -4235,7 +4235,7 @@ fn validate_gateway_guest_observation_path(
     Ok(Some(path))
 }
 
-fn load_gateway_guest_zone_link_options(
+async fn load_gateway_guest_zone_link_options(
     config_path: Option<&Path>,
     identity: &d2bd_runtime::guest_mode::GuestIdentity,
     bundle: &BundleResolver,
@@ -4243,7 +4243,7 @@ fn load_gateway_guest_zone_link_options(
     let Some(config_path) = config_path else {
         return Ok(None);
     };
-    let metadata = match fs::symlink_metadata(config_path) {
+    let metadata = match tokio::fs::symlink_metadata(config_path).await {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(_) => {
@@ -4257,7 +4257,7 @@ fn load_gateway_guest_zone_link_options(
             detail: "Guest gateway configuration is not a regular file".to_owned(),
         });
     }
-    let bytes = fs::read(config_path).map_err(|_| TypedError::InternalConfig {
+    let bytes = tokio::fs::read(config_path).await.map_err(|_| TypedError::InternalConfig {
         detail: "Guest gateway configuration unavailable".to_owned(),
     })?;
     let config: GatewayGuestConfigFile =
@@ -4400,7 +4400,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         ResourceRef::parse(&options.guest_ref).map_err(|_| TypedError::InternalConfig {
             detail: "guest identity reference is invalid".to_owned(),
         })?;
-    let guest_uid = kernel_guest_uid().unwrap_or(options.guest_uid);
+    let guest_uid = kernel_guest_uid().await.unwrap_or(options.guest_uid);
     let guest_uid = ResourceUid::parse(guest_uid).map_err(|_| TypedError::InternalConfig {
         detail: "guest identity UID is invalid".to_owned(),
     })?;
@@ -4472,7 +4472,8 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         options.gateway_zone_link_config_path.as_deref(),
         &identity,
         &bundle,
-    )?
+    )
+    .await?
     .map(|config| {
         let observation_path = config.observation_path;
         let runtime = d2b_provider_transport_azure_relay::GatewayGuestZoneLinkRuntime::from_sealed(
@@ -4508,7 +4509,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "parent Zone ComponentSession key is unavailable".to_owned(),
             })?;
-    let parent_public = read_public_key32(&parent_public_path)?;
+    let parent_public = read_public_key32(&parent_public_path).await?;
     let mut listener = runtime
         .bind_listener()
         .map_err(|error| TypedError::InternalConfig {
@@ -4561,7 +4562,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         d2bd_runtime::guest_mode::GuestSessionLease,
     )> = None;
     loop {
-        let local_private = read_secret32(&local_private_path)?;
+        let local_private = read_secret32(&local_private_path).await?;
         if let Some((mut serving, lease)) = active.take() {
             tokio::select! {
                 _ = sigterm.recv() => {
@@ -4733,8 +4734,8 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     Ok(())
 }
 
-fn read_secret32(path: &Path) -> Result<d2b_session::Secret32, TypedError> {
-    let bytes = fs::read(path).map_err(|_| TypedError::InternalConfig {
+async fn read_secret32(path: &Path) -> Result<d2b_session::Secret32, TypedError> {
+    let bytes = tokio::fs::read(path).await.map_err(|_| TypedError::InternalConfig {
         detail: "guest ComponentSession private key unavailable".to_owned(),
     })?;
     let bytes: [u8; 32] = bytes.try_into().map_err(|_| TypedError::InternalConfig {
@@ -4745,8 +4746,8 @@ fn read_secret32(path: &Path) -> Result<d2b_session::Secret32, TypedError> {
     })
 }
 
-fn read_public_key32(path: &Path) -> Result<[u8; 32], TypedError> {
-    let bytes = fs::read(path).map_err(|_| TypedError::InternalConfig {
+async fn read_public_key32(path: &Path) -> Result<[u8; 32], TypedError> {
+    let bytes = tokio::fs::read(path).await.map_err(|_| TypedError::InternalConfig {
         detail: "parent Zone ComponentSession key unavailable".to_owned(),
     })?;
     let bytes: [u8; 32] = bytes.try_into().map_err(|_| TypedError::InternalConfig {
@@ -8547,6 +8548,7 @@ mod workload_observability_tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn current_process_entry() -> PidfdEntry {
         let pid = std::process::id() as i32;
         let stat = fs::read_to_string(format!("/proc/{pid}/stat")).expect("read current stat");
@@ -9535,6 +9537,7 @@ fn dispatch_broker_usbip_probe(
     ))
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn usbip_probe_entry_from_intent(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
 ) -> public_wire::UsbipProbeEntry {
@@ -9655,8 +9658,10 @@ fn usbip_probe_entry_from_intent(
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn public_host_usb_probe_from_sysfs(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
+
 ) -> (
     public_wire::UsbipHostProbeStatus,
     public_wire::UsbipTopologyPolicyStatus,
@@ -9751,7 +9756,8 @@ fn public_host_usb_probe_from_sysfs(
     )
 }
 
-fn read_usb_vendor_product(device: &Path) -> Option<(u16, u16)> {
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn read_usb_vendor_product(device: &Path) -> Option<(u16,u16)> {
     let vendor =
         u16::from_str_radix(fs::read_to_string(device.join("idVendor")).ok()?.trim(), 16).ok()?;
     let product = u16::from_str_radix(
@@ -10002,6 +10008,7 @@ struct QemuMediaProbeRegistryIndex {
     records: Vec<QemuMediaProbeRegistryRecord>,
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn qemu_media_probe_registry_records() -> Vec<QemuMediaProbeRegistryRecord> {
     let Ok(bytes) = fs::read(QEMU_MEDIA_REDACTED_INDEX_PATH) else {
         return Vec::new();
@@ -10812,8 +10819,8 @@ pub(crate) async fn connect_guest_component_session(
     .await
 }
 
-fn kernel_guest_uid() -> Option<String> {
-    let cmdline = std::fs::read_to_string("/proc/cmdline").ok()?;
+async fn kernel_guest_uid() -> Option<String> {
+    let cmdline = tokio::fs::read_to_string("/proc/cmdline").await.ok()?;
     let mut values = cmdline
         .split_ascii_whitespace()
         .filter_map(|argument| argument.strip_prefix("d2b.guest_uid="));
@@ -16269,6 +16276,7 @@ fn emit_vm_shutdown_outcome_audit(
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn persist_vm_shutdown_marker(
     state: &ServerState,
     vm: &str,
@@ -16622,7 +16630,8 @@ fn finish_terminated_runner(
     remove_runner_snapshot(state, vm, role_id);
 }
 
-fn cgroup_events_populated_at(path: &Path) -> Result<Option<bool>, std::io::Error> {
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn cgroup_events_populated_at(path:&Path) -> Result<Option<bool>, std::io::Error> {
     let events = path.join("cgroup.events");
     if !events.exists() {
         return Ok(None);
@@ -16762,6 +16771,7 @@ fn request_cgroup_kill_if_populated(
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn prove_role_cgroup_empty_or_escalate(
     state: &ServerState,
     caller_role: BrokerCallerRole,
@@ -16916,60 +16926,31 @@ async fn raw_broker_round_trip_async(
     caller_role: BrokerCallerRole,
     timeout: Duration,
 ) -> Result<Value, TypedError> {
-    // U13/R11 documented fd-boundary site: the QemuMedia shutdown path's
-    // raw SOCK_SEQPACKET round trip is deadline-bounded blocking socket I/O
-    // (connect_timeout + read/write timeouts) that stays on a blocking
-    // worker rather than a reactor worker. A full AsyncFd conversion would
-    // duplicate the broker protocol.rs seqpacket transport here for a
-    // shutdown-only caller; the spawn_blocking seat is the sanctioned
-    // blocking-I/O pattern and is kept with the synchronous-path allow.
-    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    let result = tokio::task::spawn_blocking(move || {
-        dispatch_raw_broker_value_to_socket(&socket_path, request, caller_role, timeout)
-    })
-    .await
-    .map_err(|err| TypedError::InternalIo {
-        context: "join raw broker round trip".to_owned(),
-        detail: err.to_string(),
-    })?;
-    result
-}
-
-fn dispatch_raw_broker_value_to_socket(
-    socket_path: &Path,
-    request: Value,
-    caller_role: BrokerCallerRole,
-    timeout: Duration,
-) -> Result<Value, TypedError> {
+    // The QemuMedia shutdown path's raw SOCK_SEQPACKET round trip is
+    // deadline-bounded socket I/O on an AsyncFd (the same readiness-driven
+    // pattern the forward rendezvous ships for seqpacket transport), so the
+    // worker never parks on the broker: connect carries the stock
+    // connect_timeout, and each frame -- write and read -- is awaited under
+    // the remaining operation deadline.
     let deadline = Instant::now() + timeout;
-    let remaining = broker_remaining_before_op(deadline, socket_path)?;
-    let socket = Socket::from(connect_seqpacket_with_timeout(
-        socket_path,
-        Some(remaining),
-    )?);
+    let remaining = broker_remaining_before_op(deadline, &socket_path)?;
+    let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(remaining))?);
+    let packet = crate::forward_rendezvous::AsyncSeqpacket::register(socket)?;
     let envelope = json!({
         "request": request,
         "callerRole": caller_role,
         "testPeerUid": Value::Null,
     });
-    let remaining = broker_remaining_before_op(deadline, socket_path)?;
-    socket
-        .set_write_timeout(Some(remaining))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set raw broker write timeout to {remaining:?}"),
-            detail: err.to_string(),
-        })?;
-    write_json_frame(&socket, &envelope)?;
-    let remaining = broker_remaining_before_op(deadline, socket_path)?;
-    socket
-        .set_read_timeout(Some(remaining))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set raw broker read timeout to {remaining:?}"),
-            detail: err.to_string(),
-        })?;
-    let response = read_frame(&socket)?;
+    let envelope_bytes = serde_json::to_vec(&envelope).map_err(|err| TypedError::InternalIo {
+        context: "serialize raw broker request".to_owned(),
+        detail: err.to_string(),
+    })?;
+    let remaining = broker_remaining_before_op(deadline, &socket_path)?;
+    packet.write_frame(&envelope_bytes, remaining).await?;
+    let remaining = broker_remaining_before_op(deadline, &socket_path)?;
+    let response = packet.read_frame(remaining).await?;
     serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
-        path: socket_path.to_path_buf(),
+        path: socket_path,
         detail: err.to_string(),
     })
 }
@@ -17481,10 +17462,11 @@ fn stop_vmm_runner_with_provider(
     Some(fallback)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn wait_terminated_with_broker_poll(
     state: &ServerState,
     vm: &str,
-    role_id: &str,
+    role_id:&str,
     deadline: Instant,
 ) -> Result<WaitTermination, PidfdTableError> {
     let started = Instant::now();
@@ -18980,6 +18962,7 @@ fn provider_lifecycle_failure_response(
     )
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn dispatch_broker_vm_start_inner(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
@@ -20180,19 +20163,20 @@ fn activation_marker_path(state: &ServerState, vm: &str) -> PathBuf {
     activation_marker_dir(state).join(format!("{vm}.json"))
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_activation_marker(state: &ServerState, vm: &str) -> Option<HostActivationPendingMarker> {
     let path = activation_marker_path(state, vm);
     let bytes = fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
-fn refresh_activation_marker_metrics_on_startup(state: &ServerState) {
+async fn refresh_activation_marker_metrics_on_startup(state: &ServerState) {
     let dir = activation_marker_dir(state);
-    let Ok(entries) = fs::read_dir(&dir) else {
+    let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
         return;
     };
-    for entry in entries.flatten() {
-        let Ok(bytes) = fs::read(entry.path()) else {
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let Ok(bytes) = tokio::fs::read(entry.path()).await else {
             continue;
         };
         let Ok(marker) = serde_json::from_slice::<HostActivationPendingMarker>(&bytes) else {
@@ -20211,11 +20195,11 @@ fn refresh_activation_marker_metrics_on_startup(state: &ServerState) {
 
 async fn restore_configuration_staging_on_startup(state: &ServerState) {
     let dir = activation_marker_dir(state);
-    let Ok(entries) = fs::read_dir(&dir) else {
+    let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
         return;
     };
-    for entry in entries.flatten() {
-        let Ok(bytes) = fs::read(entry.path()) else {
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let Ok(bytes) = tokio::fs::read(entry.path()).await else {
             continue;
         };
         let Ok(marker) = serde_json::from_slice::<HostActivationPendingMarker>(&bytes) else {
@@ -20305,13 +20289,14 @@ fn dispatch_broker_activation(
     )
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn dispatch_live_guest_activation_resource(
-    state: &ServerState,
-    request: public_wire::ActivationRequest,
-    verb: &'static str,
-    mode: DaemonActivationMode,
-    peer_uid: u32,
-) -> Result<Value, TypedError> {
+    state:&ServerState,
+    request:public_wire::ActivationRequest,
+    verb:&'static str,
+    mode:DaemonActivationMode,
+    peer_uid:u32,
+) -> Result<Value,TypedError> {
     if mode != DaemonActivationMode::Rollback && request.to_generation.is_some() {
         return Ok(invalid_request_response_with_summary(
             verb,
@@ -21629,6 +21614,7 @@ mod public_status_tests {
         state_dir
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn current_process_entry() -> PidfdEntry {
         let pid = std::process::id() as i32;
         let stat = fs::read_to_string(format!("/proc/{pid}/stat")).expect("read current stat");
@@ -25887,50 +25873,51 @@ mod broker_dispatch_tests {
         fs::remove_file(&api_socket).ok();
     }
 
+    struct FixedProcReader;
+
+    impl ProcReader for FixedProcReader {
+        fn proc_starttime(&self, pid: i32) -> Result<Option<u64>, String> {
+            match pid {
+                4242 => Ok(Some(55)),
+                _ => Ok(None),
+            }
+        }
+    }
+
+    struct RecordingOpener {
+        calls: Mutex<Vec<(String, String, i32, u64)>>,
+    }
+
+    impl RecordingOpener {
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    impl PidfdOpener for RecordingOpener {
+        fn open_pidfd(
+            &self,
+            vm: &str,
+            role_id: &str,
+            pid: i32,
+            expected_start_time_ticks: u64,
+        ) -> Result<std::os::fd::OwnedFd, String> {
+            self.calls.lock().expect("lock opener calls").push((
+                vm.to_owned(),
+                role_id.to_owned(),
+                pid,
+                expected_start_time_ticks,
+            ));
+            let file = File::open("/dev/null").expect("open /dev/null");
+            Ok(file.into())
+        }
+    }
+
     #[tokio::test]
     async fn startup_adoption_quarantines_without_authoritative_lifecycle_identity() {
-        struct FixedProcReader;
-
-        impl ProcReader for FixedProcReader {
-            fn proc_starttime(&self, pid: i32) -> Result<Option<u64>, String> {
-                match pid {
-                    4242 => Ok(Some(55)),
-                    _ => Ok(None),
-                }
-            }
-        }
-
-        struct RecordingOpener {
-            calls: Mutex<Vec<(String, String, i32, u64)>>,
-        }
-
-        impl RecordingOpener {
-            fn new() -> Self {
-                Self {
-                    calls: Mutex::new(Vec::new()),
-                }
-            }
-        }
-
-        impl PidfdOpener for RecordingOpener {
-            fn open_pidfd(
-                &self,
-                vm: &str,
-                role_id: &str,
-                pid: i32,
-                expected_start_time_ticks: u64,
-            ) -> Result<std::os::fd::OwnedFd, String> {
-                self.calls.lock().expect("lock opener calls").push((
-                    vm.to_owned(),
-                    role_id.to_owned(),
-                    pid,
-                    expected_start_time_ticks,
-                ));
-                let file = File::open("/dev/null").expect("open /dev/null");
-                Ok(file.into())
-            }
-        }
-
         let daemon_state_dir = test_daemon_state_dir("startup-adoption");
         let store = FilesystemSnapshotStore::new(&daemon_state_dir);
         SnapshotStore::upsert(

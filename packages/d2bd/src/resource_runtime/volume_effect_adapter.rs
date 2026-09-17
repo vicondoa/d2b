@@ -1470,6 +1470,7 @@ impl<'a> FdMarkerStore<'a> {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 impl MarkerStore for FdMarkerStore<'_> {
     fn read_marker(
         &mut self,
@@ -1626,6 +1627,7 @@ impl AnchoredAtomicFilesystem {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 impl AtomicFilesystem for AnchoredAtomicFilesystem {
     type Temp = TempFile;
 
@@ -1741,6 +1743,7 @@ impl AtomicFilesystem for AnchoredAtomicFilesystem {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn inspect_content_file(
     root: &VolumeRootHandle,
     path: &str,

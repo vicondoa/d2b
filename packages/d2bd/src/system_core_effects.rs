@@ -111,36 +111,44 @@ impl HostProbe {
             .join(name)
     }
 
-    fn has_render_node() -> bool {
-        std::fs::read_dir("/dev/dri")
-            .map(|entries| {
-                entries.flatten().any(|entry| {
-                    entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|name| name.starts_with("renderD"))
-                })
-            })
-            .unwrap_or(false)
+    async fn has_render_node() -> bool {
+        let Ok(mut entries) = tokio::fs::read_dir("/dev/dri").await else {
+            return false;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("renderD"))
+            {
+                return true;
+            }
+        }
+        false
     }
 
-    fn has_primary_drm_node() -> bool {
-        std::fs::read_dir("/dev/dri")
-            .map(|entries| {
-                entries.flatten().any(|entry| {
-                    entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|name| name.starts_with("card"))
-                })
-            })
-            .unwrap_or(false)
+    async fn has_primary_drm_node() -> bool {
+        let Ok(mut entries) = tokio::fs::read_dir("/dev/dri").await else {
+            return false;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("card"))
+            {
+                return true;
+            }
+        }
+        false
     }
 
-    fn active_process_count() -> Result<u32, SystemCoreError> {
+    async fn active_process_count() -> Result<u32, SystemCoreError> {
         let mut count = 0_u32;
-        for entry in std::fs::read_dir("/proc").map_err(|_| SystemCoreError::HostProbeFailed)? {
-            let entry = entry.map_err(|_| SystemCoreError::HostProbeFailed)?;
+        let Ok(mut entries) = tokio::fs::read_dir("/proc").await else {
+            return Err(SystemCoreError::HostProbeFailed);
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
             if entry
                 .file_name()
                 .to_str()
@@ -172,8 +180,8 @@ impl HostProbeEffectPort for HostProbe {
             HostCapabilityClass::Wayland => {
                 d2bd_runtime::resource_runtime_support::is_socket(&self.runtime_path("wayland-0"))
             }
-            HostCapabilityClass::GpuRender => Self::has_render_node(),
-            HostCapabilityClass::GpuDrm => Self::has_primary_drm_node(),
+            HostCapabilityClass::GpuRender => Self::has_render_node().await,
+            HostCapabilityClass::GpuDrm => Self::has_primary_drm_node().await,
             HostCapabilityClass::Tpm2 => {
                 Path::new("/dev/tpmrm0").is_file() || Path::new("/dev/tpm0").is_file()
             }
@@ -199,7 +207,7 @@ impl HostProbeEffectPort for HostProbe {
             kernel_release: Self::kernel_release()?,
             os_name: Self::os_name()?,
             user_manager_available: self.runtime_path("systemd").is_dir(),
-            active_process_count: Self::active_process_count()?,
+            active_process_count: Self::active_process_count().await?,
         })
     }
 }
