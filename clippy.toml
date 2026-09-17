@@ -37,8 +37,12 @@
 #   * For a wait on a condition: `tokio::sync::Notify` armed *before* the check
 #     plus `tokio::time::timeout` (the drain in
 #     `d2b-provider-toolkit`'s `GeneratedProviderServiceServer::shutdown`).
-#   * `parking_lot` for a short lock on a path that is synchronous by
-#     construction, when no await can happen inside the critical section.
+#   * `parking_lot` is banned outright (plan KD3); the U33 short-lock
+#     carve-out is revoked. The single exception is the dedicated
+#     bounded-worker channel boundary (plan R4): a blocking `sync_channel`
+#     recv on the worker's own dedicated thread with `tokio::sync::oneshot`
+#     replies, as `d2b-core`'s `loader_worker` and `d2b-resource-runtime`'s
+#     `spec_store` implement it.
 #
 # `clippy::await_holding_invalid_type`, the nightly lint for "values that must
 # not be held across a suspension point", is NOT enabled: the pinned toolchain
@@ -67,9 +71,12 @@ disallowed-methods = [
     { path = "std::thread::sleep", reason = "Sleeps the whole executor worker, stalling every task scheduled on it; use the async timer", replacement = "tokio::time::sleep" },
 
     # --- Locks ------------------------------------------------------------
-    { path = "std::sync::Mutex::lock", reason = "Blocks the calling thread until the lock is free, and the guard it returns cannot be held across an await; use the async mutex, or parking_lot for a short lock on a synchronous path", replacement = "tokio::sync::Mutex::lock" },
+    { path = "std::sync::Mutex::lock", reason = "Blocks the calling thread until the lock is free, and the guard it returns cannot be held across an await; use the async mutex, or the dedicated bounded-worker channel boundary (plan R4)", replacement = "tokio::sync::Mutex::lock" },
     { path = "std::sync::RwLock::read", reason = "Blocks the calling thread until the read lock is free, and the guard it returns cannot be held across an await", replacement = "tokio::sync::RwLock::read" },
     { path = "std::sync::RwLock::write", reason = "Blocks the calling thread until the write lock is free, and the guard it returns cannot be held across an await", replacement = "tokio::sync::RwLock::write" },
+    { path = "parking_lot::Mutex::lock", reason = "Blocking lock, and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked (plan KD3)", replacement = "tokio::sync::Mutex::lock" },
+    { path = "parking_lot::RwLock::read", reason = "Blocking read lock, and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked (plan KD3)", replacement = "tokio::sync::RwLock::read" },
+    { path = "parking_lot::RwLock::write", reason = "Blocking write lock, and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked (plan KD3)", replacement = "tokio::sync::RwLock::write" },
 
     # --- Condition variables ---------------------------------------------
     { path = "std::sync::Condvar::wait", reason = "Parks the caller until another thread notifies; on a single-threaded runtime the notifier is the parked worker itself, so the wait can never be satisfied", replacement = "arm tokio::sync::Notify before the check, then tokio::time::timeout" },
@@ -79,9 +86,26 @@ disallowed-methods = [
     { path = "parking_lot::Condvar::wait", reason = "Parks the caller until another thread notifies, which on a single-threaded runtime can never happen", replacement = "arm tokio::sync::Notify before the check, then tokio::time::timeout" },
 
     # --- Channels ---------------------------------------------------------
-    { path = "std::sync::mpsc::Receiver::recv", reason = "Blocks the receiving thread until a message arrives; only a dedicated blocking worker thread may do this, and then it takes an inline allow with that reason", replacement = "tokio::sync::mpsc::Receiver::recv, or the bounded dedicated-worker pattern in d2b-core's loader_worker" },
+    # R4 exemption (named entry): the one sanctioned sync-channel boundary is
+    # a blocking `sync_channel` recv on the worker's own dedicated thread with
+    # `tokio::sync::oneshot` replies (d2b-core's loader_worker /
+    # d2b-resource-runtime's spec_store shape). A recv loop at that boundary
+    # takes an inline allow with reason "dedicated bounded worker per plan R4".
+    { path = "std::sync::mpsc::Receiver::recv", reason = "Blocks the receiving thread until a message arrives; the sole sanctioned carve-out is the dedicated bounded-worker channel boundary (plan R4) - a blocking sync_channel recv on the worker's own dedicated thread with tokio::sync::oneshot replies - which takes an inline allow with reason \"dedicated bounded worker per plan R4\"", replacement = "tokio::sync::mpsc::Receiver::recv, or the bounded dedicated-worker pattern in d2b-core's loader_worker" },
+    { path = "std::sync::mpsc::Sender::send", reason = "Blocks the calling thread when the bounded queue is full, which in async code is the executor worker", replacement = "tokio::sync::mpsc::Sender::send, or the bounded-worker channel boundary (plan R4) from the worker's own thread" },
     { path = "std::sync::mpsc::Receiver::recv_timeout", reason = "Blocks the receiving thread for up to the timeout, stalling the worker for the whole budget", replacement = "tokio::sync::mpsc::Receiver::recv inside tokio::time::timeout" },
     { path = "std::sync::mpsc::Receiver::iter", reason = "Iterating a channel blocks the receiving thread on every step", replacement = "tokio::sync::mpsc::Receiver::recv in an async loop" },
+
+    # --- Async-to-sync bridges --------------------------------------------
+    { path = "d2bd_runtime::runtime_util::block_on_future", reason = "Async-to-sync bridge that parks the calling thread on a runtime it may not own, mid-call-graph; make the caller async end-to-end", replacement = "direct .await" },
+    { path = "d2bd_runtime::runtime_util::block_on_future_with", reason = "Async-to-sync bridge that parks the calling thread on a borrowed runtime handle, mid-call-graph; make the caller async end-to-end", replacement = "direct .await" },
+    { path = "tokio::runtime::Runtime::block_on", reason = "Mid-call-graph async-to-sync bridge; only sync runtime-driving sites at process entry points and plain #[test] harnesses survive, and they take an inline allow with that reason", replacement = "direct .await, or #[tokio::main] at the process entry point" },
+    { path = "tokio::runtime::Handle::block_on", reason = "Mid-call-graph async-to-sync bridge on a borrowed handle; only sync runtime-driving sites at process entry points and plain #[test] harnesses survive, and they take an inline allow with that reason", replacement = "direct .await, or #[tokio::main] at the process entry point" },
+
+    # --- Worker threads ---------------------------------------------------
+    { path = "tokio::task::spawn_blocking", reason = "Thread-per-call admission to the runtime's shared blocking pool, which is unbounded; banned by plan KD2", replacement = "one dedicated bounded worker per class of work, in the shape of d2b-core's loader_worker" },
+    { path = "tokio::task::block_in_place", reason = "Parks the worker thread for the whole blocking call, stalling every task scheduled on it", replacement = "the bounded-worker shape (d2b-core's loader_worker)" },
+    { path = "std::thread::JoinHandle::join", reason = "Blocks the calling thread until the thread exits; in async code that thread is the executor worker", replacement = "tokio::task::JoinHandle::await" },
 
     # --- Filesystem -------------------------------------------------------
     { path = "std::fs::read", reason = "Blocks the calling thread on filesystem I/O; the async filesystem interface is the shape callers expect, and long-lived blocking work belongs on the bounded worker", replacement = "tokio::fs::read (tokio feature \"fs\"), or d2b-core's loader_worker for a path with no async form" },
