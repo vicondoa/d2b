@@ -53,6 +53,12 @@ impl ManifestV04 {
         Ok(parsed)
     }
 
+    /// Parse a manifest from disk.
+    ///
+    /// The read is part of the bundle-read work class the loader seat
+    /// isolates: async consumers reach it through the loader worker, so the
+    /// read runs on the dedicated bounded worker's own thread.
+    #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
     pub fn from_path(path: &Path) -> Result<Self, Error> {
         let bytes = std::fs::read(path).map_err(|_| Error::internal_io("manifest-v04-read"))?;
         Self::from_slice(&bytes)

@@ -8,6 +8,7 @@ mod manifest_v04_roundtrip {
     #[test]
     fn baseline_vms_json_round_trips_semantically() {
         let baseline_path = runfile_path(BASELINE_FIXTURE);
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let baseline_bytes =
             std::fs::read(&baseline_path).expect("read manifest v04 baseline fixture");
 

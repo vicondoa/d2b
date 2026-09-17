@@ -37,6 +37,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 /// Await a `run` future on a scratch thread: a panicking job that stranded its
 /// waiter would be a wedged daemon, so it must fail this test with a diagnostic
 /// instead of hanging the suite.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn await_with_deadline<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> T {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {

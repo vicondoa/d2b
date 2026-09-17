@@ -63,6 +63,10 @@ fn start_worker(name: &str) -> Option<LoaderWorker> {
     thread::Builder::new()
         .name(name.to_owned())
         .spawn(move || {
+            // The sanctioned R4 channel boundary: a blocking `sync_channel`
+            // recv on the worker's own dedicated thread, with
+            // `tokio::sync::oneshot` replies (plan R4 / KTD3).
+            #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
             while let Ok(job) = receiver.recv() {
                 job();
             }

@@ -911,6 +911,11 @@ impl BundleVerifyPolicy {
 }
 
 /// Look up a UNIX group GID by name via `/etc/group` (no unsafe).
+///
+/// Part of the bundle-read work class the loader seat isolates: async
+/// consumers reach it only through [`BundleResolver::load_with_policy_on_loader_worker`],
+/// so the read runs on the dedicated bounded worker's own thread.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn lookup_group_gid(name: &str) -> Option<u32> {
     let contents = std::fs::read_to_string("/etc/group").ok()?;
     for line in contents.lines() {
@@ -937,6 +942,12 @@ fn lookup_group_gid(name: &str) -> Option<u32> {
 /// - `"owner"` - `st_uid` ≠ `policy.required_uid` or
 ///   `st_gid` ≠ `policy.required_gid` (when Some).
 /// - `"mode"` - low 9 bits of `st_mode` ≠ `policy.required_mode`.
+///
+/// The read is part of the bundle-read work class the loader seat isolates:
+/// async consumers reach it only through
+/// [`BundleResolver::load_with_policy_on_loader_worker`], so it runs on the
+/// dedicated bounded worker's own thread.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn secure_open_and_read(path: &Path, policy: &BundleVerifyPolicy) -> Result<Vec<u8>, Error> {
     use rustix::fs::{FileType, OFlags, fstat, open};
 
@@ -5703,6 +5714,7 @@ mod tests {
         let base = std::env::var_os("TEST_TMPDIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::temp_dir().join("d2b-bundle-resolver-tests"));
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&base).expect("create bundle resolver test root");
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -5736,6 +5748,7 @@ mod tests {
                 .is_none()
         );
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(root);
     }
 
@@ -6736,6 +6749,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let root = test_root("zone-native-bundle-index");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&root).expect("create bundle root");
         let bundle_path = root.join("bundle.json");
         let site_bytes = serde_json::to_vec(&serde_json::json!({
@@ -6744,7 +6758,9 @@ mod tests {
         }))
         .expect("serialize site artifact");
         let site_path = root.join("site.json");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::write(&site_path, &site_bytes).expect("write site artifact");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::set_permissions(&site_path, fs::Permissions::from_mode(0o640)).expect("chmod site");
         let mut bundle = serde_json::json!({
             "artifactHashes": null,
@@ -6765,11 +6781,13 @@ mod tests {
             "site.json": sha256_hex(&site_bytes),
         });
         bundle["bundleHash"] = serde_json::Value::String(hash);
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::write(
             &bundle_path,
             serde_json::to_vec(&bundle).expect("serialize bundle"),
         )
         .expect("write bundle");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o640)).expect("chmod bundle");
 
         let resolver =
@@ -6787,6 +6805,7 @@ mod tests {
             "the declared site artifact is the projected Wayland socket"
         );
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(root);
     }
 
@@ -6799,6 +6818,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let root = test_root("site-artifact");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&root).expect("create bundle root");
         let site_bytes = serde_json::to_vec(&serde_json::json!({
             "schemaVersion": "v1",
@@ -6806,7 +6826,9 @@ mod tests {
         }))
         .expect("serialize site artifact");
         let site_path = root.join("site.json");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::write(&site_path, &site_bytes).expect("write site artifact");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::set_permissions(&site_path, fs::Permissions::from_mode(0o640)).expect("chmod site");
         let bundle = site_test_bundle(Some(BTreeMap::from([(
             "site.json".to_owned(),
@@ -6837,6 +6859,7 @@ mod tests {
         );
 
         let empty_root = test_root("site-artifact-absent");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&empty_root).expect("create empty bundle root");
         assert_eq!(
             load_optional_site_artifact(
@@ -6850,6 +6873,7 @@ mod tests {
             "a bundle without the artifact keeps the consumers unbound"
         );
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::write(
             &site_path,
             br#"{"schemaVersion":"v1","waylandSocket":"/tmp/wayland-0"}"#,
@@ -6864,7 +6888,9 @@ mod tests {
         .expect_err("a malformed socket refuses the load");
         assert_eq!(error.kind().as_str(), "manifest-parse-error");
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(root);
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(empty_root);
     }
 
@@ -6899,6 +6925,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let root = test_root("zone-native-topology");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&root).expect("create bundle root");
         let parent_map = BTreeMap::from([
             ("local-root".to_owned(), None),
@@ -6929,7 +6956,9 @@ mod tests {
         });
         let index_bytes = serde_json::to_vec(&index).expect("serialize index");
         let index_path = root.join("index.json");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::write(&index_path, &index_bytes).expect("write index");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::set_permissions(&index_path, fs::Permissions::from_mode(0o640)).expect("chmod index");
         let bundle = Bundle {
             bundle_version: 1,
@@ -6970,6 +6999,7 @@ mod tests {
             Some("local-root")
         );
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(root);
     }
 
@@ -7016,6 +7046,7 @@ mod tests {
             Vec::<&str>::new()
         );
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -7095,6 +7126,7 @@ mod tests {
             "the controller-owned VMM child template resolves to the trusted runner intent"
         );
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -7235,6 +7267,7 @@ mod tests {
             )
             .unwrap()
         );
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(root);
     }
 
@@ -7429,6 +7462,7 @@ mod tests {
             marker.marker,
             d2b_contracts_resource::v3::derive_network_ownership_marker(&provenance, "firewall",)
         );
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(root);
     }
 
@@ -7458,6 +7492,7 @@ mod tests {
             intent.nft_rule_body
         );
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(&root);
     }
 

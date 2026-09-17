@@ -41,6 +41,7 @@ where
     F: FnMut(&[u8]),
 {
     let corpus_dir = corpus_dir(target);
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     let mut files: Vec<_> = fs::read_dir(&corpus_dir)
         .unwrap_or_else(|error| panic!("read corpus directory {corpus_dir:?}: {error}"))
         .map(|entry| entry.expect("corpus entry").path())
@@ -53,6 +54,7 @@ where
     );
 
     for path in files {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let bytes =
             fs::read(&path).unwrap_or_else(|error| panic!("read corpus file {path:?}: {error}"));
         parser(&bytes);

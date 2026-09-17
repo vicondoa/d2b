@@ -37,6 +37,7 @@ fn current_user_policy() -> BundleVerifyPolicy {
 }
 
 /// Write `content` to `path` with mode 0o640.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn write_private(path: &Path, content: &[u8]) {
     fs::OpenOptions::new()
         .write(true)
@@ -102,6 +103,7 @@ fn self_hash(value: &serde_json::Value) -> String {
     sha256_hex(&serde_json::to_vec(&preimage).expect("hash input serializes"))
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn set_mode_to(path: &Path, mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("set permissions");
 }
@@ -177,6 +179,7 @@ fn tamper_mode_too_permissive() {
     let bundle_path = dir.path().join("bundle.json");
 
     // Write with 0o644 (world-readable, not 0o640).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -211,6 +214,7 @@ fn tamper_hash_mismatch() {
     value["bundleVersion"] = serde_json::json!(99);
     let tampered = serde_json::to_vec(&value).expect("re-serialize tampered");
     write_private(&bundle_path, &tampered);
+    set_mode_to(&bundle_path, current_user_policy().required_mode);
 
     let policy = current_user_policy();
     let err = BundleResolver::load_with_policy(&bundle_path, &policy)
@@ -235,6 +239,7 @@ fn tamper_truncated() {
 
     // Truncate to first 10 bytes - definitely unparseable JSON.
     write_private(&bundle_path, &with_hash[..10]);
+    set_mode_to(&bundle_path, current_user_policy().required_mode);
 
     let policy = current_user_policy();
     let err = BundleResolver::load_with_policy(&bundle_path, &policy)
@@ -279,6 +284,7 @@ fn tamper_missing_bundle_hash() {
 
     // A bundle without bundleHash must be rejected outright.
     write_private(&bundle_path, &minimal_bundle_json_no_hash());
+    set_mode_to(&bundle_path, current_user_policy().required_mode);
 
     let policy = current_user_policy();
     let err = BundleResolver::load_with_policy(&bundle_path, &policy)

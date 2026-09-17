@@ -29,6 +29,7 @@ const REFUSAL_DEADLINE: Duration = Duration::from_secs(10);
 /// fills a queue would make a concurrent test's job be refused as `Busy`.
 static WORKER_LOCK: Mutex<()> = Mutex::new(());
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn worker_lock() -> MutexGuard<'static, ()> {
     WORKER_LOCK
         .lock()
@@ -52,6 +53,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 /// Await a `run` future on a scratch thread: a regression that parks the caller
 /// (a blocking send, a waiter stranded on a dead worker) then fails this test
 /// with a diagnostic instead of wedging the whole suite.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn await_with_deadline<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> T {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -76,6 +78,7 @@ fn poll_noop<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
 struct ReleaseOnDrop(mpsc::Sender<()>);
 
 impl Drop for ReleaseOnDrop {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn drop(&mut self) {
         let _ = self.0.send(());
     }
@@ -136,12 +139,14 @@ fn hung_probe_job_does_not_starve_bundle_loads() {
     let (release_sender, release) = mpsc::channel();
     let release_guard = ReleaseOnDrop(release_sender);
     let mut parked = Box::pin(loader_worker::run_probe(move || {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         started_sender
             .send((
                 thread::current().id(),
                 thread::current().name().map(str::to_owned),
             ))
             .expect("signal the parked probe");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         release.recv().expect("await the release signal");
         "parked probe"
     }));
@@ -149,6 +154,7 @@ fn hung_probe_job_does_not_starve_bundle_loads() {
         poll_noop(parked.as_mut()).is_pending(),
         "the probe job must be admitted and left waiting for the probe worker"
     );
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     let (probe_thread, probe_name) = started
         .recv_timeout(REFUSAL_DEADLINE)
         .expect("the probe worker must start the parked probe job");
@@ -216,7 +222,9 @@ fn full_queue_refuses_with_named_busy_refusal() {
     let (release_sender, release) = mpsc::channel();
     let release_guard = ReleaseOnDrop(release_sender);
     let mut parked = Box::pin(loader_worker::run(move || {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         started_sender.send(()).expect("signal the parked job");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         release.recv().expect("await the release signal");
         "parked"
     }));
@@ -224,6 +232,7 @@ fn full_queue_refuses_with_named_busy_refusal() {
         poll_noop(parked.as_mut()).is_pending(),
         "the parked job must be admitted and left waiting for the worker"
     );
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     started
         .recv_timeout(REFUSAL_DEADLINE)
         .expect("the worker must start the parked job");
