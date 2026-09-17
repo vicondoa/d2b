@@ -1409,6 +1409,7 @@ mod tests {
 
     // -- factory -------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn factory_registers_only_the_binding_resource_type() {
         let factory = BindingDriverFactory::new(BindingDriverArgs {
@@ -1422,6 +1423,7 @@ mod tests {
 
     // -- reconcile: worker + endpoint children --------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn ensure_derives_worker_and_endpoint_children_persisted_before_spawn() {
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
@@ -1518,6 +1520,7 @@ mod tests {
     /// typed contract: the fence names the row's own uid, generation, and
     /// revision, so the frozen reader accepts it for exactly this row and for
     /// no unfenced revision.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_concluding_pass_publishes_the_fenced_status_projection() {
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
@@ -1564,6 +1567,7 @@ mod tests {
     /// the serving socket publishes `ready: false` under the frozen reason,
     /// and a projection authored under an older identity (or ahead of the
     /// stored revision) never reports the row ready.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn stale_or_not_serving_fences_never_report_ready() {
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
@@ -1631,6 +1635,7 @@ mod tests {
 
     // -- launch authority: plan + typed, argv-free worker child ---------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn worker_child_carries_the_signed_template_and_no_argv() {
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
@@ -1681,6 +1686,7 @@ mod tests {
 
     // -- recover: plan re-derivation matches the pre-restart incarnation ------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_rederives_the_launch_plan_matching_the_pre_restart_incarnation() {
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
@@ -1732,6 +1738,7 @@ mod tests {
 
     // -- finalize: owned children retire before the binding (F3) -------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_finalizes_owned_children_before_the_binding_teardown() {
         let manager = RecordingManager::new();
@@ -1756,6 +1763,7 @@ mod tests {
 
     // -- teardown ordering -----------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_drains_the_endpoint_before_the_worker_and_behind_the_mount_gate() {
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
@@ -1782,6 +1790,7 @@ mod tests {
         assert!(position("remove-socket") < position("delete:Process/"));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn mounted_share_blocks_the_drain_before_any_child_is_removed() {
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
@@ -1808,6 +1817,7 @@ mod tests {
 
     // -- owned-child drift -----------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn obsolete_owned_child_is_retired_endpoint_first() {
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
@@ -1838,6 +1848,7 @@ mod tests {
 
     // -- dependency edges ------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn dependency_watches_are_registered_once_per_target() {
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
@@ -1876,6 +1887,7 @@ mod tests {
 
     // -- terminal rejection visibility -----------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn rejected_view_keeps_its_stable_reason_in_status() {
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
@@ -1904,6 +1916,7 @@ mod tests {
 
     // -- owner guard -----------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn child_cannot_silently_change_owner() {
         let fake = FakeServingEffects::new();
@@ -1921,6 +1934,7 @@ mod tests {
     /// parent Volume row that is not observable yet defers retryably - the row
     /// may simply not be committed yet - while a present row with a different
     /// owner uid stays terminal (the owner guard above is unchanged).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn absent_parent_row_defers_retryably_while_owner_mismatch_stays_terminal() {
         let fake = FakeServingEffects::new();
@@ -1964,6 +1978,7 @@ mod tests {
 
     // -- deterministic child identity -------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn same_parent_and_binding_derive_the_same_child_keys() {
         let fake = FakeServingEffects::new();
