@@ -1034,7 +1034,7 @@ fn cmd_chown_if_orphan(args: &Args) -> ExitCode {
     ExitCode::from(0)
 }
 
-fn cmd_build_store_view_farm() -> ExitCode {
+async fn cmd_build_store_view_farm() -> ExitCode {
     use std::io::Read;
 
     let mut buf = Vec::new();
@@ -1059,7 +1059,9 @@ fn cmd_build_store_view_farm() -> ExitCode {
         req.generation,
         &req.closure_paths,
         &req.marker,
-    ) {
+    )
+    .await
+    {
         Ok(_) => ExitCode::from(0),
         Err(e) => {
             // Emit the typed HardlinkFarmError as a single JSON line on
@@ -1185,7 +1187,7 @@ fn cmd_apply_generation() -> ExitCode {
     }
 }
 
-fn cmd_build_store_view() -> ExitCode {
+async fn cmd_build_store_view() -> ExitCode {
     use std::io::Read;
 
     let mut buf = Vec::new();
@@ -1208,7 +1210,9 @@ fn cmd_build_store_view() -> ExitCode {
         &req.generation_id,
         &req.closure_paths,
         &req.marker,
-    ) {
+    )
+    .await
+    {
         Ok(counts) => {
             // Emit the link/skip accounting as a single JSON line on
             // stdout so the calling broker can recover it.
@@ -1230,7 +1234,7 @@ fn cmd_build_store_view() -> ExitCode {
     }
 }
 
-fn cmd_replace_store_view_live() -> ExitCode {
+async fn cmd_replace_store_view_live() -> ExitCode {
     use std::io::Read;
 
     let mut buf = Vec::new();
@@ -1245,7 +1249,7 @@ fn cmd_replace_store_view_live() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    match replace_live_top_level_paths(&req.farm_root, &req.stage_tag, &req.closure_paths) {
+    match replace_live_top_level_paths(&req.farm_root, &req.stage_tag, &req.closure_paths).await {
         Ok(counts) => {
             if let Ok(j) = serde_json::to_string(&counts) {
                 println!("{j}");
@@ -1273,15 +1277,15 @@ fn prepare_private_store_namespace() -> Result<(), String> {
     Ok(())
 }
 
-fn run_private_store_verb(verb: &str) -> ExitCode {
+async fn run_private_store_verb(verb: &str) -> ExitCode {
     if let Err(err) = prepare_private_store_namespace() {
         eprintln!("private-store: {err}");
         return ExitCode::from(1);
     }
     match verb {
-        "build-store-view-farm" => cmd_build_store_view_farm(),
-        "build-store-view" => cmd_build_store_view(),
-        "replace-store-view-live" => cmd_replace_store_view_live(),
+        "build-store-view-farm" => cmd_build_store_view_farm().await,
+        "build-store-view" => cmd_build_store_view().await,
+        "replace-store-view-live" => cmd_replace_store_view_live().await,
         other => {
             eprintln!("private-store: unsupported verb {other}");
             ExitCode::from(1)
@@ -1289,7 +1293,13 @@ fn run_private_store_verb(verb: &str) -> ExitCode {
     }
 }
 
-fn main() -> ExitCode {
+// The hardlink-farm verbs are async (`tokio::fs`), so the process entry
+// point drives a current-thread runtime - the sanctioned "process entry
+// point drives the runtime" shape from the async-purity policy. No
+// mid-call-graph `block_on` exists anywhere: main is the only runtime
+// driver, and the sync verbs below simply run inside it.
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> ExitCode {
     // `build-store-view-farm` takes its (potentially large) request as
     // JSON on stdin, not `--flag value` argv, so it bypasses the
     // generic flag parser. The broker invokes it under
@@ -1300,18 +1310,18 @@ fn main() -> ExitCode {
             eprintln!("private-store: missing verb");
             return ExitCode::from(1);
         };
-        return run_private_store_verb(verb);
+        return run_private_store_verb(verb).await;
     }
     if args.get(1).map(String::as_str) == Some("build-store-view-farm") {
-        return cmd_build_store_view_farm();
+        return cmd_build_store_view_farm().await;
     }
     // `build-store-view` is the ADR 0027 split-layout build, same
     // stdin-JSON contract, same private-namespace invocation.
     if args.get(1).map(String::as_str) == Some("build-store-view") {
-        return cmd_build_store_view();
+        return cmd_build_store_view().await;
     }
     if args.get(1).map(String::as_str) == Some("replace-store-view-live") {
-        return cmd_replace_store_view_live();
+        return cmd_replace_store_view_live().await;
     }
     if args.get(1).map(String::as_str) == Some("apply-generation") {
         return cmd_apply_generation();

@@ -125,13 +125,13 @@ impl std::fmt::Display for StoreSyncError {
 
 impl std::error::Error for StoreSyncError {}
 
-/// Classify a [`build_store_view_cross_mount_safe`] failure into a
+/// Classify a [`build_store_view_cross_mount_safe_async`] failure into a
 /// StoreSync [`ErrorStage`]. A genuine distinct-`st_dev`
 /// [`HardlinkFarmError::DifferentFilesystem`] is a fatal topology probe
 /// failure (`probe`); everything else from the materialise step
 /// (collision, escaped cross-mount, genuine I/O) is a `stage` failure.
 ///
-/// [`build_store_view_cross_mount_safe`]: crate::ops::store_view_farm::build_store_view_cross_mount_safe
+/// [`build_store_view_cross_mount_safe_async`]: crate::ops::store_view_farm::build_store_view_cross_mount_safe_async
 fn build_error_stage(err: &HardlinkFarmError) -> ErrorStage {
     match err {
         HardlinkFarmError::DifferentFilesystem { .. } => ErrorStage::Probe,
@@ -244,15 +244,15 @@ pub struct StoreSyncOutcome {
 /// ownership/permission op on the per-VM store-view path - mutations
 /// there propagate INTO `/nix/store` via the shared inodes of the
 /// hardlink farm.
-pub fn run_store_sync(
+pub async fn run_store_sync(
     intent: &ResolvedStoreViewIntent,
     wire_vm: &str,
     wire_generation: u32,
 ) -> Result<StoreSyncOutcome, StoreSyncError> {
-    run_store_sync_inner(intent, wire_vm, wire_generation, false)
+    run_store_sync_inner(intent, wire_vm, wire_generation, false).await
 }
 
-pub fn run_store_sync_repair(
+pub async fn run_store_sync_repair(
     intent: &ResolvedStoreViewIntent,
 ) -> Result<StoreSyncOutcome, StoreSyncError> {
     let generation =
@@ -260,10 +260,10 @@ pub fn run_store_sync_repair(
             wire: u32::MAX,
             resolved: intent.generation,
         })?;
-    run_store_sync_inner(intent, &intent.vm, generation, true)
+    run_store_sync_inner(intent, &intent.vm, generation, true).await
 }
 
-fn run_store_sync_inner(
+async fn run_store_sync_inner(
     intent: &ResolvedStoreViewIntent,
     wire_vm: &str,
     wire_generation: u32,
@@ -291,7 +291,7 @@ fn run_store_sync_inner(
     }
 
     let lock_wait_started = Instant::now();
-    let _lock = acquire_sync_lock(&intent.hardlink_farm_path)?;
+    let _lock = acquire_sync_lock(&intent.hardlink_farm_path).await?;
     let mut timings = StoreSyncTimings {
         lock_wait_ms: elapsed_ms(lock_wait_started),
         ..Default::default()
@@ -310,6 +310,7 @@ fn run_store_sync_inner(
     // left over by a previous crashed publish BEFORE building the new
     // generation - keeps the split layout in a known-good shape.
     hardlink_farm::reconcile_split_current_tmp(&intent.hardlink_farm_path)
+        .await
         .map_err(|e| StoreSyncError::at(ErrorStage::CurrentSwap, e))?;
 
     // Derive the collision-free on-disk key ONCE so the fast-path probe
@@ -318,11 +319,15 @@ fn run_store_sync_inner(
 
     // Record the previously-published generation (host-only `state`
     // view) so retention can keep N-1 alongside the new generation.
-    let previous_id = hardlink_farm::read_state_current_id(&intent.hardlink_farm_path);
-    let previous_token = previous_id
+    let previous_id = hardlink_farm::read_state_current_id(&intent.hardlink_farm_path).await;
+    let previous_token = if let Some(id) = previous_id
         .as_deref()
         .filter(|id| *id != generation_id)
-        .and_then(|id| hardlink_farm::read_generation_token(&intent.hardlink_farm_path, id));
+    {
+        hardlink_farm::read_generation_token(&intent.hardlink_farm_path, id).await
+    } else {
+        None
+    };
 
     let marker = GenerationMarker {
         closure_hash: intent.closure_identity(),
@@ -344,7 +349,8 @@ fn run_store_sync_inner(
             &generation_id,
             &intent.vm,
             &intent.closure_paths,
-        );
+        )
+        .await;
     timings.verify_ms = elapsed_ms(verify_started);
 
     let closure_count = u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX);
@@ -357,12 +363,13 @@ fn run_store_sync_inner(
         // `/var/lib/d2b`. The publish steps below only touch symlinks
         // / byte copies on the root fs (no `link(2)` cross-mount hazard),
         // so they stay in-process.
-        let counts = crate::ops::store_view_farm::build_store_view_cross_mount_safe(
+        let counts = crate::ops::store_view_farm::build_store_view_cross_mount_safe_async(
             &intent.hardlink_farm_path,
             &generation_id,
             &intent.closure_paths,
             &marker,
         )
+        .await
         .map_err(|e| StoreSyncError::at(build_error_stage(&e), e))?;
         timings.stage_ms = elapsed_ms(stage_started);
 
@@ -374,13 +381,16 @@ fn run_store_sync_inner(
             &generation_id,
             &intent.db_dump_path,
         )
+        .await
         .map_err(|e| StoreSyncError::at(ErrorStage::Metadata, e))?;
         // ADR 0027 publish ordering: state/current first (host view is
         // never behind), meta/current next (guest view), live marker
         // LAST (its existence implies a fully-published generation).
         hardlink_farm::swap_state_current(&intent.hardlink_farm_path, &generation_id)
+            .await
             .map_err(|e| StoreSyncError::at(ErrorStage::CurrentSwap, e))?;
         hardlink_farm::swap_meta_current(&intent.hardlink_farm_path, &generation_id)
+            .await
             .map_err(|e| StoreSyncError::at(ErrorStage::CurrentSwap, e))?;
         plant_live_marker_with_matrix_posture(&intent.hardlink_farm_path, &intent.vm)
             .map_err(|err| posture_error(ErrorStage::Marker, err))?;
@@ -410,7 +420,7 @@ fn run_store_sync_inner(
         (CleanupStatus::SkippedFastPath, CleanupReason::FastPath, 0)
     } else {
         let cleanup_started = Instant::now();
-        let cleanup = cleanup_store_view(&intent.hardlink_farm_path, &intent.vm, &retained_ids);
+        let cleanup = cleanup_store_view(&intent.hardlink_farm_path, &intent.vm, &retained_ids).await;
         timings.cleanup_ms = elapsed_ms(cleanup_started);
         match cleanup {
             CleanupOutcome::Completed { swept_count } => {
@@ -474,11 +484,15 @@ enum CleanupOutcome {
     Failed { swept_count: u32 },
 }
 
-fn cleanup_store_view(store_root: &Path, vm: &str, retained_ids: &[String]) -> CleanupOutcome {
-    if live_pool_may_be_served(store_root, vm) {
+async fn cleanup_store_view(
+    store_root: &Path,
+    vm: &str,
+    retained_ids: &[String],
+) -> CleanupOutcome {
+    if live_pool_may_be_served(store_root, vm).await {
         return CleanupOutcome::DeferredOnline;
     }
-    match cleanup_store_view_inner(store_root, retained_ids) {
+    match cleanup_store_view_inner(store_root, retained_ids).await {
         Ok(swept_count) => CleanupOutcome::Completed { swept_count },
         Err(CleanupError::MissingMetadata) => CleanupOutcome::DeferredMetadata,
         Err(CleanupError::Io { swept_count }) => CleanupOutcome::Failed { swept_count },
@@ -490,8 +504,7 @@ enum CleanupError {
     Io { swept_count: u32 },
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn cleanup_store_view_inner(
+async fn cleanup_store_view_inner(
     store_root: &Path,
     retained_ids: &[String],
 ) -> Result<u32, CleanupError> {
@@ -500,8 +513,9 @@ fn cleanup_store_view_inner(
     let mut desired = std::collections::BTreeSet::new();
     for id in retained_ids {
         let store_paths = hardlink_farm::meta_generation_dir(store_root, id).join("store-paths");
-        let raw =
-            std::fs::read_to_string(&store_paths).map_err(|_| CleanupError::MissingMetadata)?;
+        let raw = tokio::fs::read_to_string(&store_paths)
+            .await
+            .map_err(|_| CleanupError::MissingMetadata)?;
         for line in raw.lines().filter(|line| !line.trim().is_empty()) {
             let path = Path::new(line);
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -513,9 +527,10 @@ fn cleanup_store_view_inner(
 
     let mut swept = 0u32;
     let live = hardlink_farm::live_dir(store_root);
-    if let Ok(entries) = std::fs::read_dir(&live) {
-        for entry in entries {
-            let entry = entry.map_err(|_| CleanupError::Io { swept_count: swept })?;
+    if let Ok(mut entries) = tokio::fs::read_dir(&live).await {
+        loop {
+            let next = entries.next_entry().await.map_err(|_| CleanupError::Io { swept_count: swept })?;
+            let Some(entry) = next else { break; };
             let name = entry.file_name();
             let Some(name) = name.to_str() else {
                 continue;
@@ -523,7 +538,9 @@ fn cleanup_store_view_inner(
             if name.starts_with(".d2b-marker-") || desired.contains(name) {
                 continue;
             }
-            remove_path(&entry.path()).map_err(|_| CleanupError::Io { swept_count: swept })?;
+            remove_path(&entry.path())
+                .await
+                .map_err(|_| CleanupError::Io { swept_count: swept })?;
             swept = swept.saturating_add(1);
         }
     }
@@ -531,24 +548,28 @@ fn cleanup_store_view_inner(
         &hardlink_farm::meta_dir(store_root).join("generations"),
         &retained,
     )
+    .await
     .map_err(|_| CleanupError::Io { swept_count: swept })?;
     prune_generation_dir(
         &hardlink_farm::state_dir(store_root).join("generations"),
         &retained,
     )
+    .await
     .map_err(|_| CleanupError::Io { swept_count: swept })?;
     prune_gcroots(&hardlink_farm::gcroots_dir(store_root), &retained)
+        .await
         .map_err(|_| CleanupError::Io { swept_count: swept })?;
     Ok(swept)
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn live_pool_may_be_served(store_root: &Path, vm: &str) -> bool {
+async fn live_pool_may_be_served(store_root: &Path, vm: &str) -> bool {
     let live = hardlink_farm::live_dir(store_root).display().to_string();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
+    let Ok(mut entries) = tokio::fs::read_dir("/proc").await else {
         return true;
     };
-    for entry in entries.flatten() {
+    loop {
+        let Ok(next) = entries.next_entry().await else { continue; };
+        let Some(entry) = next else { break; };
         let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
             continue;
         };
@@ -556,7 +577,7 @@ fn live_pool_may_be_served(store_root: &Path, vm: &str) -> bool {
             continue;
         }
         let cmdline = entry.path().join("cmdline");
-        let Ok(raw) = std::fs::read(&cmdline) else {
+        let Ok(raw) = tokio::fs::read(&cmdline).await else {
             continue;
         };
         let text = String::from_utf8_lossy(&raw);
@@ -567,41 +588,41 @@ fn live_pool_may_be_served(store_root: &Path, vm: &str) -> bool {
     false
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn prune_generation_dir(
+async fn prune_generation_dir(
     generations_dir: &Path,
     retained: &std::collections::BTreeSet<&str>,
 ) -> std::io::Result<()> {
-    let entries = match std::fs::read_dir(generations_dir) {
+    let mut entries = match tokio::fs::read_dir(generations_dir).await {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err),
     };
-    for entry in entries {
-        let entry = entry?;
+    loop {
+        let next = entries.next_entry().await?;
+        let Some(entry) = next else { break; };
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
             continue;
         };
         if !retained.contains(name) {
-            remove_path(&entry.path())?;
+            remove_path(&entry.path()).await?;
         }
     }
     Ok(())
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn prune_gcroots(
+async fn prune_gcroots(
     gcroots: &Path,
     retained: &std::collections::BTreeSet<&str>,
 ) -> std::io::Result<()> {
-    let entries = match std::fs::read_dir(gcroots) {
+    let mut entries = match tokio::fs::read_dir(gcroots).await {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err),
     };
-    for entry in entries {
-        let entry = entry?;
+    loop {
+        let next = entries.next_entry().await?;
+        let Some(entry) = next else { break; };
         let name = entry.file_name();
         let Some(id) = name
             .to_str()
@@ -610,19 +631,18 @@ fn prune_gcroots(
             continue;
         };
         if !retained.contains(id) {
-            std::fs::remove_file(entry.path())?;
+            tokio::fs::remove_file(entry.path()).await?;
         }
     }
     Ok(())
 }
 
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn remove_path(path: &Path) -> std::io::Result<()> {
-    let meta = std::fs::symlink_metadata(path)?;
+async fn remove_path(path: &Path) -> std::io::Result<()> {
+    let meta = tokio::fs::symlink_metadata(path).await?;
     if meta.is_dir() {
-        std::fs::remove_dir_all(path)
+        tokio::fs::remove_dir_all(path).await
     } else {
-        std::fs::remove_file(path)
+        tokio::fs::remove_file(path).await
     }
 }
 
@@ -641,8 +661,8 @@ fn posture_error(stage: ErrorStage, err: PostureError) -> StoreSyncError {
 }
 
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn acquire_sync_lock(farm_root: &Path) -> Result<File, StoreSyncError> {
-    std::fs::create_dir_all(farm_root).map_err(|err| {
+async fn acquire_sync_lock(farm_root: &Path) -> Result<File, StoreSyncError> {
+    tokio::fs::create_dir_all(farm_root).await.map_err(|err| {
         StoreSyncError::at(
             ErrorStage::Lock,
             HardlinkFarmError::Io {
@@ -743,12 +763,11 @@ mod tests {
         }
     }
 
-    #[test]
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn happy_path_populates_split_layout_and_swaps_currents() {
+    #[tokio::test]
+    async fn happy_path_populates_split_layout_and_swaps_currents() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "alpha", 7, 2);
-        let outcome = run_store_sync(&intent, "alpha", 7).expect("happy path succeeds");
+        let outcome = run_store_sync(&intent, "alpha", 7).await.expect("happy path succeeds");
 
         assert_eq!(outcome.vm, "alpha");
         assert_eq!(outcome.generation_token, 7);
@@ -793,7 +812,7 @@ mod tests {
         let live_marker = farm.join("live/.d2b-marker-alpha");
         assert!(live_marker.exists());
         assert_eq!(
-            std::fs::metadata(&live_marker).unwrap().len(),
+            tokio::fs::metadata(&live_marker).await.unwrap().len(),
             0,
             "live marker is zero-length"
         );
@@ -806,9 +825,9 @@ mod tests {
         );
 
         // Both currents resolve to the same generation id; no stale tmp.
-        let state_current = std::fs::read_link(farm.join("state/current")).unwrap();
+        let state_current = tokio::fs::read_link(farm.join("state/current")).await.unwrap();
         assert_eq!(state_current, PathBuf::from("generations").join(&gid));
-        let meta_current = std::fs::read_link(farm.join("meta/current")).unwrap();
+        let meta_current = tokio::fs::read_link(farm.join("meta/current")).await.unwrap();
         assert_eq!(meta_current, PathBuf::from("generations").join(&gid));
         assert!(!farm.join("state/current.tmp").exists());
         assert!(!farm.join("meta/current.tmp").exists());
@@ -833,7 +852,7 @@ mod tests {
             (farm.join("sync.lock"), 0o600),
             (farm.join("live/.d2b-marker-alpha"), 0o644),
         ] {
-            let meta = std::fs::symlink_metadata(&path).unwrap_or_else(|err| {
+            let meta = tokio::fs::symlink_metadata(&path).await.unwrap_or_else(|err| {
                 panic!("stat {}: {err}", path.display());
             });
             assert_eq!(meta.uid(), expected_uid, "{} owner uid", path.display());
@@ -842,12 +861,11 @@ mod tests {
         }
     }
 
-    #[test]
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn guest_meta_excludes_host_only_fields() {
+    #[tokio::test]
+    async fn guest_meta_excludes_host_only_fields() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "zeta", 9, 1);
-        run_store_sync(&intent, "zeta", 9).expect("sync succeeds");
+        run_store_sync(&intent, "zeta", 9).await.expect("sync succeeds");
 
         let gid = hardlink_farm::generation_id(
             &intent.closure_paths,
@@ -860,7 +878,7 @@ mod tests {
             .join(&gid)
             .join("meta.json");
         let value: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&guest_meta).unwrap()).unwrap();
+            serde_json::from_slice(&tokio::fs::read(&guest_meta).await.unwrap()).unwrap();
         let obj = value.as_object().unwrap();
         // Exact guest allow-list: nothing host-only (no vm, linked_count,
         // skipped_count, or system path) leaks into the guest document.
@@ -876,16 +894,15 @@ mod tests {
         );
     }
 
-    #[test]
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn second_sync_same_closure_takes_fast_path() {
+    #[tokio::test]
+    async fn second_sync_same_closure_takes_fast_path() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "omega", 4, 2);
-        run_store_sync(&intent, "omega", 4).expect("first sync succeeds");
+        run_store_sync(&intent, "omega", 4).await.expect("first sync succeeds");
         // A second sync with the identical closure must detect the
         // already-published generation and short-circuit without error,
         // leaving the currents pointing at the same generation id.
-        let outcome = run_store_sync(&intent, "omega", 4).expect("second sync succeeds");
+        let outcome = run_store_sync(&intent, "omega", 4).await.expect("second sync succeeds");
         let gid = hardlink_farm::generation_id(
             &intent.closure_paths,
             hardlink_farm::system_store_path(&intent.closure_paths),
@@ -897,42 +914,40 @@ mod tests {
         assert_eq!(outcome.skipped_count, outcome.closure_count);
         assert_eq!(outcome.swept_count, 0);
         let state_current =
-            std::fs::read_link(intent.hardlink_farm_path.join("state/current")).unwrap();
+            tokio::fs::read_link(intent.hardlink_farm_path.join("state/current")).await.unwrap();
         assert_eq!(state_current, PathBuf::from("generations").join(&gid));
     }
 
-    #[test]
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn fast_path_repairs_live_marker_posture() {
+    #[tokio::test]
+    async fn fast_path_repairs_live_marker_posture() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "alpha", 7, 1);
-        run_store_sync(&intent, "alpha", 7).expect("first sync succeeds");
+        run_store_sync(&intent, "alpha", 7).await.expect("first sync succeeds");
         let live_marker = intent
             .hardlink_farm_path
             .join("live")
             .join(".d2b-marker-alpha");
-        std::fs::set_permissions(&live_marker, std::fs::Permissions::from_mode(0o600)).unwrap();
+        tokio::fs::set_permissions(&live_marker, std::fs::Permissions::from_mode(0o600)).await.unwrap();
 
-        let outcome = run_store_sync(&intent, "alpha", 7).expect("fast path succeeds");
+        let outcome = run_store_sync(&intent, "alpha", 7).await.expect("fast path succeeds");
         assert!(outcome.fast_path);
-        let meta = std::fs::symlink_metadata(&live_marker).unwrap();
+        let meta = tokio::fs::symlink_metadata(&live_marker).await.unwrap();
         assert_eq!(meta.mode() & 0o777, 0o644);
         assert_eq!(meta.uid(), nix::unistd::Uid::current().as_raw());
         assert_eq!(meta.gid(), nix::unistd::Gid::current().as_raw());
     }
 
-    #[test]
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn non_fast_sync_sweeps_stale_live_entries_when_not_served() {
+    #[tokio::test]
+    async fn non_fast_sync_sweeps_stale_live_entries_when_not_served() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "theta", 8, 1);
         let stale = intent
             .hardlink_farm_path
             .join("live/zzzzzzzzzzzzzzzz-stale");
-        std::fs::create_dir_all(&stale).unwrap();
-        std::fs::write(stale.join("payload"), b"stale").unwrap();
+        tokio::fs::create_dir_all(&stale).await.unwrap();
+        tokio::fs::write(stale.join("payload"), b"stale").await.unwrap();
 
-        let outcome = run_store_sync(&intent, "theta", 8).expect("sync succeeds");
+        let outcome = run_store_sync(&intent, "theta", 8).await.expect("sync succeeds");
         assert_eq!(outcome.cleanup_status, CleanupStatus::Completed);
         assert_eq!(outcome.cleanup_reason, CleanupReason::None);
         assert_eq!(outcome.swept_count, 1);
@@ -940,25 +955,24 @@ mod tests {
         assert!(!outcome.cleanup_deferred);
     }
 
-    #[test]
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn farm_shares_inodes_with_source_no_recursive_chown() {
+    #[tokio::test]
+    async fn farm_shares_inodes_with_source_no_recursive_chown() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "beta", 3, 1);
 
         let src_file = intent.closure_paths[0].join("hello");
-        let pre_meta = std::fs::metadata(&src_file).unwrap();
+        let pre_meta = tokio::fs::metadata(&src_file).await.unwrap();
         let pre_ino = pre_meta.ino();
         let pre_mode = pre_meta.mode();
         let pre_uid = pre_meta.uid();
         let pre_gid = pre_meta.gid();
 
-        run_store_sync(&intent, "beta", 3).expect("sync succeeds");
+        run_store_sync(&intent, "beta", 3).await.expect("sync succeeds");
 
         let linked = intent
             .hardlink_farm_path
             .join("live/xxxxxxxxxxxxxxxx-fake-0/hello");
-        let linked_meta = std::fs::metadata(&linked).unwrap();
+        let linked_meta = tokio::fs::metadata(&linked).await.unwrap();
         // Shared inode: this is the "hardlink farm" contract.
         assert_eq!(linked_meta.ino(), pre_ino, "farm shares inodes with source");
 
@@ -967,17 +981,17 @@ mod tests {
         // shared inodes. We assert the source file's mode/owner is
         // byte-identical post-sync - the broker handler must never
         // call chown/chmod/setfacl recursively across the farm.
-        let post_meta = std::fs::metadata(&src_file).unwrap();
+        let post_meta = tokio::fs::metadata(&src_file).await.unwrap();
         assert_eq!(post_meta.mode(), pre_mode, "source mode unchanged");
         assert_eq!(post_meta.uid(), pre_uid, "source uid unchanged");
         assert_eq!(post_meta.gid(), pre_gid, "source gid unchanged");
     }
 
-    #[test]
-    fn refuses_generation_mismatch() {
+    #[tokio::test]
+    async fn refuses_generation_mismatch() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "gamma", 5, 1);
-        let err = run_store_sync(&intent, "gamma", 6).expect_err("generation mismatch refused");
+        let err = run_store_sync(&intent, "gamma", 6).await.expect_err("generation mismatch refused");
         assert!(matches!(
             err,
             StoreSyncError::GenerationMismatch {
@@ -990,11 +1004,11 @@ mod tests {
         assert_eq!(err.error_stage(), ErrorStage::Probe);
     }
 
-    #[test]
-    fn refuses_vm_mismatch() {
+    #[tokio::test]
+    async fn refuses_vm_mismatch() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "delta", 1, 1);
-        let err = run_store_sync(&intent, "epsilon", 1).expect_err("vm mismatch refused");
+        let err = run_store_sync(&intent, "epsilon", 1).await.expect_err("vm mismatch refused");
         assert_eq!(err.error_stage(), ErrorStage::Probe);
         match err {
             StoreSyncError::VmMismatch { wire, resolved } => {
@@ -1005,13 +1019,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn generation_overflow_maps_to_probe_stage() {
+    #[tokio::test]
+    async fn generation_overflow_maps_to_probe_stage() {
         let tmp = tempdir().unwrap();
         // A resolved generation that does not fit in u32 overflows the
         // wire token; this is a pre-lock request guard → probe stage.
         let intent = intent_with(tmp.path(), "kappa", u64::from(u32::MAX) + 1, 1);
-        let err = run_store_sync(&intent, "kappa", 0).expect_err("overflow refused");
+        let err = run_store_sync(&intent, "kappa", 0).await.expect_err("overflow refused");
         assert!(matches!(err, StoreSyncError::GenerationOverflow { .. }));
         assert_eq!(err.error_stage(), ErrorStage::Probe);
     }
@@ -1055,11 +1069,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn failed_sync_before_lock_writes_no_guest_metadata() {
+    #[tokio::test]
+    async fn failed_sync_before_lock_writes_no_guest_metadata() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "sigma", 5, 1);
-        let err = run_store_sync(&intent, "sigma", 6).expect_err("generation mismatch refused");
+        let err = run_store_sync(&intent, "sigma", 6).await.expect_err("generation mismatch refused");
         assert_eq!(err.error_stage(), ErrorStage::Probe);
         // A failure before the lock/materialise phase must not publish any
         // guest-served metadata or live pool: no meta/ subtree appears.

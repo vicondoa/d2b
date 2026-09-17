@@ -42,6 +42,15 @@ rustix = { workspace = true }
 nix = { version = "0.29", default-features = false, features = ["fs", "user"] }
 libc = "0.2"
 sha2 = { workspace = true }
+# Async hardlink-farm API (U7 dependency surface): the farm's path-based
+# primitives run on `tokio::fs` so the broker's store-sync path can drive
+# them from an async runtime without blocking an executor worker. `rt` +
+# `macros` additionally serve the `d2b-activation-helper` binary, whose
+# process entry point drives a current-thread runtime around the three
+# farm verbs (the sanctioned entry-point shape; no mid-call-graph
+# `block_on`). `spawn_blocking` stays unused: the only no-async-form
+# syscall (renameat2 RENAME_EXCHANGE) runs inline as a short syscall.
+tokio = { workspace = true, features = ["fs", "rt", "macros", "io-util"] }
 # `miniz_oxide` is a raw-DEFLATE decoder; d2b-host wraps it in a
 # tiny inline gzip header/trailer skipper so the W3 kernel-module
 # probe can read `/proc/config.gz` as a secondary kernel-config
@@ -56,5 +65,5 @@ nix = { version = "0.29", default-features = false, features = ["fs", "user"] }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 serde_json.workspace = true
 tempfile = "3"
-tokio = { version = "1", features = ["net"] }
+tokio = { version = "1", features = ["net", "fs", "rt", "macros", "io-util"] }
 ttrpc = { version = "0.9.0", default-features = false, features = ["async"] }

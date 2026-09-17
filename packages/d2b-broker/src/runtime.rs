@@ -4304,8 +4304,8 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     intent_id: req.bundle_closure_ref.as_str().to_owned(),
                 })?;
             let started = std::time::Instant::now();
-            let result =
-                crate::ops::store_sync::run_store_sync(intent, &vm_name, req.generation_token);
+            let result = crate::ops::store_sync::run_store_sync(intent, &vm_name, req.generation_token)
+                .await;
             let total_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
             // ADR 0027: every StoreSync attempt that reaches this handler

@@ -338,8 +338,9 @@ async fn materialize_store_view(intent: &ResolvedStoreViewIntent) -> Result<(), 
     )
     .await
     .map_err(map_hardlink_farm_error)?;
-    let _ =
-        hardlink_farm::read_generation_marker(&generation_dir).map_err(map_hardlink_farm_error)?;
+    let _ = hardlink_farm::read_generation_marker(&generation_dir)
+        .await
+        .map_err(map_hardlink_farm_error)?;
     if !intent.target_view_path.exists() {
         return Err(ReconcileExecError::Io {
             path: intent.target_view_path.display().to_string(),
