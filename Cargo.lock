@@ -2107,6 +2107,7 @@ dependencies = [
  "d2b-session",
  "d2b-session-unix",
  "libc",
+ "rustix 0.38.44",
  "tokio",
  "tokio-vsock",
 ]

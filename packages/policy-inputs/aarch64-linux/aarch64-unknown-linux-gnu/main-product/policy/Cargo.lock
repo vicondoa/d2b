@@ -1188,6 +1188,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "tracing",
 ]
 
@@ -1563,7 +1564,6 @@ dependencies = [
  "d2b-provider-system-core",
  "d2b-resource-runtime",
  "d2b-resource-types",
- "parking_lot",
  "serde_json",
  "tokio",
 ]
@@ -1796,6 +1796,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "tokio",
  "tracing",
 ]
 
@@ -1830,6 +1831,7 @@ dependencies = [
  "d2b-contracts-resource",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -1940,6 +1942,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "getrandom 0.3.4",
  "rustix 0.38.44",
+ "tokio",
  "tracing",
 ]
 
@@ -2032,6 +2035,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
  "tracing",
 ]
 
@@ -2047,7 +2051,6 @@ dependencies = [
  "d2b-provider-display-wayland",
  "d2b-resource-runtime",
  "d2b-resource-types",
- "parking_lot",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -2239,6 +2242,7 @@ dependencies = [
  "d2b-session",
  "d2b-session-unix",
  "libc",
+ "rustix 0.38.44",
  "tokio",
  "tokio-vsock",
 ]
