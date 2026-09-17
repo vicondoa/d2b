@@ -41,6 +41,10 @@ pub enum VirtualKeyboardError {
 
 struct VirtualKeyboardState;
 
+// Sync-by-construction host paste:wayland roundtrips plus the two fixed
+// 2ms inter-key pauses run on the CLI daemon's own worker thread (only
+// clipd_host ships in the bin crate; no executor exists anywhere in it).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn paste_ctrl_v() -> Result<(), VirtualKeyboardError> {
     let connection = Connection::connect_to_env()
         .map_err(|error| VirtualKeyboardError::Wayland(error.to_string()))?;
@@ -94,6 +98,10 @@ pub fn paste_ctrl_v() -> Result<(), VirtualKeyboardError> {
     Ok(())
 }
 
+// Sync-by-construction one-shot memfd write at paste time on the daemon's
+// own worker thread;no async fs form is in play for this tiny fd setup.
+
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn create_keymap_memfd() -> Result<File, VirtualKeyboardError> {
     let keymap_fd = rustix::fs::memfd_create("d2b-clipd-keymap", rustix::fs::MemfdFlags::CLOEXEC)
         .map_err(|error| VirtualKeyboardError::Keymap(error.to_string()))?;
@@ -136,6 +144,7 @@ mod tests {
         assert!(!keymap.contains("include \"evdev\""));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn keymap_fd_is_anonymous_memfd() {
         use std::os::fd::AsRawFd;

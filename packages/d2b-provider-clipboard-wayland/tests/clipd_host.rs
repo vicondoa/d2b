@@ -1,6 +1,7 @@
 use std::fs;
 use std::process::Command;
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn check_config_validates_json_and_paths_without_runtime_side_effects() {
     let temp = std::env::temp_dir().join(format!(
@@ -29,6 +30,7 @@ fn check_config_validates_json_and_paths_without_runtime_side_effects() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("config ok"));
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn check_config_rejects_relative_picker_path() {
     let temp = std::env::temp_dir().join(format!(

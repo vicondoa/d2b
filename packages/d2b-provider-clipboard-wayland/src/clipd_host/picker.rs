@@ -80,6 +80,12 @@ pub struct CommandPickerSpawner;
 impl PickerSpawner for CommandPickerSpawner {
     type Process = Child;
 
+    // Sync-by-construction subprocess launch:the picker child inherits fd
+    // 3 via command-fds mappings, so stdio plumbing must stay synchronous.
+    // clipd_host ships only in the CLI daemon, which owns its own threads
+    // and a poll loop, never an executor.
+
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerError> {
         let mut command = Command::new(&launch.command.program);
         command.args(&launch.argv);
@@ -236,6 +242,10 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
         Ok(&self.active.as_ref().expect("active").parent_socket)
     }
 
+    // Sync-by-construction nonblocking read:the daemon's poll loop marks the
+    // picker socket ready, then this drains frames without ever blocking
+    // (WouldBlock breaks the loop). Only the CLI daemon compiles clipd_host.
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     pub fn poll_active(&mut self, max_frame_bytes: usize) -> Result<PickerPoll, PickerError> {
         let Some(active) = self.active.as_mut() else {
             return Ok(PickerPoll::Incomplete);

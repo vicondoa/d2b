@@ -119,6 +119,11 @@ fn main() {
     }
 }
 
+// CLI daemon entry:all of d2b-clipd.rs runs on the main thread / its own
+// worker threads inside a poll loop; no executor exists anywhere in the
+// binary, so these blocking calls are sync-by-construction.
+
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     let args = parse_args(args_iter)?;
 
@@ -402,6 +407,7 @@ struct EventLoop<'a> {
 }
 
 impl EventLoop<'_> {
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn run(&mut self) -> Result<(), String> {
         loop {
             self.drain_async_materialization();
@@ -1116,6 +1122,7 @@ enum BridgeAttribution {
     ExactClient,
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn install_bridge_listeners(
     root: &Path,
     bridge_peers: &[BridgePeerConfig],
@@ -1197,6 +1204,7 @@ struct BridgeCopySelectionRequest {
     fd: OwnedFd,
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn accept_bridge_streams(
     bridge: &BridgeListener,
     streams: &mut Vec<BridgeStream>,
@@ -1677,6 +1685,7 @@ fn notify_bridge_selection_refresh(streams: &mut Vec<BridgeStream>) {
     streams.retain_mut(notify_bridge_stream_selection_refresh);
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn notify_bridge_stream_selection_refresh(stream: &mut BridgeStream) -> bool {
     let frame = br#"{"type":"refresh_selection"}"#;
     let mut bytes = Vec::with_capacity(frame.len() + 1);
@@ -1714,6 +1723,7 @@ fn notify_bridge_stream_selection_refresh(stream: &mut BridgeStream) -> bool {
     bridge_refresh_write_outcome(&result, bytes.len()) == BridgeRefreshWriteOutcome::Keep
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn handle_bridge_copy_selection(
     request: BridgeCopySelectionRequest,
     context: &mut BridgeHandlerContext<'_>,
@@ -2538,6 +2548,7 @@ enum ControlReadError {
     Invalid(String),
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_control_command_from_stream(
     control: &mut ControlStream,
 ) -> Result<ControlCommand, ControlReadError> {
@@ -2676,6 +2687,7 @@ fn replay_paste_after_focus(
     crate::clipd_host::virtual_keyboard::paste_ctrl_v().map_err(|error| error.to_string())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn wait_for_target_focus<F>(
     target: &FocusedWindowSnapshot,
     timeout: Duration,
@@ -2815,6 +2827,7 @@ fn preferred_mime_order(data_by_mime: &BTreeMap<String, Vec<u8>>) -> Vec<String>
     out
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn materialize_offer_mimes_async(
     data_control: &mut DataControlClient,
     offer: &crate::clipd_host::wayland::DataControlOffer,
@@ -3490,6 +3503,7 @@ enum NiriMessage {
     Disconnected,
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn spawn_niri_event_thread(socket: PathBuf, tx: mpsc::Sender<NiriMessage>) {
     std::thread::Builder::new()
         .name("d2b-clipd-niri".to_owned())
@@ -3608,6 +3622,7 @@ fn control_socket_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(runtime).join("d2b-clipd/clipd.sock"))
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn install_control_socket_parent(socket: &Path) -> Result<(), String> {
     let parent = socket
         .parent()
@@ -3631,6 +3646,7 @@ enum ControlFrame {
     Arm,
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_bounded_line(
     stream: &UnixStream,
     max_frame_bytes: usize,
@@ -3872,6 +3888,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn helper_thread_permits_are_bounded() {
         let _guard = HELPER_THREAD_TEST_LOCK.lock().expect("helper thread lock");
@@ -4428,6 +4445,7 @@ mod tests {
         assert!(err.contains("unknown argument"));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn control_command_rejects_malformed_json() {
         let (mut writer, reader) = UnixStream::pair().expect("pair");
@@ -4488,6 +4506,7 @@ mod tests {
         assert!(bridge_streams.is_empty());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn bounded_line_rejects_overlong_control_frame() {
         let (mut writer, reader) = UnixStream::pair().expect("pair");
@@ -4507,6 +4526,7 @@ mod tests {
         assert!(err.contains("timed out"));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn bridge_listener_socket_is_connectable_by_peer_group() {
         let _guard = UMASK_TEST_LOCK.lock().expect("umask lock");
@@ -4534,6 +4554,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn bridge_listener_temporary_umask_is_restored() {
         let _guard = UMASK_TEST_LOCK.lock().expect("umask lock");
@@ -4635,6 +4656,7 @@ mod tests {
         assert_eq!(err, ReasonCode::SourceMaterializeTimeout);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn write_all_nonblocking_fd_writes_socketpair_bytes() {
         let (write_sock, mut read_sock) = UnixStream::pair().expect("pair");
@@ -4673,6 +4695,7 @@ mod tests {
         drop(write_fd);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn bridge_frame_carries_exact_unsafe_local_identity_and_fd() {
         let (sender, receiver) = UnixStream::pair().expect("bridge pair");
@@ -4712,6 +4735,7 @@ mod tests {
         drop(read_fd);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn bridge_frame_rejects_non_exact_attribution() {
         let (sender, receiver) = UnixStream::pair().expect("bridge pair");
@@ -4747,6 +4771,7 @@ mod tests {
         drop(read_fd);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn bridge_frame_rejects_more_than_one_fd() {
         let (sender, receiver) = UnixStream::pair().expect("bridge pair");
@@ -4782,6 +4807,7 @@ mod tests {
         drop(read_b);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn bridge_frame_rejects_overlong_fragment_without_newline() {
         let (mut sender, receiver) = UnixStream::pair().expect("bridge pair");
@@ -4799,6 +4825,7 @@ mod tests {
         assert!(err.message().contains("bridge frame too large"));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn bridge_frame_allows_fd_for_partial_followup_frame() {
         let (sender, receiver) = UnixStream::pair().expect("bridge pair");

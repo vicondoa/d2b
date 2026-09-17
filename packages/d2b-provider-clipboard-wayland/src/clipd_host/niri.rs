@@ -46,6 +46,10 @@ pub struct NiriJsonClient {
 }
 
 impl NiriJsonClient {
+    // Sync-by-construction host IPC client:the clipd_host module ships only
+    // in the CLI daemon (src/lib.rs does not include it), and the daemon
+    // runs its own threads + poll loop, never an executor.
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     pub fn connect(
         socket_path: impl AsRef<Path>,
         max_line_bytes: usize,
@@ -71,6 +75,7 @@ impl NiriJsonClient {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     pub fn request<T: DeserializeOwned>(
         &mut self,
         request: &NiriRequest,
@@ -127,6 +132,7 @@ pub fn encode_niri_request(request: &NiriRequest) -> Result<Vec<u8>, NiriIpcErro
     Ok(frame)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn read_bounded_ndjson_line<R: Read>(
     reader: &mut R,
     max_line_bytes: usize,
@@ -589,6 +595,7 @@ mod tests {
         assert!(!cache.is_stale());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn direct_client_uses_unix_socket_json_and_bounded_line_reads() {
         let (client, mut server) = UnixStream::pair().expect("socketpair");
@@ -618,6 +625,7 @@ mod tests {
         assert_eq!(focused.app_id.as_deref(), Some("foot"));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn direct_client_unwraps_niri_variant_payloads() {
         let (client, mut server) = UnixStream::pair().expect("socketpair");
@@ -648,6 +656,7 @@ mod tests {
         assert_eq!(focused.workspace_id, Some(3));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn direct_client_unwraps_niri_workspaces_payload() {
         let (client, mut server) = UnixStream::pair().expect("socketpair");

@@ -440,6 +440,11 @@ impl core::fmt::Display for FdReadError {
 impl std::error::Error for FdReadError {}
 
 /// Read one stream through a hard byte limit.
+///
+/// Sync-by-construction: a bounded fd read at the lib's public surface with
+/// no async form in this crate (the crate exposes a sync provider surface,
+/// and callers expect a `Result` without an executor).
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn read_bounded<R: Read>(reader: &mut R, max_size_bytes: u64) -> Result<Vec<u8>, FdReadError> {
     let mut bytes = Vec::new();
     let read_limit = max_size_bytes.saturating_add(1);
