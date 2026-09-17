@@ -440,6 +440,12 @@ fn open_cgroup_dir(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome,
 /// comparison stays on the family side.
 fn observe_process(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let pid = field_i64(invocation.payload, "pid")? as i32;
+    // The kernel handler body is synchronous by construction (the envelope
+    // `HandlerTable` API takes sync closures; the seam's async handler-task
+    // model is plan U8 item 1's sequencing dependency), so the /proc probe
+    // keeps the sanctioned synchronous-path allow until the seam's U13
+    // async sweep converts handler bodies to tokio::fs.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
     let (present, state, start_time_ticks) = match &stat {
         Ok(stat) => (
@@ -454,14 +460,18 @@ fn observe_process(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome,
     // /proc/<pid>/exe can be unreadable from the broker's context even for
     // a present process (the runner runs under its own uid/namespace), so
     // the family side prefers this record and uses the readlink only as a
-    // cross-check when both are readable.
+    // cross-check when both are readable. Synchronous handler body, same
+    // sanctioned allow as the /proc stat read above (plan U8 item 1).
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     let executable = std::fs::read_link(format!("/proc/{pid}/exe"))
         .ok()
         .map(|path| path.display().to_string());
     let registered_binary =
         optional_parse_identity_fields(invocation.payload).and_then(|identity| {
+            // Non-blocking try-lock (plan U8): a Busy collision reports no
+            // registered binary, exactly like the old poisoned path.
             crate::runtime::runner_metadata_registry()
-                .lock()
+                .try_lock()
                 .ok()
                 .and_then(|registry| {
                     registry
@@ -521,9 +531,12 @@ fn take_controller_bootstrap(
         identity.zone_uid.as_ref(),
         identity.runtime_scope,
     );
+    // Non-blocking try-lock (plan U8): a Busy collision (a concurrent
+    // spawn-process escrow insert, sub-microsecond) fails the take closed;
+    // the daemon retries the adoption.
     let escrow = crate::runtime::controller_bootstrap_registry()
-        .lock()
-        .map_err(|_| errored("take-controller-bootstrap: registry mutex poisoned".to_owned()))?
+        .try_lock()
+        .map_err(|_| errored("take-controller-bootstrap: registry busy (tokio try-lock)".to_owned()))?
         .remove(&key);
     let Some(escrow) = escrow else {
         return Ok(DispatchOutcome {
@@ -887,9 +900,12 @@ fn spawn_process(
         cgroup_subtree: plan_input.cgroup_placement.subtree.clone(),
         guest_execution: identity.guest_execution.clone(),
     };
+    // Non-blocking try-lock (plan U8): a Busy collision fails the spawn
+    // closed exactly like the old poisoned path (the child is rolled back
+    // by the caller).
     let replaced = crate::runtime::runner_metadata_registry()
-        .lock()
-        .map_err(|_| errored("spawn-process: runner metadata registry mutex poisoned".to_owned()))?
+        .try_lock()
+        .map_err(|_| errored("spawn-process: runner metadata registry busy (tokio try-lock)".to_owned()))?
         .insert(runner_id.clone(), registration);
     if replaced.is_some() {
         // The reserve guard ran before the spawn, so a pre-existing
@@ -914,9 +930,11 @@ fn spawn_process(
     // only fd 0 and would silently close any advertised extra).
     if let Some(bootstrap) = retained_controller_bootstrap {
         crate::runtime::controller_bootstrap_registry()
-            .lock()
+            .try_lock()
             .map_err(|_| {
-                errored("spawn-process: controller bootstrap registry mutex poisoned".to_owned())
+                errored(
+                    "spawn-process: controller bootstrap registry busy (tokio try-lock)".to_owned(),
+                )
             })?
             .insert(runner_id.clone(), bootstrap);
     }
@@ -2004,6 +2022,9 @@ fn exit_kind_str(kind: &d2b_contracts_broker::broker_wire::ChildExitKind) -> &'s
 
 /// The pid of one pidfd, read from its fdinfo entry (`Pid:` line).
 fn pidfd_pid(pidfd: std::os::fd::BorrowedFd<'_>) -> Option<i32> {
+    // Synchronous kernel handler body; same sanctioned allow as the
+    // observe-process /proc probes (plan U8 item 1).
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd())).ok()?;
     info.lines().find_map(|line| {
         line.strip_prefix("Pid:")
@@ -2026,7 +2047,10 @@ fn parse_proc_state(stat: &str) -> Option<String> {
 fn drain_notification(
     invocation_id: &str,
 ) -> Option<d2b_contracts_broker::broker_wire::ChildReapedNotification> {
-    let mut buffer = crate::runtime::child_reap_buffer().lock().ok()?;
+    // Non-blocking try-lock (plan U8): a Busy collision (the reap task's
+    // push) returns None and the notification stays buffered for the next
+    // poll - the reap outcome is never lost, only deferred.
+    let mut buffer = crate::runtime::child_reap_buffer().try_lock().ok()?;
     let index = buffer
         .iter()
         .position(|notification| notification.runner_id == invocation_id)?;

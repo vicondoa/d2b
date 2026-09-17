@@ -8,12 +8,17 @@ use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+// Test-only sync fakes keep `std::sync::Mutex` per the plan's test-helper
+// assumption (sanctioned inline allows at flip time); production state is
+// `tokio::sync` (plan U8). The fakes exist only on the non-bootstrap wire.
+#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::{
     collections::{BTreeSet, HashMap},
-    sync::OnceLock,
+    sync::{LazyLock, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -984,7 +989,7 @@ pub(crate) struct DispatchPool {
 }
 
 impl DispatchPool {
-    fn new(workers: usize) -> Arc<Self> {
+    pub(crate) fn new(workers: usize) -> Arc<Self> {
         let mut queues = Vec::with_capacity(workers);
         for index in 0..workers {
             let (queue, mut jobs) =
@@ -1066,7 +1071,10 @@ struct Server {
     /// forwarded call parks its worker until the nested leg's reply returns,
     /// so a shared pool can deadlock the pair (see NESTED_DISPATCH_WORKERS).
     nested_dispatches: Arc<DispatchPool>,
-    ipc_rate_limiter: Arc<Mutex<IpcRateLimiter>>,
+    /// The per-uid IPC admission limiter. `tokio::sync` per plan U8: the
+    /// check runs on the synchronous dispatch workers, which reach it
+    /// through the non-blocking `try_lock` (never held across an await).
+    ipc_rate_limiter: Arc<tokio::sync::Mutex<IpcRateLimiter>>,
 }
 /// The process-lifetime handles background work reaches the broker's runtime
 /// through.
@@ -1194,7 +1202,7 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
         audit_log,
         dispatches,
         nested_dispatches,
-        ipc_rate_limiter: Arc::new(Mutex::new(IpcRateLimiter::new(
+        ipc_rate_limiter: Arc::new(tokio::sync::Mutex::new(IpcRateLimiter::new(
             DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND,
         ))),
     });
@@ -1565,7 +1573,7 @@ fn answer_request(
     peer_pid: i32,
     config: &ServerConfig,
     audit_log: &AuditLog,
-    ipc_rate_limiter: &Arc<Mutex<IpcRateLimiter>>,
+    ipc_rate_limiter: &Arc<tokio::sync::Mutex<IpcRateLimiter>>,
 ) -> io::Result<RequestOutcome> {
     #[cfg(feature = "layer1-bootstrap")]
     let _ = &request_fds; // the bootstrap wire carries no request descriptors
@@ -1624,10 +1632,17 @@ fn answer_request(
     } else {
         IpcRatePool::Direct
     };
-    let rate_allowed = ipc_rate_limiter
-        .lock()
-        .map_err(|_| io::Error::other("broker IPC rate limiter mutex poisoned"))?
-        .check(rate_pool, effective_uid, rate_role, rate_operation);
+    // The limiter is a `tokio::sync::Mutex` (plan U8); this check runs on
+    // the synchronous dispatch workers, which must never block, so it
+    // takes the non-blocking `try_lock`. The critical section is a single
+    // bounded table update, so a `Busy` collision means a concurrent
+    // request's check is in flight; the request fails closed exactly like
+    // a rate-limited one (refusals, never stalls - plan SC3 degradation
+    // shape) rather than parking the worker.
+    let rate_allowed = match ipc_rate_limiter.try_lock() {
+        Ok(mut limiter) => limiter.check(rate_pool, effective_uid, rate_role, rate_operation),
+        Err(_) => false,
+    };
     if !rate_allowed {
         if let Err(error) = write_refusal_audit_bounded(
             audit_log,
@@ -3467,6 +3482,12 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                         && Path::new(pw_dump_path).is_absolute()
                         && Path::new(runtime_dir).is_absolute() =>
                 {
+                    // The PipeWire probe runs on the synchronous dispatch
+                    // worker (the request body has no async form until the
+                    // seam's handler-task model lands, plan U8 item 1), so
+                    // the subprocess wait keeps the sanctioned synchronous
+                    // path allow rather than a tokio::process conversion.
+                    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
                     let dump = std::process::Command::new(pw_dump_path)
                         .env_clear()
                         .env("PIPEWIRE_RUNTIME_DIR", runtime_dir)
@@ -3549,6 +3570,9 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                                             command.args(["set-volume", &node_id, &level_arg]);
                                         }
                                     }
+                                    // Same synchronous dispatch worker as the
+                                    // pw_dump probe above (plan U8 item 1).
+                                    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
                                     let applied = command
                                         .output()
                                         .map(|output| output.status.success())
@@ -5256,10 +5280,19 @@ pub(crate) fn runner_pidfds() -> RunnerPidfdCell {
     RunnerPidfdCell
 }
 
+/// The controller-bootstrap escrow registry.
+///
+/// `tokio::sync` per plan U8: every caller runs on the synchronous
+/// dispatch workers or the reap task, and reaches the registry through the
+/// non-blocking `try_lock` (the critical sections are single map
+/// operations, never held across an await). A `Busy` collision is handled
+/// per site exactly like the old poisoned path (error / skip / retry).
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn controller_bootstrap_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<String, OwnedFd>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+pub(crate) fn controller_bootstrap_registry() -> &'static tokio::sync::Mutex<HashMap<String, OwnedFd>>
+{
+    static REGISTRY: LazyLock<tokio::sync::Mutex<HashMap<String, OwnedFd>>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+    &REGISTRY
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -5292,10 +5325,16 @@ impl std::fmt::Debug for RunnerRegistration {
     }
 }
 
+/// The runner-id-keyed metadata registry.
+///
+/// `tokio::sync` per plan U8 (see [`controller_bootstrap_registry`] for
+/// the access model): synchronous callers use the non-blocking `try_lock`.
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn runner_metadata_registry() -> &'static Mutex<HashMap<String, RunnerRegistration>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<String, RunnerRegistration>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+pub(crate) fn runner_metadata_registry(
+) -> &'static tokio::sync::Mutex<HashMap<String, RunnerRegistration>> {
+    static REGISTRY: LazyLock<tokio::sync::Mutex<HashMap<String, RunnerRegistration>>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+    &REGISTRY
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -5313,8 +5352,8 @@ fn register_runner_metadata(
         request.resource_ref.is_some(),
     )?;
     let mut registry = runner_metadata_registry()
-        .lock()
-        .map_err(|_| BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned()))?;
+        .try_lock()
+        .map_err(|_| BrokerError::Protocol("runner metadata registry busy (tokio try-lock)".to_owned()))?;
     registry.insert(
         runner_id.to_owned(),
         RunnerRegistration {
@@ -5361,8 +5400,8 @@ fn register_runner_metadata_from_open(
         request.resource_ref.is_some(),
     )?;
     let mut registry = runner_metadata_registry()
-        .lock()
-        .map_err(|_| BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned()))?;
+        .try_lock()
+        .map_err(|_| BrokerError::Protocol("runner metadata registry busy (tokio try-lock)".to_owned()))?;
     registry.insert(
         runner_id.to_owned(),
         RunnerRegistration {
@@ -5512,7 +5551,10 @@ fn rebind_guest_execution_registration(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn remove_runner_metadata(runner_id: &str) {
-    if let Ok(mut registry) = runner_metadata_registry().lock() {
+    // Non-blocking try-lock (plan U8): a Busy collision skips the removal
+    // exactly like the old poisoned path; the caller retries or the next
+    // reap pass clears the entry.
+    if let Ok(mut registry) = runner_metadata_registry().try_lock() {
         registry.remove(runner_id);
     }
 }
@@ -5543,8 +5585,8 @@ fn observe_registered_runner(
         // Keep the lock order aligned with deregistration: pidfd registry
         // first, metadata second. This makes the binding update atomic with
         // the live pidfd registration.
-let mut metadata_registry = runner_metadata_registry().lock().map_err(|_| {
-            BrokerError::LiveHandler("runner metadata registry mutex poisoned".to_owned())
+let mut metadata_registry = runner_metadata_registry().try_lock().map_err(|_| {
+            BrokerError::LiveHandler("runner metadata registry busy (tokio try-lock)".to_owned())
         })?;
         let registration = match metadata_registry.get(&runner_id).cloned() {
             Some(registration) => registration,
@@ -5705,9 +5747,9 @@ fn discover_runner_candidate(
     // the executable check prefers the registered spawn metadata when it
     // exists (U10 seam: the observation verifies what actually ran).
     let registered_binary = runner_metadata_registry()
-        .lock()
+        .try_lock()
         .map_err(|_| {
-            BrokerError::LiveHandler("runner metadata registry mutex poisoned".to_owned())
+            BrokerError::LiveHandler("runner metadata registry busy (tokio try-lock)".to_owned())
         })?
         .get(&runner_registry_key(
             request.vm_id.as_str(),
@@ -5990,37 +6032,38 @@ fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
 }
 
 /// In-memory ring buffer for `ChildReaped` notifications.
-/// Capped at 256 entries (oldest dropped on overflow). Protected by
-/// a `std::sync::Mutex` so both the tokio reap task and the synchronous
-/// accept loop can access it safely.
+/// Capped at 256 entries (oldest dropped on overflow). Protected by a
+/// `tokio::sync::Mutex` (plan U8) so both the tokio reap task and the
+/// synchronous dispatch workers can access it safely: the reap task pushes
+/// through the async lock (a reap notification is never dropped), while
+/// synchronous readers and writers use the non-blocking `try_lock` - the
+/// sanctioned shape for sync readers, never a surviving `std::sync::Mutex`
+/// (plan KD1). The critical sections are single deque operations, never
+/// held across an await.
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn child_reap_buffer() -> &'static Mutex<
+pub(crate) fn child_reap_buffer() -> &'static tokio::sync::Mutex<
     std::collections::VecDeque<d2b_contracts_broker::broker_wire::ChildReapedNotification>,
 > {
     use std::collections::VecDeque;
 
-    static BUFFER: OnceLock<
-        Mutex<VecDeque<d2b_contracts_broker::broker_wire::ChildReapedNotification>>,
-    > = OnceLock::new();
-    BUFFER.get_or_init(|| Mutex::new(VecDeque::with_capacity(256)))
+    static BUFFER: LazyLock<
+        tokio::sync::Mutex<VecDeque<d2b_contracts_broker::broker_wire::ChildReapedNotification>>,
+    > = LazyLock::new(|| tokio::sync::Mutex::new(VecDeque::with_capacity(256)));
+    &BUFFER
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 const CHILD_REAP_BUFFER_CAP: usize = 256;
 
-/// Push one notification to the ring buffer.
+/// Push one notification to the ring buffer under a held guard.
 /// If the buffer is full, drops the oldest entry and logs a warning.
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn push_child_reap_notification(
+fn push_child_reap_notification_locked(
+    buf: &mut std::collections::VecDeque<
+        d2b_contracts_broker::broker_wire::ChildReapedNotification,
+    >,
     notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
 ) {
-    let mut buf = match child_reap_buffer().lock() {
-        Ok(g) => g,
-        Err(_) => {
-            tracing::warn!("child_reap_buffer mutex poisoned; dropping ChildReaped notification");
-            return;
-        }
-    };
     if buf.len() >= CHILD_REAP_BUFFER_CAP {
         let dropped = buf.pop_front();
         tracing::warn!(
@@ -6034,14 +6077,41 @@ pub(crate) fn push_child_reap_notification(
     buf.push_back(notif);
 }
 
+/// Push one notification from an async context (the SIGCHLD reap task).
+/// Waits for the lock, so the primary reaper's notification is never
+/// dropped under a concurrent reader.
+#[cfg(not(feature = "layer1-bootstrap"))]
+pub(crate) async fn push_child_reap_notification_async(
+    notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
+) {
+    let mut buf = child_reap_buffer().lock().await;
+    push_child_reap_notification_locked(&mut buf, notif);
+}
+
+/// Push one notification from a synchronous context (kernel handlers on
+/// the dispatch workers). Non-blocking `try_lock`: a notification is
+/// dropped with a warning only when another push/drain momentarily holds
+/// the lock (sub-microsecond critical sections); the reap outcome is still
+/// carried by the ReapChild response and the audit record.
+#[cfg(not(feature = "layer1-bootstrap"))]
+pub(crate) fn push_child_reap_notification(
+    notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
+) {
+    let Ok(mut buf) = child_reap_buffer().try_lock() else {
+        tracing::warn!("child_reap_buffer busy; dropping ChildReaped notification");
+        return;
+    };
+    push_child_reap_notification_locked(&mut buf, notif);
+}
+
 /// Drain the ring buffer (used by PollChildReaped handler).
 #[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn drain_child_reap_buffer()
 -> Vec<d2b_contracts_broker::broker_wire::ChildReapedNotification> {
-    match child_reap_buffer().lock() {
+    match child_reap_buffer().try_lock() {
         Ok(mut buf) => buf.drain(..).collect(),
         Err(_) => {
-            tracing::warn!("child_reap_buffer mutex poisoned; returning empty drain");
+            tracing::warn!("child_reap_buffer busy; returning empty drain");
             Vec::new()
         }
     }
@@ -6064,13 +6134,17 @@ fn remove_runner_registration(runner_id: &str) {
 fn remove_runner_registries(runner_id: &str) -> bool {
     // Keep the metadata ordering aligned with observation and deregistration
     // so reap cleanup cannot deadlock with a concurrent registry update; the
-    // pidfd registry lives on the cell store with its own lock.
-    let Ok(mut metadata_registry) = runner_metadata_registry().lock() else {
+    // pidfd registry lives on the cell store with its own lock. The
+    // registries are `tokio::sync` (plan U8): the non-blocking `try_lock`
+    // skips a pass exactly like the old poisoned path, and the caller
+    // retries (the SIGCHLD loop re-passes on its next signal, the targeted
+    // reap reports Failed and the caller re-probes).
+    let Ok(mut metadata_registry) = runner_metadata_registry().try_lock() else {
         return false;
     };
     runner_pidfds().remove(runner_id);
     metadata_registry.remove(runner_id);
-    if let Ok(mut bootstrap_registry) = controller_bootstrap_registry().lock() {
+    if let Ok(mut bootstrap_registry) = controller_bootstrap_registry().try_lock() {
         bootstrap_registry.remove(runner_id);
     }
     true
@@ -6783,9 +6857,11 @@ impl DispatchBackend for LiveDispatchBackend {
         })?;
         if let Some(bootstrap) = retained_controller_bootstrap {
             controller_bootstrap_registry()
-                .lock()
+                .try_lock()
                 .map_err(|_| {
-                    BrokerError::Protocol("controller bootstrap registry mutex poisoned".to_owned())
+                    BrokerError::Protocol(
+                        "controller bootstrap registry busy (tokio try-lock)".to_owned(),
+                    )
                 })?
                 .insert(runner_id.to_owned(), bootstrap);
         }
@@ -7364,12 +7440,17 @@ const USB_AUDIT_SERIAL_HMAC_KEY_MAGIC: &str = "d2b-usb-audit-serial-hmac-v1";
 const USB_AUDIT_SERIAL_CORRELATION_VERSION: &str = "d2b-usb-audit-serial-v1";
 #[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_GRACE_WINDOW_SECONDS: u64 = 30 * 24 * 60 * 60;
+/// Rotation-window / rotation-audit dedupe sets.
+///
+/// `tokio::sync` per plan U8: the dispatch arms reach them through the
+/// non-blocking `try_lock`; a `Busy` collision degrades exactly like the
+/// old poisoned path (the dedupe is skipped, never a hard failure).
 #[cfg(not(feature = "layer1-bootstrap"))]
-static USB_AUDIT_SERIAL_HMAC_ROTATION_LOGGED: OnceLock<Mutex<HashMap<String, ()>>> =
-    OnceLock::new();
+static USB_AUDIT_SERIAL_HMAC_ROTATION_LOGGED: LazyLock<tokio::sync::Mutex<HashMap<String, ()>>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 #[cfg(not(feature = "layer1-bootstrap"))]
-static USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED: OnceLock<Mutex<HashMap<String, ()>>> =
-    OnceLock::new();
+static USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED: LazyLock<tokio::sync::Mutex<HashMap<String, ()>>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_serial_correlation_key_rotation_audit(
@@ -7399,9 +7480,10 @@ fn mark_usb_audit_serial_hmac_rotation_audit_logged(
     audit: &UsbSerialCorrelationKeyRotationAudit,
 ) -> Option<String> {
     let dedupe_key = usb_audit_serial_hmac_rotation_dedupe_key(audit);
-    let logged =
-        USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED.get_or_init(|| Mutex::new(HashMap::new()));
-    let Ok(mut logged) = logged.lock() else {
+    // Non-blocking try-lock (plan U8): a Busy collision skips the dedupe
+    // exactly like the old poisoned path - the rotation audit is logged
+    // (possibly once more) rather than lost.
+    let Ok(mut logged) = USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED.try_lock() else {
         return Some(dedupe_key);
     };
     if logged.insert(dedupe_key.clone(), ()).is_some() {
@@ -7412,10 +7494,7 @@ fn mark_usb_audit_serial_hmac_rotation_audit_logged(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn unmark_usb_audit_serial_hmac_rotation_audit_logged(dedupe_key: &str) {
-    let Some(logged) = USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED.get() else {
-        return;
-    };
-    if let Ok(mut logged) = logged.lock() {
+    if let Ok(mut logged) = USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED.try_lock() {
         logged.remove(dedupe_key);
     }
 }
@@ -7426,8 +7505,9 @@ fn log_usb_audit_serial_hmac_rotation_window(keyring: &UsbAuditSerialHmacKeyring
         return;
     };
     let dedupe_key = usb_audit_serial_hmac_rotation_dedupe_key(&audit);
-    let logged = USB_AUDIT_SERIAL_HMAC_ROTATION_LOGGED.get_or_init(|| Mutex::new(HashMap::new()));
-    let Ok(mut logged) = logged.lock() else {
+    // Non-blocking try-lock (plan U8); a Busy collision skips the window
+    // log exactly like the old poisoned path.
+    let Ok(mut logged) = USB_AUDIT_SERIAL_HMAC_ROTATION_LOGGED.try_lock() else {
         return;
     };
     if logged.insert(dedupe_key, ()).is_some() {
@@ -11424,7 +11504,7 @@ fn start_sigchld_reaper(runtime: &tokio::runtime::Runtime, audit_log: Arc<AuditL
             if sigchld.recv().await.is_none() {
                 break;
             }
-            reap_all_pidfds(audit_log.as_ref());
+            reap_all_pidfds(audit_log.as_ref()).await;
         }
     });
 }
@@ -11434,8 +11514,13 @@ fn start_sigchld_reaper(runtime: &tokio::runtime::Runtime, audit_log: Arc<AuditL
 /// has exited are removed from the registry, a `ChildReaped` notification
 /// is pushed to the ring buffer, and a forensics record is appended to the
 /// audit log.
+///
+/// Async because the reap notification push waits on the buffer lock (plan
+/// U8): the primary reaper's notification is never dropped under a
+/// concurrent reader. The `waitid` probes themselves stay non-blocking
+/// (`WNOHANG`), so no await is held across a syscall.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn reap_all_pidfds(audit_log: &AuditLog) {
+async fn reap_all_pidfds(audit_log: &AuditLog) {
     use d2b_contracts_broker::broker_wire::{
         ChildExitKind, ChildExitStatus, ChildReapedNotification,
     };
@@ -11464,7 +11549,7 @@ fn reap_all_pidfds(audit_log: &AuditLog) {
                     },
                     reaped_at_ms: reaped_at_ms_now(),
                 };
-                remove_and_notify(&runner_id, notif, audit_log);
+                remove_and_notify_async(&runner_id, notif, audit_log).await;
             }
             Ok(WaitStatus::Signaled(pid, sig, _)) => {
                 let sig_num = sig as libc::c_int;
@@ -11482,7 +11567,7 @@ fn reap_all_pidfds(audit_log: &AuditLog) {
                     },
                     reaped_at_ms: reaped_at_ms_now(),
                 };
-                remove_and_notify(&runner_id, notif, audit_log);
+                remove_and_notify_async(&runner_id, notif, audit_log).await;
             }
             Ok(WaitStatus::StillAlive) | Ok(_) => {}
             Err(Errno::ECHILD) => {
@@ -11643,10 +11728,13 @@ fn deliver_targeted_reap(
     }
 }
 
+/// The registry-removal + audit half shared by the sync and async reap
+/// notification paths; the notification push differs only in how it takes
+/// the buffer lock (plan U8).
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn remove_and_notify(
+fn remove_and_notify_common(
     runner_id: &str,
-    notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
+    notif: &d2b_contracts_broker::broker_wire::ChildReapedNotification,
     audit_log: &AuditLog,
 ) -> bool {
     let removed = remove_runner_registries(runner_id);
@@ -11656,7 +11744,7 @@ fn remove_and_notify(
             "reap: failed to clear runner registration"
         );
     }
-    if let Err(err) = audit_log.write_child_reaped(&notif) {
+    if let Err(err) = audit_log.write_child_reaped(notif) {
         tracing::warn!(runner_id = %runner_id, error = %err, "reap: audit write_child_reaped failed");
     }
     tracing::info!(
@@ -11665,7 +11753,33 @@ fn remove_and_notify(
         exit_status = ?notif.exit_status,
         "broker: child reaped via SIGCHLD handler",
     );
+    removed
+}
+
+/// Remove the registry entry, push the `ChildReaped` notification, and
+/// write the forensic audit record, from a synchronous context (the
+/// targeted post-spawn reap). The push takes the non-blocking `try_lock`.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn remove_and_notify(
+    runner_id: &str,
+    notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
+    audit_log: &AuditLog,
+) -> bool {
+    let removed = remove_and_notify_common(runner_id, &notif, audit_log);
     push_child_reap_notification(notif);
+    removed
+}
+
+/// The async variant of [`remove_and_notify`]: the push waits on the
+/// buffer lock so the SIGCHLD reaper's notification is never dropped.
+#[cfg(not(feature = "layer1-bootstrap"))]
+async fn remove_and_notify_async(
+    runner_id: &str,
+    notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
+    audit_log: &AuditLog,
+) -> bool {
+    let removed = remove_and_notify_common(runner_id, &notif, audit_log);
+    push_child_reap_notification_async(notif).await;
     removed
 }
 
@@ -15540,10 +15654,53 @@ mod tests {
         let _ = drain_child_reap_buffer();
     }
 
+    /// Serializes every test that mutates the process-global broker
+    /// registries (runner metadata, pidfds, reap buffer, controller
+    /// bootstrap). These are production statics shared across the binary,
+    /// so tests that write them must never run concurrently: one test's
+    /// registration would be clobbered by another test's cleanup. The
+    /// guard also clears the registries on entry and exit, so each test
+    /// sees a clean, isolated snapshot and leaves none behind.
+    struct RegistryTestGuard {
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl RegistryTestGuard {
+        fn new() -> Self {
+            static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+            let lock = LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            clear_registry_state();
+            Self { _lock: lock }
+        }
+    }
+
+    impl Drop for RegistryTestGuard {
+        fn drop(&mut self) {
+            clear_registry_state();
+        }
+    }
+
+    /// Clear every process-global broker registry so no state leaks
+    /// between tests. Non-blocking try-lock (plan U8) — a Busy collision
+    /// is retried by the next guard acquisition.
+    fn clear_registry_state() {
+        let _ = drain_child_reap_buffer();
+        runner_pidfds().clear();
+        if let Ok(mut registry) = runner_metadata_registry().try_lock() {
+            registry.clear();
+        }
+        if let Ok(mut registry) = controller_bootstrap_registry().try_lock() {
+            registry.clear();
+        }
+    }
+
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_process_usbip_backend_extends_mount_policy_with_device_binds() {
         let _usb_sysfs_guard = usb_sysfs_test_lock();
+        let _registry_guard = RegistryTestGuard::new();
         let root = test_audit_dir("spawn-kernel-usbip-binds");
         fs::create_dir_all(&root).expect("create test root");
         let bundle = build_test_bundle(&root);
@@ -15614,11 +15771,18 @@ mod tests {
             runner_pidfds().contains_key(runner_id),
             "the kernel must register the pidfd under the runner id"
         );
+        // The registry is a `tokio::sync::Mutex` (plan U8); concurrent
+        // spawn-kernel tests hold it for sub-microsecond critical sections,
+        // so the assertion retries the non-blocking try-lock instead of
+        // panicking on a Busy collision.
+        let registered = loop {
+            if let Ok(registry) = runner_metadata_registry().try_lock() {
+                break registry.contains_key(runner_id);
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
         assert!(
-            runner_metadata_registry()
-                .lock()
-                .expect("registry lock")
-                .contains_key(runner_id),
+            registered,
             "the kernel must register the runner metadata under the runner id"
         );
         cleanup_spawn_test_runner(runner_id);
@@ -15629,6 +15793,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_process_serving_worker_grants_ticket_tree_acls() {
+        let _registry_guard = RegistryTestGuard::new();
         use std::os::unix::fs::PermissionsExt;
 
         if ![
@@ -15707,6 +15872,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_process_cloud_hypervisor_unlinks_stale_socket_before_spawn() {
+        let _registry_guard = RegistryTestGuard::new();
         let root = test_audit_dir("spawn-kernel-stale-socket");
         fs::create_dir_all(&root).expect("create test root");
         // The sandbox execroot can push even a relative bind path past
@@ -15771,6 +15937,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_process_refuses_a_second_live_spawn_for_the_same_runner() {
+        let _registry_guard = RegistryTestGuard::new();
         let root = test_audit_dir("spawn-kernel-duplicate-guard");
         fs::create_dir_all(&root).expect("create test root");
         let harness = SpawnKernelHarness::new(
@@ -17527,7 +17694,6 @@ mod tests {
         use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
         use nix::unistd::Uid;
         use std::os::fd::AsRawFd;
-        use std::sync::Mutex;
 
         let root = test_audit_dir("usb-peercred-refused");
         fs::create_dir_all(&root).expect("create audit test dir");
@@ -17546,7 +17712,7 @@ mod tests {
             )
             .expect("open audit log"),
         );
-        let limiter = Arc::new(Mutex::new(IpcRateLimiter::new(64)));
+        let limiter = Arc::new(tokio::sync::Mutex::new(IpcRateLimiter::new(64)));
         // The connection handler reads and writes frames through the reactor
         // now, so the test drives it the way the server does.
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -17677,7 +17843,7 @@ mod tests {
             )
             .expect("open audit log"),
         );
-        let limiter = Arc::new(Mutex::new(IpcRateLimiter::new(64)));
+        let limiter = Arc::new(tokio::sync::Mutex::new(IpcRateLimiter::new(64)));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -17765,7 +17931,7 @@ mod tests {
             )
             .expect("open audit log"),
         );
-        let limiter = Arc::new(Mutex::new(IpcRateLimiter::new(64)));
+        let limiter = Arc::new(tokio::sync::Mutex::new(IpcRateLimiter::new(64)));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -19471,38 +19637,13 @@ mod tests {
         use nix::sys::signal::{Signal, kill};
         use nix::unistd::Pid;
         use std::process::Command;
-        use std::sync::{Mutex, MutexGuard, OnceLock};
         use std::time::{Duration, Instant};
 
-        struct ReapTestGuard {
-            _lock: MutexGuard<'static, ()>,
-        }
-
-        impl ReapTestGuard {
-            fn new() -> Self {
-                static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-                let lock = LOCK
-                    .get_or_init(|| Mutex::new(()))
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                clear_reap_state();
-                Self { _lock: lock }
-            }
-        }
-
-        impl Drop for ReapTestGuard {
-            fn drop(&mut self) {
-                clear_reap_state();
-            }
-        }
-
-        fn clear_reap_state() {
-            let _ = drain_child_reap_buffer();
-            runner_pidfds().clear();
-            if let Ok(mut registry) = runner_metadata_registry().lock() {
-                registry.clear();
-            }
-        }
+        // One shared serialization guard for every test that mutates the
+        // process-global broker registries: reap tests and spawn-process
+        // tests use the same lock, so a reap test's cleanup can never
+        // clobber a spawn test's mid-test registration (and vice versa).
+        type ReapTestGuard = RegistryTestGuard;
 
         fn start_test_reaper(test_name: &str) -> tokio::runtime::Runtime {
             let audit_dir = test_audit_dir(test_name);
@@ -19520,20 +19661,36 @@ mod tests {
             rt
         }
 
+        /// Run one closure against the runner metadata registry with the
+        /// non-blocking `try_lock` (plan U8: the registry is a tokio Mutex
+        /// reached from sync test bodies), retrying a Busy collision.
+        fn with_runner_metadata_mut<R>(
+            f: impl FnOnce(&mut std::collections::HashMap<String, RunnerRegistration>) -> R,
+        ) -> R {
+            loop {
+                if let Ok(mut registry) = runner_metadata_registry().try_lock() {
+                    return f(&mut registry);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+
         fn wait_for_notification(
             runner_id: &str,
             timeout: Duration,
         ) -> Option<ChildReapedNotification> {
             let deadline = Instant::now() + timeout;
             while Instant::now() < deadline {
-                let found = child_reap_buffer()
-                    .lock()
-                    .expect("child_reap_buffer lock")
-                    .iter()
-                    .find(|n| n.runner_id == runner_id)
-                    .cloned();
-                if found.is_some() {
-                    return found;
+                // Non-blocking try-lock (plan U8): a Busy collision (the
+                // reap task's push) is retried, never blocking the test.
+                if let Ok(buffer) = child_reap_buffer().try_lock() {
+                    let found = buffer
+                        .iter()
+                        .find(|n| n.runner_id == runner_id)
+                        .cloned();
+                    if found.is_some() {
+                        return found;
+                    }
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
@@ -19602,13 +19759,12 @@ mod tests {
             runner_pidfds()
                 .insert(runner_id, pidfd.try_clone().expect("clone pidfd"))
                 .expect("register runner pidfd");
-            runner_metadata_registry()
-                .lock()
-                .expect("metadata lock")
-                .insert(
+            with_runner_metadata_mut(|registry| {
+                registry.insert(
                     runner_id.to_owned(),
                     test_runner_registration(pid, start_time_ticks),
                 );
+            });
 
             let registration = test_runner_registration(pid, start_time_ticks);
             let response = reap_registered_runner_after_observation(
@@ -19625,10 +19781,7 @@ mod tests {
                 "StillAlive must preserve the exact pidfd registration"
             );
             assert!(
-                runner_metadata_registry()
-                    .lock()
-                    .expect("metadata lock")
-                    .contains_key(runner_id),
+                with_runner_metadata_mut(|registry| registry.contains_key(runner_id)),
                 "StillAlive must preserve runner metadata"
             );
 
@@ -19648,10 +19801,9 @@ mod tests {
             runner_pidfds()
                 .insert(runner_id, pidfd.try_clone().expect("clone pidfd"))
                 .expect("register runner pidfd");
-            runner_metadata_registry()
-                .lock()
-                .expect("metadata lock")
-                .insert(runner_id.to_owned(), test_runner_registration(pid, 1));
+            with_runner_metadata_mut(|registry| {
+                registry.insert(runner_id.to_owned(), test_runner_registration(pid, 1));
+            });
             std::mem::forget(child);
 
             let registration = test_runner_registration(pid, 1);
@@ -19677,10 +19829,7 @@ mod tests {
                 "reaped runner must be removed from pidfd registry"
             );
             assert!(
-                !runner_metadata_registry()
-                    .lock()
-                    .expect("metadata lock")
-                    .contains_key(runner_id),
+                !with_runner_metadata_mut(|registry| registry.contains_key(runner_id)),
                 "reaped runner must be removed from metadata registry"
             );
         }
@@ -19785,12 +19934,18 @@ mod tests {
 
             let deadline = Instant::now() + Duration::from_secs(3);
             loop {
-                let found = child_reap_buffer()
-                    .lock()
-                    .expect("child_reap_buffer lock")
-                    .iter()
-                    .filter(|n| runner_ids.iter().any(|id| id == &n.runner_id))
-                    .count();
+                // Non-blocking try-lock (plan U8): a Busy collision with
+                // the reap task's push is retried, never blocking the test.
+                let found = match child_reap_buffer().try_lock() {
+                    Ok(buffer) => buffer
+                        .iter()
+                        .filter(|n| runner_ids.iter().any(|id| id == &n.runner_id))
+                        .count(),
+                    Err(_) => {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                };
                 if found == runner_ids.len() {
                     break;
                 }
@@ -19828,12 +19983,13 @@ mod tests {
             let mut outcome = TargetedReapOutcome::StillAlive;
             while Instant::now() < deadline {
                 outcome = targeted_reap_runner(&runner_id, pidfd.as_fd());
-                if let Some(n) = child_reap_buffer()
-                    .lock()
-                    .expect("child_reap_buffer lock")
-                    .iter()
-                    .find(|n| n.runner_id == runner_id)
-                    .cloned()
+                // Non-blocking try-lock (plan U8): a Busy collision is
+                // retried, never blocking the test.
+                if let Ok(buffer) = child_reap_buffer().try_lock()
+                    && let Some(n) = buffer
+                        .iter()
+                        .find(|n| n.runner_id == runner_id)
+                        .cloned()
                 {
                     reaped = Some(n);
                     break;
@@ -19874,12 +20030,15 @@ mod tests {
             let outcome = targeted_reap_runner(&runner_id, pidfd.as_fd());
             assert_eq!(outcome, TargetedReapOutcome::StillAlive);
 
+            let none_pending = loop {
+                // Non-blocking try-lock (plan U8): retry a Busy collision.
+                if let Ok(buffer) = child_reap_buffer().try_lock() {
+                    break buffer.iter().all(|n| n.runner_id != runner_id);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            };
             assert!(
-                child_reap_buffer()
-                    .lock()
-                    .expect("child_reap_buffer lock")
-                    .iter()
-                    .all(|n| n.runner_id != runner_id),
+                none_pending,
                 "running child must not be reaped by targeted pass"
             );
             assert!(
@@ -19917,12 +20076,13 @@ mod tests {
             let mut outcome = TargetedReapOutcome::StillAlive;
             while Instant::now() < deadline {
                 outcome = targeted_reap_runner(&runner_id, pidfd.as_fd());
-                if let Some(n) = child_reap_buffer()
-                    .lock()
-                    .expect("child_reap_buffer lock")
-                    .iter()
-                    .find(|n| n.runner_id == runner_id)
-                    .cloned()
+                // Non-blocking try-lock (plan U8): a Busy collision is
+                // retried, never blocking the test.
+                if let Ok(buffer) = child_reap_buffer().try_lock()
+                    && let Some(n) = buffer
+                        .iter()
+                        .find(|n| n.runner_id == runner_id)
+                        .cloned()
                 {
                     reaped = Some(n);
                     break;
@@ -19951,10 +20111,9 @@ mod tests {
             runner_pidfds()
                 .insert(&runner_id, registry_dup)
                 .expect("register runner pidfd");
-            runner_metadata_registry()
-                .lock()
-                .expect("metadata lock")
-                .insert(runner_id.clone(), test_runner_registration(pid, 1));
+            with_runner_metadata_mut(|registry| {
+                registry.insert(runner_id.clone(), test_runner_registration(pid, 1));
+            });
 
             // Reap the child out-of-band so the pidfd waitid yields ECHILD.
             let _ = nix::sys::wait::waitpid(Pid::from_raw(pid), None);
@@ -19968,10 +20127,7 @@ mod tests {
                 "ECHILD must clear the stale registry entry"
             );
             assert!(
-                !runner_metadata_registry()
-                    .lock()
-                    .expect("metadata lock")
-                    .contains_key(&runner_id),
+                !with_runner_metadata_mut(|registry| registry.contains_key(&runner_id)),
                 "ECHILD must clear stale runner metadata"
             );
         }
@@ -20079,7 +20235,7 @@ mod tests {
             audit_log,
             dispatches: DispatchPool::new(2),
             nested_dispatches: DispatchPool::new(2),
-            ipc_rate_limiter: Arc::new(Mutex::new(IpcRateLimiter::new(64))),
+            ipc_rate_limiter: Arc::new(tokio::sync::Mutex::new(IpcRateLimiter::new(64))),
         });
         let serving = runtime.spawn(serve(server, listener));
 

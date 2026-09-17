@@ -27,7 +27,7 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use crate::ops::exec_reconcile::{IpRouteVerb, ReconcileExecError, ReconcileExecutor};
@@ -1500,8 +1500,12 @@ const OBS_VSOCK_ACL_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 /// One entry per socket rather than per spawn: every runner sharing an obs
 /// VM's socket shares its pending refresh, so what is in flight is the number
 /// of distinct sockets, not the number of calls that asked.
-static PENDING_OBS_VSOCK_ACL_RETRIES: LazyLock<Mutex<HashSet<(u32, PathBuf)>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
+///
+/// `tokio::sync` per plan U8: the claim/removal run on synchronous handler
+/// bodies and the retry task, so they use the non-blocking `try_lock` (the
+/// critical sections are single set operations, never held across an await).
+static PENDING_OBS_VSOCK_ACL_RETRIES: LazyLock<tokio::sync::Mutex<HashSet<(u32, PathBuf)>>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(HashSet::new()));
 
 /// The pending-set guard: the socket stays claimed until its refresh ends.
 struct PendingObsVsockAclRetry {
@@ -1511,17 +1515,37 @@ struct PendingObsVsockAclRetry {
 
 impl Drop for PendingObsVsockAclRetry {
     fn drop(&mut self) {
-        if let Ok(mut pending) = PENDING_OBS_VSOCK_ACL_RETRIES.lock() {
-            pending.remove(&(self.uid, self.socket.clone()));
+        match PENDING_OBS_VSOCK_ACL_RETRIES.try_lock() {
+            Ok(mut pending) => {
+                pending.remove(&(self.uid, self.socket.clone()));
+            }
+            // The set is momentarily held by another claim/removal
+            // (sub-microsecond); clear the entry asynchronously so a
+            // pending refresh can never leak past the task that owned it.
+            Err(_) => {
+                if let Some(background) = crate::runtime::broker_background() {
+                    let uid = self.uid;
+                    let socket = self.socket.clone();
+                    background.runtime.spawn(async move {
+                        PENDING_OBS_VSOCK_ACL_RETRIES
+                            .lock()
+                            .await
+                            .remove(&(uid, socket));
+                    });
+                }
+            }
         }
     }
 }
 
 /// Claim one socket's pending refresh; `false` means one is already waiting.
 fn claim_obs_vsock_acl_retry(uid: u32, socket: &Path) -> bool {
-    match PENDING_OBS_VSOCK_ACL_RETRIES.lock() {
+    match PENDING_OBS_VSOCK_ACL_RETRIES.try_lock() {
         Ok(mut pending) => pending.insert((uid, socket.to_path_buf())),
-        // A poisoned set must not stop the ACL from being refreshed.
+        // A Busy collision (another claim or removal in flight,
+        // sub-microsecond) must not skip a needed refresh: a duplicate
+        // refresh is idempotent, a skipped one leaves the socket without
+        // its ACL. Proceed exactly like the old poisoned path.
         Err(_) => true,
     }
 }
@@ -2334,28 +2358,87 @@ fn device_worker_socket_grant(
     Ok(Some(grant))
 }
 
-fn grant_daemon_api_socket_acl(api_socket: PathBuf) {
-    std::thread::spawn(move || {
-        for _ in 0..120 {
-            if api_socket.exists() {
-                match setfacl_fd_safe(&api_socket, "u:d2bd:rwx", AclPathKind::Socket) {
-                    Ok(()) => return,
-                    Err(err) => {
-                        tracing::debug!(
-                            path = %api_socket.display(),
-                            error = %err,
-                            "cloud-hypervisor api socket ACL refresh not ready yet",
-                        );
-                    }
-                }
+/// How long one daemon API-socket / component-session vsock ACL refresh
+/// keeps retrying before it gives up.
+const ACL_RETRY_WINDOW: Duration = Duration::from_secs(30);
+/// How long one ACL refresh waits between attempts.
+const ACL_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Run one bounded ACL-grant retry on the broker's reactor.
+///
+/// The attempt runs on the bounded dispatch pool (its setfacl shellout has
+/// no async form, so it belongs on the pool like every other kernel-path
+/// step); the wait between attempts is timer time on the reactor, and the
+/// loop gives up on its own budget. Returns when the attempt reports ready,
+/// the deadline passes, or the pool is gone. This is the canonical async
+/// retry shape (`spawn_obs_vsock_acl_retry`); the daemon API-socket and
+/// component-session vsock refreshes share it (plan U8 item 4).
+async fn retry_acl_grant(
+    background: &crate::runtime::BrokerBackground,
+    window: Duration,
+    interval: Duration,
+    label: &'static str,
+    attempt: Arc<dyn Fn() -> Result<bool, String> + Send + Sync>,
+) {
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        let attempt = Arc::clone(&attempt);
+        let outcome = background
+            .dispatches
+            .run(move || attempt())
+            .await;
+        match outcome {
+            Ok(Ok(true)) => return,
+            Ok(Ok(false)) => {}
+            Ok(Err(err)) => {
+                tracing::debug!(
+                    error = %err,
+                    "{label} ACL refresh not ready yet",
+                );
             }
-            std::thread::sleep(std::time::Duration::from_millis(250));
+            // The pool is gone, so the broker is shutting down.
+            Err(_) => return,
         }
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!("{label} ACL refresh timed out");
+            return;
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
+/// Retry the cloud-hypervisor api-socket ACL grant in a background task
+/// until the socket appears (bounded to ~30s, matching the obs-vsock
+/// precedent). The attempt's setfacl shellout has no async form, so it runs
+/// on the broker's bounded dispatch pool; the wait between attempts is
+/// timer time on the reactor, not a thread.
+fn grant_daemon_api_socket_acl(api_socket: PathBuf) {
+    let Some(background) = crate::runtime::broker_background() else {
+        // Only a serving broker has a reactor to retry on; a handler driven
+        // outside one has nothing to retry against either.
         tracing::warn!(
             path = %api_socket.display(),
-            "cloud-hypervisor api socket ACL refresh timed out",
+            "cloud-hypervisor api socket ACL refresh dropped: no broker reactor is running",
         );
+        return;
+    };
+    let attempt: Arc<dyn Fn() -> Result<bool, String> + Send + Sync> = Arc::new(move || {
+        if api_socket.exists() {
+            match setfacl_fd_safe(&api_socket, "u:d2bd:rwx", AclPathKind::Socket) {
+                Ok(()) => Ok(true),
+                Err(err) => Err(err),
+            }
+        } else {
+            Ok(false)
+        }
     });
+    background.runtime.spawn(retry_acl_grant(
+        background,
+        ACL_RETRY_WINDOW,
+        ACL_RETRY_INTERVAL,
+        "cloud-hypervisor api socket",
+        attempt,
+    ));
 }
 
 /// The system principal the framework grants daemon-side component-session
@@ -2556,31 +2639,34 @@ fn revoke_component_session_vsock_acl(socket: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Retry the daemon-vsock socket ACL grant in a background thread until
+/// Retry the daemon-vsock socket ACL grant in a background task until
 /// the cloud-hypervisor process has created the vsock socket (bounded to
 /// ~30s, matching the obs-vsock precedent). The traversal ACLs are
-/// granted synchronously before this thread starts, so the retry only
-/// re-attempts the socket grant. Logs are path-free.
+/// granted synchronously before this task starts, so the retry only
+/// re-attempts the socket grant. The attempt's setfacl shellout runs on
+/// the broker's bounded dispatch pool; the wait is timer time on the
+/// reactor (the canonical async retry, plan U8 item 4). Logs are
+/// path-free.
 fn spawn_component_session_vsock_acl_retry(socket: PathBuf) {
-    std::thread::spawn(move || {
-        for _ in 0..120 {
-            match grant_component_session_socket_acl_once(&socket) {
-                Ok(true) => return,
-                Ok(false) => {}
-                Err(_) => {
-                    tracing::debug!(
-                        subsystem = "component-session-health",
-                        "component-session vsock daemon ACL refresh not ready yet",
-                    );
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(250));
-        }
+    let Some(background) = crate::runtime::broker_background() else {
+        // Only a serving broker has a reactor to retry on; a handler driven
+        // outside one has nothing to retry against either.
         tracing::warn!(
             subsystem = "component-session-health",
-            "component-session vsock daemon ACL refresh timed out",
+            "component-session vsock daemon ACL refresh dropped: no broker reactor is running",
         );
+        return;
+    };
+    let attempt: Arc<dyn Fn() -> Result<bool, String> + Send + Sync> = Arc::new(move || {
+        grant_component_session_socket_acl_once(&socket)
     });
+    background.runtime.spawn(retry_acl_grant(
+        background,
+        ACL_RETRY_WINDOW,
+        ACL_RETRY_INTERVAL,
+        "component-session vsock daemon",
+        attempt,
+    ));
 }
 
 /// Refresh the daemon-vsock ACL for a CH runner plan. No-op for any
@@ -5163,5 +5249,72 @@ mod tests {
             "the claim is released when the refresh ends"
         );
         drop(PendingObsVsockAclRetry { uid, socket });
+    }
+
+    /// The canonical async ACL retry (plan U8 item 4) stops as soon as the
+    /// attempt reports ready: exactly one attempt runs. Hermetic: the
+    /// attempt is injected, so no setfacl shellout happens.
+    #[tokio::test]
+    async fn acl_grant_retry_stops_on_first_success() {
+        let background = crate::runtime::BrokerBackground {
+            runtime: tokio::runtime::Handle::current(),
+            dispatches: crate::runtime::DispatchPool::new(2),
+        };
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let attempt_calls = Arc::clone(&calls);
+        let attempt: Arc<dyn Fn() -> Result<bool, String> + Send + Sync> = Arc::new(move || {
+            attempt_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(true)
+        });
+        retry_acl_grant(
+            &background,
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+            "test",
+            attempt,
+        )
+        .await;
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a ready grant must stop the retry after the first attempt"
+        );
+    }
+
+    /// The canonical async ACL retry respects its deadline: a socket that
+    /// never becomes ready keeps attempting until the window expires, then
+    /// stops. Timing-tolerant by construction (R13): the assertions are
+    /// lower bounds only - the retry must not give up before the window
+    /// elapses and must have attempted more than once.
+    #[tokio::test]
+    async fn acl_grant_retry_respects_deadline() {
+        let background = crate::runtime::BrokerBackground {
+            runtime: tokio::runtime::Handle::current(),
+            dispatches: crate::runtime::DispatchPool::new(2),
+        };
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let attempt_calls = Arc::clone(&calls);
+        let attempt: Arc<dyn Fn() -> Result<bool, String> + Send + Sync> = Arc::new(move || {
+            attempt_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(false)
+        });
+        let started = tokio::time::Instant::now();
+        retry_acl_grant(
+            &background,
+            Duration::from_millis(150),
+            Duration::from_millis(20),
+            "test",
+            attempt,
+        )
+        .await;
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(150),
+            "the retry must not give up before its deadline: {elapsed:?}"
+        );
+        assert!(
+            calls.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "the retry must keep attempting until the deadline"
+        );
     }
 }
