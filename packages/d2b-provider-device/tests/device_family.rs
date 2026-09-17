@@ -156,6 +156,7 @@ fn descriptor_declares_the_device_type_over_four_providers() {
 
 /// A row is driven by the component its Provider reference selects, and a
 /// Provider outside the four is terminal.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn a_row_runs_the_effect_of_the_provider_its_spec_names() {
     let effects = Arc::new(RecordingEffects::default());
