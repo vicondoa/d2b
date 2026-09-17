@@ -5,7 +5,8 @@ use d2b_provider_transport_vsock::{
     RelayObservation, RelayPhase, SessionAuthority, SessionKey, SessionProof,
 };
 use ring::rand::{SystemRandom, generate};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 fn nonce() -> [u8; 32] {
     generate::<[u8; 32]>(&SystemRandom::new()).unwrap().expose()
@@ -32,8 +33,8 @@ impl RelayEffectPort for FakeRelayPort {
         &self,
         _: &RelayBinding,
     ) -> Result<Self::CidReservation, RelayEffectError> {
-        self.calls.lock().unwrap().push("reserve-cid");
-        if *self.fail_reserve.lock().unwrap() {
+        self.calls.lock().await.push("reserve-cid");
+        if *self.fail_reserve.lock().await {
             Err(RelayEffectError::CidAuthorityConflict)
         } else {
             Ok(1)
@@ -45,7 +46,7 @@ impl RelayEffectPort for FakeRelayPort {
         _: &RelayBinding,
         _: &Self::CidReservation,
     ) -> Result<Self::Listener, RelayEffectError> {
-        self.calls.lock().unwrap().push("bind-listener");
+        self.calls.lock().await.push("bind-listener");
         Ok(2)
     }
 
@@ -55,8 +56,8 @@ impl RelayEffectPort for FakeRelayPort {
         _: &Self::Listener,
         _: &Self::CidReservation,
     ) -> Result<Self::RelayProcess, RelayEffectError> {
-        self.calls.lock().unwrap().push("spawn-relay");
-        if *self.fail_spawn.lock().unwrap() {
+        self.calls.lock().await.push("spawn-relay");
+        if *self.fail_spawn.lock().await {
             Err(RelayEffectError::ProcessUnavailable)
         } else {
             Ok(3)
@@ -64,13 +65,13 @@ impl RelayEffectPort for FakeRelayPort {
     }
 
     async fn close_relay(&self, _: &Self::RelayProcess) -> Result<(), RelayEffectError> {
-        self.calls.lock().unwrap().push("close-relay");
+        self.calls.lock().await.push("close-relay");
         Ok(())
     }
 
     async fn close_listener(&self, _: &Self::Listener) -> Result<(), RelayEffectError> {
-        self.calls.lock().unwrap().push("close-listener");
-        if *self.fail_close_listener.lock().unwrap() {
+        self.calls.lock().await.push("close-listener");
+        if *self.fail_close_listener.lock().await {
             Err(RelayEffectError::CloseUnconfirmed)
         } else {
             Ok(())
@@ -78,8 +79,8 @@ impl RelayEffectPort for FakeRelayPort {
     }
 
     async fn release_cid(&self, _: &Self::CidReservation) -> Result<(), RelayEffectError> {
-        self.calls.lock().unwrap().push("release-cid");
-        if *self.fail_release.lock().unwrap() {
+        self.calls.lock().await.push("release-cid");
+        if *self.fail_release.lock().await {
             Err(RelayEffectError::CloseUnconfirmed)
         } else {
             Ok(())
@@ -91,10 +92,10 @@ impl RelayEffectPort for FakeRelayPort {
         _: &RelayBinding,
     ) -> Result<Option<RelayObservation<Self::Listener, Self::RelayProcess>>, RelayEffectError>
     {
-        if let Some(error) = *self.observe_error.lock().unwrap() {
+        if let Some(error) = *self.observe_error.lock().await {
             return Err(error);
         }
-        Ok(self.observed.lock().unwrap().clone())
+        Ok(self.observed.lock().await.clone())
     }
 }
 
@@ -111,6 +112,7 @@ fn binding() -> RelayBinding {
     )
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn finalization_closes_relay_before_releasing_cid_authority() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -133,7 +135,7 @@ fn finalization_closes_relay_before_releasing_cid_authority() {
         relay.start(&session).await.unwrap();
         relay.finalize().await.unwrap();
         assert_eq!(
-            *calls.lock().unwrap(),
+            *calls.lock().await,
             vec![
                 "reserve-cid",
                 "bind-listener",
@@ -147,6 +149,7 @@ fn finalization_closes_relay_before_releasing_cid_authority() {
     });
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn restart_adopts_only_the_matching_listener_and_process() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -156,7 +159,7 @@ fn restart_adopts_only_the_matching_listener_and_process() {
     runtime.block_on(async {
         let binding = binding();
         let port = FakeRelayPort::default();
-        *port.observed.lock().unwrap() = Some(RelayObservation {
+        *port.observed.lock().await = Some(RelayObservation {
             binding: binding.clone(),
             listener: 2,
             process: 3,
@@ -167,7 +170,7 @@ fn restart_adopts_only_the_matching_listener_and_process() {
         relay.finalize().await.unwrap();
 
         let port = FakeRelayPort::default();
-        *port.observed.lock().unwrap() = Some(RelayObservation {
+        *port.observed.lock().await = Some(RelayObservation {
             binding: RelayBinding::new(
                 GuestIdentity::new(
                     ResourceRef::parse("Guest/other").unwrap(),
@@ -190,6 +193,7 @@ fn restart_adopts_only_the_matching_listener_and_process() {
     });
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn reserve_failure_leaves_relay_retryable() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -199,7 +203,7 @@ fn reserve_failure_leaves_relay_retryable() {
     runtime.block_on(async {
         let port = FakeRelayPort::default();
         let fail_reserve = Arc::clone(&port.fail_reserve);
-        *port.fail_reserve.lock().unwrap() = true;
+        *port.fail_reserve.lock().await = true;
         let key = SessionKey::from_core([7; 32]);
         let guest = binding().guest().clone();
         let mut authority = SessionAuthority::new(guest.clone(), key.clone(), 1);
@@ -219,7 +223,7 @@ fn reserve_failure_leaves_relay_retryable() {
         relay.finalize().await.unwrap();
         assert_eq!(relay.phase(), RelayPhase::Closed);
 
-        *fail_reserve.lock().unwrap() = false;
+        *fail_reserve.lock().await = false;
         relay.start(&session).await.unwrap();
         assert_eq!(relay.phase(), RelayPhase::Ready);
         relay.finalize().await.unwrap();
@@ -227,6 +231,7 @@ fn reserve_failure_leaves_relay_retryable() {
     });
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn failed_cid_release_retains_authority_for_retry() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -247,18 +252,19 @@ fn failed_cid_release_retains_authority_for_retry() {
             .unwrap();
         let mut relay = NativeGuestRelay::new(port, binding());
         relay.start(&session).await.unwrap();
-        *fail_release.lock().unwrap() = true;
+        *fail_release.lock().await = true;
         assert_eq!(
             relay.finalize().await.unwrap_err(),
             RelayEffectError::CloseUnconfirmed
         );
         assert_eq!(relay.phase(), RelayPhase::Finalizing);
-        *fail_release.lock().unwrap() = false;
+        *fail_release.lock().await = false;
         relay.finalize().await.unwrap();
         assert_eq!(relay.phase(), RelayPhase::Closed);
     });
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn listener_close_failure_keeps_cid_authority_for_retry() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -267,8 +273,8 @@ fn listener_close_failure_keeps_cid_authority_for_retry() {
         .unwrap();
     runtime.block_on(async {
         let port = FakeRelayPort::default();
-        *port.fail_spawn.lock().unwrap() = true;
-        *port.fail_close_listener.lock().unwrap() = true;
+        *port.fail_spawn.lock().await = true;
+        *port.fail_close_listener.lock().await = true;
         let calls = Arc::clone(&port.calls);
         let fail_close_listener = Arc::clone(&port.fail_close_listener);
         let key = SessionKey::from_core([7; 32]);
@@ -288,7 +294,7 @@ fn listener_close_failure_keeps_cid_authority_for_retry() {
         );
         assert_eq!(relay.phase(), RelayPhase::Degraded);
         assert_eq!(
-            *calls.lock().unwrap(),
+            *calls.lock().await,
             vec![
                 "reserve-cid",
                 "bind-listener",
@@ -297,11 +303,11 @@ fn listener_close_failure_keeps_cid_authority_for_retry() {
             ]
         );
 
-        *fail_close_listener.lock().unwrap() = false;
+        *fail_close_listener.lock().await = false;
         relay.finalize().await.unwrap();
         assert_eq!(relay.phase(), RelayPhase::Closed);
         assert_eq!(
-            *calls.lock().unwrap(),
+            *calls.lock().await,
             vec![
                 "reserve-cid",
                 "bind-listener",
@@ -314,6 +320,7 @@ fn listener_close_failure_keeps_cid_authority_for_retry() {
     });
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn restart_observation_error_degrades_without_adoption() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -322,7 +329,7 @@ fn restart_observation_error_degrades_without_adoption() {
         .unwrap();
     runtime.block_on(async {
         let port = FakeRelayPort::default();
-        *port.observe_error.lock().unwrap() = Some(RelayEffectError::Transient);
+        *port.observe_error.lock().await = Some(RelayEffectError::Transient);
         let mut relay = NativeGuestRelay::new(port, binding());
 
         assert_eq!(

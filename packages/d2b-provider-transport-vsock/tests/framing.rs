@@ -31,6 +31,7 @@ impl AttachmentPayload for TestAttachment {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn framed_transport_handles_partial_and_coalesced_records() {
     let runtime = Builder::new_current_thread()
@@ -55,6 +56,7 @@ fn framed_transport_handles_partial_and_coalesced_records() {
     });
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn framed_transport_rejects_oversized_records_before_allocation() {
     let runtime = Builder::new_current_thread()
@@ -72,6 +74,7 @@ fn framed_transport_rejects_oversized_records_before_allocation() {
     });
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn framed_transport_rejects_attachments() {
     let runtime = Builder::new_current_thread()
