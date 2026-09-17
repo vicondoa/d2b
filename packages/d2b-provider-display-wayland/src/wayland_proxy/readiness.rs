@@ -24,6 +24,9 @@ impl ReadinessReporter {
         }
     }
 
+    // The readiness reporter is a sync public surface; it is driven by the CLI
+    // binary's poll loop and has no async form at this boundary.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn connect(identity: ProxyIdentity, path: &Path) -> io::Result<Self> {
         let stream = UnixStream::connect(path)?;
         stream.set_write_timeout(Some(Duration::from_millis(250)))?;
@@ -56,6 +59,9 @@ impl ReadinessReporter {
         self.emit(&event)
     }
 
+    // Short socket write against a 250 ms write timeout at the sync readiness
+    // surface; no async form fits the CLI reporter path.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn emit(&mut self, event: &ProxyReadinessEvent) -> io::Result<()> {
         let Some(stream) = self.stream.as_mut() else {
             return Ok(());

@@ -1801,7 +1801,10 @@ impl XdgToplevelHandler for WrapperToplevelHandler {
     }
 }
 
-fn create_memfd_with_contents(contents: &[u8], size: u64) -> io::Result<OwnedFd> {
+// memfd is memory-backed: write_all cannot block on I/O; called from the
+    // sync wayland-proxy handler path.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    fn create_memfd_with_contents(contents: &[u8], size: u64) -> io::Result<OwnedFd> {
     let name = CString::new("d2b-wayland-border").expect("static memfd name has no nul");
     let fd = memfd_create(name.as_c_str(), MemFdCreateFlag::MFD_CLOEXEC)
         .map_err(|errno| io::Error::from_raw_os_error(errno as i32))?;

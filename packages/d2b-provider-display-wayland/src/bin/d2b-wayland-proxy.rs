@@ -251,6 +251,7 @@ fn bound_poll_timeout_to_deadline(base_ms: i32, deadline: Instant, now: Instant)
     )
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
@@ -493,6 +494,7 @@ fn report_first_client_ready(
     readiness.ready(ProxyReadinessStage::FirstClient)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn accept_loop(
     listener: UnixListener,
     upstream: String,

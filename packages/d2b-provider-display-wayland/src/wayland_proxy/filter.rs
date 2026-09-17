@@ -766,6 +766,9 @@ impl VirtualClipboardState {
             .map(|stream| (stream, self.pending_bridge_poll_flags()))
     }
 
+    // Non-blocking read (WouldBlock handled** at a poll-driven sync bridge
+    // boundary driven by the CLI loop;no async form fits this surface.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn drain_bridge_messages(clipboard: &Rc<RefCell<Self>>) {
         let mut refresh = false;
         {
@@ -2794,7 +2797,10 @@ fn bind_matches_advertised_cap(
     requested_interface == advertised.interface && requested_version <= advertised.version
 }
 
-fn connect_bridge_nonblocking(path: &PathBuf) -> std::io::Result<UnixStream> {
+// SOCK_NONBLOCK connect with EINPROGRESS/EAGAIN tolerated; readiness is
+    // driven by the CLI poll loop;no async form fits this path.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    fn connect_bridge_nonblocking(path: &PathBuf) -> std::io::Result<UnixStream> {
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
     use std::os::fd::AsRawFd;
 
@@ -3037,6 +3043,7 @@ mod tests {
         assert!(clipboard.bridge_retry_deadline().is_some());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn flush_pending_bridge_handoffs_delivers_and_removes_queue_item() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
@@ -3123,6 +3130,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn queued_handoff_failure_preserves_queue_and_respects_backoff() {
         let root = PathBuf::from("target").join(format!(

@@ -8,8 +8,13 @@ license.workspace = true
 [features]
 test-support = []
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

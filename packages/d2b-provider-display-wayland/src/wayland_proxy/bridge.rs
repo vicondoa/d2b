@@ -292,6 +292,9 @@ pub enum BridgeTransferKind {
 }
 
 impl BridgeHandoff for UnixStream {
+    // Descriptor-passing sendmsg, MSG_DONTWAIT non-blocking on a poll-driven
+    // sync bridge surface;no async form fits the trait contract here.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn handoff_transfer_fd(
         &mut self,
         local_fd: &LocalTransferFd,
@@ -398,6 +401,7 @@ mod tests {
         )
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn assert_peer_observes_local_close(status: HandoffStatus) {
         let (local, mut peer) = UnixStream::pair().expect("socket pair");
         let local = LocalTransferFd::new(local.into());
@@ -555,6 +559,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn bridge_handoff_sends_fd_with_scm_rights() {
         let (mut bridge, peer) = UnixStream::pair().expect("bridge socket pair");

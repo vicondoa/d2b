@@ -816,7 +816,10 @@ fn format_table_is_well_formed(table: &[u8]) -> bool {
     table.len().is_multiple_of(16)
 }
 
-fn table_fd(table: &[u8]) -> io::Result<OwnedFd> {
+// memfd is memory-backed: write_all cannot block on I/O; called from the
+    // sync wayland-proxy handler path。
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    fn table_fd(table: &[u8]) -> io::Result<OwnedFd> {
     let name = CString::new("d2b-dmabuf-format-table").expect("static memfd name has no NUL");
     let fd =
         memfd_create(name.as_c_str(), MemFdCreateFlag::MFD_CLOEXEC).map_err(io::Error::from)?;
@@ -905,6 +908,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn handler_with_plane(modifier: u64) -> DmabufBufferParamsHandler {
         let filters = Arc::new(DmabufFilterList::new(
             &[],
