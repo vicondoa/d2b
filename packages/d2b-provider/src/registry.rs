@@ -11,15 +11,18 @@ use std::{
     fmt,
     future::{Future, ready},
     sync::{
-        Arc, Mutex, RwLock,
-        atomic::{AtomicU8, Ordering},
+        Arc,
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
 use d2b_contracts_resource::v3::{ConfigurationGeneration, ResourceRef};
 use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
-use tokio::{sync::Notify, time};
+use tokio::{
+    sync::{Notify, watch},
+    time,
+};
 
 use crate::{
     context::{CancellationToken, OwnedOperationContext},
@@ -190,17 +193,13 @@ impl fmt::Debug for AdmissionOptions {
     }
 }
 
-struct InFlightState {
-    total: usize,
-    by_provider: BTreeMap<ResourceRef, usize>,
-}
-
 struct RegistryInner<I> {
     snapshot: ProviderRegistrySnapshot,
     instances: BTreeMap<ResourceRef, (ProviderDescriptor, I)>,
     lifecycle: AtomicU8,
     limits: RegistryLimits,
-    in_flight: Mutex<InFlightState>,
+    in_flight_total: AtomicUsize,
+    in_flight_by_provider: BTreeMap<ResourceRef, AtomicUsize>,
     drained: Notify,
     cancellation: CancellationToken,
 }
@@ -346,16 +345,19 @@ impl<I> ProviderRegistryBuilder<I> {
             lifecycle: RegistryLifecycle::Accepting,
             descriptors,
         };
+        let in_flight_by_provider = self
+            .instances
+            .keys()
+            .map(|provider_ref| (provider_ref.clone(), AtomicUsize::new(0)))
+            .collect();
         Ok(ProviderRegistry {
             inner: Arc::new(RegistryInner {
                 snapshot,
                 instances: self.instances,
                 lifecycle: AtomicU8::new(ACCEPTING),
                 limits: self.limits,
-                in_flight: Mutex::new(InFlightState {
-                    total: 0,
-                    by_provider: BTreeMap::new(),
-                }),
+                in_flight_total: AtomicUsize::new(0),
+                in_flight_by_provider,
                 drained: Notify::new(),
                 cancellation: CancellationToken::new(),
             }),
@@ -441,30 +443,49 @@ impl<I: Clone> ProviderRegistry<I> {
         &self,
         provider_ref: &ResourceRef,
     ) -> Result<InFlightPermit<I>, ProviderRuntimeError> {
-        let mut state = self
-            .inner
-            .in_flight
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let provider_count = state.by_provider.get(provider_ref).copied().unwrap_or(0);
-        if state.total >= self.inner.limits.total_in_flight
-            || provider_count >= self.inner.limits.per_provider_in_flight
-        {
-            return Err(ProviderRuntimeError::InFlightLimit);
-        }
-        state.total += 1;
-        state
-            .by_provider
-            .insert(provider_ref.clone(), provider_count + 1);
-        if self.lifecycle() != RegistryLifecycle::Accepting {
-            state.total -= 1;
-            if provider_count == 0 {
-                state.by_provider.remove(provider_ref);
-            } else {
-                state
-                    .by_provider
-                    .insert(provider_ref.clone(), provider_count);
+        // The in-flight accounting is lock-free (plan U4): the per-Provider
+        // counters live in an immutable map built at `finish`, and each cap
+        // is enforced by a compare-exchange loop, so admission stays exact
+        // without a mutex. The lifecycle re-check below mirrors the original
+        // locked accounting: a generation that retired between `admit`'s
+        // check and the increment rolls its slots back.
+        let Some(provider_count) = self.inner.in_flight_by_provider.get(provider_ref) else {
+            return Err(ProviderRuntimeError::UnknownProvider);
+        };
+        let mut total = self.inner.in_flight_total.load(Ordering::Acquire);
+        loop {
+            if total >= self.inner.limits.total_in_flight {
+                return Err(ProviderRuntimeError::InFlightLimit);
             }
+            match self.inner.in_flight_total.compare_exchange_weak(
+                total,
+                total + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(actual) => total = actual,
+            }
+        }
+        let mut count = provider_count.load(Ordering::Acquire);
+        loop {
+            if count >= self.inner.limits.per_provider_in_flight {
+                self.inner.in_flight_total.fetch_sub(1, Ordering::AcqRel);
+                return Err(ProviderRuntimeError::InFlightLimit);
+            }
+            match provider_count.compare_exchange_weak(
+                count,
+                count + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(actual) => count = actual,
+            }
+        }
+        if self.lifecycle() != RegistryLifecycle::Accepting {
+            self.inner.in_flight_total.fetch_sub(1, Ordering::AcqRel);
+            provider_count.fetch_sub(1, Ordering::AcqRel);
             return Err(ProviderRuntimeError::NotAccepting);
         }
         Ok(InFlightPermit {
@@ -491,20 +512,18 @@ impl<I: Clone> ProviderRegistry<I> {
         &self,
         policy: &RegistryDrainPolicy,
     ) -> Result<RegistryShutdownReport, ProviderRuntimeError> {
-        let wait_for_drain =
-            wait_until_drained(&self.inner.in_flight, &self.inner.drained, || ready(()));
+        let wait_for_drain = wait_until_drained(
+            &self.inner.in_flight_total,
+            &self.inner.drained,
+            || ready(()),
+        );
         let drained = time::timeout(
             Duration::from_millis(u64::from(policy.drain_deadline_ms)),
             wait_for_drain,
         )
         .await
         .is_ok();
-        let unresolved_in_flight = self
-            .inner
-            .in_flight
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .total;
+        let unresolved_in_flight = self.inner.in_flight_total.load(Ordering::Acquire);
         self.inner.lifecycle.store(RETIRED, Ordering::Release);
         Ok(RegistryShutdownReport {
             drained,
@@ -527,19 +546,15 @@ impl<I> fmt::Debug for InFlightPermit<I> {
 
 impl<I> Drop for InFlightPermit<I> {
     fn drop(&mut self) {
-        let mut state = self
-            .registry
-            .in_flight
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        state.total = state.total.saturating_sub(1);
-        if let Some(count) = state.by_provider.get_mut(&self.provider_ref) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                state.by_provider.remove(&self.provider_ref);
-            }
+        // The counters are atomic precisely so releasing a permit never takes
+        // a lock: the drop may run on an executor worker while the drain task
+        // waits, or on the main thread after the runtime ended, and parking
+        // either would stall the drain it must complete (the same shape as
+        // `ProviderAdmission`'s drop in d2b-provider-toolkit).
+        if let Some(count) = self.registry.in_flight_by_provider.get(&self.provider_ref) {
+            count.fetch_sub(1, Ordering::AcqRel);
         }
-        if state.total == 0 {
+        if self.registry.in_flight_total.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.registry.drained.notify_waiters();
         }
     }
@@ -566,8 +581,14 @@ impl<I> fmt::Debug for AdmittedProvider<I> {
 }
 
 /// Holds the Zone's current registry generation across a live republication.
+///
+/// The generation is a `tokio::sync::watch` value: `current` clones the live
+/// `Arc` synchronously and non-blockingly, and `publish` swaps it with
+/// `send_replace` (which updates even with no receivers). This is the
+/// clone-on-read / swap-on-write shape the old `RwLock` served, without a
+/// blocking read for the synchronous consumers (plan U4).
 pub struct ProviderRegistryManager<I> {
-    current: Arc<RwLock<Arc<ProviderRegistry<I>>>>,
+    current: watch::Sender<Arc<ProviderRegistry<I>>>,
 }
 
 impl<I> Clone for ProviderRegistryManager<I> {
@@ -589,17 +610,13 @@ impl<I> fmt::Debug for ProviderRegistryManager<I> {
 impl<I: Clone> ProviderRegistryManager<I> {
     /// Take ownership of an initial generation.
     pub fn new(initial: ProviderRegistry<I>) -> Self {
-        Self {
-            current: Arc::new(RwLock::new(Arc::new(initial))),
-        }
+        let (current, _) = watch::channel(Arc::new(initial));
+        Self { current }
     }
 
     /// The generation new calls are admitted against.
     pub fn current(&self) -> Arc<ProviderRegistry<I>> {
-        self.current
-            .read()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
+        self.current.borrow().clone()
     }
 
     /// Swap in a replacement generation and drain the outgoing one.
@@ -627,19 +644,13 @@ impl<I: Clone> ProviderRegistryManager<I> {
             .compare_exchange(ACCEPTING, DRAINING, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| ProviderRuntimeError::InvalidLifecycleTransition)?;
         old.inner.cancellation.cancel();
-        {
-            let mut current = self
-                .current
-                .write()
-                .unwrap_or_else(|error| error.into_inner());
-            *current = Arc::new(replacement);
-        }
+        self.current.send_replace(Arc::new(replacement));
         old.finish_drain(&policy).await
     }
 }
 
 async fn wait_until_drained<F, Fut>(
-    in_flight: &Mutex<InFlightState>,
+    in_flight_total: &AtomicUsize,
     drained: &Notify,
     mut before_await: F,
 ) where
@@ -648,11 +659,7 @@ async fn wait_until_drained<F, Fut>(
 {
     loop {
         let notified = drained.notified();
-        let total = in_flight
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .total;
-        if total == 0 {
+        if in_flight_total.load(Ordering::Acquire) == 0 {
             break;
         }
         before_await().await;
@@ -662,10 +669,12 @@ async fn wait_until_drained<F, Fut>(
 
 #[cfg(test)]
 mod tests {
-    use super::{InFlightState, wait_until_drained};
+    use super::wait_until_drained;
     use std::{
-        collections::BTreeMap,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::Duration,
     };
     use tokio::{
@@ -674,36 +683,31 @@ mod tests {
     };
 
     struct FinalPermit {
-        in_flight: Arc<Mutex<InFlightState>>,
+        in_flight_total: Arc<AtomicUsize>,
         drained: Arc<Notify>,
     }
 
     impl Drop for FinalPermit {
         fn drop(&mut self) {
-            self.in_flight
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .total = 0;
-            self.drained.notify_waiters();
+            if self.in_flight_total.fetch_sub(1, Ordering::AcqRel) == 1 {
+                self.drained.notify_waiters();
+            }
         }
     }
 
     async fn prove_final_drop_between_check_and_await_completes() {
-        let in_flight = Arc::new(Mutex::new(InFlightState {
-            total: 1,
-            by_provider: BTreeMap::new(),
-        }));
+        let in_flight_total = Arc::new(AtomicUsize::new(1));
         let drained = Arc::new(Notify::new());
         let barrier = Arc::new(Barrier::new(2));
         let permit = FinalPermit {
-            in_flight: in_flight.clone(),
+            in_flight_total: in_flight_total.clone(),
             drained: drained.clone(),
         };
 
         let waiter = {
             let barrier = barrier.clone();
             tokio::spawn(async move {
-                wait_until_drained(&in_flight, &drained, move || {
+                wait_until_drained(&in_flight_total, &drained, move || {
                     let barrier = barrier.clone();
                     async move {
                         barrier.wait().await;
@@ -723,6 +727,7 @@ mod tests {
             .expect("drain waiter must not panic");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn dropping_the_final_permit_between_check_and_await_notifies_drain_waiters() {
         prove_final_drop_between_check_and_await_completes().await;

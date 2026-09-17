@@ -8,14 +8,14 @@
 use std::{
     collections::VecDeque,
     future::Future,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use d2b_contracts_provider::v3::{SpecifiedProviderMethod, provider_registry::ProviderBindingAxis};
 use d2b_contracts_resource::v3::identity::ServiceName;
 use d2b_contracts_resource::v3::{CanonicalJsonObject, ZoneId};
 use tokio::{
-    sync::{Semaphore, mpsc},
+    sync::{Mutex, Semaphore, mpsc},
     time::{Duration, timeout},
 };
 
@@ -243,20 +243,22 @@ impl<S> ProviderAgent<S> {
     }
 
     /// Snapshot retained audit events.
+    ///
+    /// Synchronous via the non-blocking `try_lock` (plan U4): a collision
+    /// reports an empty list fail-closed, and the caller re-checks.
     pub fn audit_events(&self) -> Vec<ProviderAgentAuditEvent> {
         self.audit
-            .lock()
+            .try_lock()
             .map(|events| events.iter().copied().collect())
             .unwrap_or_default()
     }
 
-    fn record(&self, event: ProviderAgentAuditEvent) {
-        if let Ok(mut audit) = self.audit.lock() {
-            if audit.len() == MAX_AGENT_AUDIT_EVENTS {
-                audit.pop_front();
-            }
-            audit.push_back(event);
+    async fn record(&self, event: ProviderAgentAuditEvent) {
+        let mut audit = self.audit.lock().await;
+        if audit.len() == MAX_AGENT_AUDIT_EVENTS {
+            audit.pop_front();
         }
+        audit.push_back(event);
     }
 }
 
@@ -274,7 +276,8 @@ where
                 ProviderAgentOutcome::UnsupportedService,
                 request.method,
                 self.provider_axis,
-            ));
+            ))
+            .await;
             return Err(ProviderAgentError::UnsupportedService);
         }
         let permit = self
@@ -298,7 +301,8 @@ where
             },
             request.method,
             self.provider_axis,
-        ));
+        ))
+        .await;
         result
     }
 
@@ -350,6 +354,7 @@ mod tests {
         .unwrap()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn unsupported_service_returns_typed_error() {
         let agent = ProviderAgent::new(
@@ -364,6 +369,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn negative_timeout_is_rejected_before_dispatch() {
         assert_eq!(
@@ -378,6 +384,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn session_close_terminates_serve_loop() {
         let agent = ProviderAgent::new(

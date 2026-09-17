@@ -385,6 +385,7 @@ fn an_invalid_drain_policy_is_refused() {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn shutdown_drains_then_retires_and_refuses_a_second_transition() {
     let work = zone(&["work"]);
@@ -409,6 +410,7 @@ async fn shutdown_drains_then_retires_and_refuses_a_second_transition() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn shutdown_reports_an_unresolved_call_and_cancels_its_context() {
     let work = zone(&["work"]);
@@ -430,6 +432,7 @@ async fn shutdown_reports_an_unresolved_call_and_cancels_its_context() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn publish_swaps_the_generation_and_drains_the_outgoing_one() {
     let work = zone(&["work"]);
@@ -449,6 +452,7 @@ async fn publish_swaps_the_generation_and_drains_the_outgoing_one() {
         .expect("the replacement generation admits");
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn publish_refuses_a_stale_generation_and_a_foreign_zone() {
     let work = zone(&["work"]);
