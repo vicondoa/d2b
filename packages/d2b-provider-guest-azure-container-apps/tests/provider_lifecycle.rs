@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use async_trait::async_trait;
 use d2b_contracts_provider::v3::credential::CredentialLeaseHandle;
@@ -39,7 +40,7 @@ impl AcaCredentialLeaseClient for FakeLeaseClient {
     ) -> Result<AcaCredentialLease, AcaControlError> {
         self.state
             .lock()
-            .unwrap()
+            .await
             .lease_expiries
             .push(request.requested_expiry_unix_ms());
         Ok(AcaCredentialLease::from_metadata(
@@ -49,7 +50,7 @@ impl AcaCredentialLeaseClient for FakeLeaseClient {
     }
 
     async fn revoke(&self, _: &AcaCredentialLease) -> Result<(), AcaControlError> {
-        self.state.lock().unwrap().revoked += 1;
+        self.state.lock().await.revoked += 1;
         Ok(())
     }
 }
@@ -68,7 +69,7 @@ impl AcaControl for FakeControl {
         Ok(self
             .state
             .lock()
-            .unwrap()
+            .await
             .health
             .pop_front()
             .unwrap_or(AcaControlHealth::Ready))
@@ -80,8 +81,8 @@ impl AcaControl for FakeControl {
         _: &AcaControlContext,
         _: &d2b_provider_guest_azure_container_apps::AcaWorkloadQuery,
     ) -> Result<AcaSandboxCandidates, AcaControlError> {
-        self.state.lock().unwrap().calls.push("find-sandboxes");
-        Ok(AcaSandboxCandidates::new(self.state.lock().unwrap().candidates.clone()).unwrap())
+        self.state.lock().await.calls.push("find-sandboxes");
+        Ok(AcaSandboxCandidates::new(self.state.lock().await.candidates.clone()).unwrap())
     }
 
     async fn find_disk_images(
@@ -90,7 +91,7 @@ impl AcaControl for FakeControl {
         _: &AcaControlContext,
         _: &AcaDesiredDiskImage,
     ) -> Result<AcaDiskImageCandidates, AcaControlError> {
-        self.state.lock().unwrap().calls.push("find-images");
+        self.state.lock().await.calls.push("find-images");
         Ok(AcaDiskImageCandidates::new(Vec::new()).unwrap())
     }
 
@@ -100,7 +101,7 @@ impl AcaControl for FakeControl {
         _: &AcaControlContext,
         _: &AcaDesiredDiskImage,
     ) -> Result<AcaDiskImageRecord, AcaControlError> {
-        self.state.lock().unwrap().calls.push("create-image");
+        self.state.lock().await.calls.push("create-image");
         Ok(AcaDiskImageRecord {
             id: AcaDiskImageId::parse("disk-1").unwrap(),
             generation: 1,
@@ -113,8 +114,8 @@ impl AcaControl for FakeControl {
         _: &AcaControlContext,
         desired: &AcaDesiredSandbox,
     ) -> Result<AcaSandboxRecord, AcaControlError> {
-        self.state.lock().unwrap().calls.push("create-sandbox");
-        self.state.lock().unwrap().desired_sandbox = Some(desired.clone());
+        self.state.lock().await.calls.push("create-sandbox");
+        self.state.lock().await.desired_sandbox = Some(desired.clone());
         Ok(record(AcaSandboxLifecycle::Creating))
     }
 
@@ -124,11 +125,11 @@ impl AcaControl for FakeControl {
         _: &AcaControlContext,
         _: &AcaSandboxId,
     ) -> Result<AcaSandboxRecord, AcaControlError> {
-        self.state.lock().unwrap().calls.push("resume");
+        self.state.lock().await.calls.push("resume");
         let lifecycle = self
             .state
             .lock()
-            .unwrap()
+            .await
             .resume_lifecycle
             .unwrap_or(AcaSandboxLifecycle::Running);
         Ok(record(lifecycle))
@@ -140,7 +141,7 @@ impl AcaControl for FakeControl {
         _: &AcaControlContext,
         _: &AcaSandboxId,
     ) -> Result<AcaSandboxRecord, AcaControlError> {
-        self.state.lock().unwrap().calls.push("stop");
+        self.state.lock().await.calls.push("stop");
         Ok(record(AcaSandboxLifecycle::Stopped))
     }
 
@@ -150,8 +151,8 @@ impl AcaControl for FakeControl {
         _: &AcaControlContext,
         _: &AcaSandboxId,
     ) -> Result<AcaDeleteOutcome, AcaControlError> {
-        self.state.lock().unwrap().calls.push("delete");
-        let mut state = self.state.lock().unwrap();
+        self.state.lock().await.calls.push("delete");
+        let mut state = self.state.lock().await;
         if state.delete_failures > 0 {
             state.delete_failures -= 1;
             return Err(AcaControlError::new(AcaControlErrorKind::Unavailable));
@@ -205,6 +206,7 @@ impl AcaClock for FixedClock {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn running_sandbox_reaches_ready_without_exposing_identity() {
     let state = Arc::new(Mutex::new(FakeState {
@@ -219,9 +221,10 @@ async fn running_sandbox_reaches_ready_without_exposing_identity() {
     );
     assert_eq!(controller.phase(), AcaPhase::Ready);
     assert!(!format!("{:?}", controller.status()).contains("sandbox-1"));
-    assert_eq!(state.lock().unwrap().revoked, 2);
+    assert_eq!(state.lock().await.revoked, 2);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn running_sandbox_requires_authenticated_healthy_control() {
     let state = Arc::new(Mutex::new(FakeState {
@@ -248,6 +251,7 @@ async fn running_sandbox_requires_authenticated_healthy_control() {
     assert_eq!(controller.phase(), AcaPhase::Ready);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn ambiguous_adoption_fails_closed() {
     let state = Arc::new(Mutex::new(FakeState {
@@ -270,6 +274,7 @@ async fn ambiguous_adoption_fails_closed() {
     assert_eq!(controller.phase(), AcaPhase::Degraded);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn missing_sandbox_uses_disk_and_sandbox_effects_then_finalizes() {
     let state = Arc::new(Mutex::new(FakeState::default()));
@@ -283,7 +288,7 @@ async fn missing_sandbox_uses_disk_and_sandbox_effects_then_finalizes() {
     ));
     assert_eq!(controller.phase(), AcaPhase::Provisioning);
     assert_eq!(
-        state.lock().unwrap().calls,
+        state.lock().await.calls,
         [
             "find-sandboxes",
             "find-images",
@@ -291,16 +296,17 @@ async fn missing_sandbox_uses_disk_and_sandbox_effects_then_finalizes() {
             "create-sandbox"
         ]
     );
-    state.lock().unwrap().candidates = vec![record(AcaSandboxLifecycle::Stopped)];
+    state.lock().await.candidates = vec![record(AcaSandboxLifecycle::Stopped)];
     controller
         .finalize(AcaOperationId::parse("operation-4").unwrap(), 1_000)
         .await
         .unwrap();
     assert_eq!(controller.phase(), AcaPhase::Finalized);
     assert!(!controller.finalizer_installed());
-    assert_eq!(state.lock().unwrap().calls.last(), Some(&"delete"));
+    assert_eq!(state.lock().await.calls.last(), Some(&"delete"));
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn provider_settings_reach_the_sandbox_effect() {
     let state = Arc::new(Mutex::new(FakeState::default()));
@@ -318,7 +324,7 @@ async fn provider_settings_reach_the_sandbox_effect() {
         .unwrap();
     let desired = state
         .lock()
-        .unwrap()
+        .await
         .desired_sandbox
         .clone()
         .expect("sandbox effect should receive desired settings");
@@ -332,6 +338,7 @@ async fn provider_settings_reach_the_sandbox_effect() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn failed_sandbox_is_deleted_during_finalization() {
     let state = Arc::new(Mutex::new(FakeState {
@@ -349,9 +356,10 @@ async fn failed_sandbox_is_deleted_during_finalization() {
         .unwrap();
 
     assert!(!controller.finalizer_installed());
-    assert_eq!(state.lock().unwrap().calls, ["find-sandboxes", "delete"]);
+    assert_eq!(state.lock().await.calls, ["find-sandboxes", "delete"]);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn unknown_sandbox_fails_closed_during_finalization() {
     let state = Arc::new(Mutex::new(FakeState {
@@ -371,9 +379,10 @@ async fn unknown_sandbox_fails_closed_during_finalization() {
     );
     assert!(controller.finalizer_installed());
     assert_eq!(controller.phase(), AcaPhase::Degraded);
-    assert_eq!(state.lock().unwrap().calls, ["find-sandboxes"]);
+    assert_eq!(state.lock().await.calls, ["find-sandboxes"]);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn finalization_waits_for_a_creating_sandbox_before_stopping() {
     let state = Arc::new(Mutex::new(FakeState {
@@ -390,9 +399,9 @@ async fn finalization_waits_for_a_creating_sandbox_before_stopping() {
         .await
         .unwrap();
     assert!(controller.finalizer_installed());
-    assert_eq!(state.lock().unwrap().calls, ["find-sandboxes"]);
+    assert_eq!(state.lock().await.calls, ["find-sandboxes"]);
 
-    state.lock().unwrap().candidates = vec![record(AcaSandboxLifecycle::Stopped)];
+    state.lock().await.candidates = vec![record(AcaSandboxLifecycle::Stopped)];
     controller
         .finalize(
             AcaOperationId::parse("operation-finalize-stopped").unwrap(),
@@ -402,11 +411,12 @@ async fn finalization_waits_for_a_creating_sandbox_before_stopping() {
         .unwrap();
     assert!(!controller.finalizer_installed());
     assert_eq!(
-        state.lock().unwrap().calls,
+        state.lock().await.calls,
         ["find-sandboxes", "find-sandboxes", "delete"]
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn finalization_stage_survives_controller_restart() {
     let state = Arc::new(Mutex::new(FakeState {
@@ -424,7 +434,7 @@ async fn finalization_stage_survives_controller_restart() {
     let recovery = first.recovery_state();
     assert_eq!(recovery.finalization_stage, "stop");
 
-    state.lock().unwrap().candidates = vec![record(AcaSandboxLifecycle::Stopped)];
+    state.lock().await.candidates = vec![record(AcaSandboxLifecycle::Stopped)];
     let mut restored = controller(Arc::clone(&state))
         .restore_recovery_state(AcaRecoveryState {
             phase: recovery.phase,
@@ -446,6 +456,7 @@ async fn finalization_stage_survives_controller_restart() {
     assert!(!restored.finalizer_installed());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn restored_delete_stage_rechecks_a_stopping_sandbox() {
     let state = Arc::new(Mutex::new(FakeState {
@@ -473,7 +484,7 @@ async fn restored_delete_stage_rechecks_a_stopping_sandbox() {
     assert_eq!(controller.recovery_state().finalization_stage, "stop");
     assert!(controller.finalizer_installed());
 
-    state.lock().unwrap().candidates = vec![record(AcaSandboxLifecycle::Stopped)];
+    state.lock().await.candidates = vec![record(AcaSandboxLifecycle::Stopped)];
     controller
         .finalize(
             AcaOperationId::parse("operation-recovery-stopped").unwrap(),
@@ -482,9 +493,10 @@ async fn restored_delete_stage_rechecks_a_stopping_sandbox() {
         .await
         .unwrap();
     assert_eq!(controller.phase(), AcaPhase::Finalized);
-    assert_eq!(state.lock().unwrap().calls.last(), Some(&"delete"));
+    assert_eq!(state.lock().await.calls.last(), Some(&"delete"));
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn resume_waits_for_running_lifecycle() {
     let state = Arc::new(Mutex::new(FakeState {
@@ -503,6 +515,7 @@ async fn resume_waits_for_running_lifecycle() {
     assert_eq!(controller.phase(), AcaPhase::Provisioning);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn readiness_attempts_are_bounded() {
     let state = Arc::new(Mutex::new(FakeState {
@@ -535,6 +548,7 @@ async fn readiness_attempts_are_bounded() {
     assert_eq!(controller.phase(), AcaPhase::Failed);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn lease_expiry_uses_absolute_unix_time() {
     let state = Arc::new(Mutex::new(FakeState {
@@ -547,11 +561,12 @@ async fn lease_expiry_uses_absolute_unix_time() {
         .await
         .unwrap();
     assert_eq!(
-        state.lock().unwrap().lease_expiries,
+        state.lock().await.lease_expiries,
         vec![1_235_567, 1_235_567]
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn finalization_retries_after_partial_delete_failure() {
     let state = Arc::new(Mutex::new(FakeState {
