@@ -276,6 +276,9 @@ async fn main() {
 /// that path in, and a printed path labelled as an account table reads to a
 /// scanner as account data leaving the host in a log.
 fn check_principal_allocation(path: &Path) -> Result<(), String> {
+    // CLI-only path (plan R11): the check runs before any async runtime and
+    // never on an executor worker, so the synchronous read is sanctioned.
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     let table = std::fs::read_to_string(path)
         .map_err(|error| format!("read host account table: {error}"))?;
     let host = HostAccounts::parse_passwd(&table)

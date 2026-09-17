@@ -200,7 +200,7 @@ pub(crate) fn declared_enrollment_link(
 /// Returns how many endpoints were bound. The Zone's runtime is shared by all
 /// of them, because the enrollment state machine of each child link lives in
 /// it and two connections for one link must not race.
-pub(crate) fn serve_guest_enrollments(
+pub(crate) async fn serve_guest_enrollments(
     local_root: ZonePath,
     edges: Vec<ZoneTreeEdge>,
     endpoints: Vec<GuestEnrollmentEndpoint>,
@@ -231,7 +231,7 @@ pub(crate) fn serve_guest_enrollments(
     let mut bound = 0;
     for endpoint in endpoints {
         let path = endpoint.socket_path();
-        match bind_enrollment_endpoint(&path, endpoint.socket_owner) {
+        match bind_enrollment_endpoint(&path, endpoint.socket_owner).await {
             Ok(listener) => {
                 tracing::info!(endpoint = %path.display(), "guest enrollment endpoint bound");
                 spawn_accept_loop(listener, Arc::clone(&server), path);
@@ -316,10 +316,13 @@ fn spawn_accept_loop(
 /// The bind is a plain socket operation, so it needs no reactor and is
 /// callable from any context; the accept loop converts the listener where the
 /// runtime is.
-fn bind_enrollment_endpoint(path: &Path, owner: (u32, u32)) -> std::io::Result<StdUnixListener> {
-    replace_stale_socket(path)?;
+async fn bind_enrollment_endpoint(
+    path: &Path,
+    owner: (u32, u32),
+) -> std::io::Result<StdUnixListener> {
+    replace_stale_socket(path).await?;
     let listener = StdUnixListener::bind(path)?;
-    set_socket_owner(path, owner);
+    set_socket_owner(path, owner).await;
     Ok(listener)
 }
 
@@ -329,8 +332,8 @@ fn bind_enrollment_endpoint(path: &Path, owner: (u32, u32)) -> std::io::Result<S
 /// A daemon restart leaves the previous socket file behind. It is replaced
 /// only after proving nothing answers on it, so a restarted daemon recovers
 /// its endpoint and a running one is never displaced.
-fn replace_stale_socket(path: &Path) -> std::io::Result<()> {
-    let metadata = match std::fs::symlink_metadata(path) {
+async fn replace_stale_socket(path: &Path) -> std::io::Result<()> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
@@ -341,13 +344,13 @@ fn replace_stale_socket(path: &Path) -> std::io::Result<()> {
             "enrollment endpoint path is not a socket",
         ));
     }
-    if std::os::unix::net::UnixStream::connect(path).is_ok() {
+    if tokio::net::UnixStream::connect(path).await.is_ok() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AddrInUse,
             "enrollment endpoint is already served",
         ));
     }
-    std::fs::remove_file(path)
+    tokio::fs::remove_file(path).await
 }
 
 /// Hand one bound endpoint to the owner the hypervisor connects as.
@@ -356,9 +359,10 @@ fn replace_stale_socket(path: &Path) -> std::io::Result<()> {
 /// that bridges it is the state root's owner. A failure here is reported and
 /// not fatal: the endpoint stays bound, and the refusal a connection then hits
 /// is the kernel's permission check, not a silently widened one.
-fn set_socket_owner(path: &Path, owner: (u32, u32)) {
+async fn set_socket_owner(path: &Path, owner: (u32, u32)) {
     if let Err(error) =
-        std::fs::set_permissions(path, PermissionsExt::from_mode(ZONE_ENROLLMENT_SOCKET_MODE))
+        tokio::fs::set_permissions(path, PermissionsExt::from_mode(ZONE_ENROLLMENT_SOCKET_MODE))
+            .await
     {
         tracing::warn!(endpoint = %path.display(), error = %error, "enrollment endpoint mode refused");
     }
@@ -592,12 +596,9 @@ mod tests {
     async fn a_guest_enrolls_over_the_bound_endpoint() {
         let root =
             std::env::temp_dir().join(format!("d2b-zone-enrollment-serve-{}", std::process::id()));
-        tokio::task::spawn_blocking({
-            let root = root.clone();
-            move || std::fs::create_dir_all(&root).expect("a temporary root")
-        })
-        .await
-        .expect("temporary root creation task panicked");
+        tokio::fs::create_dir_all(&root)
+            .await
+            .expect("a temporary root");
         let endpoint = GuestEnrollmentEndpoint::new(
             ZoneId::parse("zone-k1").expect("a valid zone"),
             ResourceUid::parse("33333333-3333-4333-8333-333333333333").expect("a valid UID"),
@@ -605,7 +606,7 @@ mod tests {
             ZoneLinkControllerGeneration::parse("controller-1").expect("a valid generation"),
             EnrolledSocketLayout {
                 vsock_host_socket: root.join("vsock.sock"),
-                socket_owner: state_root_owner(&root),
+                socket_owner: state_root_owner(&root).await,
             },
             &identity(),
             [0x33; 32],
@@ -617,7 +618,8 @@ mod tests {
                 vec![edge()],
                 vec![endpoint.clone()],
                 Arc::new(|| NOW_UNIX_MS),
-            ),
+            )
+            .await,
             1,
             "one declared endpoint is bound"
         );
@@ -671,51 +673,55 @@ mod tests {
             }
         );
 
-        let _ =
-            tokio::task::spawn_blocking(move || std::fs::remove_file(endpoint.socket_path()))
-                .await
-                .expect("endpoint socket cleanup task panicked");
-        let _ = std::fs::remove_dir(&root);
+        let _ = tokio::fs::remove_file(endpoint.socket_path()).await;
+        let _ = tokio::fs::remove_dir(&root).await;
     }
 
-    #[test]
-    fn a_stale_endpoint_socket_is_replaced_and_a_live_one_is_left_alone() {
+    #[tokio::test]
+    async fn a_stale_endpoint_socket_is_replaced_and_a_live_one_is_left_alone() {
         let root = std::env::temp_dir().join(format!("d2b-zone-enrollment-{}", std::process::id()));
-        std::fs::create_dir_all(&root).expect("a temporary root");
-        let owner = state_root_owner(&root);
+        tokio::fs::create_dir_all(&root).await.expect("a temporary root");
+        let owner = state_root_owner(&root).await;
         let path = root.join("vsock.sock_14320");
-        let _ = std::fs::remove_file(&path);
+        let _ = tokio::fs::remove_file(&path).await;
 
-        let live = bind_enrollment_endpoint(&path, owner).expect("the first bind succeeds");
-        let refused = bind_enrollment_endpoint(&path, owner);
+        let live = bind_enrollment_endpoint(&path, owner)
+            .await
+            .expect("the first bind succeeds");
+        let refused = bind_enrollment_endpoint(&path, owner).await;
         assert!(refused.is_err(), "a live endpoint is never displaced");
 
         drop(live);
         bind_enrollment_endpoint(&path, owner)
+            .await
             .expect("the stale endpoint is replaced after the owner goes away");
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&root);
+        let _ = tokio::fs::remove_file(&path).await;
+        let _ = tokio::fs::remove_dir(&root).await;
     }
 
-    #[test]
-    fn a_non_socket_endpoint_path_is_refused_rather_than_removed() {
+    #[tokio::test]
+    async fn a_non_socket_endpoint_path_is_refused_rather_than_removed() {
         let root =
             std::env::temp_dir().join(format!("d2b-zone-enrollment-file-{}", std::process::id()));
-        std::fs::create_dir_all(&root).expect("a temporary root");
+        tokio::fs::create_dir_all(&root).await.expect("a temporary root");
         let path = root.join("vsock.sock_14320");
-        std::fs::write(&path, b"not a socket").expect("a file at the endpoint path");
+        tokio::fs::write(&path, b"not a socket")
+            .await
+            .expect("a file at the endpoint path");
 
-        assert!(bind_enrollment_endpoint(&path, state_root_owner(&root)).is_err());
+        assert!(bind_enrollment_endpoint(&path, state_root_owner(&root).await)
+            .await
+            .is_err());
         assert!(path.exists(), "a non-socket path is never removed");
 
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&root);
+        let _ = tokio::fs::remove_file(&path).await;
+        let _ = tokio::fs::remove_dir(&root).await;
     }
 
     /// The owner a bound endpoint is handed to: the state root's own owner,
     /// which for a test root is this process.
-    fn state_root_owner(root: &Path) -> (u32, u32) {
-        let metadata = std::fs::metadata(root).expect("a temporary root");
+    async fn state_root_owner(root: &Path) -> (u32, u32) {
+        let metadata = tokio::fs::metadata(root).await.expect("a temporary root");
         (metadata.uid(), metadata.gid())
     }
 }

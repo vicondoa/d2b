@@ -12,7 +12,7 @@ use std::{
     os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
     path::PathBuf,
     sync::{
-        Arc, LazyLock, Mutex, OnceLock,
+        Arc, LazyLock, OnceLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
@@ -426,7 +426,7 @@ where
     pending_picker_receipts: BTreeMap<String, d2b_provider_clipboard_wayland::PickerReceipt>,
     pending_guest_selection_events:
         BTreeMap<String, d2b_provider_clipboard_wayland::GuestSelectionEvent>,
-    notification_port: Arc<Mutex<Box<dyn DesktopNotificationPort + Send>>>,
+    notification_port: Arc<AsyncMutex<Box<dyn DesktopNotificationPort + Send>>>,
     display_resource_client:
         Option<Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>>,
     display_resource_evidence: Option<CoreDisplayResourceEvidence>,
@@ -830,7 +830,7 @@ where
             notification: None,
             pending_picker_receipts: BTreeMap::new(),
             pending_guest_selection_events: BTreeMap::new(),
-            notification_port: Arc::new(Mutex::new(notification_port)),
+            notification_port: Arc::new(AsyncMutex::new(notification_port)),
             display_resource_client: None,
             display_resource_evidence: None,
             interaction_identity: None,
@@ -1694,7 +1694,7 @@ where
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
                 let mut notification_port = self
                     .notification_port
-                    .lock()
+                    .try_lock()
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
                 let result = if source_route.subject_ref().resource_type().as_str() == "Provider" {
                     self.notification
@@ -3752,6 +3752,8 @@ where
             if Instant::now() >= deadline {
                 return Err(WorkerEffectError::CleanupIncomplete);
             }
+            // U13: sync `WorkerEffectPort` trait poll; converts to
+            // `tokio::time::sleep` with the run_effect bridge in U13.
             thread::sleep(Duration::from_millis(50));
         }
     }
@@ -4083,6 +4085,8 @@ where
             if Instant::now() >= deadline {
                 break observed_state;
             }
+            // U13: sync `WorkerEffectPort` trait poll; converts to
+            // `tokio::time::sleep` with the run_effect bridge in U13.
             thread::sleep(Duration::from_millis(50));
         };
         let mut process_deleted = false;
@@ -4146,6 +4150,8 @@ where
                     if Instant::now() >= deadline {
                         break;
                     }
+                    // U13: sync `WorkerEffectPort` trait poll; converts to
+                    // `tokio::time::sleep` with the run_effect bridge in U13.
                     thread::sleep(Duration::from_millis(50));
                 }
             }
@@ -4705,14 +4711,14 @@ struct InteractionNotificationLifecycleState {
 }
 
 struct InteractionNotificationLifecycleBackend {
-    state: Mutex<InteractionNotificationLifecycleState>,
-    port: Arc<Mutex<Box<dyn DesktopNotificationPort + Send>>>,
+    state: AsyncMutex<InteractionNotificationLifecycleState>,
+    port: Arc<AsyncMutex<Box<dyn DesktopNotificationPort + Send>>>,
 }
 
 impl InteractionNotificationLifecycleBackend {
-    fn new(port: Arc<Mutex<Box<dyn DesktopNotificationPort + Send>>>) -> Self {
+    fn new(port: Arc<AsyncMutex<Box<dyn DesktopNotificationPort + Send>>>) -> Self {
         Self {
-            state: Mutex::new(InteractionNotificationLifecycleState {
+            state: AsyncMutex::new(InteractionNotificationLifecycleState {
                 sources: std::collections::BTreeSet::new(),
                 host_sink: None,
             }),
@@ -4722,9 +4728,12 @@ impl InteractionNotificationLifecycleBackend {
 }
 
 impl NotificationLifecycleBackend for InteractionNotificationLifecycleBackend {
+    // The trait is synchronous (d2b-provider-notification-desktop), so the
+    // tokio locks are taken with non-blocking `try_lock` per plan U4: a
+    // collision fails closed with the same lifecycle error, never a stall.
     fn start_source(&self, source: &NotificationSourceIdentity) -> Result<(), &'static str> {
         self.state
-            .lock()
+            .try_lock()
             .map_err(|_| "notification-source-lifecycle-unavailable")?
             .sources
             .insert(source.clone());
@@ -4734,7 +4743,7 @@ impl NotificationLifecycleBackend for InteractionNotificationLifecycleBackend {
     fn stop_source(&self, source: &NotificationSourceIdentity) -> Result<(), &'static str> {
         if self
             .state
-            .lock()
+            .try_lock()
             .map_err(|_| "notification-source-lifecycle-unavailable")?
             .sources
             .remove(source)
@@ -4747,12 +4756,12 @@ impl NotificationLifecycleBackend for InteractionNotificationLifecycleBackend {
 
     fn start_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), &'static str> {
         self.port
-            .lock()
+            .try_lock()
             .map_err(|_| "notification-host-sink-unavailable")?
             .activate()
             .map_err(|_| "notification-host-sink-unavailable")?;
         self.state
-            .lock()
+            .try_lock()
             .map_err(|_| "notification-host-sink-unavailable")?
             .host_sink = Some(sink.clone());
         Ok(())
@@ -4762,19 +4771,19 @@ impl NotificationLifecycleBackend for InteractionNotificationLifecycleBackend {
         {
             let state = self
                 .state
-                .lock()
+                .try_lock()
                 .map_err(|_| "notification-host-sink-unavailable")?;
             if state.host_sink.as_ref() != Some(sink) {
                 return Err("notification-host-sink-lifecycle-mismatch");
             }
         }
         self.port
-            .lock()
+            .try_lock()
             .map_err(|_| "notification-host-sink-unavailable")?
             .deactivate()
             .map_err(|_| "notification-host-sink-unavailable")?;
         self.state
-            .lock()
+            .try_lock()
             .map_err(|_| "notification-host-sink-unavailable")?
             .host_sink = None;
         Ok(())
@@ -4787,7 +4796,7 @@ impl NotificationLifecycleBackend for InteractionNotificationLifecycleBackend {
     ) -> Result<NotificationLifecycleObservation, &'static str> {
         let state = self
             .state
-            .lock()
+            .try_lock()
             .map_err(|_| "notification-source-lifecycle-unavailable")?;
         Ok(NotificationLifecycleObservation::new(
             state.sources.iter().cloned().collect(),
@@ -4803,7 +4812,7 @@ impl core::fmt::Debug for InteractionDrainEffects {
 }
 
 impl InteractionDrainEffects {
-    fn new(port: Arc<Mutex<Box<dyn DesktopNotificationPort + Send>>>) -> Self {
+    fn new(port: Arc<AsyncMutex<Box<dyn DesktopNotificationPort + Send>>>) -> Self {
         Self {
             notification_lifecycle: Some(NotificationLifecycleSupervisor::new(
                 InteractionNotificationLifecycleBackend::new(port),
@@ -5088,7 +5097,7 @@ fn unix_guest_subject_uid(uid: u32) -> ResourceUid {
 /// Bind and retain the daemon-owned ComponentSession listeners for all
 /// interaction Provider service packages. Providers do not open these sockets
 /// and no Provider-owned service unit is created.
-pub fn spawn_interaction_listeners<S>(
+pub async fn spawn_interaction_listeners<S>(
     runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S>>>>,
     state_dir: PathBuf,
     zone: ZoneId,
@@ -5104,11 +5113,16 @@ where
         expected_peer_uid,
         Arc::new(AtomicBool::new(false)),
     )
+    .await
 }
 
 /// Bind listeners using an existing shutdown token so independently
 /// Zone-bound listener sets can be stopped as one daemon-owned group.
-pub fn spawn_interaction_listeners_with_stop<S>(
+///
+/// The accept loops run as reactor tasks (plan U12): registration is
+/// async-end-to-end, and each listener parks on AsyncFd readiness rather
+/// than a poll/sleep thread.
+pub async fn spawn_interaction_listeners_with_stop<S>(
     runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S>>>>,
     state_dir: PathBuf,
     zone: ZoneId,
@@ -5118,9 +5132,11 @@ pub fn spawn_interaction_listeners_with_stop<S>(
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
 {
-    ensure_owned_state_dir(&state_dir, expected_peer_uid).map_err(|error| error.to_string())?;
+    ensure_owned_state_dir(&state_dir, expected_peer_uid)
+        .await
+        .map_err(|error| error.to_string())?;
     let state_metadata =
-        std::fs::symlink_metadata(&state_dir).map_err(|error| error.to_string())?;
+        tokio::fs::symlink_metadata(&state_dir).await.map_err(|error| error.to_string())?;
     if state_metadata.file_type().is_symlink()
         || !state_metadata.is_dir()
         || state_metadata.uid() != expected_peer_uid
@@ -5129,8 +5145,8 @@ where
         return Err("interaction-listener-state-directory-ownership".to_owned());
     }
 
-    fn ensure_owned_state_dir(path: &std::path::Path, expected_uid: u32) -> std::io::Result<()> {
-        match std::fs::symlink_metadata(path) {
+    async fn ensure_owned_state_dir(path: &std::path::Path, expected_uid: u32) -> std::io::Result<()> {
+        match tokio::fs::symlink_metadata(path).await {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink()
                     || !metadata.is_dir()
@@ -5145,7 +5161,7 @@ where
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if let Some(parent) = path.parent() {
-                    let parent_metadata = std::fs::symlink_metadata(parent)?;
+                    let parent_metadata = tokio::fs::symlink_metadata(parent).await?;
                     if parent_metadata.file_type().is_symlink()
                         || !parent_metadata.is_dir()
                         || parent_metadata.mode() & 0o002 != 0
@@ -5156,8 +5172,8 @@ where
                         ));
                     }
                 }
-                std::fs::create_dir_all(path)?;
-                let metadata = std::fs::symlink_metadata(path)?;
+                tokio::fs::create_dir_all(path).await?;
+                let metadata = tokio::fs::symlink_metadata(path).await?;
                 if metadata.file_type().is_symlink()
                     || !metadata.is_dir()
                     || metadata.uid() != expected_uid
@@ -5174,19 +5190,18 @@ where
         Ok(())
     }
     let mut paths = Vec::with_capacity(COMPONENT_SESSION_SERVICES.len());
-    let handlers = Arc::new(Mutex::new(Vec::new()));
+    let handlers = Arc::new(AsyncMutex::new(Vec::new()));
     let active_handlers = Arc::new(AtomicUsize::new(0));
     let mut threads = Vec::with_capacity(COMPONENT_SESSION_SERVICES.len());
     for (service, _) in COMPONENT_SESSION_SERVICES {
         let slug = service.replace('.', "-");
         let path = state_dir.join(format!("interaction-{slug}.sock"));
         let listener = bind_interaction_listener(&path, expected_peer_uid)
+            .await
             .map_err(|error| format!("bind interaction listener {}: {error}", path.display()))?;
         let runtime = Arc::clone(&runtime);
         let zone = zone.clone();
         let service = (*service).to_owned();
-        let failure_stop = Arc::clone(&stop);
-        let thread_name = format!("d2bd-interaction-{}", service.replace('.', "-"));
         let context = InteractionAcceptContext {
             runtime,
             zone,
@@ -5196,45 +5211,33 @@ where
             handlers: Arc::clone(&handlers),
             active_handlers: Arc::clone(&active_handlers),
         };
-        thread::Builder::new()
-            .name(thread_name)
-            .spawn(move || interaction_accept_loop(listener, context))
-            .map(|thread| threads.push(thread))
-            .map_err(|error| {
-                failure_stop.store(true, Ordering::Release);
-                for thread in threads.drain(..) {
-                    let _ = thread.join();
-                }
-                error.to_string()
-            })?;
+        threads.push(tokio::spawn(interaction_accept_loop(listener, context)));
         paths.push(path);
     }
-    let socket_identities = paths
-        .iter()
-        .map(|path| {
-            let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
-            Ok((metadata.dev(), metadata.ino()))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let parent_identities = paths
-        .iter()
-        .map(|path| {
-            let parent = path
-                .parent()
-                .ok_or_else(|| "interaction-listener-parent-missing".to_owned())?;
-            let metadata = std::fs::symlink_metadata(parent).map_err(|error| error.to_string())?;
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Err("interaction-listener-parent-invalid".to_owned());
-            }
-            Ok((metadata.dev(), metadata.ino()))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+    let mut socket_identities = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let metadata =
+            tokio::fs::symlink_metadata(path).await.map_err(|error| error.to_string())?;
+        socket_identities.push((metadata.dev(), metadata.ino()));
+    }
+    let mut parent_identities = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "interaction-listener-parent-missing".to_owned())?;
+        let metadata =
+            tokio::fs::symlink_metadata(parent).await.map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err("interaction-listener-parent-invalid".to_owned());
+        }
+        parent_identities.push((metadata.dev(), metadata.ino()));
+    }
     Ok(InteractionListenerSet {
         paths,
         socket_identities,
         parent_identities,
         stop,
-        threads: Mutex::new(threads),
+        threads: AsyncMutex::new(threads),
         handlers,
     })
 }
@@ -5245,8 +5248,8 @@ pub struct InteractionListenerSet {
     socket_identities: Vec<(u64, u64)>,
     parent_identities: Vec<(u64, u64)>,
     stop: Arc<AtomicBool>,
-    threads: Mutex<Vec<thread::JoinHandle<()>>>,
-    handlers: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
+    threads: AsyncMutex<Vec<tokio::task::JoinHandle<()>>>,
+    handlers: Arc<AsyncMutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 impl core::fmt::Debug for InteractionListenerSet {
@@ -5271,71 +5274,55 @@ impl InteractionListenerSet {
     }
 
     /// Append another independently Zone-bound listener set.
-    pub fn extend(&mut self, mut other: Self) {
+    pub async fn extend(&mut self, mut other: Self) {
         self.paths.append(&mut other.paths);
         self.socket_identities.append(&mut other.socket_identities);
         self.parent_identities.append(&mut other.parent_identities);
-        let other_threads = std::mem::replace(&mut other.threads, Mutex::new(Vec::new()))
-            .into_inner()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.threads
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .extend(other_threads);
-        self.handlers
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .append(
-                &mut other
-                    .handlers
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
-            );
+        let other_threads = std::mem::take(&mut *other.threads.lock().await);
+        self.threads.lock().await.extend(other_threads);
+        let mut other_handlers = std::mem::take(&mut *other.handlers.lock().await);
+        self.handlers.lock().await.append(&mut other_handlers);
     }
 
     /// Stop accepting new sessions and join all listener loops.
-    pub fn stop(&self) {
+    pub async fn stop(&self) {
         self.stop.store(true, Ordering::Release);
-        let mut threads = self
-            .threads
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut threads = self.threads.lock().await;
         for thread in threads.drain(..) {
-            let _ = thread.join();
+            let _ = thread.await;
         }
-        let mut handlers = self
-            .handlers
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drop(threads);
+        let mut handlers = self.handlers.lock().await;
         for handler in handlers.drain(..) {
-            let _ = handler.join();
+            let _ = handler.await;
         }
-        self.remove_socket_paths();
+        self.remove_socket_paths().await;
     }
 
-    fn remove_socket_paths(&self) {
+    async fn remove_socket_paths(&self) {
         for ((path, (device, inode)), (parent_device, parent_inode)) in self
             .paths
             .iter()
             .zip(&self.socket_identities)
             .zip(&self.parent_identities)
         {
-            let parent_owned = path.parent().and_then(|parent| {
-                std::fs::symlink_metadata(parent).ok().filter(|metadata| {
+            let parent_owned = match path.parent() {
+                Some(parent) => tokio::fs::symlink_metadata(parent).await.ok().filter(|metadata| {
                     metadata.is_dir()
                         && !metadata.file_type().is_symlink()
                         && metadata.dev() == *parent_device
                         && metadata.ino() == *parent_inode
-                })
-            });
+                }),
+                None => None,
+            };
             if parent_owned.is_some()
-                && std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+                && tokio::fs::symlink_metadata(path).await.is_ok_and(|metadata| {
                     metadata.file_type().is_socket()
                         && metadata.dev() == *device
                         && metadata.ino() == *inode
                 })
             {
-                let _ = std::fs::remove_file(path);
+                let _ = tokio::fs::remove_file(path).await;
             }
         }
     }
@@ -5343,21 +5330,20 @@ impl InteractionListenerSet {
 
 impl Drop for InteractionListenerSet {
     fn drop(&mut self) {
+        // Drop cannot await (R11 synchronous path): the stop flag is set so
+        // the reactor accept tasks wind down within ACCEPT_PARK, the task
+        // handles are detached, and the socket paths are removed with the
+        // synchronous fs surface. The daemon's shutdown path calls
+        // `stop().await` first, which joins the tasks; this is the safety
+        // net for early drops (R13: join semantics move to `stop().await`).
         self.stop.store(true, Ordering::Release);
-        let threads = self
-            .threads
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for thread in threads.drain(..) {
-            let _ = thread.join();
+        if let Ok(mut threads) = self.threads.try_lock() {
+            threads.clear();
         }
-        let mut handlers = self
-            .handlers
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for handler in handlers.drain(..) {
-            let _ = handler.join();
+        if let Ok(mut handlers) = self.handlers.try_lock() {
+            handlers.clear();
         }
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         for ((path, (device, inode)), (parent_device, parent_inode)) in self
             .paths
             .iter()
@@ -5385,10 +5371,13 @@ impl Drop for InteractionListenerSet {
     }
 }
 
-fn bind_interaction_listener(path: &std::path::Path, expected_uid: u32) -> std::io::Result<Socket> {
-    match std::fs::symlink_metadata(path) {
+async fn bind_interaction_listener(
+    path: &std::path::Path,
+    expected_uid: u32,
+) -> std::io::Result<Socket> {
+    match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) if metadata.file_type().is_socket() && metadata.uid() == expected_uid => {
-            std::fs::remove_file(path)?
+            tokio::fs::remove_file(path).await?
         }
         Ok(_) => {
             return Err(std::io::Error::new(
@@ -5403,7 +5392,7 @@ fn bind_interaction_listener(path: &std::path::Path, expected_uid: u32) -> std::
     listener.set_nonblocking(true)?;
     listener.bind(&SockAddr::unix(path)?)?;
     listener.listen(32)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
+    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660)).await?;
     Ok(listener)
 }
 
@@ -5417,11 +5406,11 @@ where
     service: String,
     expected_peer_uid: u32,
     stop: Arc<AtomicBool>,
-    handlers: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
+    handlers: Arc<AsyncMutex<Vec<tokio::task::JoinHandle<()>>>>,
     active_handlers: Arc<AtomicUsize>,
 }
 
-fn interaction_accept_loop<S>(listener: Socket, context: InteractionAcceptContext<S>)
+async fn interaction_accept_loop<S>(listener: Socket, context: InteractionAcceptContext<S>)
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
 {
@@ -5434,60 +5423,74 @@ where
         handlers,
         active_handlers,
     } = context;
-    while !stop.load(Ordering::Acquire) {
-        reap_finished_handlers(&handlers);
-        let socket = match accept_with(
-            listener.as_fd(),
-            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
-        ) {
-            Ok(accepted) => accepted,
-            Err(rustix::io::Errno::INTR) => continue,
-            Err(rustix::io::Errno::AGAIN) => {
-                wait_for_listener_ready(listener.as_fd());
-                continue;
-            }
-            Err(error) => {
-                tracing::warn!(%error, service = %service, "interaction listener accept failed");
-                continue;
-            }
-        };
-        let runtime = Arc::clone(&runtime);
-        let zone = zone.clone();
-        let service = service.clone();
-        if !reserve_interaction_handler(&active_handlers) {
-            continue;
+    // The reactor owns readiness (plan U12): the non-blocking listener is
+    // wrapped in AsyncFd, so the loop parks on the reactor instead of a
+    // poll/sleep thread.
+    let listener = match tokio::io::unix::AsyncFd::new(listener) {
+        Ok(listener) => listener,
+        Err(error) => {
+            tracing::warn!(%error, service = %service, "interaction listener could not enter the reactor");
+            return;
         }
-        let handler_active = Arc::clone(&active_handlers);
-        let handler_stop = Arc::clone(&stop);
-        let handler = thread::Builder::new()
-            .name("d2bd-interaction-session".to_owned())
-            .spawn(move || {
-                let result = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|error| error.to_string())
-                    .and_then(|runtime_handle| {
-                        runtime_handle.block_on(admit_interaction_socket(
-                            socket,
-                            runtime,
-                            zone,
-                            service,
-                            expected_peer_uid,
-                            handler_stop,
-                        ))
-                    });
-                if let Err(error) = result {
-                    tracing::debug!(%error, "interaction ComponentSession refused");
+    };
+    while !stop.load(Ordering::Acquire) {
+        reap_finished_handlers(&handlers).await;
+        // Park on readiness; the bounded park keeps a stop request observable
+        // without a connection (the same ACCEPT_PARK latency the poll wait
+        // had). Readiness covers POLLIN/POLLERR/POLLHUP, so a peer that
+        // closed before accept is admitted and refused by the admission path.
+        tokio::select! {
+            result = listener.readable() => {
+                match result {
+                    Ok(mut guard) => {
+                        loop {
+                            match accept_with(
+                                listener.as_fd(),
+                                SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+                            ) {
+                                Ok(socket) => {
+                                    let runtime = Arc::clone(&runtime);
+                                    let zone = zone.clone();
+                                    let service = service.clone();
+                                    if !reserve_interaction_handler(&active_handlers) {
+                                        continue;
+                                    }
+                                    let handler_active = Arc::clone(&active_handlers);
+                                    let handler_stop = Arc::clone(&stop);
+                                    let handler = tokio::spawn(async move {
+                                        let result = admit_interaction_socket(
+                                            socket,
+                                            runtime,
+                                            zone,
+                                            service,
+                                            expected_peer_uid,
+                                            handler_stop,
+                                        )
+                                        .await;
+                                        if let Err(error) = result {
+                                            tracing::debug!(%error, "interaction ComponentSession refused");
+                                        }
+                                        handler_active.fetch_sub(1, Ordering::AcqRel);
+                                    });
+                                    handlers.lock().await.push(handler);
+                                }
+                                Err(rustix::io::Errno::INTR) => continue,
+                                Err(rustix::io::Errno::AGAIN) => break,
+                                Err(error) => {
+                                    tracing::warn!(%error, service = %service, "interaction listener accept failed");
+                                    break;
+                                }
+                            }
+                        }
+                        guard.clear_ready();
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, service = %service, "interaction listener stopped accepting");
+                        break;
+                    }
                 }
-                handler_active.fetch_sub(1, Ordering::AcqRel);
-            });
-        if let Ok(handler) = handler {
-            handlers
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(handler);
-        } else {
-            active_handlers.fetch_sub(1, Ordering::AcqRel);
+            }
+            _ = tokio::time::sleep(ACCEPT_PARK) => {}
         }
     }
 }
@@ -5498,16 +5501,6 @@ const MAX_INTERACTION_HANDLERS: usize = 64;
 /// pending: long enough not to spin on the socket, short enough that a stop
 /// request is observed without waiting for the next connection.
 const ACCEPT_PARK: Duration = Duration::from_millis(50);
-
-/// Park in the kernel until the listener has work or [`ACCEPT_PARK`] expires.
-///
-/// The loop's listener is non-blocking so `stop` is never held behind an idle
-/// socket; parking here is what keeps that from becoming a poll loop.
-fn wait_for_listener_ready(listener: std::os::fd::BorrowedFd<'_>) {
-    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
-    let mut fds = [PollFd::new(listener, PollFlags::POLLIN)];
-    let _ = poll(&mut fds, PollTimeout::try_from(ACCEPT_PARK).unwrap_or(PollTimeout::MAX));
-}
 
 fn reserve_interaction_handler(active_handlers: &AtomicUsize) -> bool {
     let mut active = active_handlers.load(Ordering::Acquire);
@@ -5527,14 +5520,12 @@ fn reserve_interaction_handler(active_handlers: &AtomicUsize) -> bool {
     }
 }
 
-fn reap_finished_handlers(handlers: &Mutex<Vec<thread::JoinHandle<()>>>) {
-    let mut handlers = handlers
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+async fn reap_finished_handlers(handlers: &AsyncMutex<Vec<tokio::task::JoinHandle<()>>>) {
+    let mut handlers = handlers.lock().await;
     let mut index = 0;
     while index < handlers.len() {
         if handlers[index].is_finished() {
-            let _ = handlers.swap_remove(index).join();
+            let _ = handlers.swap_remove(index).await;
         } else {
             index += 1;
         }
@@ -6355,6 +6346,11 @@ const MAX_INFLIGHT_EFFECTS: usize = 64;
 static EFFECT_ADMISSION: LazyLock<d2bd_runtime::concurrency::ConnSemaphore> =
     LazyLock::new(|| d2bd_runtime::concurrency::ConnSemaphore::new(MAX_INFLIGHT_EFFECTS));
 
+// U13 bridge: the desktop-effect run bridge (spawn_blocking + sync_channel +
+// `block_on_future` + `Handle::try_current` fallback) is deleted in plan U13
+// and replaced by direct await end-to-end; the ConnSemaphore cap (64) stays
+// the sole refusal point. The sync `WorkerEffectPort` trait methods that call
+// it (and their 50ms poll sleeps) convert in the same unit.
 fn run_effect<T, F, Fut>(operation: F) -> Result<T, WorkerEffectError>
 where
     T: Send + 'static,
@@ -6415,6 +6411,9 @@ mod tests {
     impl ProcessEffectBackend for Backend {
         type Handle = ();
 
+        // Sync-by-construction test fake (plan assumption): a plain
+        // `#[test]` helper whose lock is taken outside any async context.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn launch(
             &self,
             request: ProcessRequest,
@@ -6744,29 +6743,116 @@ mod tests {
         }
     }
 
-    #[test]
-    fn listener_stop_removes_daemon_owned_socket_paths() {
+    #[tokio::test]
+    async fn listener_stop_removes_daemon_owned_socket_paths() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("interaction.sock");
         let listener = bind_interaction_listener(&path, rustix::process::geteuid().as_raw())
+            .await
             .expect("listener socket");
         drop(listener);
-        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        let metadata = tokio::fs::symlink_metadata(&path).await.unwrap();
         let listeners = InteractionListenerSet {
             paths: vec![path.clone()],
             socket_identities: vec![(metadata.dev(), metadata.ino())],
             parent_identities: {
-                let parent = std::fs::symlink_metadata(directory.path()).unwrap();
+                let parent = tokio::fs::symlink_metadata(directory.path()).await.unwrap();
                 vec![(parent.dev(), parent.ino())]
             },
             stop: Arc::new(AtomicBool::new(false)),
-            threads: Mutex::new(Vec::new()),
-            handlers: Arc::new(Mutex::new(Vec::new())),
+            threads: AsyncMutex::new(Vec::new()),
+            handlers: Arc::new(AsyncMutex::new(Vec::new())),
         };
 
         assert!(path.exists());
-        listeners.stop();
+        listeners.stop().await;
         assert!(!path.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawned_listener_set_admits_through_the_reactor_and_stops() {
+        let directory = tempfile::tempdir().unwrap();
+        let zone = ZoneId::parse("work").unwrap();
+        let uid = nix::unistd::getuid().as_raw();
+        let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_runtime(&zone, uid))));
+        // The daemon creates the daemon-owned `interaction/` parent before
+        // listener registration (the spawned set creates only the Zone dir).
+        let interaction_root = directory.path().join("interaction");
+        tokio::fs::create_dir_all(&interaction_root)
+            .await
+            .expect("interaction root");
+        let state_dir = interaction_root.join(zone.as_str());
+        let listeners = spawn_interaction_listeners_with_stop(
+            Arc::clone(&runtime),
+            state_dir,
+            zone.clone(),
+            uid,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .expect("listener set spawns");
+        let paths = listeners.paths().to_owned();
+        let (service, path) = (
+            d2b_provider_display_wayland::SERVICE_PACKAGE,
+            paths.first().expect("one listener per fixed service"),
+        );
+        assert!(path.exists());
+
+        // The spawned accept loop runs on the reactor: a client connect plus
+        // the sealed handshake must admit one session without any manual
+        // accept on the test side.
+        let client_socket =
+            Socket::new(Domain::UNIX, Type::from(libc::SOCK_SEQPACKET), None).unwrap();
+        client_socket
+            .connect(&SockAddr::unix(path).unwrap())
+            .expect("connect spawned interaction listener");
+        client_socket.set_nonblocking(true).unwrap();
+        let policy = interaction_endpoint_policy(service, 1).unwrap();
+        let client_seqpacket = SeqpacketSocket::from_owned(client_socket.into()).unwrap();
+        let client_peer = client_seqpacket.acceptor_peer_credentials().unwrap();
+        let transport = test_unix_transport(client_seqpacket, client_peer, &policy);
+        let mut engine = tokio::time::timeout(
+            Duration::from_secs(5),
+            SessionEngine::establish_initiator(
+                transport,
+                policy,
+                d2b_session::HandshakeCredentials::Nn,
+                Instant::now(),
+            ),
+        )
+        .await
+        .expect("client handshake timeout")
+        .expect("client handshake failed");
+        for _ in 0..100 {
+            let admitted = runtime
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|set| set.runtime_for(&zone))
+                .is_some_and(|composition| composition.session_count() == 1);
+            if admitted {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            runtime
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|set| set.runtime_for(&zone))
+                .is_some_and(|composition| composition.session_count() == 1),
+            "the reactor accept loop admitted the connecting client"
+        );
+        let _ = engine.close(
+            d2b_contracts_zone_session::v3::component_session::CloseReason::Normal,
+            d2b_contracts_zone_session::v3::component_session::Remediation::None,
+        );
+        listeners.stop().await;
+        assert!(
+            !path.exists(),
+            "stop removes the daemon-owned listener socket paths"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -6776,7 +6862,7 @@ mod tests {
         let uid = nix::unistd::getuid().as_raw();
         let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_runtime(&zone, uid))));
         let display_path = directory.path().join("display.sock");
-        let display_listener = bind_interaction_listener(&display_path, uid).unwrap();
+        let display_listener = bind_interaction_listener(&display_path, uid).await.unwrap();
         let (display_client, display_server) = establish_test_client(
             &display_listener,
             &runtime,
@@ -6787,7 +6873,7 @@ mod tests {
         )
         .await;
         let process_path = directory.path().join("process.sock");
-        let process_listener = bind_interaction_listener(&process_path, uid).unwrap();
+        let process_listener = bind_interaction_listener(&process_path, uid).await.unwrap();
         let (process_client, process_server) = establish_test_client(
             &process_listener,
             &runtime,
@@ -6948,7 +7034,7 @@ mod tests {
         let uid = nix::unistd::getuid().as_raw();
         let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_runtime(&zone, uid))));
         let path = directory.path().join("process.sock");
-        let listener = bind_interaction_listener(&path, uid).unwrap();
+        let listener = bind_interaction_listener(&path, uid).await.unwrap();
         let (client, server) = establish_test_client(
             &listener,
             &runtime,
@@ -6973,6 +7059,10 @@ mod tests {
         let target = ResourceRef::parse(&format!("Guest/uid-{uid}")).unwrap();
         let guard = runtime.lock().await;
         let lookup_runtime = Arc::clone(&runtime);
+        // U13 test site (plan U13): the sync driver's `blocking_lock` may
+        // only run off-runtime, so the lookup rides the blocking pool until
+        // U13 converts the sync driver itself; the contention assertion is
+        // unchanged (R13: no timing change).
         let mut lookup = tokio::spawn(async move {
             tokio::task::spawn_blocking(move || {
                 blocking_component_session_driver_for_service(
@@ -7224,7 +7314,7 @@ mod tests {
             &zone, uid,
         ))));
         let path = directory.path().join("display.sock");
-        let listener = bind_interaction_listener(&path, uid).expect("display listener");
+        let listener = bind_interaction_listener(&path, uid).await.expect("display listener");
         let (_client, server) = establish_test_client(
             &listener,
             &runtime,
@@ -7536,7 +7626,7 @@ mod tests {
                 .path()
                 .join(service.replace('.', "-"))
                 .with_extension("sock");
-            let listener = bind_interaction_listener(&path, uid).unwrap();
+            let listener = bind_interaction_listener(&path, uid).await.unwrap();
             let (client, server) =
                 establish_test_client(&listener, &runtime, &zone, service, uid, &path).await;
             clients.push((service, path, listener, client, server));
@@ -7872,7 +7962,7 @@ mod tests {
                 .path()
                 .join(service.replace('.', "-"))
                 .with_extension("sock");
-            let listener = bind_interaction_listener(&path, uid).unwrap();
+            let listener = bind_interaction_listener(&path, uid).await.unwrap();
             let (client, server) =
                 establish_test_client(&listener, &runtime, &zone, service, uid, &path).await;
             clients.push((service, path, listener, client, server));
@@ -8062,7 +8152,7 @@ mod tests {
                 .path()
                 .join(service.replace('.', "-"))
                 .with_extension("sock");
-            let listener = bind_interaction_listener(&path, uid).unwrap();
+            let listener = bind_interaction_listener(&path, uid).await.unwrap();
             let (client, server) =
                 establish_test_client(&listener, &runtime, &zone, service, uid, &path).await;
             clients.push((service, path, listener, client, server));
@@ -8287,7 +8377,7 @@ mod tests {
             .path()
             .join(service.replace('.', "-"))
             .with_extension("sock");
-        let listener = bind_interaction_listener(&path, uid).unwrap();
+        let listener = bind_interaction_listener(&path, uid).await.unwrap();
         let (client, server) =
             establish_test_client(&listener, &runtime, &zone, service, uid, &path).await;
         let display_spec = WaylandSessionSpec::new(
@@ -8371,8 +8461,8 @@ mod tests {
 
     #[test]
     fn notification_authority_release_refuses_active_effects() {
-        let port: Arc<Mutex<Box<dyn DesktopNotificationPort + Send>>> =
-            Arc::new(Mutex::new(Box::new(InteractionNotificationPort::default())));
+        let port: Arc<AsyncMutex<Box<dyn DesktopNotificationPort + Send>>> =
+            Arc::new(AsyncMutex::new(Box::new(InteractionNotificationPort::default())));
         let mut effects = InteractionDrainEffects::new(port);
         let source = NotificationSourceIdentity::new(
             ZoneId::parse("work").unwrap(),
@@ -8408,27 +8498,24 @@ mod tests {
         assert!(!effects.authority_released());
     }
 
-    #[test]
-    fn listener_handler_reservations_are_bounded() {
+    #[tokio::test]
+    async fn listener_handler_reservations_are_bounded() {
         let active_handlers = Arc::new(AtomicUsize::new(0));
-        let (sender, receiver) = std::sync::mpsc::channel();
-        thread::scope(|scope| {
-            for _ in 0..MAX_INTERACTION_HANDLERS + 16 {
-                let active_handlers = Arc::clone(&active_handlers);
-                let sender = sender.clone();
-                scope.spawn(move || {
-                    sender
-                        .send(reserve_interaction_handler(&active_handlers))
-                        .unwrap();
-                });
+        let mut reservations = Vec::with_capacity(MAX_INTERACTION_HANDLERS + 16);
+        for _ in 0..MAX_INTERACTION_HANDLERS + 16 {
+            let active_handlers = Arc::clone(&active_handlers);
+            reservations.push(tokio::spawn(async move {
+                reserve_interaction_handler(&active_handlers)
+            }));
+        }
+        let mut reserved = 0;
+        for reservation in reservations {
+            if reservation.await.expect("reservation task failed") {
+                reserved += 1;
             }
-        });
-        drop(sender);
+        }
 
-        assert_eq!(
-            receiver.into_iter().filter(|reserved| *reserved).count(),
-            MAX_INTERACTION_HANDLERS
-        );
+        assert_eq!(reserved, MAX_INTERACTION_HANDLERS);
         assert_eq!(
             active_handlers.load(Ordering::Acquire),
             MAX_INTERACTION_HANDLERS
@@ -8455,19 +8542,21 @@ mod tests {
             .expect("a released slot admits the next effect");
     }
 
-    #[test]
-    fn completed_listener_handlers_are_reaped() {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let handler = thread::spawn(move || sender.send(()).unwrap());
-        receiver.recv().unwrap();
+    #[tokio::test]
+    async fn completed_listener_handlers_are_reaped() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let handler = tokio::spawn(async move {
+            let _ = sender.send(());
+        });
+        receiver.await.expect("handler completed");
         while !handler.is_finished() {
-            thread::yield_now();
+            tokio::task::yield_now().await;
         }
-        let handlers = Mutex::new(vec![handler]);
+        let handlers = AsyncMutex::new(vec![handler]);
 
-        reap_finished_handlers(&handlers);
+        reap_finished_handlers(&handlers).await;
 
-        assert!(handlers.lock().unwrap().is_empty());
+        assert!(handlers.lock().await.is_empty());
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -8476,7 +8565,7 @@ mod tests {
         let path = directory.path().join("interaction.sock");
         let zone = ZoneId::parse("work").unwrap();
         let uid = nix::unistd::getuid().as_raw();
-        let listener = bind_interaction_listener(&path, uid).unwrap();
+        let listener = bind_interaction_listener(&path, uid).await.unwrap();
         let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_runtime(&zone, uid))));
 
         let client_socket =
@@ -8491,7 +8580,7 @@ mod tests {
                 SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
             ) {
                 Ok(accepted) => break accepted,
-                Err(rustix::io::Errno::AGAIN) => thread::yield_now(),
+                Err(rustix::io::Errno::AGAIN) => tokio::task::yield_now().await,
                 Err(error) => panic!("accept failed: {error}"),
             }
         };
@@ -8592,11 +8681,7 @@ mod tests {
         let replay = RequestId::new(vec![0x43; 16]).unwrap();
         assert!(driver.start_ttrpc(replay, replay_frame,).await.is_err());
         drop(listener);
-        let cleanup_path = path.clone();
-        tokio::task::spawn_blocking(move || std::fs::remove_file(&cleanup_path))
-            .await
-            .expect("listener socket cleanup task panicked")
-            .unwrap();
+        let _ = tokio::fs::remove_file(&path).await;
         assert!(!path.exists());
     }
 
@@ -8605,6 +8690,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("interaction.sock");
         let listener = bind_interaction_listener(&path, nix::unistd::getuid().as_raw())
+            .await
             .expect("listener socket");
         let client = Socket::new(Domain::UNIX, Type::from(libc::SOCK_SEQPACKET), None).unwrap();
         client.connect(&SockAddr::unix(&path).unwrap()).unwrap();
@@ -8614,7 +8700,7 @@ mod tests {
                 SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
             ) {
                 Ok(accepted) => break accepted,
-                Err(rustix::io::Errno::AGAIN) => thread::yield_now(),
+                Err(rustix::io::Errno::AGAIN) => tokio::task::yield_now().await,
                 Err(error) => panic!("accept failed: {error}"),
             }
         };

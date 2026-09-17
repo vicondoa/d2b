@@ -3757,10 +3757,12 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                     zone,
                                     state.daemon_uid,
                                     Arc::clone(&shared_stop),
-                                ) {
+                                )
+                                .await
+                                {
                                     Ok(listeners) => {
                                         if let Some(existing) = listener_set.as_mut() {
-                                            existing.extend(listeners);
+                                            existing.extend(listeners).await;
                                         } else {
                                             listener_set = Some(listeners);
                                         }
@@ -4737,7 +4739,7 @@ async fn drain_v3_providers(state: &ServerState) {
 async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedError> {
     if let Some(listeners) = state.interaction_listeners.lock().await.take()
     {
-        listeners.stop();
+        listeners.stop().await;
     }
     let interaction_error = {
         let mut runtime = state.interaction_runtime.lock().await;
@@ -14847,7 +14849,8 @@ async fn compose_guest_enrollment(
         edges,
         endpoints,
         std::sync::Arc::new(unix_now_millis),
-    );
+    )
+    .await;
     tracing::info!(
         zone = %topology.root.as_str(),
         endpoints = served,

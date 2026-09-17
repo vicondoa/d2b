@@ -9,9 +9,11 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     os::fd::{AsFd, OwnedFd},
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, Instant},
 };
+
+use tokio::sync::Mutex;
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
@@ -67,26 +69,27 @@ async fn wait_for_controller_bootstrap_endpoint(
     endpoint: OwnedFd,
     timeout: Duration,
 ) -> Result<OwnedFd, String> {
-    tokio::task::spawn_blocking(move || {
-        use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
-
-        let timeout = PollTimeout::try_from(timeout)
-            .map_err(|_| "provider-controller-bootstrap-timeout-invalid".to_owned())?;
-        let interests = PollFlags::POLLIN | PollFlags::POLLERR | PollFlags::POLLHUP;
-        let mut descriptors = [PollFd::new(endpoint.as_fd(), interests)];
-        let ready = poll(&mut descriptors, timeout)
+    // Readiness-driven AsyncFd wait (plan U13 classification), not a worker
+    // seat: a seat would serialize concurrent provider bootstraps head-of-line.
+    // The reactor owns readiness, so the descriptor must be non-blocking.
+    let flags = rustix::fs::fcntl_getfl(&endpoint)
+        .map_err(|_| "provider-controller-bootstrap-wait-failed".to_owned())?;
+    if !flags.contains(rustix::fs::OFlags::NONBLOCK) {
+        rustix::fs::fcntl_setfl(&endpoint, flags | rustix::fs::OFlags::NONBLOCK)
             .map_err(|_| "provider-controller-bootstrap-wait-failed".to_owned())?;
-        let readable = descriptors[0]
-            .revents()
-            .is_some_and(|events| events.contains(PollFlags::POLLIN));
-        if ready > 0 && readable {
-            Ok(endpoint)
-        } else {
-            Err("provider-controller-bootstrap-timeout".to_owned())
-        }
-    })
-    .await
-    .map_err(|_| "provider-controller-bootstrap-wait-failed".to_owned())?
+    }
+    let endpoint = tokio::io::unix::AsyncFd::new(endpoint)
+        .map_err(|_| "provider-controller-bootstrap-wait-failed".to_owned())?;
+    let mut guard = tokio::time::timeout(timeout, endpoint.readable())
+        .await
+        .map_err(|_| "provider-controller-bootstrap-timeout".to_owned())?
+        .map_err(|_| "provider-controller-bootstrap-wait-failed".to_owned())?;
+    // The reactor observed POLLIN/POLLERR/POLLHUP readiness (the same
+    // interest set the poll wait used); the readiness is consumed and the
+    // endpoint returned, so the caller's read observes the frame or the
+    // peer's closure.
+    guard.clear_ready();
+    Ok(endpoint.into_inner())
 }
 
 /// Probe the host posture needed by the daemon-owned minijail Provider.
@@ -94,6 +97,13 @@ async fn wait_for_controller_bootstrap_endpoint(
 /// The Provider receives this bounded snapshot through its constructor; it
 /// never reads host paths or cgroup state itself.
 pub(crate) fn detect_minijail_platform_gate() -> PlatformGate {
+    // Genuinely synchronous path (plan R11): the gate is read by the sync
+    // `ProductionProcessProviders::new_for_mode` constructor (whose callers
+    // are outside this unit's scope) and by system_core_effects' sync-shaped
+    // probe surface; converting to tokio::fs would require an async
+    // constructor and out-of-scope caller changes. The reads are two short
+    // /proc stats (osrelease, cgroup), negligible blocking-pool pressure.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     let (kernel_major, kernel_minor) = std::fs::read_to_string("/proc/sys/kernel/osrelease")
         .ok()
         .and_then(|release| {
@@ -112,6 +122,7 @@ pub(crate) fn detect_minijail_platform_gate() -> PlatformGate {
             Some((major, minor))
         })
         .unwrap_or((0, 0));
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     let cgroup_kill_available = std::fs::read_to_string("/proc/self/cgroup")
         .ok()
         .and_then(|cgroup| {
@@ -833,6 +844,9 @@ impl ProviderLivenessProbe {
 
 #[async_trait::async_trait]
 impl d2bd_runtime::supervisor::readiness_liveness::LivenessProbe for ProviderLivenessProbe {
+    // U13 bridge: `block_on_future` sync probe is deleted when the
+    // readiness-loop caller converts to `probe_async` end-to-end (plan U13,
+    // bridge elimination). `probe_async` below is the async form.
     fn probe(&self) -> RunnerLiveness {
         Self::classify(crate::block_on_future(
             self.providers.probe_node(&self.vm, &self.node),
@@ -1170,7 +1184,8 @@ impl ProductionProcessProviders {
     /// Return whether a Provider-managed identity is currently retained.
     pub fn has_active_role(&self, vm: &str, role_id: &str) -> bool {
         self.managed
-            .lock()
+            .try_lock()
+            .ok()
             .map(|managed| managed.contains_key(&(vm.to_owned(), role_id.to_owned())))
             .unwrap_or(false)
     }
@@ -1178,7 +1193,8 @@ impl ProductionProcessProviders {
     /// Return whether any Provider-managed long-lived role is retained.
     pub fn has_active_vm(&self, vm: &str) -> bool {
         self.managed
-            .lock()
+            .try_lock()
+            .ok()
             .map(|managed| managed.keys().any(|(managed_vm, _)| managed_vm == vm))
             .unwrap_or(false)
     }
@@ -1186,7 +1202,8 @@ impl ProductionProcessProviders {
     /// Return Provider role keys with retained exact local authority.
     pub fn active_role_ids(&self, vm: &str) -> Vec<String> {
         self.managed
-            .lock()
+            .try_lock()
+            .ok()
             .map(|managed| {
                 managed
                     .keys()
@@ -1286,12 +1303,15 @@ impl ProductionProcessProviders {
             context.device_worker_launch.as_ref(),
         ) {
             (Some(launch), None) => ticket
-                .with_launch_args(serving_worker_launch_args(
-                    &self.bundle,
-                    &self.socket_runtime_dir,
-                    &context.zone,
-                    launch,
-                )?)
+                .with_launch_args(
+                    serving_worker_launch_args(
+                        &self.bundle,
+                        &self.socket_runtime_dir,
+                        &context.zone,
+                        launch,
+                    )
+                    .await?,
+                )
                 .map_err(|_| "provider-ticket:serving-args-invalid".to_owned())?,
             (None, Some(launch)) => ticket
                 .with_launch_args(device_worker_launch_args(
@@ -1907,7 +1927,7 @@ impl ProductionProcessProviders {
         let Some(managed) = self
             .managed_resources
             .lock()
-            .map_err(|_| "provider-managed-state-poisoned".to_owned())?
+            .await
             .get(&(
                 context.zone.clone(),
                 context.zone_uid.clone(),
@@ -1961,7 +1981,8 @@ impl ProductionProcessProviders {
     /// Return whether a generic resource retains a verified identity.
     pub fn has_active_resource(&self, resource_ref: &ResourceRef) -> bool {
         self.managed_resources
-            .lock()
+            .try_lock()
+            .ok()
             .map(|managed| managed.keys().any(|(_, _, key)| key == resource_ref))
             .unwrap_or(false)
     }
@@ -1974,7 +1995,8 @@ impl ProductionProcessProviders {
         resource_ref: &ResourceRef,
     ) -> bool {
         self.managed_resources
-            .lock()
+            .try_lock()
+            .ok()
             .map(|managed| {
                 managed.contains_key(&(zone.clone(), zone_uid.cloned(), resource_ref.clone()))
             })
@@ -1995,7 +2017,7 @@ impl ProductionProcessProviders {
         let (resource_uid, generation) = row;
         let (provider_ref, owner_ref, owner_uid) = binding;
         self.managed_resources
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|managed| {
                 managed
@@ -2019,7 +2041,7 @@ impl ProductionProcessProviders {
     ) -> bool {
         let key = (context.zone.clone(), resource_ref.clone());
         self.controller_bootstrap
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|markers| markers.get(&key).map(|marker| marker.context() == context))
             .unwrap_or(false)
@@ -2035,7 +2057,7 @@ impl ProductionProcessProviders {
             return;
         };
         let key = (context.zone.clone(), context.resource_ref.clone());
-        if let Ok(mut markers) = self.controller_bootstrap.lock()
+        if let Ok(mut markers) = self.controller_bootstrap.try_lock()
             && markers.get(&key).is_some_and(|marker| {
                 let marker_context = marker.context();
                 marker_context.zone == context.zone
@@ -2070,7 +2092,7 @@ impl ProductionProcessProviders {
             return;
         };
         let key = (context.zone.clone(), context.resource_ref.clone());
-        if let Ok(mut markers) = self.controller_bootstrap.lock()
+        if let Ok(mut markers) = self.controller_bootstrap.try_lock()
             && markers.get(&key).is_some_and(|marker| {
                 let marker_context = marker.context();
                 marker_context.process_ref == *context.resource_ref
@@ -2103,7 +2125,7 @@ impl ProductionProcessProviders {
         let key = (endpoint.context.zone.clone(), process_ref);
         let mut markers = self
             .controller_bootstrap
-            .lock()
+            .try_lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?;
         if markers.len() >= MAX_CONTROLLER_BOOTSTRAP_ENDPOINTS && !markers.contains_key(&key) {
             return Err("provider-controller-bootstrap-capacity".to_owned());
@@ -2131,12 +2153,12 @@ impl ProductionProcessProviders {
         wake: ControllerSessionReconcileWake,
     ) -> Result<(), String> {
         self.controller_session_wakers
-            .lock()
+            .try_lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
             .insert(zone.clone(), Arc::clone(&wake));
         let pending = self
             .controller_bootstrap
-            .lock()
+            .try_lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
             .values()
             .any(|marker| {
@@ -2157,7 +2179,7 @@ impl ProductionProcessProviders {
         // reconciles pending markers itself).
         let wake = match self
             .controller_session_wakers
-            .lock()
+            .try_lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
             .get(zone)
             .cloned()
@@ -2180,7 +2202,8 @@ impl ProductionProcessProviders {
         process_ref: &ResourceRef,
     ) -> bool {
         self.controller_bootstrap
-            .lock()
+            .try_lock()
+            .ok()
             .map(|markers| markers.contains_key(&(zone.clone(), process_ref.clone())))
             .unwrap_or(false)
     }
@@ -2190,7 +2213,7 @@ impl ProductionProcessProviders {
         zone: &ZoneId,
         process_ref: &ResourceRef,
     ) -> bool {
-        let Ok(markers) = self.controller_bootstrap.lock() else {
+        let Ok(markers) = self.controller_bootstrap.try_lock() else {
             return false;
         };
         let Some(ControllerBootstrapMarker::Pending(endpoint)) =
@@ -2215,7 +2238,8 @@ impl ProductionProcessProviders {
         zone: &ZoneId,
     ) -> Vec<ControllerBootstrapContext> {
         self.controller_bootstrap
-            .lock()
+            .try_lock()
+            .ok()
             .map(|markers| {
                 markers
                     .iter()
@@ -2232,7 +2256,8 @@ impl ProductionProcessProviders {
         zone: &ZoneId,
     ) -> Vec<ControllerBootstrapContext> {
         self.controller_bootstrap
-            .lock()
+            .try_lock()
+            .ok()
             .map(|markers| {
                 markers
                     .values()
@@ -2273,7 +2298,7 @@ impl ProductionProcessProviders {
         if expected.zone() != zone {
             return None;
         }
-        let mut markers = self.controller_bootstrap.lock().ok()?;
+        let mut markers = self.controller_bootstrap.try_lock().ok()?;
         let key = (zone.clone(), expected.process_ref().clone());
         let marker = markers.remove(&key)?;
         match marker {
@@ -2303,7 +2328,7 @@ impl ProductionProcessProviders {
         &self,
         context: &ControllerBootstrapContext,
     ) -> bool {
-        let Ok(mut markers) = self.controller_bootstrap.lock() else {
+        let Ok(mut markers) = self.controller_bootstrap.try_lock() else {
             return false;
         };
         if !matches!(
@@ -2327,7 +2352,7 @@ impl ProductionProcessProviders {
         &self,
         endpoint: ControllerBootstrapEndpoint,
     ) -> bool {
-        let Ok(mut markers) = self.controller_bootstrap.lock() else {
+        let Ok(mut markers) = self.controller_bootstrap.try_lock() else {
             return false;
         };
         let key = (
@@ -2347,7 +2372,7 @@ impl ProductionProcessProviders {
     }
 
     pub(crate) fn fail_controller_bootstrap(&self, context: &ControllerBootstrapContext) -> bool {
-        let Ok(mut markers) = self.controller_bootstrap.lock() else {
+        let Ok(mut markers) = self.controller_bootstrap.try_lock() else {
             return false;
         };
         if markers
@@ -2368,7 +2393,7 @@ impl ProductionProcessProviders {
     ) {
         let process_identity = self
             .managed_resources
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|managed| {
                 managed
@@ -2389,7 +2414,7 @@ impl ProductionProcessProviders {
         } else {
             self.forget_controller_bootstrap_for_resource_context(context);
         }
-        if let Ok(mut managed) = self.managed_resources.lock()
+        if let Ok(mut managed) = self.managed_resources.try_lock()
             && managed
                 .get(&(
                     context.zone.clone(),
@@ -2632,7 +2657,7 @@ impl ProductionProcessProviders {
         let managed = self
             .managed_resources
             .lock()
-            .map_err(|_| "provider-managed-state-poisoned".to_owned())?
+            .await
             .get(&(
                 context.zone.clone(),
                 context.zone_uid.clone(),
@@ -2872,7 +2897,7 @@ impl ProductionProcessProviders {
         let managed = self
             .managed
             .lock()
-            .map_err(|_| "provider-managed-state-poisoned".to_owned())?
+            .await
             .get(&key)
             .copied()
             .ok_or_else(|| "provider-process-not-found".to_owned())?;
@@ -2932,7 +2957,7 @@ impl ProductionProcessProviders {
         let Some(managed) = self
             .managed
             .lock()
-            .map_err(|_| "provider-managed-state-poisoned".to_owned())?
+            .await
             .get(&key)
             .copied()
         else {
@@ -3028,7 +3053,7 @@ impl ProductionProcessProviders {
         identity: ProcessIdentityDigest,
     ) -> Result<(), String> {
         self.managed
-            .lock()
+            .try_lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
             .insert(
                 (vm.to_owned(), Self::tracked_role_id(node)),
@@ -3045,7 +3070,7 @@ impl ProductionProcessProviders {
         managed: ManagedResource,
     ) -> Result<(), String> {
         self.managed_resources
-            .lock()
+            .try_lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
             .insert(
                 (
@@ -3059,7 +3084,7 @@ impl ProductionProcessProviders {
     }
 
     fn forget(&self, vm: &str, node: &ProcessNode) {
-        if let Ok(mut managed) = self.managed.lock() {
+        if let Ok(mut managed) = self.managed.try_lock() {
             managed.remove(&(vm.to_owned(), Self::tracked_role_id(node)));
         }
     }
@@ -3070,14 +3095,14 @@ impl ProductionProcessProviders {
         zone_uid: Option<&ResourceUid>,
         resource_ref: &ResourceRef,
     ) {
-        if let Ok(mut markers) = self.controller_bootstrap.lock() {
+        if let Ok(mut markers) = self.controller_bootstrap.try_lock() {
             markers.retain(|(marker_zone, marker_ref), marker| {
                 marker_zone != zone
                     || marker_ref != resource_ref
                     || marker.context().zone_uid.as_ref() != zone_uid
             });
         }
-        if let Ok(mut managed) = self.managed_resources.lock() {
+        if let Ok(mut managed) = self.managed_resources.try_lock() {
             managed.remove(&(zone.clone(), zone_uid.cloned(), resource_ref.clone()));
         }
     }
@@ -3218,7 +3243,7 @@ impl ProductionProcessProviders {
         let managed = self
             .managed_resources
             .lock()
-            .map_err(|_| "provider-managed-state-poisoned".to_owned())?
+            .await
             .values()
             .filter(|managed| {
                 managed.zone == context.zone && managed.resource_ref == *context.resource_ref
@@ -3532,7 +3557,7 @@ fn validate_resource_execution_target(
 /// template pins it, and the broker composes `argv[0]` from it. These
 /// arguments carry the per-binding data the binding controller declared
 /// (private socket path, served view root, thread pool, cache, flags).
-fn serving_worker_launch_args(
+async fn serving_worker_launch_args(
     bundle: &BundleResolver,
     socket_runtime_dir: &std::path::Path,
     zone: &ZoneId,
@@ -3586,10 +3611,11 @@ fn serving_worker_launch_args(
     // The worker binds its private socket as the in-namespace principal; the
     // directory is realized before the launch (old-plane runtime-dir prep).
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)
+        tokio::fs::create_dir_all(parent)
+            .await
             .map_err(|_| "provider-ticket:serving-socket-dir-create".to_owned())?;
         use std::os::unix::fs::PermissionsExt as _;
-        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        let _ = tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await;
     }
     let cache = match launch.cache {
         AttachmentCache::Auto => "auto",
@@ -4387,7 +4413,6 @@ fn stable_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::fd::AsRawFd;
     use d2b_provider_process::{GpuWorkerParams, SwtpmFlushParams, SwtpmWorkerParams, VideoWorkerParams};
     use d2b_contracts_provider::v3::{
         ArtifactDigest, BinaryRef, ComponentDescriptor, ComponentExecution,
@@ -4824,8 +4849,10 @@ mod tests {
             SockFlag::SOCK_CLOEXEC,
         )
         .expect("bootstrap socketpair");
-        let writer = tokio::task::spawn_blocking(move || {
-            nix::sys::socket::send(sender.as_raw_fd(), b"ready", nix::sys::socket::MsgFlags::empty())
+        // One short frame on a socketpair never blocks; the writer is a plain
+        // task (R13: no blocking-pool thread, timing unchanged).
+        let writer = tokio::spawn(async move {
+            rustix::net::send(&sender, b"ready", rustix::net::SendFlags::empty())
                 .expect("bootstrap readiness frame");
         });
         let endpoint = wait_for_controller_bootstrap_endpoint(receiver, Duration::from_secs(1))
