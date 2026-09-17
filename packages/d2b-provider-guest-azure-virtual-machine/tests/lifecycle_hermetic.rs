@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use async_trait::async_trait;
 use d2b_contracts::{OpaqueAzureRef, ResourceRef};
@@ -58,7 +59,7 @@ struct FixedClock(Arc<Mutex<u64>>);
 
 impl Clock for FixedClock {
     fn now_unix_ms(&self) -> u64 {
-        *self.0.lock().unwrap()
+        *self.0.try_lock().unwrap()
     }
 }
 
@@ -70,7 +71,7 @@ impl AzureEffectPort for FakeEffect {
         _: &str,
         _: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().await;
         state.calls.push("provision");
         state.state = AzureVmState::Running;
         state.handle = Some(AzureVmHandle::from_core("opaque-vm").unwrap());
@@ -88,7 +89,7 @@ impl AzureEffectPort for FakeEffect {
     ) -> Result<LroStatus, AzureVmError> {
         self.state
             .lock()
-            .unwrap()
+            .await
             .polls
             .pop()
             .ok_or(AzureVmError::Transient)
@@ -99,7 +100,7 @@ impl AzureEffectPort for FakeEffect {
         _: &AzureVmGuestSettings,
         _: &AzureAccessToken,
     ) -> Result<(AzureVmState, Option<AzureVmHandle>, Option<TagDigest>), AzureVmError> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock().await;
         Ok((state.state, state.handle.clone(), state.tags))
     }
 
@@ -109,7 +110,7 @@ impl AzureEffectPort for FakeEffect {
         _: PskExtensionPayload,
         _: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().await;
         state.calls.push("extension");
         if state.extension_failures > 0 {
             state.extension_failures -= 1;
@@ -123,7 +124,7 @@ impl AzureEffectPort for FakeEffect {
         _: &AzureVmGuestSettings,
         _: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().await;
         state.calls.push("extension-delete");
         if state.extension_delete_failures > 0 {
             state.extension_delete_failures -= 1;
@@ -148,7 +149,7 @@ impl AzureEffectPort for FakeEffect {
         _: &str,
         _: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().await;
         state.calls.push("delete");
         state.state = AzureVmState::Absent;
         state.handle = None;
@@ -162,7 +163,7 @@ impl AzureEffectPort for FakeEffect {
         _: &str,
         _: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError> {
-        self.state.lock().unwrap().calls.push("child-cleanup");
+        self.state.lock().await.calls.push("child-cleanup");
         Ok(AzureOperationHandle::from_core(b"child-cleanup").unwrap())
     }
 
@@ -264,6 +265,7 @@ fn azure_wire_enums_use_adr_values() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn absent_vm_starts_non_blocking_provision() {
     let (provider, settings) = config();
@@ -287,9 +289,10 @@ async fn absent_vm_starts_non_blocking_provision() {
         AzureVmReconcileOutcome::Progressing { .. }
     ));
     assert_eq!(controller.phase(), AzureVmPhase::Provisioning);
-    assert_eq!(state.lock().unwrap().calls, ["provision"]);
+    assert_eq!(state.lock().await.calls, ["provision"]);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn observed_provisioning_vm_is_not_provisioned_again_after_restart() {
     let (provider, settings) = config();
@@ -308,9 +311,10 @@ async fn observed_provisioning_vm_is_not_provisioned_again_after_restart() {
         AzureVmReconcileOutcome::Progressing { .. }
     ));
     assert_eq!(controller.phase(), AzureVmPhase::Provisioning);
-    assert!(state.lock().unwrap().calls.is_empty());
+    assert!(state.lock().await.calls.is_empty());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn poll_rejects_an_operation_handle_that_is_not_current() {
     let (provider, settings) = config();
@@ -330,9 +334,10 @@ async fn poll_rejects_an_operation_handle_that_is_not_current() {
         AzureVmError::InvalidOperationHandle
     );
     assert_eq!(controller.phase(), AzureVmPhase::Provisioning);
-    assert_eq!(state.lock().unwrap().calls, ["provision"]);
+    assert_eq!(state.lock().await.calls, ["provision"]);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn finalize_preserves_the_first_delete_operation_id() {
     let (provider, settings) = config();
@@ -356,6 +361,7 @@ async fn finalize_preserves_the_first_delete_operation_id() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn recovery_state_restores_opaque_lro_without_secret_material() {
     let (provider, settings) = config();
@@ -396,6 +402,7 @@ async fn recovery_state_restores_opaque_lro_without_secret_material() {
     restored.reconcile("zone", "guest", 1).await.unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn restart_adopts_only_tagged_running_vm() {
     let (provider, settings) = config();
@@ -419,6 +426,7 @@ async fn restart_adopts_only_tagged_running_vm() {
     assert!(!format!("{:?}", controller.status()).contains("opaque-vm"));
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn delete_keeps_finalizer_until_lro_completion() {
     let (provider, settings) = config();
@@ -452,6 +460,7 @@ async fn delete_keeps_finalizer_until_lro_completion() {
     assert_eq!(controller.phase(), AzureVmPhase::Finalized);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn running_vm_waits_for_authenticated_enrollment() {
     let (provider, settings) = config();
@@ -472,6 +481,7 @@ async fn running_vm_waits_for_authenticated_enrollment() {
     assert!(controller.status().identity_digest().is_none());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn ready_vm_accepts_typed_resize_and_commits_after_lro() {
     let (provider, settings) = config();
@@ -514,6 +524,7 @@ async fn ready_vm_accepts_typed_resize_and_commits_after_lro() {
     assert_eq!(controller.phase(), AzureVmPhase::Ready);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn failed_update_lro_honors_pending_delete_intent() {
     let (provider, settings) = config();
@@ -557,7 +568,7 @@ async fn failed_update_lro_honors_pending_delete_intent() {
     assert_eq!(controller.phase(), AzureVmPhase::Deleting);
     assert!(controller.finalizer_installed());
     assert!(controller.recovery_state().pending_update.is_none());
-    assert_eq!(state.lock().unwrap().calls, ["delete"]);
+    assert_eq!(state.lock().await.calls, ["delete"]);
     controller
         .poll_operation(AzureOperationHandle::from_core(b"delete").unwrap())
         .await
@@ -570,6 +581,7 @@ async fn failed_update_lro_honors_pending_delete_intent() {
     assert!(!controller.finalizer_installed());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn restart_with_pending_delete_never_reprovisions_an_absent_vm() {
     let (provider, settings) = config();
@@ -609,9 +621,10 @@ async fn restart_with_pending_delete_never_reprovisions_an_absent_vm() {
         .await
         .unwrap();
     assert_eq!(controller.phase(), AzureVmPhase::Finalized);
-    assert_eq!(state.lock().unwrap().calls, ["child-cleanup"]);
+    assert_eq!(state.lock().await.calls, ["child-cleanup"]);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn foreign_tags_are_not_adopted() {
     let (provider, settings) = config();
@@ -632,6 +645,7 @@ async fn foreign_tags_are_not_adopted() {
     assert_eq!(controller.phase(), AzureVmPhase::Failed);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn restart_finalization_reobserves_before_clearing_finalizer() {
     let (provider, settings) = config();
@@ -664,6 +678,7 @@ async fn restart_finalization_reobserves_before_clearing_finalizer() {
     assert!(!controller.finalizer_installed());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn provisioning_lro_delivers_psk_before_bootstrap_phase() {
     let (provider, settings) = config();
@@ -694,9 +709,10 @@ async fn provisioning_lro_delivers_psk_before_bootstrap_phase() {
         .await
         .unwrap();
     assert_eq!(controller.phase(), AzureVmPhase::Bootstrapping);
-    assert_eq!(state.lock().unwrap().calls, ["provision", "extension"]);
+    assert_eq!(state.lock().await.calls, ["provision", "extension"]);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn failed_extension_lro_redelivers_psk_without_losing_secret() {
     let (provider, settings) = config();
@@ -736,11 +752,12 @@ async fn failed_extension_lro_redelivers_psk_without_losing_secret() {
         .unwrap();
     assert_eq!(controller.phase(), AzureVmPhase::Bootstrapping);
     assert_eq!(
-        state.lock().unwrap().calls,
+        state.lock().await.calls,
         ["provision", "extension", "extension"]
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn transient_extension_failure_does_not_consume_delivery_attempt() {
     let (provider, settings) = config();
@@ -780,6 +797,7 @@ async fn transient_extension_failure_does_not_consume_delivery_attempt() {
     assert!(recovery.bootstrap_extension_present);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn running_vm_fails_closed_at_bootstrap_deadline() {
     let (provider, settings) = config();
@@ -795,7 +813,7 @@ async fn running_vm_fails_closed_at_bootstrap_deadline() {
         .unwrap()
         .with_clock(Arc::new(FixedClock(Arc::clone(&now))));
     controller.reconcile("zone", "guest", 1).await.unwrap();
-    *now.lock().unwrap() = 60_000;
+    *now.lock().await = 60_000;
     assert_eq!(
         controller.reconcile("zone", "guest", 2).await.unwrap_err(),
         AzureVmError::BootstrapFailed
@@ -803,6 +821,7 @@ async fn running_vm_fails_closed_at_bootstrap_deadline() {
     assert_eq!(controller.phase(), AzureVmPhase::Failed);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn bootstrap_deadline_retries_failed_extension_cleanup() {
     let (provider, settings) = config();
