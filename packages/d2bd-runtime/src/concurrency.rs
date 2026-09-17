@@ -163,8 +163,13 @@ impl OpLockManager {
         Self::default()
     }
 
-    /// Acquire the lock appropriate to `class`, blocking the CALLING
-    /// (worker) thread - never the accept loop - until it is available.
+    /// Acquire the lock appropriate to `class`. The op lock spans a
+    /// synchronous critical section (never an await), and callers run both
+    /// on tokio runtime workers (the async dispatch path) and on dedicated
+    /// threads; tokio's `blocking_*` primitives panic inside a runtime, so
+    /// acquisition spins on `try_lock` until the lock is free (the repo's
+    /// lock_sync pattern). The critical sections are single map ops, so a
+    /// spin is bounded and there is no deadlock: holders never await.
     pub fn acquire(&self, class: &OpLockClass) -> OpLockGuard<'_> {
         match class {
             OpLockClass::ReadOnly => OpLockGuard::None,
@@ -172,18 +177,38 @@ impl OpLockManager {
                 // Lock ordering: global(read) THEN per-VM. A global op
                 // takes global(write), so it cannot interleave with an
                 // in-flight per-VM op, and the single ordering is acyclic.
-                let global = self.global.blocking_read();
+                let global = loop {
+                    match self.global.try_read() {
+                        Ok(guard) => break guard,
+                        Err(_) => std::hint::spin_loop(),
+                    }
+                };
                 let vm_lock = {
-                    let mut map = self.per_vm.blocking_lock();
+                    let mut map = loop {
+                        match self.per_vm.try_lock() {
+                            Ok(guard) => break guard,
+                            Err(_) => std::hint::spin_loop(),
+                        }
+                    };
                     Arc::clone(
                         map.entry(vm.clone())
                             .or_insert_with(|| Arc::new(Mutex::new(()))),
                     )
                 };
-                let vm = vm_lock.blocking_lock_owned();
+                let vm = loop {
+                    match vm_lock.clone().try_lock_owned() {
+                        Ok(guard) => break guard,
+                        Err(_) => std::hint::spin_loop(),
+                    }
+                };
                 OpLockGuard::PerVm { global, vm }
             }
-            OpLockClass::Global => OpLockGuard::Global(self.global.blocking_write()),
+            OpLockClass::Global => loop {
+                match self.global.try_write() {
+                    Ok(guard) => break OpLockGuard::Global(guard),
+                    Err(_) => std::hint::spin_loop(),
+                }
+            },
         }
     }
 }
