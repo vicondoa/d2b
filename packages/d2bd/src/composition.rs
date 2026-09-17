@@ -29775,9 +29775,13 @@ mod loader_worker_refusal_tests {
     /// operator sees the worker's named `bundle-loader-busy` refusal.
     #[tokio::test]
     async fn busy_load_seat_surfaces_bundle_loader_busy_to_the_daemon() {
-        let _lock = seat_lock();
         let state = refusal_state();
-        let (_release, _parked, _queued) = saturate(Seat::Load);
+        let (_release, _parked, _queued) = {
+            // The process-wide seat-manipulation lock guards only the
+            // saturation step; drop it before the await (await_holding_lock).
+            let _lock = seat_lock();
+            saturate(Seat::Load)
+        };
         let error = load_bundle_resolver_on_worker(&state)
             .await
             .expect_err("a saturated load seat must refuse the daemon's bundle load");
