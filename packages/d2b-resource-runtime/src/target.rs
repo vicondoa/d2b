@@ -1144,6 +1144,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_host_assignment_is_never_realizable_through_a_guest_target() {
         let directory = TargetDirectory::new();
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
@@ -1163,6 +1164,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn guest_targeting_realizes_through_the_guest_path_without_a_duplicate() {
         let directory = TargetDirectory::new();
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
@@ -1208,6 +1210,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn guest_disconnect_keeps_desired_state_and_reports_observed_state_unavailable() {
         let directory = TargetDirectory::new();
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
@@ -1247,6 +1250,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_guest_that_stops_answering_reports_unavailable_never_absent() {
         let directory = TargetDirectory::new();
         directory.connect_guest(&guest(), 1, Arc::new(Vanished)).expect("connect guest");
@@ -1266,6 +1270,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn guest_reconnect_rebinds_the_assignment_and_adopts_the_realization() {
         let directory = TargetDirectory::new();
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
@@ -1310,6 +1315,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_stale_session_generation_cannot_inherit_realization_authority() {
         let directory = TargetDirectory::new();
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
@@ -1392,6 +1398,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn zone_link_deletion_leaves_unrelated_resources_targeting_the_same_guest_alone() {
         let directory = TargetDirectory::new();
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
@@ -1446,6 +1453,7 @@ mod tests {
     /// on a Guest never mints a ZoneLink assignment and leaves the live
     /// link's own assignment and realization untouched.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn ordinary_guest_realization_never_creates_or_moves_a_zone_link() {
         let directory = TargetDirectory::new();
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
@@ -1501,6 +1509,7 @@ mod tests {
     /// assignment or realization; the link's own release never moves
     /// availability.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn zone_link_topology_and_guest_availability_move_independently() {
         let directory = TargetDirectory::new();
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
@@ -1550,6 +1559,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_resource_carries_exactly_one_target_assignment() {
         let directory = TargetDirectory::new();
         let guest_a = TargetRef::guest("guest-a").expect("guest");
@@ -1585,6 +1595,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn only_assigned_resources_have_target_authority() {
         let directory = TargetDirectory::new();
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
@@ -1603,6 +1614,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_target_binding_never_trusts_a_channel_it_kept() {
         let directory = Arc::new(TargetDirectory::new());
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
@@ -1649,6 +1661,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_host_binding_has_no_guest_realization_path() {
         let directory = Arc::new(TargetDirectory::new());
         let source = key("Process", "hosted");

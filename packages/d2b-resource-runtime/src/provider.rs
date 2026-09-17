@@ -356,6 +356,7 @@ mod tests {
     /// The directory maps resource type names to factories and serves
     /// lookups by the `type_name` component of a `ResourceKey`.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn directory_registers_and_looks_up_factories_by_type() {
         let mut directory = ProviderDirectory::new();
         directory
@@ -372,6 +373,7 @@ mod tests {
     /// Registering two factories for one type is a provider-wiring bug and
     /// fails registration without clobbering the first factory.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn duplicate_type_registration_is_rejected() {
         let mut directory = ProviderDirectory::new();
         directory
@@ -406,6 +408,7 @@ mod tests {
     /// A declared driver registers its factory, decoder, and operation
     /// references, and the registry reports the set it serves.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn declared_drivers_register_and_report_their_types() {
         let mut directory = ProviderDirectory::new();
         let mut process = StubRegistration::new("Process");
@@ -482,6 +485,7 @@ mod tests {
     /// `create_driver` resolves the factory by the key's resource type and
     /// hands back the erased driver with classification intact.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn create_driver_builds_the_erased_driver_for_the_key_type() {
         let mut directory = ProviderDirectory::new();
         directory

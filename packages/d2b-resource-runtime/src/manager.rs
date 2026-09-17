@@ -1661,6 +1661,7 @@ mod tests {
     /// one actor; a changed spec advances the durable generation exactly
     /// once and the actor observes the new generation only after the commit.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn duplicate_ensure_same_handle_and_one_actor() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
@@ -1700,6 +1701,7 @@ mod tests {
     /// loss and reconnect reach the affected actor without moving desired
     /// state or the target-local realization.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn guest_target_assignment_binds_the_session_generation() {
         use crate::guest_target::GuestTargetRuntime;
         use crate::manager::ResourceManagerMsg;
@@ -1783,6 +1785,7 @@ mod tests {
     /// the spec row present, and a restart (fresh manager over the same
     /// durable store) recovers the resource.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn ensure_commits_before_spawn_and_restart_recovers() {
         let h = harness(&["Other"]).await; // factory does NOT cover "Ghost"
         let k = key("test", "Ghost", "g");
@@ -1811,6 +1814,7 @@ mod tests {
     /// with recover/adopt, and dependents receive `DependencyChanged`, so
     /// they reconcile and re-register their watches.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn actor_crash_respawns_and_notifies_dependents() {
         let h = harness(&["Target", "Dep"]).await;
         let tkey = key("test", "Target", "t");
@@ -1843,6 +1847,7 @@ mod tests {
     /// children, retains matching ones, and marks obsolete children
     /// deleting (their rows retire after cleanup).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn owned_children_diff_creates_retains_marks_obsolete() {
         let h = harness(&["Volume", "Worker"]).await;
         let parent = key("test", "Volume", "data");
@@ -1883,6 +1888,7 @@ mod tests {
     /// volume fixture reads the parent's `deletionRequestedAt` in exactly
     /// this window).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn parent_row_retires_after_its_owned_children() {
         let h = harness(&["Volume", "Worker"]).await;
         let parent = key("test", "Volume", "data");
@@ -1943,6 +1949,7 @@ mod tests {
     /// durable deleting mark committed rejects a late Ensure with the typed
     /// deleting conflict, surfaced through the manager.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn ensure_against_deleting_is_rejected() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
@@ -1982,6 +1989,7 @@ mod tests {
     /// are still tearing down. Fails on the insert-time link: the binding
     /// (and Volume) rows disappear inside the observed window.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn resumed_delete_holds_reloaded_parent_until_children_retire() {
         use crate::identity::ResourceProvenance;
         use crate::spec_store::StoredDesiredResource;
@@ -2143,6 +2151,7 @@ mod tests {
     /// inside the driver, so the finalize counter is the direct order
     /// witness: a reversed pass would block with the counter still at zero.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn delete_pass_runs_finalize_before_delete() {
         let h = harness(&["Test"]).await;
         let solo = key("test", "Test", "solo");
@@ -2180,6 +2189,7 @@ mod tests {
     /// delete. With the leaf's and the parent's deletes held inside their
     /// drivers, the chain retires strictly leaf-first once the gates open.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn finalize_holds_each_parent_until_its_owned_children_retire() {
         let h = harness(&["Volume", "Worker", "Job"]).await;
         let grandparent = key("test", "Volume", "top");
@@ -2315,6 +2325,7 @@ mod tests {
     /// the read projection serve `phase: Ready, observedGeneration: N+1` for
     /// a generation the actor never reconciled.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn in_flight_status_keeps_its_published_generation() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
@@ -2506,6 +2517,7 @@ mod tests {
     /// already knew better. Only invalidation (spec change, deletion) clears
     /// the layer.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn in_progress_pass_publishes_its_projection() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
@@ -2542,6 +2554,7 @@ mod tests {
     /// projection (the manager clears it at commit and the new pass
     /// republishes only what it computed).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn spec_change_drops_the_old_generations_projection() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
@@ -2582,6 +2595,7 @@ mod tests {
     /// flight never overlap - the guard coalesces them, and the driver is
     /// entered exactly once more after the effect completes.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn same_resource_reconcile_never_overlaps() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
@@ -2612,6 +2626,7 @@ mod tests {
     /// R14: distinct resources are independent actors; their reconciles run
     /// concurrently.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn distinct_resources_reconcile_concurrently() {
         let h = harness(&["Test"]).await;
         let ak = key("test", "Test", "a");
@@ -2638,6 +2653,7 @@ mod tests {
     /// AE2/R12: a watch registered against a condition that is already true
     /// notifies immediately, from the same mailbox handler.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn watch_when_already_true_notifies_immediately() {
         let h = harness(&["Test"]).await;
         let tkey = key("test", "Test", "data");
@@ -2670,6 +2686,7 @@ mod tests {
     /// is still queued still notifies exactly once, through the real actor
     /// mailbox.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn condition_flip_while_watch_queued_notifies_exactly_once() {
         let h = harness(&["Test"]).await;
         let tkey = key("test", "Test", "data");
@@ -2714,6 +2731,7 @@ mod tests {
     /// published status - the read the volume leg (KTD6) and the child-set
     /// readiness lanes could not reach through `get`/`children`.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn driver_reads_child_live_phase_through_its_context() {
         let h = harness(&["Parent", "Worker"]).await;
         let parent = key("test", "Parent", "p");
@@ -2763,6 +2781,7 @@ mod tests {
     /// its actor when the dependency becomes Ready, and the woken driver
     /// proves the dependency ready through its context read.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn driver_readiness_watch_wakes_the_subscriber_and_the_read_proves_ready() {
         let h = harness(&["Dep", "Target"]).await;
         let dep = key("test", "Dep", "d");
@@ -2813,6 +2832,7 @@ mod tests {
     /// nothing published answers a view with no status at all (unknown,
     /// never a fabricated `Pending`).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn live_read_documents_absent_and_unpublished_rows() {
         let h = harness(&["Other"]).await; // factory does NOT cover "Ghost"
         let home = key("test", "Other", "home");
@@ -2844,6 +2864,7 @@ mod tests {
     /// Spec section 32: the delete path cancels the pending requeue timer -
     /// after cleanup, no further reconcile is ever delivered.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn delete_cancels_pending_requeue_timer() {
         let h = harness_with(&["Test"], Duration::from_millis(300)).await;
         let k = key("test", "Test", "data");
@@ -2885,6 +2906,7 @@ mod tests {
     /// degraded Volume's layout effect - and the broker `StoreSync` its source
     /// resolution performs - to one run per backoff window.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn retryable_effect_failure_backs_off_before_the_next_pass() {
         let h = harness_with(&["Test"], Duration::from_millis(400)).await;
         let k = key("test", "Test", "data");
@@ -2928,6 +2950,7 @@ mod tests {
     /// terminal), and the published wire status is the failure's own
     /// projection; the log line renders the same fields.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn not_yet_failure_defers_with_a_requeue_and_publishes_its_structured_detail() {
         let h = harness_with(&["Test"], Duration::from_millis(400)).await;
         let k = key("test", "Test", "data");
@@ -2987,6 +3010,7 @@ mod tests {
     /// state. Before this, the awaiting-restart arm returned `Satisfied` and
     /// the runtime published wire `Ready` over a process that did not exist.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn scheduled_retry_publishes_pending_never_ready() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
@@ -3019,6 +3043,7 @@ mod tests {
     /// R11/AE6: status transitions publish `RuntimeChanged` to the manager
     /// (which feeds the watch hub) and perform zero persistent writes.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn status_transitions_publish_and_write_zero_store_rows() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
@@ -3060,6 +3085,7 @@ mod tests {
     /// compared values) into the wire layer and never requeues. A requeue
     /// here would busy-loop a row that can never converge.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn terminal_refusal_publishes_its_evidence_and_never_requeues() {
         let h = harness_with(&["Test"], Duration::from_millis(300)).await;
         let k = key("test", "Test", "data");
@@ -3091,6 +3117,7 @@ mod tests {
     /// assesses the generation the pass read; the newer committed generation
     /// must not die with the coalesced flag.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn coalesced_trigger_is_reconciled_after_a_terminal_effect_failure() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
@@ -3126,6 +3153,7 @@ mod tests {
     /// stale success layer. `wire_status` prefers a projection when one is
     /// present, so a leaked layer would hide the driver failure entirely.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn failed_pass_drops_the_projection_it_computed() {
         let h = harness_with(&["Test"], Duration::from_millis(400)).await;
         let k = key("test", "Test", "data");
@@ -3159,6 +3187,7 @@ mod tests {
     /// while the effect was still in flight; completion then drives the
     /// follow-up pass.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn long_effect_leaves_the_actor_mailbox_responsive() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
@@ -3195,6 +3224,7 @@ mod tests {
     /// failure - the start pass proceeds to reconcile, which is where the
     /// resource gets created, and nothing failure-shaped reaches the wire.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn recover_missing_proceeds_to_reconcile_without_a_failure() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
@@ -3223,6 +3253,7 @@ mod tests {
     /// neither the registration nor its satisfaction writes anything durable;
     /// the audit log holds only the desired mutations.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn internal_watch_traffic_writes_no_store_rows() {
         let h = harness(&["Target", "Dep"]).await;
         let tkey = key("test", "Target", "t");
@@ -3249,6 +3280,7 @@ mod tests {
     /// restarted dependent re-registers it during its start reconcile, and
     /// the rebuilt edge notifies it again when the target becomes Ready.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn restart_rebuilds_watch_edges_through_reconcile() {
         let h = harness(&["Target", "Dep"]).await;
         let tkey = key("test", "Target", "t");
@@ -3290,6 +3322,7 @@ mod tests {
     /// a poisoned spawn leaves the child row durable and a restart recovers
     /// it with the same ownership edge.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn child_ensure_persists_before_spawn_and_restart_recovers() {
         let h = harness(&["Volume"]).await; // factory does NOT cover "Worker"
         let parent = key("test", "Volume", "data");
@@ -3331,6 +3364,7 @@ mod tests {
     /// refused, so the durable owner and the live ownership edge survive the
     /// attempt; the committed owner can still update its own child in place.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn child_ensure_refuses_a_different_parent_and_keeps_its_committed_owner() {
         let h = harness(&["Volume", "Worker"]).await;
         let owner = key("test", "Volume", "data");
@@ -3397,6 +3431,7 @@ mod tests {
     /// columns move at the committed generation, and `SpecChanged` reaches
     /// the actor so nothing keeps serving the stale annotation.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn metadata_only_child_ensure_writes_and_notifies_the_actor() {
         let h = harness(&["Volume", "Worker"]).await;
         let parent = key("test", "Volume", "data");
@@ -3443,6 +3478,7 @@ mod tests {
     /// projection of the pass that preceded it; only completed cleanup
     /// removes the row.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn delete_clears_the_projection_before_cleanup_completes() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");

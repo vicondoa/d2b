@@ -1313,6 +1313,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn realization_is_idempotent_per_source_and_never_a_second_resource() {
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
         runtime.bind_session(1).expect("bind session");
@@ -1334,6 +1335,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_session_bound_capability_stops_working_after_reconnect() {
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
         runtime.bind_session(1).expect("bind session");
@@ -1356,6 +1358,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn adoption_rebinds_present_realizations_and_reports_missing_sources() {
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
         runtime.bind_session(1).expect("bind session");
@@ -1481,6 +1484,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn the_host_client_round_trips_the_exact_frame_the_guest_dispatches() {
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
         runtime.bind_session(1).expect("bind session");
@@ -1529,6 +1533,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_stale_generation_is_refused_locally_and_never_reaches_the_peer() {
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
         runtime.bind_session(2).expect("bind session");
@@ -1553,6 +1558,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_lost_session_answers_session_unavailable_over_the_wire() {
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
         runtime.bind_session(1).expect("bind session");
@@ -1581,6 +1587,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn adoption_over_the_wire_rebinds_instead_of_inheriting() {
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
         runtime.bind_session(1).expect("bind session");

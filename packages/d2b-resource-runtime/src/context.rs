@@ -1136,6 +1136,7 @@ mod tests {
     /// enforced in U3's handler; the exhaustive match in the stub pins that
     /// this surface cannot even express a spawn-shaped call.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn ensure_child_sends_one_persist_request_and_awaits_commit_ack() {
         let (tx, mut rx) = mpsc::channel::<super::ManagerCall>(4);
         let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
@@ -1196,6 +1197,7 @@ mod tests {
     /// A closed manager channel or a dropped request surfaces as
     /// `ResourceError::ManagerRpc`, never as a silent no-op.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn manager_failures_surface_as_manager_rpc_errors() {
         // Channel closed before the call.
         let (tx, rx) = mpsc::channel::<super::ManagerCall>(1);
@@ -1221,6 +1223,7 @@ mod tests {
     /// never fabricates absence: a request the manager drops without
     /// replying surfaces as `ResourceError::ManagerRpc`.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn dropped_view_request_surfaces_as_manager_rpc_error() {
         let (tx, mut rx) = mpsc::channel::<super::ManagerCall>(1);
         let endpoint = super::ChannelManagerEndpoint::new(tx);
@@ -1299,6 +1302,7 @@ mod tests {
     /// the row, a manager that holds no row answers `Absent`, and a manager
     /// that cannot answer reports `Unavailable` - never absence.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn classified_lookup_maps_present_absent_and_unanswerable_manager() {
         let key = ResourceKey::new("z", "Volume", "data");
         let row = test_row("z", "Volume", "data");
@@ -1389,6 +1393,7 @@ mod tests {
     /// tokio-time scheduler under paused time. Retry state stays runtime-only
     /// (R13): nothing here is persisted.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn requeue_after_delivers_exactly_one_reconcile_after_the_delay() {
         let requeue = TokioRequeue::new();
         let mut delivered = requeue.take_receiver();
@@ -1417,6 +1422,7 @@ mod tests {
     /// U3 owns the wiring): cancellation suppresses exactly the cancelled
     /// schedule and leaves other pending schedules intact.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn concurrent_delete_cancels_only_the_cancelled_requeue() {
         let requeue = TokioRequeue::new();
         let mut delivered = requeue.take_receiver();
@@ -1509,6 +1515,7 @@ mod tests {
     /// enforces this inside ResourceActor's mailbox; this test pins the
     /// shapes and the pattern that make the invariant expressible.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn internal_watch_evaluate_and_register_share_one_mailbox_handler() {
         enum TargetMsg {
             BecomeReady,
@@ -1595,6 +1602,7 @@ mod tests {
     /// The watch and manager shapes cross channels intact: registrations and
     /// calls are Send and round-trip field-exact.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn watch_and_manager_shapes_send_and_receive_intact() {
         // WatchRegistration through a channel.
         let (wtx, mut wrx) = mpsc::unbounded_channel::<WatchRegistration>();
@@ -1639,6 +1647,7 @@ mod tests {
     /// resource's key as the subscriber, and satisfaction arrives on this
     /// resource's notify channel.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn watch_registration_routes_through_the_manager_with_subscriber_identity() {
         let (tx, mut rx) = mpsc::channel::<super::ManagerCall>(1);
         let mut fixture = fixture(

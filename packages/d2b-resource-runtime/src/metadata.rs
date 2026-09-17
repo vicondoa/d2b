@@ -440,6 +440,7 @@ mod tests {
     /// stores; anything else is the same corrupt row the old `validate_spec`
     /// refused.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn validate_refuses_a_spec_that_is_not_an_object() {
         let manager = ScriptedManager::new();
         let (mut ctx, mut driver) = driver(json!("not-an-object"), Arc::clone(&manager)).await;
@@ -459,6 +460,7 @@ mod tests {
     /// The bootstrap rows store `{}`: the old fence was "the row is not
     /// empty", not "the spec has fields".
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn validate_admits_the_empty_spec_object() {
         let manager = ScriptedManager::new();
         let (mut ctx, mut driver) = driver(json!({}), Arc::clone(&manager)).await;
@@ -470,6 +472,7 @@ mod tests {
 
     /// Recovery and deletion realize nothing on a target and read no rows.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn recover_and_delete_converge_without_manager_calls() {
         let manager = ScriptedManager::new();
         let (mut ctx, mut driver) = driver(json!({}), Arc::clone(&manager)).await;
@@ -484,6 +487,7 @@ mod tests {
     /// One reconcile pass converges as metadata: no manager read, no effect,
     /// and no status the type would claim.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn reconcile_converges_without_effects() {
         let manager = ScriptedManager::new();
         let (mut ctx, mut driver) =
@@ -499,6 +503,7 @@ mod tests {
     /// The drain is child-first: a live owned child defers the row, and once
     /// the children are gone the drain converges.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn finalize_drains_owned_children_first() {
         let manager = ScriptedManager::with_owned(vec![owned_child("Process")]);
         let (mut ctx, mut driver) = driver(json!({}), Arc::clone(&manager)).await;
@@ -522,6 +527,7 @@ mod tests {
 
     /// A manager read the drain cannot answer is retryable, never terminal.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_failed_child_read_is_retryable() {
         let manager = ScriptedManager::new();
         manager.fail_reads();

@@ -541,6 +541,7 @@ mod tests {
     // -- F4 / R23: LIST -> WATCH handoff -----------------------------------
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn list_then_watch_receives_every_later_event_with_no_gap() {
         let hub = hub();
         // "LIST" snapshot revision.
@@ -571,6 +572,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn selector_filters_both_replay_and_live_delivery() {
         let hub = hub();
         let snapshot = hub.snapshot_revision();
@@ -614,6 +616,7 @@ mod tests {
     // -- R23: ring replay within one epoch ---------------------------------
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn ring_replays_retained_events_within_one_epoch() {
         let hub = WatchHub::new(&ManualClock::at(1_000), 8);
 
@@ -647,6 +650,7 @@ mod tests {
     // -- AE4 / R24: stale epoch cursors fail closed -------------------------
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn cursor_from_previous_epoch_returns_expired() {
         let hub = hub(); // epoch stamped at 1_000 via the manual clock.
         upsert(&hub, "a").await;
@@ -667,6 +671,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn future_cursor_within_epoch_fails_closed() {
         let hub = hub();
         let future = RuntimeRevision::new(1_000, u64::MAX);
@@ -678,6 +683,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn cursor_behind_retention_frontier_is_expired() {
         let hub = WatchHub::new(&ManualClock::at(1_000), 4);
         for i in 1..=10 {
@@ -702,6 +708,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn relist_after_expired_recovers_with_new_snapshot() {
         let hub = hub();
         let stale = RuntimeRevision::new(999, 5);
@@ -726,6 +733,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn slow_subscriber_gets_explicit_missed_never_silent_drop() {
         let hub = WatchHub::with_config(
             &ManualClock::at(1_000),
@@ -774,6 +782,7 @@ mod tests {
     // -- Bounded ring under churn -------------------------------------------
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn ring_stays_bounded_under_churn_and_snapshot_advances() {
         let capacity = 16;
         let hub = WatchHub::new(&ManualClock::at(1_000), capacity);
@@ -796,6 +805,7 @@ mod tests {
     // -- F4 / AE6 / R11: status churn, zero persistence ----------------------
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn status_churn_generates_strictly_increasing_revisions_and_events() {
         let hub = hub();
         let WatchRegistration::Live { stream, .. } = hub.register(WatchSelector::all(), None).await
@@ -827,6 +837,7 @@ mod tests {
     // -- R11/R24: no persistence anywhere in the watch path -------------------
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn hub_writes_zero_files_and_takes_no_store_handle() {
         // fs-level: the hub performs no I/O, so a tempdir it "operates in"
         // stays empty. Type-level: the whole hub API takes no store handle,
@@ -847,13 +858,16 @@ mod tests {
             .await;
         }
         while stream.try_recv().is_some() {}
-        let entries: Vec<_> = std::fs::read_dir(dir.path())
-            .expect("read tempdir")
-            .collect();
+        let mut read_dir = tokio::fs::read_dir(dir.path()).await.expect("read tempdir");
+        let mut entries: Vec<_> = Vec::new();
+        while let Some(entry) = read_dir.next_entry().await.expect("read tempdir entry") {
+            entries.push(entry);
+        }
         assert!(entries.is_empty(), "hub wrote files: {entries:?}");
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn events_after_serves_manager_list_support() {
         let hub = hub();
         upsert(&hub, "a").await;
@@ -873,6 +887,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn async_recv_drains_then_missed_then_ends() {
         let hub = WatchHub::with_config(
             &ManualClock::at(1_000),

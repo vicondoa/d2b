@@ -414,6 +414,11 @@ fn ensure_transactional_inner(
 // Connection setup
 // ---------------------------------------------------------------------------
 
+/// The store's open half is synchronous by construction (rusqlite has no
+/// async form) and runs either on the dedicated worker's setup path or, in
+/// production, on d2bd's bounded loader seat (plan KTD2); the posture
+/// chmods are best-effort and bounded.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn tighten_file_modes(path: &Path) {
     // Best-effort posture enforcement: the store file and its WAL/SHM side
     // files carry the daemon's private-data mode (0600). SQLite names the
@@ -443,6 +448,11 @@ fn tighten_file_modes(path: &Path) {
     }
 }
 
+/// Same synchronous-open rationale as [`tighten_file_modes`]: the directory
+/// create/chmod is the dedicated worker's setup half (the production caller
+/// pre-creates the parent with `tokio::fs` and runs this on the bounded
+/// loader seat, so the create is a no-op there).
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn open_connection(path: &Path) -> Result<Connection, SpecStoreError> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -878,6 +888,7 @@ mod tests {
     /// Persist-then-reopen: rows, audit, and schema survive close/reopen and
     /// migrations apply idempotently.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn persist_then_reopen() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("specs.db");
@@ -902,6 +913,7 @@ mod tests {
     /// second store call observes the committed generation, proving the
     /// first call's write was durable before its Ok.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn ensure_returns_after_commit() {
         let dir = TempDir::new().unwrap();
         let store = open_in(&dir);
@@ -923,6 +935,7 @@ mod tests {
     /// Idempotent Ensure (R7): equal spec keeps generation; changed spec
     /// advances exactly one generation per call.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn idempotent_ensure_generation() {
         let dir = TempDir::new().unwrap();
         let store = open_in(&dir);
@@ -938,6 +951,7 @@ mod tests {
     /// Deleting mark survives a simulated crash: the connection is dropped
     /// without cleanup and the store reopens with `deleting` still set.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn deleting_survives_crash() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("specs.db");
@@ -957,6 +971,7 @@ mod tests {
     /// Ensure against a deleting row is rejected with a typed error; the
     /// deleting mark stays terminal until removal (R10).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn ensure_against_deleting_rejected() {
         let dir = TempDir::new().unwrap();
         let store = open_in(&dir);
@@ -978,6 +993,7 @@ mod tests {
     /// assertion by exhaustiveness of the surface itself; repeated store
     /// calls produce no audit records beyond the mutations themselves.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn no_status_write_surface() {
         let dir = TempDir::new().unwrap();
         let store = open_in(&dir);
@@ -999,6 +1015,7 @@ mod tests {
     /// independent store handles on the same file hammer ensure on different
     /// keys; `busy_timeout` + IMMEDIATE transactions absorb contention.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn concurrent_writers_serialize() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("specs.db");
@@ -1041,6 +1058,7 @@ mod tests {
     /// committed generation, and a byte-identical ensure still returns
     /// `Unchanged`.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn metadata_only_ensure_writes_columns_without_a_generation() {
         let dir = TempDir::new().unwrap();
         let store = open_in(&dir);
@@ -1083,21 +1101,23 @@ mod tests {
 
     /// File posture (0600 store / WAL / SHM, 0700 dir) asserted after writes.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn file_mode_private() {
         use std::os::unix::fs::PermissionsExt;
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("private").join("specs.db");
         let store = SpecStore::open(&path).unwrap();
         store.ensure(row("data", b"spec-v1")).await.unwrap();
-        let mode = |p: &Path| {
-            std::fs::metadata(p)
+        let mode = |p: PathBuf| async move {
+            tokio::fs::metadata(&p)
+                .await
                 .map(|m| m.permissions().mode() & 0o777)
                 .unwrap_or(u32::MAX)
         };
-        assert_eq!(mode(&path), 0o600, "store file mode");
-        assert_eq!(mode(&path.with_extension("db-wal")), 0o600, "wal mode");
-        assert_eq!(mode(&path.with_extension("db-shm")), 0o600, "shm mode");
-        assert_eq!(mode(path.parent().unwrap()), 0o700, "store dir mode");
+        assert_eq!(mode(path.clone()).await, 0o600, "store file mode");
+        assert_eq!(mode(path.with_extension("db-wal")).await, 0o600, "wal mode");
+        assert_eq!(mode(path.with_extension("db-shm")).await, 0o600, "shm mode");
+        assert_eq!(mode(path.parent().unwrap().to_path_buf()).await, 0o700, "store dir mode");
     }
 
     /// The side files of the *actual* database path are the ones tightened
@@ -1105,6 +1125,7 @@ mod tests {
     /// `*.<suffix-db>` names, so a `.sqlite3` store kept SQLite's creation
     /// mode on its real WAL/SHM while the module claimed 0600).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn side_files_of_a_suffixed_database_are_tightened() {
         use std::os::unix::fs::PermissionsExt;
         let dir = TempDir::new().unwrap();
@@ -1112,27 +1133,30 @@ mod tests {
         let store = SpecStore::open(&path).expect("open");
         store.ensure(row("data", b"spec-v1")).await.unwrap();
         let side = |suffix: &str| path.with_file_name(format!("spec-store.sqlite3{suffix}"));
-        let chmod = |p: &Path, mode: u32| {
-            let file = std::fs::File::open(p).unwrap_or_else(|error| panic!("{p:?}: {error}"));
-            file.set_permissions(PermissionsExt::from_mode(mode)).unwrap();
+        let chmod = |p: PathBuf, mode: u32| async move {
+            let file = tokio::fs::File::open(&p).await.unwrap_or_else(|error| panic!("{p:?}: {error}"));
+            file.set_permissions(PermissionsExt::from_mode(mode)).await.unwrap();
         };
         // The connection created these side files; force a world-readable
         // mode so the assertions prove the store tightened them, not that
         // the process umask happened to.
-        chmod(&side("-wal"), 0o644);
-        chmod(&side("-shm"), 0o644);
+        chmod(side("-wal"), 0o644).await;
+        chmod(side("-shm"), 0o644).await;
         // A second open on the same file re-runs `tighten_file_modes` while
         // the first connection keeps the side files alive.
         let reopened = SpecStore::open(&path).expect("reopen");
-        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&side("-wal")), 0o600, "the real wal is tightened");
-        assert_eq!(mode(&side("-shm")), 0o600, "the real shm is tightened");
+        let mode = |p: PathBuf| async move {
+            tokio::fs::metadata(&p).await.unwrap().permissions().mode() & 0o777
+        };
+        assert_eq!(mode(side("-wal")).await, 0o600, "the real wal is tightened");
+        assert_eq!(mode(side("-shm")).await, 0o600, "the real shm is tightened");
         drop(reopened);
         drop(store);
     }
 
     /// List honors selector filters (zone / type / owner).
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn list_by_selector() {
         let dir = TempDir::new().unwrap();
         let store = open_in(&dir);
@@ -1163,6 +1187,7 @@ mod tests {
     /// must be `Busy`, and the store must serve again once the lock is
     /// released.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_full_queue_returns_busy_backpressure_not_writer_gone() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("specs.db");
@@ -1208,6 +1233,7 @@ mod tests {
     /// sender closes the channel; the writer drains and exits, and every
     /// later call refuses with `WriterGone` - the store must be reopened.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_killed_writer_returns_writer_gone_terminal() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("specs.db");

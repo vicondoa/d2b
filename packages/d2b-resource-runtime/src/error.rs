@@ -976,6 +976,7 @@ mod tests {
     /// hand-maintained prose. Regenerate with
     /// `cargo test -p d2b-resource-runtime --lib -- --ignored regenerate_failure_kind_reference`.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn failure_kind_reference_doc_matches_the_registry() {
         let path = reference_doc_path();
         let committed = std::fs::read_to_string(&path)
@@ -990,6 +991,7 @@ mod tests {
 
     #[test]
     #[ignore = "regenerates the committed reference doc from the registry"]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn regenerate_failure_kind_reference() {
         let path = reference_doc_path();
         std::fs::write(&path, render_failure_kind_reference())

@@ -797,6 +797,12 @@ fn conditions(
 }
 
 /// Per-controller single-flight registry keyed only by canonical resource UID.
+///
+/// The registry is a documented synchronous-path boundary (plan R11): the
+/// whole `CredentialControllerHandlers` contract is synchronous by design
+/// (a contracts crate with no runtime dependency), the guard is held only
+/// across the caller's synchronous handler call, and the critical sections
+/// are single insert/remove operations - never across a suspension point.
 #[derive(Default)]
 pub struct CredentialSingleFlight {
     running: Mutex<BTreeSet<ResourceUid>>,
@@ -824,6 +830,7 @@ impl CredentialSingleFlight {
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn lock(&self) -> Result<MutexGuard<'_, BTreeSet<ResourceUid>>, CredentialControllerError> {
         self.running
             .lock()
@@ -844,6 +851,7 @@ pub struct CredentialSingleFlightGuard<'registry> {
 }
 
 impl Drop for CredentialSingleFlightGuard<'_> {
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn drop(&mut self) {
         if let Some(credential_uid) = self.credential_uid.take()
             && let Ok(mut running) = self.registry.running.lock()

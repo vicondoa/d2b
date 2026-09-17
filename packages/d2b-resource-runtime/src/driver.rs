@@ -295,6 +295,7 @@ pub trait ResourceDriverFactory: Send + Sync + 'static {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn erased_driver_boundary_reports_retryable_and_terminal_classes() {
         let fixture = fixture(
             test_row("z", "Process", "worker-0"),
@@ -336,6 +337,7 @@ pub trait ResourceDriverFactory: Send + Sync + 'static {
     /// (re)requested first; with no owned children the driver's `finalize`
     /// runs exactly once.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn erased_finalize_gates_the_drivers_own_drain_on_owned_children() {
         let factory = FakeFactory::new(&["Test"]);
         let key = ResourceKey::new("z", "Test", "parent");
@@ -431,6 +433,7 @@ pub trait ResourceDriverFactory: Send + Sync + 'static {
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn long_effect_returns_in_progress_and_completes_as_a_message() {
         let fixture = fixture(
             test_row("z", "Process", "worker-0"),
