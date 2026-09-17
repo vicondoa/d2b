@@ -17,6 +17,10 @@ fn repo_file(relative: &str) -> String {
     if let Ok(current_dir) = env::current_dir() {
         candidates.push(current_dir.join(relative));
     }
+    // Cargo can run the integration tests with the package dir as CWD;
+    // resolve from the manifest dir (packages/xtask -> repo root) too.
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    candidates.push(manifest.join("../../").join(relative));
 
     candidates
         .into_iter()
