@@ -176,6 +176,11 @@ impl ZoneOperationRouter {
         if request_digest.is_empty() {
             return Err(RouterError::InvalidRequestDigest);
         }
+        // The router is a synchronous idempotency surface (no async form);
+        // each critical section is a bounded in-memory table op with no
+        // suspension point, so the std lock is the sanctioned synchronous
+        // path (plan R11 inventory).
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let mut rows = self.rows.lock().map_err(|_| RouterError::Poisoned)?;
         if let Some(existing) = rows.get(&key) {
             if existing.expires_at_ms <= now_ms
@@ -220,6 +225,7 @@ impl ZoneOperationRouter {
         operation_id: &ResourceUid,
         result: impl Into<String>,
     ) -> Result<(), RouterError> {
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let mut rows = self.rows.lock().map_err(|_| RouterError::Poisoned)?;
         let row = rows.get_mut(key).ok_or(RouterError::UnknownOperation)?;
         if &row.operation_id != operation_id {
@@ -234,6 +240,7 @@ impl ZoneOperationRouter {
 
     /// Sweep rows only after the tombstone horizon has elapsed.
     pub fn sweep(&self, now_ms: u64) -> Result<usize, RouterError> {
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let mut rows = self.rows.lock().map_err(|_| RouterError::Poisoned)?;
         let before = rows.len();
         rows.retain(|_, row| row.tombstone_until_ms > now_ms);
@@ -242,6 +249,7 @@ impl ZoneOperationRouter {
 
     /// Number of retained idempotency rows.
     pub fn len(&self) -> Result<usize, RouterError> {
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         Ok(self.rows.lock().map_err(|_| RouterError::Poisoned)?.len())
     }
 
@@ -282,6 +290,7 @@ impl DurableExecTable {
         if process_ref.resource_type().as_str() != "EphemeralProcess" {
             return Err(RouterError::WrongExecutionType);
         }
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let mut rows = self.rows.lock().map_err(|_| RouterError::Poisoned)?;
         if rows.contains_key(&operation_id) {
             return Err(RouterError::DuplicateOperation);
@@ -295,6 +304,7 @@ impl DurableExecTable {
 
     /// Remove a completed execution.
     pub fn remove(&self, operation_id: &ResourceUid) -> Result<bool, RouterError> {
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         Ok(self
             .rows
             .lock()
@@ -305,6 +315,7 @@ impl DurableExecTable {
 
     /// Return current table occupancy.
     pub fn len(&self) -> Result<usize, RouterError> {
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         Ok(self.rows.lock().map_err(|_| RouterError::Poisoned)?.len())
     }
 

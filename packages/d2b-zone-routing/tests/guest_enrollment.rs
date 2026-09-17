@@ -15,7 +15,9 @@
 
 use std::io;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 use d2b_bus::session::ZoneLinkState;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
@@ -197,6 +199,10 @@ fn the_security_key_frontend_enrolls_serves_and_drains_over_a_faked_vsock_transp
                 .enable_all()
                 .build()
                 .expect("the allocator runtime builds");
+            // Plain #[test] harness: the dedicated thread owns its runtime
+            // and drives one async serve to completion (sanctioned
+            // cfg(test) helper per plan R11).
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
             runtime.block_on(serve_allocator(server));
         })
     };
@@ -213,9 +219,15 @@ fn the_security_key_frontend_enrolls_serves_and_drains_over_a_faked_vsock_transp
     );
 
     assert_eq!(status, 0, "the guest lifecycle completes");
+    // Plain #[test] harness joining its own spawned thread (sanctioned
+    // cfg(test) helper per plan R11).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     allocator.join().expect("the allocator task completes");
     assert_eq!(
-        injected.lock().expect("injected reports").as_slice(),
+        injected
+            .try_lock()
+            .expect("injected reports")
+            .as_slice(),
         &[REPORT],
         "the frontend injected exactly the report the enrolled session carried"
     );
@@ -231,6 +243,7 @@ fn a_frontend_without_a_placement_is_refused_before_any_session() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn an_absent_placement_refuses_the_named_admission_absent() {
     let (client, server_stream) = tokio::io::duplex(FRAME_LIMIT);
@@ -256,6 +269,7 @@ async fn an_absent_placement_refuses_the_named_admission_absent() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn a_revoked_authority_refuses_the_named_policy_denial() {
     let (client, server_stream) = tokio::io::duplex(FRAME_LIMIT);
@@ -279,6 +293,7 @@ async fn a_revoked_authority_refuses_the_named_policy_denial() {
     assert_eq!(server.link_state(&zone_path(&["k1", "k0"])), None);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn an_admitted_bootstrap_refuses_a_replay_then_the_link_enrolls() {
     let (client, server_stream) = tokio::io::duplex(FRAME_LIMIT);
@@ -323,6 +338,7 @@ async fn an_admitted_bootstrap_refuses_a_replay_then_the_link_enrolls() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn a_frame_that_is_not_a_call_ends_the_connection() {
     let (client, server_stream) = tokio::io::duplex(FRAME_LIMIT);
@@ -336,6 +352,7 @@ async fn a_frame_that_is_not_a_call_ends_the_connection() {
     assert_eq!(outcome, Err(ZoneEnrollmentServeError::Malformed));
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn the_call_allowance_is_bounded() {
     let (client, server_stream) = tokio::io::duplex(FRAME_LIMIT);
@@ -367,6 +384,7 @@ async fn the_call_allowance_is_bounded() {
     assert_eq!(replies, ZONE_ENROLLMENT_CALLS_MAX);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn an_expired_psk_issuance_refuses_the_named_bootstrap_psk_expired() {
     let (client, server_stream) = tokio::io::duplex(FRAME_LIMIT);
@@ -413,7 +431,7 @@ impl d2b_sk_frontend::HidDevice for FakeHidDevice {
     async fn send_report(&mut self, report: &[u8; 64]) -> io::Result<()> {
         self.injected
             .lock()
-            .expect("injected reports")
+            .await
             .push(*report);
         Ok(())
     }
@@ -426,7 +444,9 @@ struct DuplexLink {
 
 impl GuestLink for DuplexLink {
     fn connect(&self) -> GuestLinkFuture {
-        let client = self.client.lock().expect("link").take();
+        // Sync trait surface: non-blocking try_lock fails closed (plan U4
+        // sync-consumer pattern); the critical section is a take().
+        let client = self.client.try_lock().expect("link").take();
         Box::pin(async move {
             let stream = client.ok_or(GuestError::LinkUnavailable)?;
             let transport: Box<dyn OwnedTransport> = Box::new(FramedVsockTransport::new(stream));

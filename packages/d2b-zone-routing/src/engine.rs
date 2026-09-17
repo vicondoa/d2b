@@ -294,6 +294,11 @@ impl ZoneRouteAdmission {
 
     /// Consume and verify the admission at the current daemon time.
     fn consume(&self) -> Result<RouteAdmissionSnapshot, ZoneRouteFailClosedReason> {
+        // The admission is a single-use sync decision surface consumed by the
+        // daemon's synchronous route walk; the critical section is a `take()`
+        // with no suspension point, so the std lock is the sanctioned
+        // synchronous path (plan R11 inventory).
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let mut state_guard = self
             .state
             .lock()

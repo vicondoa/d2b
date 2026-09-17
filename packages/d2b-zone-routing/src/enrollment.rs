@@ -290,6 +290,11 @@ impl ZoneEnrollmentAdmission {
     /// is refused with a closed reason; the admission cannot be reused
     /// afterwards.
     pub(crate) fn consume(&self) -> Result<ZoneEnrollmentExpectation, ZoneEnrollmentRefusal> {
+        // Single-use sync admission surface consumed by the serving runtime's
+        // synchronous handler path; the critical section is a `take()` with no
+        // suspension point, so the std lock is the sanctioned synchronous path
+        // (plan R11 inventory).
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let mut guard = self
             .state
             .lock()
