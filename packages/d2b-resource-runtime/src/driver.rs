@@ -339,7 +339,7 @@ pub trait ResourceDriverFactory: Send + Sync + 'static {
     async fn erased_finalize_gates_the_drivers_own_drain_on_owned_children() {
         let factory = FakeFactory::new(&["Test"]);
         let key = ResourceKey::new("z", "Test", "parent");
-        let shared = factory.shared(&key);
+        let shared = factory.shared(&key).await;
 
         // A live owned child: the boundary defers before the driver's drain.
         let child = test_row("z", "Test", "child");

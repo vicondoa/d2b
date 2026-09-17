@@ -38,8 +38,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use parking_lot::Mutex;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{mpsc, Mutex, Notify};
 
 use crate::identity::ResourceKey;
 use crate::revision::{RuntimeRevision, WIRE_SEQUENCE_BUDGET};
@@ -288,9 +287,20 @@ struct Subscriber {
 ///
 /// No persistence, no store dependency: all state is the ring, the
 /// sequence counter, and the live subscriber list.
+///
+/// The hub state is a `tokio::sync::Mutex` (async purity, plan U4): every
+/// mutating or ring-reading operation is async. [`WatchHub::snapshot_revision`]
+/// stays synchronous for the external LIST handshake (consumed from sync
+/// call sites) through a lock-free atomic projection of the committed
+/// sequence, written by `publish` under the mutex.
 pub struct WatchHub {
     epoch: u64,
     config: WatchHubConfig,
+    /// Lock-free projection of the committed sequence for synchronous
+    /// readers ([`Self::snapshot_revision`]); written under `inner` by
+    /// [`Self::publish`] after the ring commit, so a reader never sees a
+    /// sequence whose event is not yet in the ring.
+    sequence: AtomicU64,
     inner: Mutex<HubInner>,
 }
 
@@ -314,6 +324,7 @@ impl WatchHub {
         Self {
             epoch: epoch.nanos(),
             config,
+            sequence: AtomicU64::new(0),
             inner: Mutex::new(HubInner {
                 sequence: 0,
                 evicted_through: 0,
@@ -324,21 +335,27 @@ impl WatchHub {
     }
 
     /// The current revision: LIST anchors watches at this cursor.
+    ///
+    /// Synchronous and lock-free (the external LIST handshake calls it from
+    /// sync call sites): it reads the atomic projection of the committed
+    /// sequence, so it may momentarily lag a publish that is in flight. A
+    /// lagging cursor is still servable - registration replays everything
+    /// after it, so the LIST->WATCH handshake stays gap-free.
     pub fn snapshot_revision(&self) -> RuntimeRevision {
         RuntimeRevision {
             epoch: self.epoch,
-            sequence: self.inner.lock().sequence,
+            sequence: self.sequence.load(Ordering::Relaxed),
         }
     }
 
     /// Number of retained events (bounded by the ring capacity).
-    pub fn ring_len(&self) -> usize {
-        self.inner.lock().ring.len()
+    pub async fn ring_len(&self) -> usize {
+        self.inner.lock().await.ring.len()
     }
 
     /// Number of live subscribers.
-    pub fn subscriber_count(&self) -> usize {
-        self.inner.lock().subscribers.len()
+    pub async fn subscriber_count(&self) -> usize {
+        self.inner.lock().await.subscribers.len()
     }
 
     /// Register a watch resuming from `after`.
@@ -347,12 +364,12 @@ impl WatchHub {
     /// in-epoch cursor serves retained replay plus live delivery; a cursor
     /// from an older epoch, a future cursor, or one already evicted from
     /// the ring returns [`WatchRegistration::Expired`] (R24: relist).
-    pub fn register(
+    pub async fn register(
         &self,
         selector: WatchSelector,
         after: Option<RuntimeRevision>,
     ) -> WatchRegistration {
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.lock().await;
         let snapshot = RuntimeRevision {
             epoch: self.epoch,
             sequence: inner.sequence,
@@ -391,8 +408,8 @@ impl WatchHub {
     /// Publish one change: assign the next revision, append to the ring,
     /// and fan out to matching subscribers (F4: desired and runtime changes
     /// both publish; every change bumps the revision).
-    pub fn publish(&self, notice: ChangeNotice) -> RuntimeRevision {
-        let mut inner = self.inner.lock();
+    pub async fn publish(&self, notice: ChangeNotice) -> RuntimeRevision {
+        let mut inner = self.inner.lock().await;
         let sequence = inner
             .sequence
             .checked_add(1)
@@ -418,6 +435,10 @@ impl WatchHub {
             }
         }
         inner.sequence = sequence;
+        // Publish the lock-free projection only after the ring commit, so a
+        // synchronous snapshot reader never sees a sequence whose event is
+        // not yet replayable.
+        self.sequence.store(sequence, Ordering::Relaxed);
 
         // Fan out. A subscriber whose buffer is full gets the explicit
         // Missed path, never a silent drop.
@@ -454,11 +475,11 @@ impl WatchHub {
 
     /// Retained events after `cursor` (the relist/read path for the
     /// manager). Errors with [`RevisionExpired`] exactly like registration.
-    pub fn events_after(
+    pub async fn events_after(
         &self,
         after: RuntimeRevision,
     ) -> Result<Vec<ResourceChange>, RevisionExpired> {
-        let inner = self.inner.lock();
+        let inner = self.inner.lock().await;
         if !self.cursor_servable(&inner, after) {
             return Err(RevisionExpired {
                 cursor: after,
@@ -508,12 +529,13 @@ mod tests {
         )
     }
 
-    fn upsert(hub: &WatchHub, name: &str) -> RuntimeRevision {
+    async fn upsert(hub: &WatchHub, name: &str) -> RuntimeRevision {
         hub.publish(ChangeNotice {
             key: key("z", "Process", name),
             kind: ChangeKind::Upsert,
             source: ChangeSource::Desired,
         })
+        .await
     }
 
     // -- F4 / R23: LIST -> WATCH handoff -----------------------------------
@@ -525,15 +547,15 @@ mod tests {
         let snapshot = hub.snapshot_revision();
 
         // An event published between LIST and WATCH.
-        upsert(&hub, "a");
+        upsert(&hub, "a").await;
         // Registration interleaves with publishes.
         let WatchRegistration::Live { replay, stream, .. } =
-            hub.register(WatchSelector::all(), Some(snapshot))
+            hub.register(WatchSelector::all(), Some(snapshot)).await
         else {
             panic!("in-epoch cursor must register");
         };
         let mut stream = stream;
-        upsert(&hub, "b");
+        upsert(&hub, "b").await;
 
         // The pre-registration event arrives in the replay batch (it was
         // published after the snapshot, before registration); live delivery
@@ -556,10 +578,11 @@ mod tests {
             key: key("z", "Volume", "v1"),
             kind: ChangeKind::Upsert,
             source: ChangeSource::Desired,
-        });
+        })
+        .await;
 
         let WatchRegistration::Live { stream, .. } =
-            hub.register(WatchSelector::for_type("Process"), Some(snapshot))
+            hub.register(WatchSelector::for_type("Process"), Some(snapshot)).await
         else {
             panic!("in-epoch cursor must register");
         };
@@ -569,12 +592,14 @@ mod tests {
             key: key("z", "Volume", "v2"),
             kind: ChangeKind::Upsert,
             source: ChangeSource::Desired,
-        });
+        })
+        .await;
         hub.publish(ChangeNotice {
             key: key("z", "Process", "p1"),
             kind: ChangeKind::Upsert,
             source: ChangeSource::Desired,
-        });
+        })
+        .await;
 
         match stream.try_recv() {
             Some(WatchDelivery::Change(change)) => {
@@ -593,15 +618,15 @@ mod tests {
         let hub = WatchHub::new(&ManualClock::at(1_000), 8);
 
         for i in 1..=5 {
-            upsert(&hub, &format!("r{i}"));
+            upsert(&hub, &format!("r{i}")).await;
         }
         let after = RuntimeRevision::new(1_000, 2);
         for i in 6..=10 {
-            upsert(&hub, &format!("r{i}"));
+            upsert(&hub, &format!("r{i}")).await;
         }
 
         let WatchRegistration::Live { replay, stream, .. } =
-            hub.register(WatchSelector::all(), Some(after))
+            hub.register(WatchSelector::all(), Some(after)).await
         else {
             panic!("in-epoch cursor must register");
         };
@@ -612,7 +637,7 @@ mod tests {
         assert!(replay.windows(2).all(|w| w[0].revision < w[1].revision));
 
         // Live delivery continues after replay.
-        upsert(&hub, "r11");
+        upsert(&hub, "r11").await;
         match stream.try_recv() {
             Some(WatchDelivery::Change(change)) => assert_eq!(change.key.name, "r11"),
             other => panic!("expected live delivery after replay, got {other:?}"),
@@ -624,16 +649,16 @@ mod tests {
     #[tokio::test]
     async fn cursor_from_previous_epoch_returns_expired() {
         let hub = hub(); // epoch stamped at 1_000 via the manual clock.
-        upsert(&hub, "a");
+        upsert(&hub, "a").await;
 
         // A cursor from a prior daemon lifetime (older epoch).
         let stale = RuntimeRevision::new(999, u64::MAX);
         assert!(matches!(
-            hub.register(WatchSelector::all(), Some(stale)),
+            hub.register(WatchSelector::all(), Some(stale)).await,
             WatchRegistration::Expired(_)
         ));
         assert_eq!(
-            hub.events_after(stale),
+            hub.events_after(stale).await,
             Err(RevisionExpired {
                 cursor: stale,
                 snapshot: hub.snapshot_revision(),
@@ -646,30 +671,30 @@ mod tests {
         let hub = hub();
         let future = RuntimeRevision::new(1_000, u64::MAX);
         assert!(matches!(
-            hub.register(WatchSelector::all(), Some(future)),
+            hub.register(WatchSelector::all(), Some(future)).await,
             WatchRegistration::Expired(_)
         ));
-        assert!(hub.events_after(future).is_err());
+        assert!(hub.events_after(future).await.is_err());
     }
 
     #[tokio::test]
     async fn cursor_behind_retention_frontier_is_expired() {
         let hub = WatchHub::new(&ManualClock::at(1_000), 4);
         for i in 1..=10 {
-            upsert(&hub, &format!("p{i}"));
+            upsert(&hub, &format!("p{i}")).await;
         }
         // Sequences 1..=6 were evicted: a cursor at 3 cannot be served.
         let lapped = RuntimeRevision::new(1_000, 3);
         assert!(matches!(
-            hub.register(WatchSelector::all(), Some(lapped)),
+            hub.register(WatchSelector::all(), Some(lapped)).await,
             WatchRegistration::Expired(_)
         ));
-        assert!(hub.events_after(lapped).is_err());
+        assert!(hub.events_after(lapped).await.is_err());
 
         // A cursor at the frontier still replays everything retained.
         let frontier = RuntimeRevision::new(1_000, 6);
         let WatchRegistration::Live { replay, .. } =
-            hub.register(WatchSelector::all(), Some(frontier))
+            hub.register(WatchSelector::all(), Some(frontier)).await
         else {
             panic!("frontier cursor must register");
         };
@@ -681,15 +706,15 @@ mod tests {
         let hub = hub();
         let stale = RuntimeRevision::new(999, 5);
         assert!(matches!(
-            hub.register(WatchSelector::all(), Some(stale)),
+            hub.register(WatchSelector::all(), Some(stale)).await,
             WatchRegistration::Expired(_)
         ));
 
         // Relist: take the new snapshot revision, publish, re-watch.
         let snapshot = hub.snapshot_revision();
-        upsert(&hub, "fresh");
+        upsert(&hub, "fresh").await;
         let WatchRegistration::Live { replay, stream, .. } =
-            hub.register(WatchSelector::all(), Some(snapshot))
+            hub.register(WatchSelector::all(), Some(snapshot)).await
         else {
             panic!("fresh snapshot must register");
         };
@@ -709,7 +734,7 @@ mod tests {
                 delivery_buffer: 2,
             },
         );
-        let WatchRegistration::Live { stream, .. } = hub.register(WatchSelector::all(), None)
+        let WatchRegistration::Live { stream, .. } = hub.register(WatchSelector::all(), None).await
         else {
             unreachable!();
         };
@@ -719,7 +744,7 @@ mod tests {
         // fills, the ring churns past the subscriber's frontier, and the
         // subscriber must see an explicit Missed - not silent drop.
         for i in 0..32 {
-            upsert(&hub, &format!("p{i}"));
+            upsert(&hub, &format!("p{i}")).await;
         }
 
         let mut seen_changes = 0;
@@ -741,7 +766,7 @@ mod tests {
         // reports RevisionExpired exactly like a stale cursor (U8 maps the
         // Missed signal onto this relist path).
         assert!(matches!(
-            hub.events_after(missed),
+            hub.events_after(missed).await,
             Err(RevisionExpired { .. })
         ));
     }
@@ -753,19 +778,19 @@ mod tests {
         let capacity = 16;
         let hub = WatchHub::new(&ManualClock::at(1_000), capacity);
         for i in 0..10_000 {
-            upsert(&hub, &format!("p{i}"));
+            upsert(&hub, &format!("p{i}")).await;
         }
-        assert_eq!(hub.ring_len(), capacity);
+        assert_eq!(hub.ring_len().await, capacity);
         assert_eq!(hub.snapshot_revision().sequence, 10_000);
 
         // A gone subscriber is reaped on the next publish.
-        let WatchRegistration::Live { stream, .. } = hub.register(WatchSelector::all(), None)
+        let WatchRegistration::Live { stream, .. } = hub.register(WatchSelector::all(), None).await
         else {
             unreachable!()
         };
         drop(stream);
-        upsert(&hub, "after-drop");
-        assert_eq!(hub.subscriber_count(), 0);
+        upsert(&hub, "after-drop").await;
+        assert_eq!(hub.subscriber_count().await, 0);
     }
 
     // -- F4 / AE6 / R11: status churn, zero persistence ----------------------
@@ -773,7 +798,7 @@ mod tests {
     #[tokio::test]
     async fn status_churn_generates_strictly_increasing_revisions_and_events() {
         let hub = hub();
-        let WatchRegistration::Live { stream, .. } = hub.register(WatchSelector::all(), None)
+        let WatchRegistration::Live { stream, .. } = hub.register(WatchSelector::all(), None).await
         else {
             unreachable!()
         };
@@ -781,11 +806,13 @@ mod tests {
 
         let mut previous = hub.snapshot_revision();
         for _ in 0..50 {
-            let revision = hub.publish(ChangeNotice {
-                key: key("z", "Process", "churn"),
-                kind: ChangeKind::Upsert,
-                source: ChangeSource::RuntimeStatus,
-            });
+            let revision = hub
+                .publish(ChangeNotice {
+                    key: key("z", "Process", "churn"),
+                    kind: ChangeKind::Upsert,
+                    source: ChangeSource::RuntimeStatus,
+                })
+                .await;
             assert!(revision > previous, "every status change bumps the revision");
             previous = revision;
         }
@@ -799,14 +826,14 @@ mod tests {
 
     // -- R11/R24: no persistence anywhere in the watch path -------------------
 
-    #[test]
-    fn hub_writes_zero_files_and_takes_no_store_handle() {
+    #[tokio::test]
+    async fn hub_writes_zero_files_and_takes_no_store_handle() {
         // fs-level: the hub performs no I/O, so a tempdir it "operates in"
         // stays empty. Type-level: the whole hub API takes no store handle,
         // so this test compiles without one (R11/R24).
         let dir = tempfile::tempdir().expect("tempdir");
         let hub = WatchHub::new(&ManualClock::at(1), 16);
-        let WatchRegistration::Live { stream, .. } = hub.register(WatchSelector::all(), None)
+        let WatchRegistration::Live { stream, .. } = hub.register(WatchSelector::all(), None).await
         else {
             unreachable!()
         };
@@ -816,7 +843,8 @@ mod tests {
                 key: key("z", "Process", &format!("p{i}")),
                 kind: ChangeKind::Upsert,
                 source: ChangeSource::RuntimeStatus,
-            });
+            })
+            .await;
         }
         while stream.try_recv().is_some() {}
         let entries: Vec<_> = std::fs::read_dir(dir.path())
@@ -828,17 +856,18 @@ mod tests {
     #[tokio::test]
     async fn events_after_serves_manager_list_support() {
         let hub = hub();
-        upsert(&hub, "a");
+        upsert(&hub, "a").await;
         let snapshot = hub.snapshot_revision();
-        upsert(&hub, "b");
+        upsert(&hub, "b").await;
 
-        let events = hub.events_after(snapshot).expect("in-epoch");
+        let events = hub.events_after(snapshot).await.expect("in-epoch");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].key.name, "b");
 
         // Cursor at zero is the "everything retained" cursor.
         let all = hub
             .events_after(RuntimeRevision::new(1_000, 0))
+            .await
             .expect("in-epoch");
         assert_eq!(all.len(), 2);
     }
@@ -852,13 +881,13 @@ mod tests {
                 delivery_buffer: 2,
             },
         );
-        let WatchRegistration::Live { stream, .. } = hub.register(WatchSelector::all(), None)
+        let WatchRegistration::Live { stream, .. } = hub.register(WatchSelector::all(), None).await
         else {
             unreachable!()
         };
         let mut stream = stream;
         for i in 0..8 {
-            upsert(&hub, &format!("p{i}"));
+            upsert(&hub, &format!("p{i}")).await;
         }
         let mut changes = 0;
         let mut missed = false;

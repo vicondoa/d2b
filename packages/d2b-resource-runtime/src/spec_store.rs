@@ -14,6 +14,14 @@
 //! remaining cross-connection case (two stores open on one file, e.g. during
 //! handover).
 //!
+//! Admission is refuse-don't-queue (the loader_worker doctrine): a full
+//! 256-slot queue refuses with [`SpecStoreError::Busy`] - backpressure, the
+//! writer is alive and a retry succeeds - while a closed channel refuses
+//! with [`SpecStoreError::WriterGone`] - terminal, the store must be
+//! reopened. The reply await is unbounded once admitted (a deadline cannot
+//! preempt the serial writer); a writer panic drops the reply sender and the
+//! await ends with WriterGone.
+//!
 //! ## Durability posture
 //!
 //! WAL mode, `busy_timeout` 5s, `synchronous=NORMAL`, and **IMMEDIATE
@@ -166,8 +174,19 @@ pub enum SpecStoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("spec store migration: {0}")]
     Migration(String),
+    /// The writer's bounded queue (256 slots) is full: the call was not
+    /// admitted. This is backpressure, never writer death - the writer is
+    /// alive and the call can be retried. Per-caller handling: the manager
+    /// surfaces it as [`crate::error::ResourceError::Store`] and the daemon
+    /// plane surfaces it as its own store error; both treat it as retryable
+    /// (a later admission succeeds once the queue drains), unlike
+    /// [`Self::WriterGone`], which is terminal and requires reopening the
+    /// store.
+    #[error("spec store writer busy (queue full)")]
+    Busy,
     /// Writer thread gone (store handle raced past shutdown, or the writer
-    /// panicked). The store must be reopened.
+    /// panicked). Terminal: the store must be reopened. Never produced by a
+    /// full queue - a full queue is [`Self::Busy`].
     #[error("spec store writer unavailable")]
     WriterGone,
 }
@@ -207,8 +226,14 @@ enum Request {
 }
 
 /// The writer thread's exclusive connection owner. All SQLite happens here.
+///
+/// The blocking `recv` is the sanctioned bounded-worker channel boundary
+/// (plan R4): the writer is a dedicated thread, never an executor worker, so
+/// the blocking recv parks only the writer's own thread. The reply travels
+/// back over a `tokio::sync::oneshot`, exactly the loader_worker shape.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn writer_loop(mut conn: Connection, requests: Receiver<Request>) {
-    for request in requests {
+    while let Ok(request) = requests.recv() {
         match request {
             Request::Ensure { row, reply } => {
                 let _ = reply.send(ensure_transactional(&mut conn, row));
@@ -705,11 +730,17 @@ impl SpecStore {
     /// migrations, and start the writer thread. Returns after migrations are
     /// committed.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, SpecStoreError> {
+        Self::open_with_bound(path, 256)
+    }
+
+    /// [`Self::open`] with an explicit writer-queue bound. The production
+    /// bound is 256; tests shrink it to inject queue-full backpressure.
+    fn open_with_bound(path: impl Into<PathBuf>, bound: usize) -> Result<Self, SpecStoreError> {
         let path = path.into();
         let mut conn = open_connection(&path)?;
         crate::schema::migrate(&mut conn).map_err(|err| SpecStoreError::Migration(err.to_string()))?;
         tighten_file_modes(&path);
-        let (sender, receiver) = sync_channel::<Request>(256);
+        let (sender, receiver) = sync_channel::<Request>(bound);
         let join = std::thread::Builder::new()
             .name("spec-store-writer".into())
             .spawn(move || writer_loop(conn, receiver))
@@ -770,12 +801,36 @@ impl SpecStore {
         F: FnOnce(oneshot::Sender<Result<R, SpecStoreError>>) -> Request,
     {
         let (tx, rx) = oneshot::channel();
-        let sender = self.sender.as_ref().expect("sender lives until Drop");
-        sender.try_send(make(tx)).map_err(|_| SpecStoreError::WriterGone)?;
+        // The sender is `None` only while the store is being dropped (the
+        // writer already drained and exited): a call racing the teardown is
+        // the terminal writer-gone case, not a panic.
+        let Some(sender) = self.sender.as_ref() else {
+            return Err(SpecStoreError::WriterGone);
+        };
+        // Admission is refuse-don't-queue (the loader_worker doctrine): a
+        // full 256-slot queue refuses with `Busy` (backpressure, retryable)
+        // and a closed channel refuses with `WriterGone` (terminal). The
+        // two were previously collapsed into WriterGone, so saturation
+        // presented as phantom writer death.
+        sender.try_send(make(tx)).map_err(|error| match error {
+            std::sync::mpsc::TrySendError::Full(_) => SpecStoreError::Busy,
+            std::sync::mpsc::TrySendError::Disconnected(_) => SpecStoreError::WriterGone,
+        })?;
+        // The reply await is deliberately unbounded, matching loader_worker:
+        // the writer is a serial worker, so a deadline here cannot preempt a
+        // request already running on it - it would only turn a slow-but-
+        // progressing store into a spurious failure. The wait is bounded in
+        // practice: the writer drains FIFO and every op is capped by
+        // `busy_timeout` (5s). A writer panic drops the reply sender, so the
+        // await ends with WriterGone instead of hanging on a dead worker.
         rx.await.map_err(|_| SpecStoreError::WriterGone)?
     }
 }
 
+/// Drop is synchronous by construction and has no async form: the writer
+/// teardown (drain, checkpoint, exit) is the dedicated worker's own bounded
+/// work, so the join parks only the caller until the worker finishes it.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 impl Drop for SpecStore {
     fn drop(&mut self) {
         // Drop the sender first so the writer drains pending requests,
@@ -1098,5 +1153,72 @@ mod tests {
             .await
             .unwrap();
         assert!(by_zone.is_empty());
+    }
+
+    /// Failure taxonomy (U4): a full writer queue is backpressure - the
+    /// writer is alive and the call is retryable - never phantom writer
+    /// death. The writer is stalled on a second connection's exclusive lock
+    /// (its IMMEDIATE transaction waits on `busy_timeout`), so the bounded
+    /// queue cannot drain while the test floods it; the first refused call
+    /// must be `Busy`, and the store must serve again once the lock is
+    /// released.
+    #[tokio::test]
+    async fn a_full_queue_returns_busy_backpressure_not_writer_gone() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("specs.db");
+        // Bound 1: one in-flight request saturates the queue.
+        let store = std::sync::Arc::new(SpecStore::open_with_bound(&path, 1).unwrap());
+        // Hold the file's write lock on a second connection: the writer's
+        // next IMMEDIATE transaction blocks, so the queue cannot drain.
+        let blocker = rusqlite::Connection::open(&path).unwrap();
+        blocker.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        // Flood the queue while the writer is stalled.
+        let handles: Vec<_> = (0..3)
+            .map(|i| {
+                let store = std::sync::Arc::clone(&store);
+                tokio::spawn(async move {
+                    store.ensure(row(&format!("data-{i}"), b"spec")).await
+                })
+            })
+            .collect();
+        // Release the writer before collecting: the admitted request then
+        // completes instead of timing out on busy_timeout.
+        drop(blocker);
+        let mut outcomes = Vec::with_capacity(handles.len());
+        for handle in handles {
+            outcomes.push(handle.await.expect("ensure task"));
+        }
+        assert!(
+            outcomes.iter().any(|outcome| matches!(outcome, Err(SpecStoreError::Busy))),
+            "a saturated queue must refuse with Busy, got {outcomes:?}"
+        );
+        assert!(
+            outcomes
+                .iter()
+                .all(|outcome| !matches!(outcome, Err(SpecStoreError::WriterGone))),
+            "a full queue is not writer death, got {outcomes:?}"
+        );
+        // The writer survived: round-trips still work after the backlog
+        // drains.
+        let outcome = store.ensure(row("data", b"spec-v1")).await.unwrap();
+        assert!(matches!(outcome, EnsureOutcome::Created(_)));
+    }
+
+    /// Failure taxonomy (U4): a killed writer is terminal. Dropping the
+    /// sender closes the channel; the writer drains and exits, and every
+    /// later call refuses with `WriterGone` - the store must be reopened.
+    #[tokio::test]
+    async fn a_killed_writer_returns_writer_gone_terminal() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("specs.db");
+        let mut store = SpecStore::open_with_bound(&path, 1).unwrap();
+        // Kill the writer: dropping the sender closes the channel (the
+        // writer drains pending requests, checkpoints, and exits).
+        drop(store.sender.take());
+        let err = store.ensure(row("data", b"spec-v1")).await.unwrap_err();
+        assert!(
+            matches!(err, SpecStoreError::WriterGone),
+            "a dead writer is terminal WriterGone, got {err:?}"
+        );
     }
 }

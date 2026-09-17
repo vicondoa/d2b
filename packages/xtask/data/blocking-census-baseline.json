@@ -5624,7 +5624,7 @@
       "std::thread::JoinHandle::join": 2,
       "std::thread::sleep": 0,
       "tokio::runtime::Handle::block_on": 0,
-      "tokio::runtime::Runtime::block_on": 101,
+      "tokio::runtime::Runtime::block_on": 104,
       "tokio::task::block_in_place": 0,
       "tokio::task::spawn_blocking": 0
     },

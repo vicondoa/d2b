@@ -40,9 +40,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use parking_lot::Mutex;
 use ractor::{Actor, ActorCell, ActorProcessingErr, ActorRef};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 
 use crate::context::{
     EffectCompleted, EffectResult, ManagerEndpoint, OperationId, RequeueId, RequeueScheduler,
@@ -218,7 +217,13 @@ impl ActorTimers {
 
     /// Cancel every pending schedule (the delete path).
     fn cancel_all(&self) {
-        if let Some((_, handle)) = self.pending.lock().take() {
+        // The actor is the single owner of `pending` (ractor serializes its
+        // handlers), so the non-blocking `try_lock` never collides; a
+        // collision would only mean a stale timer fires, which the deleting
+        // actor answers with the deletion retry pass.
+        if let Ok(mut pending) = self.pending.try_lock()
+            && let Some((_, handle)) = pending.take()
+        {
             handle.abort();
         }
     }
@@ -228,7 +233,15 @@ impl RequeueScheduler for ActorTimers {
     fn schedule(&self, _key: ResourceKey, after: Duration) -> RequeueId {
         let id = RequeueId(self.next.fetch_add(1, Ordering::SeqCst));
         let handle = ractor::time::send_after(after, self.cell.clone(), || ResourceMsg::Reconcile);
-        let mut pending = self.pending.lock();
+        // `tokio::sync::Mutex` (plan U4) reached from the sync trait
+        // surface via the non-blocking `try_lock`. The actor is the single
+        // owner (ractor serializes its handlers), so a collision is
+        // impossible by construction; if one ever occurred, the new timer
+        // still fires and the untracked record only means `cancel` cannot
+        // abort it - a duplicate reconcile is idempotent.
+        let Ok(mut pending) = self.pending.try_lock() else {
+            return id;
+        };
         if let Some((_, old)) = pending.take() {
             old.abort();
         }
@@ -237,7 +250,9 @@ impl RequeueScheduler for ActorTimers {
     }
 
     fn cancel(&self, id: RequeueId) {
-        let mut pending = self.pending.lock();
+        let Ok(mut pending) = self.pending.try_lock() else {
+            return;
+        };
         if pending.as_ref().is_some_and(|(scheduled, _)| *scheduled == id)
             && let Some((_, handle)) = pending.take()
         {
@@ -815,7 +830,7 @@ pub(crate) mod test_support {
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use parking_lot::Mutex;
+    use tokio::sync::Mutex;
 
     use crate::context::{EffectCompleted, EffectResult, ResourceContext, WatchCondition};
     use crate::driver::{DynResourceDriver, ResourceDriver, ResourceDriverFactory};
@@ -1047,7 +1062,7 @@ pub(crate) mod test_support {
             _ctx: &mut ResourceContext,
         ) -> Result<RecoveryOutcome, Self::Error> {
             self.shared.recover_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(*self.shared.recover_outcome.lock())
+            Ok(*self.shared.recover_outcome.lock().await)
         }
 
         async fn reconcile(
@@ -1055,23 +1070,23 @@ pub(crate) mod test_support {
             ctx: &mut ResourceContext,
         ) -> Result<ReconcileOutcome, Self::Error> {
             self.shared.reconcile_calls.fetch_add(1, Ordering::SeqCst);
-            self.shared.generations_seen.lock().push(ctx.generation());
+            self.shared.generations_seen.lock().await.push(ctx.generation());
             // A dependent registers its internal watch in every reconcile
             // (spec sections 15-16): exactly-once delivery is the target
             // actor's contract, re-registration is the dependent's.
-            let watch_target = self.shared.watch_target.lock().clone();
+            let watch_target = self.shared.watch_target.lock().await.clone();
             if let Some(target) = watch_target {
                 self.shared.watch_calls.fetch_add(1, Ordering::SeqCst);
                 let _watch = ctx.watch(target, WatchCondition::Ready).await;
             }
             // Live state of other resources (KTD3): each reconcile reads the
             // configured keys through the context and records the answer.
-            let view_targets = self.shared.view_targets.lock().clone();
+            let view_targets = self.shared.view_targets.lock().await.clone();
             for target in view_targets {
                 let view = ctx.get_view(&target).await.expect("live view read");
-                self.shared.view_reads.lock().push(FakeViewRead { key: target, view });
+                self.shared.view_reads.lock().await.push(FakeViewRead { key: target, view });
             }
-            let mode = *self.shared.reconcile_mode.lock();
+            let mode = *self.shared.reconcile_mode.lock().await;
             match mode {
                 ReconcileMode::Satisfied => Ok(ReconcileOutcome::Satisfied),
                 ReconcileMode::ProjectionOnce => {
@@ -1084,7 +1099,7 @@ pub(crate) mod test_support {
                     Ok(ReconcileOutcome::Satisfied)
                 }
                 ReconcileMode::PanicOnce => {
-                    *self.shared.reconcile_mode.lock() = ReconcileMode::Satisfied;
+                     *self.shared.reconcile_mode.lock().await = ReconcileMode::Satisfied;
                     panic!("fake reconcile crash");
                 }
                 ReconcileMode::FailRetryable => Err(FakeDriverError::Failed),
@@ -1102,7 +1117,7 @@ pub(crate) mod test_support {
                 ReconcileMode::NotYetOnceWithDetail => {
                     if self.shared.reconcile_calls.load(Ordering::SeqCst) > 1 {
                         // The requeued pass converges.
-                        *self.shared.reconcile_mode.lock() = ReconcileMode::Satisfied;
+                         *self.shared.reconcile_mode.lock().await = ReconcileMode::Satisfied;
                         return Ok(ReconcileOutcome::Satisfied);
                     }
                     Err(FakeDriverError::NotYet)
@@ -1110,7 +1125,7 @@ pub(crate) mod test_support {
                 ReconcileMode::EffectFailsRetryableOnce => {
                     if self.shared.reconcile_calls.load(Ordering::SeqCst) > 1 {
                         // The requeued pass converges.
-                        *self.shared.reconcile_mode.lock() = ReconcileMode::Satisfied;
+                         *self.shared.reconcile_mode.lock().await = ReconcileMode::Satisfied;
                         return Ok(ReconcileOutcome::Satisfied);
                     }
                     let operation = ctx.begin_operation();
@@ -1233,8 +1248,8 @@ pub(crate) mod test_support {
         }
 
         /// The shared driver state for a key (created on first use).
-        pub(crate) fn shared(&self, key: &ResourceKey) -> Arc<FakeDriverShared> {
-            self.registry.lock().entry(key.clone()).or_insert_with(|| Arc::new(FakeDriverShared::new())).clone()
+        pub(crate) async fn shared(&self, key: &ResourceKey) -> Arc<FakeDriverShared> {
+            self.registry.lock().await.entry(key.clone()).or_insert_with(|| Arc::new(FakeDriverShared::new())).clone()
         }
 
     }
@@ -1246,7 +1261,7 @@ pub(crate) mod test_support {
         }
 
         async fn create(&self, key: &ResourceKey) -> Box<dyn DynResourceDriver> {
-            Box::new(FakeDriver { shared: self.shared(key) })
+            Box::new(FakeDriver { shared: self.shared(key).await })
         }
     }
 

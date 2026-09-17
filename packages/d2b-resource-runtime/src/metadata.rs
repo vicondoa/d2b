@@ -250,8 +250,8 @@ async fn drain_owned_children(ctx: &mut ResourceContext) -> Result<(), DriverFai
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Mutex;
 
     use crate::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
@@ -309,8 +309,8 @@ mod tests {
             })
         }
 
-        fn call_order(&self) -> Vec<&'static str> {
-            self.calls.lock().expect("calls").clone()
+        async fn call_order(&self) -> Vec<&'static str> {
+            self.calls.lock().await.clone()
         }
 
         fn fail_reads(&self) {
@@ -340,11 +340,8 @@ mod tests {
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.calls.lock().expect("calls").push("delete");
-            self.owned
-                .lock()
-                .expect("owned")
-                .retain(|row| row.key != *key);
+            self.calls.lock().await.push("delete");
+            self.owned.lock().await.retain(|row| row.key != *key);
             Ok(())
         }
 
@@ -352,11 +349,11 @@ mod tests {
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().expect("calls").push("list-owned");
+            self.calls.lock().await.push("list-owned");
             if self.fail_reads.load(Ordering::SeqCst) {
                 return Err(ResourceError::ManagerRpc("scripted read failure".into()));
             }
-            Ok(self.owned.lock().expect("owned").clone())
+            Ok(self.owned.lock().await.clone())
         }
 
         async fn register_watch(
@@ -454,7 +451,7 @@ mod tests {
         assert_eq!(failure.class(), FailureClass::Terminal);
         assert_eq!(failure.op(), DriverOp::Validate);
         assert!(
-            manager.call_order().is_empty(),
+            manager.call_order().await.is_empty(),
             "validate must not touch the manager"
         );
     }
@@ -481,7 +478,7 @@ mod tests {
             RecoveryOutcome::Adopted
         );
         driver.delete(&mut ctx).await.expect("converged");
-        assert!(manager.call_order().is_empty());
+        assert!(manager.call_order().await.is_empty());
     }
 
     /// One reconcile pass converges as metadata: no manager read, no effect,
@@ -495,7 +492,7 @@ mod tests {
             driver.reconcile(&mut ctx).await.expect("converged"),
             ReconcileOutcome::Satisfied
         );
-        assert!(manager.call_order().is_empty());
+        assert!(manager.call_order().await.is_empty());
         assert!(ctx.status::<serde_json::Value>().is_none());
     }
 
@@ -512,11 +509,11 @@ mod tests {
         assert_eq!(failure.kind().code(), "children-draining");
         assert_eq!(failure.op(), DriverOp::Delete);
         assert!(
-            manager.call_order().contains(&"delete"),
+            manager.call_order().await.contains(&"delete"),
             "the child is nudged through its own finalize-before-delete pass"
         );
 
-        manager.owned.lock().expect("owned").clear();
+        manager.owned.lock().await.clear();
         driver
             .finalize(&mut ctx)
             .await

@@ -618,14 +618,14 @@ impl ResourceManagerState {
         // The realization is gone; its directory record goes with it (U13).
         // Releasing one assignment never touches the guest session, another
         // assignment, or another realization (R20).
-        self.targets.release(key);
+        self.targets.release(key).await;
         self.unindex_row(key);
         self.pending_retirement.remove(key);
         self.hub.publish(ChangeNotice {
             key: key.clone(),
             kind: ChangeKind::Delete,
             source: ChangeSource::Desired,
-        });
+        }).await;
         if let Some(owner_key) = owner_key
             && self.pending_retirement.contains(&owner_key)
             && !self.has_live_children(&owner_key)
@@ -757,7 +757,7 @@ impl ResourceManagerState {
                 key: committed.key.clone(),
                 kind: ChangeKind::Upsert,
                 source: ChangeSource::Desired,
-            });
+            }).await;
         }
         let key = committed.key.clone();
         let actor = match self.actors.get(&key).cloned() {
@@ -818,7 +818,7 @@ impl ResourceManagerState {
                     key: key.clone(),
                     kind: ChangeKind::Upsert,
                     source: ChangeSource::Desired,
-                });
+                }).await;
             }
             Err(SpecStoreError::NotFound { .. }) => return Ok(()),
             Err(error) => return Err(error.into()),
@@ -1008,7 +1008,7 @@ impl Actor for ResourceManager {
                 // One manager serializes list snapshots, revisions, and watch
                 // registration, so the list/watch handoff stays gap-free
                 // within the epoch (F4, R23).
-                reply.send(Ok(state.hub.register(selector, after))).ok();
+                reply.send(Ok(state.hub.register(selector, after).await)).ok();
             }
             ResourceManagerMsg::RuntimeChanged { key, generation, status, projection } => {
                 // Status is in-memory only (R11): update the view model and
@@ -1033,7 +1033,7 @@ impl Actor for ResourceManager {
                         key,
                         kind: ChangeKind::Upsert,
                         source: ChangeSource::RuntimeStatus,
-                    });
+                    }).await;
                 }
             }
             ResourceManagerMsg::ActorStarted { key, actor } => {
@@ -1677,7 +1677,7 @@ mod tests {
         assert_eq!(first.actor, second.actor, "duplicate ensure returns the same handle");
         assert_eq!(first.generation, 1);
         assert_eq!(second.generation, 1);
-        let shared = h.factory.shared(&k);
+        let shared = h.factory.shared(&k).await;
         until(|| shared.recover_calls.load(AtomicOrdering::SeqCst) == 1).await;
 
         // Changed spec: generation N+1 persists before the actor receives
@@ -1689,7 +1689,7 @@ mod tests {
             .expect("changed ensure");
         assert_eq!(updated.generation, 2);
         assert_eq!(updated.actor, first.actor);
-        until(|| shared.generations_seen.lock().contains(&2)).await;
+        until(|| shared.generations_seen.try_lock().is_ok_and(|seen| seen.contains(&2))).await;
         let row = h.client.get_row(k.clone()).await.expect("get_row").expect("row");
         assert_eq!(row.generation, 2);
         assert_eq!(row.spec, b"two");
@@ -1802,7 +1802,7 @@ mod tests {
         // the orphaned row, which recovers and reconciles.
         let restarted =
             harness_over(h.store.clone(), "test", &["Ghost"], Duration::from_millis(200)).await;
-        let shared = restarted.factory.shared(&k);
+        let shared = restarted.factory.shared(&k).await;
         until(|| shared.recover_calls.load(AtomicOrdering::SeqCst) == 1).await;
         wait_status(&restarted.client, &k, ResourceStatus::Ready).await;
     }
@@ -1815,10 +1815,10 @@ mod tests {
         let h = harness(&["Target", "Dep"]).await;
         let tkey = key("test", "Target", "t");
         let dkey = key("test", "Dep", "d");
-        let tshare = h.factory.shared(&tkey);
-        let dshare = h.factory.shared(&dkey);
+        let tshare = h.factory.shared(&tkey).await;
+        let dshare = h.factory.shared(&dkey).await;
         // The dependent registers a watch on the target in every reconcile.
-        *dshare.watch_target.lock() = Some(tkey.clone());
+        *dshare.watch_target.lock().await = Some(tkey.clone());
 
         let target =
             h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
@@ -1829,7 +1829,7 @@ mod tests {
         let watch_calls_before = dshare.watch_calls.load(AtomicOrdering::SeqCst);
 
         // Crash the target through its driver (panic in reconcile).
-        *tshare.reconcile_mode.lock() = ReconcileMode::PanicOnce;
+        *tshare.reconcile_mode.lock().await = ReconcileMode::PanicOnce;
         target.actor.send_message(ResourceMsg::Reconcile).expect("cast reconcile");
         until(|| tshare.recover_calls.load(AtomicOrdering::SeqCst) == 2).await;
 
@@ -1868,7 +1868,7 @@ mod tests {
         // Parent config drops `b`: marked deleting, row retired after cleanup.
         let akey = key("test", "Worker", "helper");
         let bkey = key("test", "Worker", "extra");
-        let bshare = h.factory.shared(&bkey);
+        let bshare = h.factory.shared(&bkey).await;
         let third = h.client.reconcile_children(parent.clone(), vec![a]).await.expect("diff");
         assert_eq!(third.obsolete, vec![bkey.clone()]);
         wait_row_gone(&h.client, &bkey).await;
@@ -1903,9 +1903,9 @@ mod tests {
 
         // The child's cleanup blocks, so the parent's own cleanup completes
         // while the child row is provably still alive.
-        let cshare = h.factory.shared(&child);
+        let cshare = h.factory.shared(&child).await;
         cshare.delete_blocked.store(true, AtomicOrdering::SeqCst);
-        let pshare = h.factory.shared(&parent);
+        let pshare = h.factory.shared(&parent).await;
         h.client.remove(subject(), parent.clone()).await.expect("remove");
         // Owner directive 2026-09-11: a driver's finalize finalizes every
         // owned resource before its own drain work, so the parent's `delete`
@@ -1946,7 +1946,7 @@ mod tests {
     async fn ensure_against_deleting_is_rejected() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
+        let shared = h.factory.shared(&k).await;
         shared.delete_blocked.store(true, AtomicOrdering::SeqCst);
         h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         wait_status(&h.client, &k, ResourceStatus::Ready).await;
@@ -2054,8 +2054,8 @@ mod tests {
             "Process",
             "Endpoint",
         ]));
-        factory.shared(&worker).delete_blocked.store(true, AtomicOrdering::SeqCst);
-        factory.shared(&endpoint).delete_blocked.store(true, AtomicOrdering::SeqCst);
+        factory.shared(&worker).await.delete_blocked.store(true, AtomicOrdering::SeqCst);
+        factory.shared(&endpoint).await.delete_blocked.store(true, AtomicOrdering::SeqCst);
         let restarted = harness_over_with_factory(
             store.clone(),
             "test",
@@ -2070,21 +2070,17 @@ mod tests {
         // Volume's deletes must wait for their children (and the binding)
         // respectively. Do NOT restore a gate that expects a parent delete
         // before its children retire.
-        until(|| {
-            factory.shared(&worker).delete_calls.load(AtomicOrdering::SeqCst) >= 1
-        })
-        .await;
-        until(|| {
-            factory.shared(&endpoint).delete_calls.load(AtomicOrdering::SeqCst) >= 1
-        })
-        .await;
+        let worker_shared = factory.shared(&worker).await;
+        let endpoint_shared = factory.shared(&endpoint).await;
+        until(|| worker_shared.delete_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        until(|| endpoint_shared.delete_calls.load(AtomicOrdering::SeqCst) >= 1).await;
         assert_eq!(
-            factory.shared(&binding).delete_calls.load(AtomicOrdering::SeqCst),
+            factory.shared(&binding).await.delete_calls.load(AtomicOrdering::SeqCst),
             0,
             "a binding's delete runs only after its owned children retire"
         );
         assert_eq!(
-            factory.shared(&volume).delete_calls.load(AtomicOrdering::SeqCst),
+            factory.shared(&volume).await.delete_calls.load(AtomicOrdering::SeqCst),
             0,
             "a Volume's delete runs only after its binding retires"
         );
@@ -2125,18 +2121,18 @@ mod tests {
 
         // Releasing the children completes the resumed cascade: children
         // first, then the binding, then the Volume.
-        factory.shared(&worker).open_gate();
-        factory.shared(&endpoint).open_gate();
+        factory.shared(&worker).await.open_gate();
+        factory.shared(&endpoint).await.open_gate();
         wait_row_gone(&restarted.client, &worker).await;
         wait_row_gone(&restarted.client, &endpoint).await;
         wait_row_gone(&restarted.client, &binding).await;
         wait_row_gone(&restarted.client, &volume).await;
         assert!(
-            factory.shared(&binding).delete_calls.load(AtomicOrdering::SeqCst) >= 1,
+            factory.shared(&binding).await.delete_calls.load(AtomicOrdering::SeqCst) >= 1,
             "the binding's delete runs once its owned children retired"
         );
         assert!(
-            factory.shared(&volume).delete_calls.load(AtomicOrdering::SeqCst) >= 1,
+            factory.shared(&volume).await.delete_calls.load(AtomicOrdering::SeqCst) >= 1,
             "the Volume's delete runs once its binding retired"
         );
     }
@@ -2150,7 +2146,7 @@ mod tests {
     async fn delete_pass_runs_finalize_before_delete() {
         let h = harness(&["Test"]).await;
         let solo = key("test", "Test", "solo");
-        let shared = h.factory.shared(&solo);
+        let shared = h.factory.shared(&solo).await;
         h.client
             .ensure(subject(), None, desired("Test", "solo", b"spec"))
             .await
@@ -2213,9 +2209,9 @@ mod tests {
 
         // The leaf pins the chain; the parent's delete is held too so its
         // own turn in the sequence is directly observable.
-        let grandparent_shared = h.factory.shared(&grandparent);
-        let parent_shared = h.factory.shared(&parent);
-        let leaf_shared = h.factory.shared(&leaf);
+        let grandparent_shared = h.factory.shared(&grandparent).await;
+        let parent_shared = h.factory.shared(&parent).await;
+        let leaf_shared = h.factory.shared(&leaf).await;
         parent_shared.delete_blocked.store(true, AtomicOrdering::SeqCst);
         leaf_shared.delete_blocked.store(true, AtomicOrdering::SeqCst);
         h.client.remove(subject(), grandparent.clone()).await.expect("remove");
@@ -2513,8 +2509,8 @@ mod tests {
     async fn in_progress_pass_publishes_its_projection() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.reconcile_mode.lock() = ReconcileMode::InProgressWithProjectionOnce;
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::InProgressWithProjectionOnce;
         h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         until(|| shared.reconcile_calls.load(AtomicOrdering::SeqCst) == 1).await;
 
@@ -2549,8 +2545,8 @@ mod tests {
     async fn spec_change_drops_the_old_generations_projection() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.reconcile_mode.lock() = ReconcileMode::ProjectionOnce;
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::ProjectionOnce;
         h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         wait_status(&h.client, &k, ResourceStatus::Ready).await;
         let first = h.client.get(k.clone()).await.expect("get").expect("view");
@@ -2589,8 +2585,8 @@ mod tests {
     async fn same_resource_reconcile_never_overlaps() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.reconcile_mode.lock() = ReconcileMode::GatedEffectOnce;
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::GatedEffectOnce;
         let handle =
             h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         until(|| {
@@ -2620,10 +2616,10 @@ mod tests {
         let h = harness(&["Test"]).await;
         let ak = key("test", "Test", "a");
         let bk = key("test", "Test", "b");
-        let ashared = h.factory.shared(&ak);
-        let bshared = h.factory.shared(&bk);
-        *ashared.reconcile_mode.lock() = ReconcileMode::BlockedInline;
-        *bshared.reconcile_mode.lock() = ReconcileMode::BlockedInline;
+        let ashared = h.factory.shared(&ak).await;
+        let bshared = h.factory.shared(&bk).await;
+        *ashared.reconcile_mode.lock().await = ReconcileMode::BlockedInline;
+        *bshared.reconcile_mode.lock().await = ReconcileMode::BlockedInline;
         h.client.ensure(subject(), None, desired("Test", "a", b"a")).await.expect("ensure a");
         h.client.ensure(subject(), None, desired("Test", "b", b"b")).await.expect("ensure b");
         until(|| {
@@ -2677,8 +2673,8 @@ mod tests {
     async fn condition_flip_while_watch_queued_notifies_exactly_once() {
         let h = harness(&["Test"]).await;
         let tkey = key("test", "Test", "data");
-        let shared = h.factory.shared(&tkey);
-        *shared.reconcile_mode.lock() = ReconcileMode::GatedEffectOnce;
+        let shared = h.factory.shared(&tkey).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::GatedEffectOnce;
         h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         until(|| shared.reconcile_calls.load(AtomicOrdering::SeqCst) == 1).await;
 
@@ -2722,9 +2718,9 @@ mod tests {
         let h = harness(&["Parent", "Worker"]).await;
         let parent = key("test", "Parent", "p");
         let child = key("test", "Worker", "w");
-        let pshare = h.factory.shared(&parent);
+        let pshare = h.factory.shared(&parent).await;
         // The parent's driver reads the child's live view on every reconcile.
-        *pshare.view_targets.lock() = vec![child.clone()];
+        *pshare.view_targets.lock().await = vec![child.clone()];
 
         let handle = h
             .client
@@ -2741,17 +2737,19 @@ mod tests {
         // state rather than whatever the start pass raced.
         handle.actor.send_message(ResourceMsg::Reconcile).expect("cast reconcile");
         until(|| {
-            pshare.view_reads.lock().iter().any(|read| {
-                read.key == child
-                    && read
-                        .view
-                        .as_ref()
-                        .is_some_and(|view| view.observed_status() == Some(ResourceStatus::Ready))
+            pshare.view_reads.try_lock().is_ok_and(|reads| {
+                reads.iter().any(|read| {
+                    read.key == child
+                        && read
+                            .view
+                            .as_ref()
+                            .is_some_and(|view| view.observed_status() == Some(ResourceStatus::Ready))
+                })
             })
         })
         .await;
 
-        let reads = pshare.view_reads.lock();
+        let reads = pshare.view_reads.lock().await;
         let read = reads.iter().rev().find(|read| read.key == child).expect("child read");
         let view = read.view.as_ref().expect("the child row exists");
         assert_eq!(view.key, child);
@@ -2769,20 +2767,20 @@ mod tests {
         let h = harness(&["Dep", "Target"]).await;
         let dep = key("test", "Dep", "d");
         let target = key("test", "Target", "t");
-        let dshare = h.factory.shared(&dep);
-        let tshare = h.factory.shared(&target);
+        let dshare = h.factory.shared(&dep).await;
+        let tshare = h.factory.shared(&target).await;
         // The target holds its first reconcile open until the gate opens, so
         // it is not Ready while the dependent registers its watch.
-        *tshare.reconcile_mode.lock() = ReconcileMode::GatedEffectOnce;
-        *dshare.watch_target.lock() = Some(target.clone());
-        *dshare.view_targets.lock() = vec![target.clone()];
+        *tshare.reconcile_mode.lock().await = ReconcileMode::GatedEffectOnce;
+        *dshare.watch_target.lock().await = Some(target.clone());
+        *dshare.view_targets.lock().await = vec![target.clone()];
 
         h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
         h.client.ensure(subject(), None, desired("Dep", "d", b"d")).await.expect("dep");
         until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) >= 1).await;
         let reconciles_before = dshare.reconcile_calls.load(AtomicOrdering::SeqCst);
         assert!(
-            dshare.view_reads.lock().iter().all(|read| read
+            dshare.view_reads.lock().await.iter().all(|read| read
                 .view
                 .as_ref()
                 .is_none_or(|view| view.observed_status() != Some(ResourceStatus::Ready))),
@@ -2796,12 +2794,14 @@ mod tests {
         // re-reads the dependency; the read now proves it Ready.
         until(|| dshare.reconcile_calls.load(AtomicOrdering::SeqCst) > reconciles_before).await;
         until(|| {
-            dshare.view_reads.lock().iter().any(|read| {
-                read.key == target
-                    && read
-                        .view
-                        .as_ref()
-                        .is_some_and(|view| view.observed_status() == Some(ResourceStatus::Ready))
+            dshare.view_reads.try_lock().is_ok_and(|reads| {
+                reads.iter().any(|read| {
+                    read.key == target
+                        && read
+                            .view
+                            .as_ref()
+                            .is_some_and(|view| view.observed_status() == Some(ResourceStatus::Ready))
+                })
             })
         })
         .await;
@@ -2818,8 +2818,8 @@ mod tests {
         let home = key("test", "Other", "home");
         let ghost = key("test", "Ghost", "g");
         let absent = key("test", "Other", "never-created");
-        let shared = h.factory.shared(&home);
-        *shared.view_targets.lock() = vec![ghost.clone(), absent.clone()];
+        let shared = h.factory.shared(&home).await;
+        *shared.view_targets.lock().await = vec![ghost.clone(), absent.clone()];
 
         // A poisoned spawn leaves the committed row with no actor, so nothing
         // has ever published a status for it.
@@ -2828,9 +2828,9 @@ mod tests {
             .await
             .expect_err("spawn fails after the commit");
         h.client.ensure(subject(), None, desired("Other", "home", b"home")).await.expect("home");
-        until(|| shared.view_reads.lock().len() >= 2).await;
+        until(|| shared.view_reads.try_lock().is_ok_and(|reads| reads.len() >= 2)).await;
 
-        let reads = shared.view_reads.lock();
+        let reads = shared.view_reads.lock().await;
         let ghost_read = reads.iter().find(|read| read.key == ghost).expect("ghost read");
         let view = ghost_read.view.as_ref().expect("the committed row is visible");
         assert_eq!(view.generation, 1);
@@ -2847,8 +2847,8 @@ mod tests {
     async fn delete_cancels_pending_requeue_timer() {
         let h = harness_with(&["Test"], Duration::from_millis(300)).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.reconcile_mode.lock() = ReconcileMode::FailRetryable;
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::FailRetryable;
         h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         wait_status(
             &h.client,
@@ -2888,8 +2888,8 @@ mod tests {
     async fn retryable_effect_failure_backs_off_before_the_next_pass() {
         let h = harness_with(&["Test"], Duration::from_millis(400)).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.reconcile_mode.lock() = ReconcileMode::EffectFailsRetryableOnce;
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::EffectFailsRetryableOnce;
         h.client
             .ensure(subject(), None, desired("Test", "data", b"one"))
             .await
@@ -2931,8 +2931,8 @@ mod tests {
     async fn not_yet_failure_defers_with_a_requeue_and_publishes_its_structured_detail() {
         let h = harness_with(&["Test"], Duration::from_millis(400)).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.reconcile_mode.lock() = ReconcileMode::NotYetOnceWithDetail;
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::NotYetOnceWithDetail;
         h.client
             .ensure(subject(), None, desired("Test", "data", b"one"))
             .await
@@ -2990,8 +2990,8 @@ mod tests {
     async fn scheduled_retry_publishes_pending_never_ready() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.reconcile_mode.lock() = ReconcileMode::RetryScheduledOnce;
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::RetryScheduledOnce;
         let handle =
             h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
 
@@ -3022,7 +3022,7 @@ mod tests {
     async fn status_transitions_publish_and_write_zero_store_rows() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
+        let shared = h.factory.shared(&k).await;
         let handle =
             h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         wait_status(&h.client, &k, ResourceStatus::Ready).await;
@@ -3043,7 +3043,7 @@ mod tests {
         );
         let view = h.client.get(k.clone()).await.expect("get").expect("view");
         assert_eq!(view.status, Some(ResourceStatus::Ready));
-        let events = h.hub.events_after(snapshot).expect("events after snapshot");
+        let events = h.hub.events_after(snapshot).await.expect("events after snapshot");
         assert!(
             events.iter().any(|event| event.source == ChangeSource::RuntimeStatus),
             "status transitions publish runtime events to the hub"
@@ -3063,8 +3063,8 @@ mod tests {
     async fn terminal_refusal_publishes_its_evidence_and_never_requeues() {
         let h = harness_with(&["Test"], Duration::from_millis(300)).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.reconcile_mode.lock() = ReconcileMode::RefusedWithEvidence;
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::RefusedWithEvidence;
         h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         wait_status(&h.client, &k, ResourceStatus::Failed(fake_refused_failure())).await;
 
@@ -3094,8 +3094,8 @@ mod tests {
     async fn coalesced_trigger_is_reconciled_after_a_terminal_effect_failure() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.reconcile_mode.lock() = ReconcileMode::GatedRefusedEffectOnce;
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::GatedRefusedEffectOnce;
         h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         until(|| shared.reconcile_calls.load(AtomicOrdering::SeqCst) == 1).await;
 
@@ -3114,7 +3114,7 @@ mod tests {
         shared.open_gate();
         wait_status(&h.client, &k, ResourceStatus::Ready).await;
         assert_eq!(
-            shared.generations_seen.lock().clone(),
+            shared.generations_seen.lock().await.clone(),
             vec![1, 2],
             "the newer committed generation was reconciled"
         );
@@ -3129,8 +3129,8 @@ mod tests {
     async fn failed_pass_drops_the_projection_it_computed() {
         let h = harness_with(&["Test"], Duration::from_millis(400)).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.reconcile_mode.lock() = ReconcileMode::ProjectionThenFailOnce;
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::ProjectionThenFailOnce;
         h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         wait_status(
             &h.client,
@@ -3162,8 +3162,8 @@ mod tests {
     async fn long_effect_leaves_the_actor_mailbox_responsive() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.reconcile_mode.lock() = ReconcileMode::GatedEffectOnce;
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::GatedEffectOnce;
         let handle =
             h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         until(|| shared.reconcile_calls.load(AtomicOrdering::SeqCst) == 1).await;
@@ -3198,8 +3198,8 @@ mod tests {
     async fn recover_missing_proceeds_to_reconcile_without_a_failure() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.recover_outcome.lock() = crate::driver::RecoveryOutcome::Missing;
+        let shared = h.factory.shared(&k).await;
+        *shared.recover_outcome.lock().await = crate::driver::RecoveryOutcome::Missing;
         h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         wait_status(&h.client, &k, ResourceStatus::Ready).await;
 
@@ -3227,8 +3227,8 @@ mod tests {
         let h = harness(&["Target", "Dep"]).await;
         let tkey = key("test", "Target", "t");
         let dkey = key("test", "Dep", "d");
-        let dshare = h.factory.shared(&dkey);
-        *dshare.watch_target.lock() = Some(tkey.clone());
+        let dshare = h.factory.shared(&dkey).await;
+        *dshare.watch_target.lock().await = Some(tkey.clone());
         h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
         h.client.ensure(subject(), None, desired("Dep", "d", b"d")).await.expect("dependent");
         wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
@@ -3253,9 +3253,9 @@ mod tests {
         let h = harness(&["Target", "Dep"]).await;
         let tkey = key("test", "Target", "t");
         let dkey = key("test", "Dep", "d");
-        let tshare = h.factory.shared(&tkey);
-        let dshare = h.factory.shared(&dkey);
-        *dshare.watch_target.lock() = Some(tkey.clone());
+        let tshare = h.factory.shared(&tkey).await;
+        let dshare = h.factory.shared(&dkey).await;
+        *dshare.watch_target.lock().await = Some(tkey.clone());
         h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
         h.client.ensure(subject(), None, desired("Dep", "d", b"d")).await.expect("dependent");
         wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
@@ -3269,7 +3269,7 @@ mod tests {
         // Gate the restarted target's start pass so the dependent's
         // re-registered watch lands while the target is not Ready yet: the
         // notification then has to come from the target's own transition.
-        *tshare.reconcile_mode.lock() = ReconcileMode::GatedEffectOnce;
+        *tshare.reconcile_mode.lock().await = ReconcileMode::GatedEffectOnce;
         let restarted =
             harness_over_with_factory(h.store.clone(), "test", h.factory.clone(), Duration::from_millis(200))
                 .await;
@@ -3415,7 +3415,7 @@ mod tests {
             .expect("first child ensure");
         assert!(matches!(created, EnsureOutcome::Created(_)));
         wait_status(&h.client, &child, ResourceStatus::Ready).await;
-        let reconciles = h.factory.shared(&child).reconcile_calls.load(AtomicOrdering::SeqCst);
+        let reconciles = h.factory.shared(&child).await.reconcile_calls.load(AtomicOrdering::SeqCst);
 
         let updated = h
             .client
@@ -3434,10 +3434,8 @@ mod tests {
         );
         let row = h.client.get_row(child.clone()).await.expect("get_row").expect("child row");
         assert_eq!(row.metadata, b"annotation-2", "the new annotation is durable");
-        until(|| {
-            h.factory.shared(&child).reconcile_calls.load(AtomicOrdering::SeqCst) > reconciles
-        })
-        .await;
+        let child_shared = h.factory.shared(&child).await;
+        until(|| child_shared.reconcile_calls.load(AtomicOrdering::SeqCst) > reconciles).await;
     }
 
     /// §36 desired state + the projection channel: delete commits the durable
@@ -3448,8 +3446,8 @@ mod tests {
     async fn delete_clears_the_projection_before_cleanup_completes() {
         let h = harness(&["Test"]).await;
         let k = key("test", "Test", "data");
-        let shared = h.factory.shared(&k);
-        *shared.reconcile_mode.lock() = ReconcileMode::ProjectionOnce;
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::ProjectionOnce;
         h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         wait_status(&h.client, &k, ResourceStatus::Ready).await;
         let ready = h.client.get(k.clone()).await.expect("get").expect("view");

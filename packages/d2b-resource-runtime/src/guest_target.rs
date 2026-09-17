@@ -23,9 +23,10 @@
 pub const MODULE_NAME: &str = "guest_target";
 
 use std::{collections::HashMap, fmt, sync::Arc};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
-use parking_lot::Mutex;
+use tokio::sync::Mutex;
 use serde_json::Value;
 
 use crate::identity::ResourceKey;
@@ -419,10 +420,19 @@ pub trait GuestTargetControl: Send + Sync + fmt::Debug + 'static {
 }
 
 #[derive(Debug)]
-struct GuestTargetState {
+struct GuestTargetInner {
+    /// Immutable for the runtime's lifetime.
     reference: TargetRef,
-    session_generation: Option<u64>,
-    instances: HashMap<ResourceKey, TargetResourceInstance>,
+    /// Live authenticated ComponentSession generation, lock-free: `0` means
+    /// none, and [`GuestTargetRuntime::bind_session`] refuses zero.
+    session_generation: AtomicU64,
+    /// Target-local realizations, keyed by the owning Host-zone identity.
+    /// A `tokio::sync::Mutex` (plan U4): the runtime's whole surface is
+    /// synchronous (the guest target-control service and the host directory
+    /// call it from sync contexts), so every access takes the non-blocking
+    /// `try_lock`; critical sections are single map operations, never held
+    /// across an await.
+    instances: Mutex<HashMap<ResourceKey, TargetResourceInstance>>,
 }
 
 /// The Guest-side target runtime.
@@ -432,62 +442,89 @@ struct GuestTargetState {
 /// store, and no resource namespace.
 #[derive(Debug, Clone)]
 pub struct GuestTargetRuntime {
-    inner: Arc<Mutex<GuestTargetState>>,
+    inner: Arc<GuestTargetInner>,
 }
 
 impl GuestTargetRuntime {
     pub fn new(reference: TargetRef) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(GuestTargetState {
+            inner: Arc::new(GuestTargetInner {
                 reference,
-                session_generation: None,
-                instances: HashMap::new(),
-            })),
+                session_generation: AtomicU64::new(0),
+                instances: Mutex::new(HashMap::new()),
+            }),
         }
     }
 
     /// The Guest this runtime realizes for.
     pub fn reference(&self) -> TargetRef {
-        self.inner.lock().reference.clone()
+        self.inner.reference.clone()
     }
 
     /// The authenticated ComponentSession generation currently bound.
     pub fn session_generation(&self) -> Option<u64> {
-        self.inner.lock().session_generation
+        match self.inner.session_generation.load(Ordering::Acquire) {
+            0 => None,
+            generation => Some(generation),
+        }
     }
 
     /// Bind the authenticated session generation of the parent
     /// ComponentSession. A generation older than the live one is refused: a
     /// reconnect can never inherit an older session's authority, and binding
     /// the same generation again is a no-op.
+    ///
+    /// Lock-free (the generation is an atomic, plan U4): the compare-exchange
+    /// loop preserves the read-check-write regression semantics exactly.
     pub fn bind_session(&self, session_generation: u64) -> Result<(), GuestTargetError> {
         if session_generation == 0 {
             return Err(GuestTargetError::SessionUnavailable);
         }
-        let mut state = self.inner.lock();
-        if let Some(live) = state.session_generation {
-            if session_generation < live {
-                return Err(GuestTargetError::SessionGenerationRegression);
-            }
-            if session_generation == live {
+        let mut live = self.inner.session_generation.load(Ordering::Acquire);
+        loop {
+            if live == session_generation {
                 return Ok(());
             }
+            if live > session_generation {
+                return Err(GuestTargetError::SessionGenerationRegression);
+            }
+            match self.inner.session_generation.compare_exchange_weak(
+                live,
+                session_generation,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(observed) => live = observed,
+            }
         }
-        state.session_generation = Some(session_generation);
-        Ok(())
     }
 
     /// Every target-local realization this runtime holds, in identity order.
+    ///
+    /// Synchronous via the non-blocking `try_lock`; a collision (another
+    /// operation mid-critical-section, sub-microsecond) reports an empty
+    /// list fail-closed, and the caller re-checks.
     pub fn instances(&self) -> Vec<TargetResourceInstance> {
+        let Ok(state) = self.inner.instances.try_lock() else {
+            return Vec::new();
+        };
         let mut instances: Vec<TargetResourceInstance> =
-            self.inner.lock().instances.values().cloned().collect();
+            state.values().cloned().collect();
         instances.sort_by(|left, right| identity_order(&left.source).cmp(&identity_order(&right.source)));
         instances
     }
 
     /// The target-local realization for one source, when present.
+    ///
+    /// Synchronous via the non-blocking `try_lock`; a collision reports
+    /// `None` fail-closed (the caller's next pass re-checks; a delete whose
+    /// effect decision raced a collision re-runs on the next delete).
     pub fn instance(&self, source: &ResourceKey) -> Option<TargetResourceInstance> {
-        self.inner.lock().instances.get(source).cloned()
+        let Ok(state) = self.inner.instances.try_lock() else {
+            return None;
+        };
+        state.get(source).cloned()
     }
 
     /// A target-control capability bound to one authenticated generation.
@@ -502,10 +539,10 @@ impl GuestTargetRuntime {
     }
 
     fn require_generation(&self, session_generation: u64) -> Result<(), GuestTargetError> {
-        match self.inner.lock().session_generation {
-            Some(live) if live == session_generation => Ok(()),
-            Some(_) => Err(GuestTargetError::StaleSessionGeneration),
-            None => Err(GuestTargetError::SessionUnavailable),
+        match self.inner.session_generation.load(Ordering::Acquire) {
+            live if live == session_generation => Ok(()),
+            0 => Err(GuestTargetError::SessionUnavailable),
+            _ => Err(GuestTargetError::StaleSessionGeneration),
         }
     }
 
@@ -515,7 +552,15 @@ impl GuestTargetRuntime {
     ) -> Result<TargetResourceInstance, GuestTargetError> {
         let session_generation = request.session_generation();
         self.require_generation(session_generation)?;
-        let mut state = self.inner.lock();
+        // Synchronous caller (the target-control service dispatches from a
+        // sync context): non-blocking `try_lock` per plan U4. A collision
+        // answers fail-closed - nothing was read, written, or deleted - and
+        // the host retries, exactly like [`Self::handle`]'s
+        // `SessionUnavailable` answer.
+        let mut state = match self.inner.instances.try_lock() {
+            Ok(state) => state,
+            Err(_) => return Err(GuestTargetError::SessionUnavailable),
+        };
         let instance = TargetResourceInstance {
             source: request.source().clone(),
             source_uid: *request.source_uid(),
@@ -525,7 +570,7 @@ impl GuestTargetRuntime {
             spec_digest: request.spec_digest().to_owned(),
             state: TargetInstanceState::Realizing,
         };
-        state.instances.insert(request.source().clone(), instance.clone());
+        state.insert(request.source().clone(), instance.clone());
         Ok(instance)
     }
 
@@ -537,6 +582,14 @@ impl GuestTargetRuntime {
     /// [`TargetControlResponse::SessionUnavailable`] and performs no effect at
     /// all - no read, no realize, no delete, no adoption.
     pub fn handle(&self, request: TargetControlRequest) -> TargetControlResponse {
+        // Synchronous caller (the target-control service dispatches from a
+        // sync context): non-blocking `try_lock` per plan U4. A collision
+        // answers `SessionUnavailable` - fail-closed, nothing was read,
+        // written, or deleted, and the host retries. The guard is dropped
+        // immediately: the dispatch below re-locks per operation.
+        if self.inner.instances.try_lock().is_err() {
+            return TargetControlResponse::SessionUnavailable;
+        }
         match request {
             TargetControlRequest::Realize(request) => match self.realize(request) {
                 Ok(realization) => TargetControlResponse::Realized { realization },
@@ -581,7 +634,13 @@ impl GuestTargetRuntime {
         source: &ResourceKey,
     ) -> Result<Option<TargetResourceInstance>, GuestTargetError> {
         self.require_generation(session_generation)?;
-        Ok(self.inner.lock().instances.get(source).cloned())
+        // Non-blocking `try_lock` (synchronous surface, plan U4); a
+        // collision fails closed with `SessionUnavailable` - nothing was
+        // read - and the host retries.
+        let Ok(state) = self.inner.instances.try_lock() else {
+            return Err(GuestTargetError::SessionUnavailable);
+        };
+        Ok(state.get(source).cloned())
     }
 
     fn delete(
@@ -590,7 +649,13 @@ impl GuestTargetRuntime {
         source: &ResourceKey,
     ) -> Result<bool, GuestTargetError> {
         self.require_generation(session_generation)?;
-        Ok(self.inner.lock().instances.remove(source).is_some())
+        // Non-blocking `try_lock` (synchronous surface, plan U4); a
+        // collision fails closed with `SessionUnavailable` - nothing was
+        // deleted - and the host retries.
+        let Ok(mut state) = self.inner.instances.try_lock() else {
+            return Err(GuestTargetError::SessionUnavailable);
+        };
+        Ok(state.remove(source).is_some())
     }
 
     fn adopt(
@@ -599,10 +664,16 @@ impl GuestTargetRuntime {
         sources: &[ResourceKey],
     ) -> Result<Vec<GuestAdoption>, GuestTargetError> {
         self.require_generation(session_generation)?;
-        let mut state = self.inner.lock();
+        // Non-blocking `try_lock` (synchronous surface, plan U4); a
+        // collision fails closed with `SessionUnavailable` - nothing was
+        // re-bound - and the host retries.
+        let mut state = match self.inner.instances.try_lock() {
+            Ok(state) => state,
+            Err(_) => return Err(GuestTargetError::SessionUnavailable),
+        };
         let mut adopted = Vec::with_capacity(sources.len());
         for source in sources {
-            match state.instances.get_mut(source) {
+            match state.get_mut(source) {
                 Some(instance) => {
                     instance.session_generation = session_generation;
                     adopted.push(GuestAdoption::Adopted(instance.clone()));
@@ -616,8 +687,14 @@ impl GuestTargetRuntime {
     /// Advance one target-local realization to ready (the target-local effect
     /// code calls this when its effect is serving).
     pub fn mark_ready(&self, source: &ResourceKey) -> Option<TargetResourceInstance> {
-        let mut state = self.inner.lock();
-        let instance = state.instances.get_mut(source)?;
+        // Non-blocking `try_lock` (synchronous surface, plan U4); a
+        // collision reports `None` fail-closed - the caller answers with
+        // the pre-existing realizing state and the host re-observes.
+        let mut state = match self.inner.instances.try_lock() {
+            Ok(state) => state,
+            Err(_) => return None,
+        };
+        let instance = state.get_mut(source)?;
         instance.state = TargetInstanceState::Ready;
         Some(instance.clone())
     }

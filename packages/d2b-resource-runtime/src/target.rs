@@ -25,7 +25,7 @@ pub const MODULE_NAME: &str = "target";
 
 use std::{collections::BTreeMap, collections::HashMap, fmt, sync::Arc};
 
-use parking_lot::Mutex;
+use tokio::sync::Mutex;
 
 use crate::guest_target::{
     GuestAdoption, GuestRealizeRequest, GuestTargetControl, GuestTargetError, TargetControlAssignment,
@@ -428,6 +428,12 @@ pub enum TargetError {
     NotGuestTarget,
     /// The guest target refused the operation.
     GuestRefused(GuestTargetError),
+    /// The directory's state lock was momentarily held by a concurrent
+    /// operation (tokio try-lock collision on a synchronous caller;
+    /// critical sections are sub-microsecond and never held across an
+    /// await). Fail-closed admission: nothing was changed, and the caller
+    /// retries.
+    Busy,
 }
 
 impl fmt::Display for TargetError {
@@ -446,6 +452,7 @@ impl fmt::Display for TargetError {
             Self::NotAssigned => formatter.write_str("target-not-assigned"),
             Self::NotGuestTarget => formatter.write_str("target-not-a-guest-target"),
             Self::GuestRefused(error) => write!(formatter, "{error}"),
+            Self::Busy => formatter.write_str("target-directory-busy"),
         }
     }
 }
@@ -583,9 +590,14 @@ impl TargetDirectory {
     }
 
     /// Resolve one declared execution reference without recording anything.
+    ///
+    /// Synchronous via the non-blocking `try_lock` (plan U4); a collision
+    /// refuses with [`TargetError::Busy`] and the caller retries.
     pub fn resolve(&self, execution_ref: &str) -> Result<ResolvedTarget, TargetError> {
         let reference = TargetRef::parse(execution_ref)?;
-        let state = self.inner.lock();
+        let Ok(state) = self.inner.try_lock() else {
+            return Err(TargetError::Busy);
+        };
         Ok(Self::resolve_locked(&state, reference))
     }
 
@@ -617,7 +629,16 @@ impl TargetDirectory {
         execution_ref: &str,
     ) -> Result<TargetAssignment, TargetError> {
         let reference = TargetRef::parse(execution_ref)?;
-        let mut state = self.inner.lock();
+        // Synchronous surface (consumed from sync call sites in the daemon
+        // plane): non-blocking `try_lock` per plan U4, refusing with
+        // [`TargetError::Busy`] on a collision instead of parking the
+        // caller's thread. The manager's spawn path surfaces the refusal
+        // after its row committed (F1) and a later Ensure or restart
+        // retries it.
+        let mut state = match self.inner.try_lock() {
+            Ok(state) => state,
+            Err(_) => return Err(TargetError::Busy),
+        };
         let target = Self::resolve_locked(&state, reference.clone());
         let assignment = TargetAssignment {
             source: source.clone(),
@@ -646,8 +667,24 @@ impl TargetDirectory {
     }
 
     /// The recorded assignment of one resource.
+    ///
+    /// Synchronous (consumed from sync call sites in the daemon plane). The
+    /// state lock is a `tokio::sync::Mutex` (plan U4), so a synchronous
+    /// caller takes the non-blocking `try_lock`; a collision (another
+    /// operation mid-critical-section, sub-microsecond) reports "not
+    /// assigned" fail-closed rather than parking the caller. Callers that
+    /// can re-check (the adoption pass re-runs on every reconnect) retry;
+    /// the manager's own paths use the async methods and never see this.
     pub fn assignment(&self, source: &ResourceKey) -> Option<TargetAssignment> {
-        let state = self.inner.lock();
+        let Ok(state) = self.inner.try_lock() else {
+            return None;
+        };
+        Self::assignment_locked(&state, source)
+    }
+
+    /// The recorded assignment of one resource against an already-held
+    /// directory state.
+    fn assignment_locked(state: &DirectoryState, source: &ResourceKey) -> Option<TargetAssignment> {
         if let Some(assignment) = state.host_assignments.get(source) {
             return Some(assignment.clone());
         }
@@ -665,8 +702,8 @@ impl TargetDirectory {
     /// other assignment for the same guest, and every other target-local
     /// realization stay exactly as they were (R20: a deleted ZoneLink must
     /// not disturb unrelated resources targeting the same guest).
-    pub fn release(&self, source: &ResourceKey) -> Option<TargetAssignment> {
-        let mut state = self.inner.lock();
+    pub async fn release(&self, source: &ResourceKey) -> Option<TargetAssignment> {
+        let mut state = self.inner.lock().await;
         if let Some(assignment) = state.host_assignments.remove(source) {
             return Some(assignment);
         }
@@ -678,10 +715,16 @@ impl TargetDirectory {
 
     /// Every resource currently assigned to one guest target, in identity
     /// order.
+    ///
+    /// Synchronous (consumed from sync call sites in the daemon plane) via
+    /// the non-blocking `try_lock`; a collision reports an empty list
+    /// fail-closed, and the caller's next pass (the adoption pass re-runs on
+    /// every reconnect) re-checks.
     pub fn assignments_for(&self, guest: &TargetRef) -> Vec<ResourceKey> {
-        let mut assigned: Vec<ResourceKey> = self
-            .inner
-            .lock()
+        let Ok(state) = self.inner.try_lock() else {
+            return Vec::new();
+        };
+        let mut assigned: Vec<ResourceKey> = state
             .guests
             .get(guest)
             .map(|record| record.assignments.keys().cloned().collect())
@@ -691,8 +734,17 @@ impl TargetDirectory {
     }
 
     /// Availability of one guest target.
+    ///
+    /// Synchronous (consumed from sync call sites in the daemon plane) via
+    /// the non-blocking `try_lock`; a collision reports
+    /// [`TargetAvailability::Unknown`] fail-closed - the caller treats the
+    /// guest as not connected and re-checks - instead of parking the
+    /// caller's thread.
     pub fn availability(&self, guest: &TargetRef) -> TargetAvailability {
-        match self.inner.lock().guests.get(guest) {
+        let Ok(state) = self.inner.try_lock() else {
+            return TargetAvailability::Unknown;
+        };
+        match state.guests.get(guest) {
             None => TargetAvailability::Unknown,
             Some(record) => match (&record.live, record.last_session_generation) {
                 (Some(live), _) => TargetAvailability::Connected {
@@ -725,7 +777,15 @@ impl TargetDirectory {
         if session_generation == 0 {
             return Err(TargetError::SessionGenerationZero);
         }
-        let mut state = self.inner.lock();
+        // Synchronous caller (the daemon plane's bind path): non-blocking
+        // `try_lock` per plan U4. A collision (another directory operation
+        // mid-critical-section, sub-microsecond) refuses with
+        // [`TargetError::Busy`] - fail-closed admission, nothing changed,
+        // the caller retries - instead of parking the caller's thread.
+        let mut state = match self.inner.try_lock() {
+            Ok(state) => state,
+            Err(_) => return Err(TargetError::Busy),
+        };
         let record = state
             .guests
             .entry(guest.clone())
@@ -765,7 +825,13 @@ impl TargetDirectory {
         guest: &TargetRef,
         session_generation: u64,
     ) -> Result<GuestDisconnectOutcome, TargetError> {
-        let mut state = self.inner.lock();
+        // Synchronous caller (the daemon plane's unbind path): non-blocking
+        // `try_lock` per plan U4, refusing with [`TargetError::Busy`] on a
+        // collision instead of parking the caller's thread.
+        let mut state = match self.inner.try_lock() {
+            Ok(state) => state,
+            Err(_) => return Err(TargetError::Busy),
+        };
         let record = state.guests.get_mut(guest).ok_or(TargetError::UnknownGuest)?;
         match &record.live {
             Some(live) if live.session_generation == session_generation => {
@@ -796,7 +862,7 @@ impl TargetDirectory {
         spec_digest: &str,
         local_handle: &str,
     ) -> Result<TargetResourceInstance, TargetError> {
-        let (control, assignment) = self.session_authority(handle, source)?;
+        let (control, assignment) = self.session_authority(handle, source).await?;
         let session_generation = handle.session_generation().ok_or(TargetError::GuestUnavailable)?;
         let request = GuestRealizeRequest::new(
             TargetControlAssignment::new(
@@ -825,7 +891,7 @@ impl TargetDirectory {
         handle: &GuestTargetHandle,
         source: &ResourceKey,
     ) -> Result<TargetObservation, TargetError> {
-        let (control, assignment) = match self.session_authority(handle, source) {
+        let (control, assignment) = match self.session_authority(handle, source).await {
             Ok(authority) => authority,
             Err(TargetError::GuestUnavailable) => return Ok(TargetObservation::Unavailable),
             Err(error) => return Err(error),
@@ -845,7 +911,7 @@ impl TargetDirectory {
         handle: &GuestTargetHandle,
         source: &ResourceKey,
     ) -> Result<bool, TargetError> {
-        let (control, assignment) = self.session_authority(handle, source)?;
+        let (control, assignment) = self.session_authority(handle, source).await?;
         let session_generation = handle.session_generation().ok_or(TargetError::GuestUnavailable)?;
         control
             .delete(&Self::control_assignment(&assignment, session_generation))
@@ -868,7 +934,7 @@ impl TargetDirectory {
         sources: &[ResourceKey],
     ) -> Result<GuestAdoptionOutcome, TargetError> {
         let (control, session_generation) = {
-            let state = self.inner.lock();
+            let state = self.inner.lock().await;
             for source in sources {
                 self.assigned_to(&state, source, handle)?;
             }
@@ -879,9 +945,12 @@ impl TargetDirectory {
         let adopted = {
             let mut adopted = Vec::with_capacity(sources.len());
             for source in sources {
-                let assignment = self
-                    .assignment(source)
-                    .ok_or(TargetError::NotAssigned)?;
+                // Locked lookup, not the synchronous `assignment` accessor:
+                // adoption is async and must never see a try-lock collision.
+                let assignment = {
+                    let state = self.inner.lock().await;
+                    Self::assignment_locked(&state, source).ok_or(TargetError::NotAssigned)?
+                };
                 adopted.push(
                     control
                         .adopt(&Self::control_assignment(&assignment, session_generation))
@@ -896,7 +965,7 @@ impl TargetDirectory {
             session_generation: Some(session_generation),
         };
         let target = ResolvedTarget::Guest(rebound.clone());
-        let mut state = self.inner.lock();
+        let mut state = self.inner.lock().await;
         if let Some(record) = state.guests.get_mut(handle.reference()) {
             for source in sources {
                 if let Some(assignment) = record.assignments.get_mut(source) {
@@ -928,12 +997,12 @@ impl TargetDirectory {
 
     /// The live control channel of one assignment, or the reason it has no
     /// authority: no live session, or a handle bound to another generation.
-    fn session_authority(
+    async fn session_authority(
         &self,
         handle: &GuestTargetHandle,
         source: &ResourceKey,
     ) -> Result<(Arc<dyn GuestTargetControl>, TargetAssignment), TargetError> {
-        let state = self.inner.lock();
+        let state = self.inner.lock().await;
         let assignment = self.assigned_to(&state, source, handle)?.clone();
         let record = state.guests.get(handle.reference()).ok_or(TargetError::UnknownGuest)?;
         let live = record.live.as_ref().ok_or(TargetError::GuestUnavailable)?;
@@ -1342,7 +1411,7 @@ mod tests {
             directory.delete(&link_handle, &link).await.expect("delete link realization"),
             "the ZoneLink's own realization is the only one torn down"
         );
-        let released = directory.release(&link).expect("release link assignment");
+        let released = directory.release(&link).await.expect("release link assignment");
         assert_eq!(released.source(), &link);
         assert_eq!(
             directory.delete(&link_handle, &link).await.err(),
@@ -1405,7 +1474,7 @@ mod tests {
             TargetObservation::Realizing { session_generation: 1 }
         );
         directory.delete(&worker_handle, &worker).await.expect("delete worker realization");
-        directory.release(&worker).expect("release worker");
+        directory.release(&worker).await.expect("release worker");
 
         assert_eq!(
             directory.assignment(&link),
@@ -1471,7 +1540,7 @@ mod tests {
         );
 
         // The link's own lifecycle never moves availability.
-        directory.release(&link).expect("release link");
+        directory.release(&link).await.expect("release link");
         assert_eq!(
             directory.availability(&guest()),
             TargetAvailability::Connected { session_generation: 2 },
@@ -1530,7 +1599,7 @@ mod tests {
             Some(TargetError::NotAssigned)
         );
         assert_eq!(directory.assignments_for(&guest()), vec![assigned]);
-        assert!(directory.release(&unassigned).is_none());
+        assert!(directory.release(&unassigned).await.is_none());
     }
 
     #[tokio::test]
