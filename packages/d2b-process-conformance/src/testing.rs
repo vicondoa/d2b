@@ -108,15 +108,20 @@ impl ScriptedEffectPort {
     }
 
     /// Return every recorded call in order.
+    ///
+    /// The suite drives every port single-threaded (the crate's hand-rolled
+    /// poller), so the lock is never contended; `try_lock` keeps the test
+    /// double free of blocking locks and fails closed (empty record) if a
+    /// future test ever contends.
     pub fn calls(&self) -> Vec<PortCall> {
         self.calls
-            .lock()
+            .try_lock()
             .map(|calls| calls.clone())
             .unwrap_or_default()
     }
 
     fn record(&self, call: PortCall) {
-        if let Ok(mut calls) = self.calls.lock() {
+        if let Ok(mut calls) = self.calls.try_lock() {
             calls.push(call);
         }
     }
