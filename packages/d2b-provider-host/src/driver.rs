@@ -447,26 +447,26 @@ mod tests {
     /// Scripted observation port: records every call order-preservingly and
     /// can fail the probe.
     struct RecordingEffects {
-        calls: parking_lot::Mutex<Vec<String>>,
-        phase: parking_lot::Mutex<ResourcePhase>,
+        calls: tokio::sync::Mutex<Vec<String>>,
+        phase: tokio::sync::Mutex<ResourcePhase>,
         fail: AtomicBool,
     }
 
     impl RecordingEffects {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                calls: parking_lot::Mutex::new(Vec::new()),
-                phase: parking_lot::Mutex::new(ResourcePhase::Ready),
+                calls: tokio::sync::Mutex::new(Vec::new()),
+                phase: tokio::sync::Mutex::new(ResourcePhase::Ready),
                 fail: AtomicBool::new(false),
             })
         }
 
         fn call_order(&self) -> Vec<String> {
-            self.calls.lock().clone()
+            self.calls.try_lock().expect("uncontended test mutex").clone()
         }
 
         fn set_phase(&self, phase: ResourcePhase) {
-            *self.phase.lock() = phase;
+            *self.phase.try_lock().expect("uncontended test mutex") = phase;
         }
     }
 
@@ -478,14 +478,14 @@ mod tests {
             provider_ref: &ResourceRef,
             spec: &HostSpec,
         ) -> Result<HostObservationReport, String> {
-            self.calls.lock().push("observe-host".to_owned());
+            self.calls.lock().await.push("observe-host".to_owned());
             if self.fail.load(Ordering::SeqCst) {
                 return Err("the scripted probe refused".to_owned());
             }
             let mut status = HostReconciler::new()
                 .reconcile(host_ref, provider_ref, spec)
                 .expect("the scripted host spec is admitted");
-            status.phase = *self.phase.lock();
+            status.phase = *self.phase.lock().await;
             Ok(HostObservationReport {
                 status,
                 capabilities: vec![HostCapabilityClass::Kvm],
@@ -502,21 +502,21 @@ mod tests {
     /// any unexpected manager call fails the test loudly through the recorded
     /// call list.
     struct RecordingManager {
-        calls: parking_lot::Mutex<Vec<&'static str>>,
-        owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
+        calls: tokio::sync::Mutex<Vec<&'static str>>,
+        owned: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
     }
 
     impl RecordingManager {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                calls: parking_lot::Mutex::new(Vec::new()),
-                owned: parking_lot::Mutex::new(Vec::new()),
+                calls: tokio::sync::Mutex::new(Vec::new()),
+                owned: tokio::sync::Mutex::new(Vec::new()),
             })
         }
 
         /// Seed one owned child row (the finalize gate's input).
         fn seed_owned(&self, key: ResourceKey) {
-            self.owned.lock().push(StoredDesiredResource {
+            self.owned.try_lock().expect("uncontended test mutex").push(StoredDesiredResource {
                 key,
                 uid: [0x77; 16],
                 generation: 1,
@@ -530,7 +530,7 @@ mod tests {
         }
 
         fn call_order(&self) -> Vec<&'static str> {
-            self.calls.lock().clone()
+            self.calls.try_lock().expect("uncontended test mutex").clone()
         }
     }
 
@@ -541,7 +541,7 @@ mod tests {
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            self.calls.lock().push("ensure-child");
+            self.calls.lock().await.push("ensure-child");
             Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
         }
 
@@ -549,7 +549,7 @@ mod tests {
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().push("get");
+            self.calls.lock().await.push("get");
             Ok(None)
         }
 
@@ -557,13 +557,13 @@ mod tests {
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            self.calls.lock().push("view");
+            self.calls.lock().await.push("view");
             Err(ResourceError::ManagerRpc("unexpected view".into()))
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.calls.lock().push("delete");
-            let mut owned = self.owned.lock();
+            self.calls.lock().await.push("delete");
+            let mut owned = self.owned.lock().await;
             if owned.iter().any(|row| row.key == *key) {
                 owned.retain(|row| row.key != *key);
                 Ok(())
@@ -576,8 +576,8 @@ mod tests {
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().push("list-owned");
-            Ok(self.owned.lock().clone())
+            self.calls.lock().await.push("list-owned");
+            Ok(self.owned.lock().await.clone())
         }
 
         async fn register_watch(
@@ -585,35 +585,35 @@ mod tests {
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            self.calls.lock().push("register-watch");
+            self.calls.lock().await.push("register-watch");
             Ok(WatchId(1))
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            self.calls.lock().push("cancel-watch");
+            self.calls.lock().await.push("cancel-watch");
             Ok(())
         }
     }
 
     struct RecordingRequeue {
-        calls: parking_lot::Mutex<Vec<u64>>,
+        calls: tokio::sync::Mutex<Vec<u64>>,
     }
 
     impl RecordingRequeue {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                calls: parking_lot::Mutex::new(Vec::new()),
+                calls: tokio::sync::Mutex::new(Vec::new()),
             })
         }
 
         fn call_count(&self) -> usize {
-            self.calls.lock().len()
+            self.calls.try_lock().expect("uncontended test mutex").len()
         }
     }
 
     impl RequeueScheduler for RecordingRequeue {
         fn schedule(&self, _key: ResourceKey, after: std::time::Duration) -> RequeueId {
-            self.calls.lock().push(after.as_millis() as u64);
+            self.calls.try_lock().expect("uncontended test mutex").push(after.as_millis() as u64);
             RequeueId(0)
         }
 
@@ -695,6 +695,7 @@ mod tests {
 
     // -- factory -------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn factory_registers_exactly_the_host_resource_type() {
         let factory = HostDriverFactory::new(RecordingEffects::new());
@@ -708,6 +709,7 @@ mod tests {
     /// The declaration registers the type and the registry serves the
     /// declared factory, so a Host row reaches its driver through the
     /// registry alone.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_registry_serves_the_declared_factory_for_a_host_row() {
         let effects = RecordingEffects::new();
@@ -732,6 +734,7 @@ mod tests {
 
     // -- validate ------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_accepts_the_bootstrap_host_row() {
         let (mut ctx, _effects, _manager, _requeue, mut driver) = host_fixture().await;
@@ -741,6 +744,7 @@ mod tests {
             .expect("bootstrap Host validates");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_rejects_a_host_with_a_foreign_provider() {
         let mut ctx = fixture(
@@ -753,6 +757,7 @@ mod tests {
         assert_eq!(failure.class(), FailureClass::Terminal);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_rejects_a_host_without_a_provider_ref() {
         let mut ctx = fixture(
@@ -765,6 +770,7 @@ mod tests {
         assert_eq!(failure.class(), FailureClass::Terminal);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_rejects_a_malformed_host_spec() {
         let mut ctx = fixture(
@@ -779,6 +785,7 @@ mod tests {
 
     // -- recover -------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_without_touching_the_target() {
         let (mut ctx, effects, _manager, _requeue, mut driver) = host_fixture().await;
@@ -792,6 +799,7 @@ mod tests {
 
     // -- reconcile -----------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_observes_once_per_desired_generation() {
         let (mut ctx, effects, manager, _requeue, mut driver) = host_fixture().await;
@@ -823,6 +831,7 @@ mod tests {
         assert!(manager.call_order().is_empty());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_publishes_a_degraded_host_observation() {
         let (mut ctx, effects, _manager, _requeue, mut driver) = host_fixture().await;
@@ -841,6 +850,7 @@ mod tests {
         assert!(report.minijail_ready);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_maps_a_probe_failure_to_a_retryable_failure() {
         let (mut ctx, effects, _manager, _requeue, mut driver) = host_fixture().await;
@@ -852,6 +862,7 @@ mod tests {
 
     // -- finalize: owned children retire before the delete no-op (F3) ---------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_finalizes_owned_children_before_the_delete_noop() {
         let effects = RecordingEffects::new();
@@ -879,6 +890,7 @@ mod tests {
 
     // -- delete --------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_converges_without_effects_or_child_mutation() {
         let (mut ctx, effects, manager, _requeue, mut driver) = host_fixture().await;
@@ -889,6 +901,7 @@ mod tests {
 
     // -- no-spawn surface (KTD13) --------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn driver_operations_stay_off_every_spawn_surface() {
         let (mut ctx, _effects, manager, requeue, mut driver) = host_fixture().await;

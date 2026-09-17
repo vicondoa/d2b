@@ -5,8 +5,13 @@ edition = "2024"
 publish = false
 license.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
 
 [dependencies]
 async-trait = "0.1"
@@ -17,5 +22,4 @@ d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstra
 serde_json.workspace = true
 
 [dev-dependencies]
-parking_lot = "0.12"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
