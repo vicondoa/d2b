@@ -370,6 +370,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn revoke_session_deduplicates_the_fenced_operation_identity() {
         let session = RecordingCredentialSession::default();
@@ -472,6 +473,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn uncertain_revocation_never_unblocks_cleanup() {
         // A live session that cannot confirm revocation must keep the

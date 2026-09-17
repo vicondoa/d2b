@@ -1295,6 +1295,7 @@ mod tests {
         assert_eq!(factory.resource_types()[0].as_str(), CREDENTIAL_TYPE_NAME);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn factory_created_driver_validates_through_the_erased_boundary() {
         let factory = CredentialDriverFactory::new(CredentialDriverArgs {
@@ -1309,6 +1310,7 @@ mod tests {
             .expect("valid credential");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_rejects_a_provider_outside_the_credential_family() {
         let mut ctx = context(
@@ -1328,6 +1330,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_rejects_scope_mismatches_per_provider_kind() {
         // Entra credentials execute on a Guest and never carry a user domain.
@@ -1382,6 +1385,7 @@ mod tests {
             .expect("secret-service user scope");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_reports_provider_unavailable_and_never_goes_ready() {
         let effects = FakeEffects::new(log());
@@ -1413,6 +1417,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn managed_identity_reconcile_gates_the_agent_on_the_execution_target() {
         let log = log();
@@ -1434,6 +1439,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn managed_identity_reconcile_ensures_the_agent_until_it_is_ready() {
         let log = log();
@@ -1484,6 +1490,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn managed_identity_agent_spec_is_owner_bound_egress_denied_and_annotation_tagged() {
         let log = log();
@@ -1556,6 +1563,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn non_managed_identity_credentials_reconcile_without_children() {
         let log = log();
@@ -1576,6 +1584,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn managed_identity_recover_adopts_a_ready_agent_and_waits_otherwise() {
         let log = log();
@@ -1612,6 +1621,7 @@ mod tests {
 
     // -- finalize: the agent child retires before the credential (F3) --------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_finalizes_the_owned_agent_child_before_the_revocation() {
         let log = log();
@@ -1645,6 +1655,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_revokes_before_marking_the_agent_child_deleting() {
         let log = log();
@@ -1683,6 +1694,7 @@ mod tests {
         assert!(manager.children()[0].deleting);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_fails_closed_without_a_live_session_generation() {
         let log = log();
@@ -1714,6 +1726,7 @@ mod tests {
         assert!(effects.session.lock().is_some());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_fails_closed_on_a_stale_session_generation() {
         let log = log();
@@ -1780,6 +1793,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_skips_revocation_without_lease_facts_and_retires_the_child() {
         let log = log();
@@ -1803,6 +1817,7 @@ mod tests {
         assert!(ctx.status::<CredentialDriverStatus>().is_none());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_is_idempotent_under_retry() {
         let log = log();
@@ -1857,6 +1872,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_converges_without_children() {
         let log = log();
@@ -1873,6 +1889,7 @@ mod tests {
         assert!(manager.ensured().is_empty());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_reports_agent_draining_for_a_deleting_child() {
         let log = log();
@@ -1889,6 +1906,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_deletes_a_drifted_agent_child_before_recreating_it() {
         let log = log();
