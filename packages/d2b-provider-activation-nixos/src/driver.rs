@@ -383,7 +383,7 @@ pub struct ActivationDriver {
     controller: ActivationController,
     /// The owned runner child a settle watch is already registered for
     /// (R12 dependency edge: one registration per child).
-    watched_runner: std::sync::Mutex<Option<ResourceKey>>,
+    watched_runner: tokio::sync::Mutex<Option<ResourceKey>>,
 }
 
 impl ActivationDriver {
@@ -393,7 +393,7 @@ impl ActivationDriver {
             effects: args.effects,
             verifier: args.verifier,
             controller: ActivationController::new(),
-            watched_runner: std::sync::Mutex::new(None),
+            watched_runner: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -624,8 +624,9 @@ impl ActivationDriver {
         let already_watched = self
             .watched_runner
             .lock()
-            .map(|watched| watched.as_ref() == Some(runner))
-            .unwrap_or(true);
+            .await
+            .as_ref()
+            .is_some_and(|watched| *watched == *runner);
         if already_watched {
             return;
         }
@@ -633,9 +634,8 @@ impl ActivationDriver {
             .watch(runner.clone(), WatchCondition::Ready)
             .await
             .is_ok()
-            && let Ok(mut watched) = self.watched_runner.lock()
         {
-            *watched = Some(runner.clone());
+            *self.watched_runner.lock().await = Some(runner.clone());
         }
     }
 
@@ -734,8 +734,9 @@ impl ResourceDriver for ActivationDriver {
             let settle_watched = self
                 .watched_runner
                 .lock()
-                .map(|watched| watched.as_ref() == Some(&runner))
-                .unwrap_or(true);
+                .await
+                .as_ref()
+                .is_some_and(|watched| *watched == runner);
             ctx.set_status(if settle_watched {
                 ActivationDriverStatus::applying()
             } else {
@@ -1175,6 +1176,7 @@ mod tests {
 
     // -- factory and validation ----------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn factory_registers_only_the_generation_resource_type() {
         let factory = ActivationDriverFactory::new(ActivationDriverArgs {
@@ -1186,6 +1188,7 @@ mod tests {
         assert_eq!(factory.resource_types()[0].as_str(), ACTIVATION_TYPE_NAME);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_rejects_a_spec_outside_the_closed_generation_contract() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Incomplete);
@@ -1216,6 +1219,7 @@ mod tests {
 
     // -- host-target reconcile ------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn host_target_dispatches_the_preserved_handoff_intent_and_projects_success() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Completed {
@@ -1273,6 +1277,7 @@ mod tests {
         assert!(f.manager.log().is_empty());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn host_refusal_projects_helper_refused_without_minting_a_runner() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Refused);
@@ -1300,6 +1305,7 @@ mod tests {
         assert!(f.manager.log().is_empty());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn host_target_without_a_prior_row_fails_closed_before_dispatch() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Completed {
@@ -1343,6 +1349,7 @@ mod tests {
         assert!(effects.dispatches().is_empty());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn offline_verification_refuses_before_the_handoff_is_dispatched() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Completed {
@@ -1385,6 +1392,7 @@ mod tests {
 
     // -- guest-target reconcile -----------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn guest_target_mints_the_runner_as_an_owned_process_resource() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Incomplete);
@@ -1451,6 +1459,7 @@ mod tests {
         assert_eq!(log.iter().filter(|entry| entry.starts_with("ensure:")).count(), 1);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn guest_rejoin_waits_on_the_settle_edge_without_duplicating_the_runner() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Incomplete);
@@ -1483,6 +1492,7 @@ mod tests {
         assert_eq!(status(&f.ctx).detail(), ActivationDetail::Applying);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_an_existing_runner_and_reports_missing_without_one() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Incomplete);
@@ -1526,6 +1536,7 @@ mod tests {
 
     // -- finalize: the owned runner retires before the generation (F3) --------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_finalizes_the_owned_runner_before_the_generation_teardown() {
         let manager = RecordingManager::new(GENERATION_UID).with_row(StoredDesiredResource {
@@ -1568,6 +1579,7 @@ mod tests {
 
     // -- teardown -------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_retires_only_the_owned_runner_child_and_is_idempotent() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Incomplete);

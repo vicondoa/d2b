@@ -5,8 +5,13 @@ edition = "2024"
 publish = false
 license.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
 
 # test_support is needed both by external crates (which opt in via the
 # `test-support` feature) and by this crate's OWN tests. Gating on
@@ -18,6 +23,7 @@ workspace = true
 test-support = []
 
 [dependencies]
+tokio = { version = "1", default-features = false, features = ["sync"] }
 async-trait = "0.1"
 tracing = "0.1"
 parking_lot = "0.12"
