@@ -20,14 +20,6 @@ pub async fn touch(shared: &tokio::sync::Mutex<u32>) {
     let _guard = shared.lock().await;
 }
 
-/// The sanctioned adapter for blocking syscalls: the closure runs on a
-/// blocking thread, never on a runtime worker.
-pub async fn via_spawn_blocking(path: &Path) -> Vec<u8> {
-    tokio::task::spawn_blocking(move || std::fs::read(path))
-        .await
-        .unwrap_or_default()
-}
-
 /// An async block with pure work only.
 pub fn compute() -> impl Future<Output = u32> {
     async { 1 + 1 }

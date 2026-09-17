@@ -49,10 +49,21 @@ use crate::blocking_census::{parse_deny_list, DeniedApi};
 /// The named violation class every finding renders under.
 pub const VIOLATION_NAME: &str = "blocking-call-in-async-context";
 
-/// The default scan roots: the broker, the daemon, and every provider crate
-/// (the handler crates linked into the broker binary - a non-yielding handler
+/// The default scan roots: the covered control-plane crates (broker, daemon,
+/// daemon runtime, core, resource runtime) plus every provider crate (the
+/// handler crates linked into the broker binary - a non-yielding handler
 /// starves the whole envelope).
-const DEFAULT_CRATE_ROOTS: &[&str] = &["packages/d2b-broker", "packages/d2bd"];
+///
+/// The resource-runtime/core/daemon-runtime roots are the shared substrate
+/// converted by U4/U5/U17; they are scanned from day one so the gate cannot
+/// regress while that conversion is in flight.
+const DEFAULT_CRATE_ROOTS: &[&str] = &[
+    "packages/d2b-broker",
+    "packages/d2bd",
+    "packages/d2bd-runtime",
+    "packages/d2b-core",
+    "packages/d2b-resource-runtime",
+];
 
 /// One blocking call found on a runtime worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -496,7 +507,7 @@ fn load_entries(repo_root: &Path) -> Result<Vec<DeniedApi>, String> {
     Ok(entries)
 }
 
-/// The default scan roots: the broker, the daemon, and every provider crate.
+/// Resolve [`DEFAULT_CRATE_ROOTS`] plus every provider crate under `packages`.
 fn default_scan_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut paths = Vec::new();
     for root in DEFAULT_CRATE_ROOTS {
@@ -615,16 +626,25 @@ mod tests {
             .map(|violation| (violation.api.as_str(), violation.context))
             .collect();
         found.sort_unstable();
-        assert_eq!(
-            found,
-            vec![
-                ("std::fs::read", "async fn"),
-                ("std::fs::write", "async block"),
-                ("std::sync::Mutex::lock", "async fn"),
-                ("std::thread::sleep", "async fn"),
-            ],
-            "the fixture's four blocking calls must each be flagged exactly once"
-        );
+        // Each of the fixture's four denied `std::` calls must be flagged
+        // exactly once in its async context. The set comparison is presence-
+        // per-API, not a whole-result equality: the deny list is the single
+        // source of truth, so once the U1 entries land the `spawn_blocking`
+        // call in `via_spawn_blocking` is additionally flagged (KD2) while the
+        // exemption keeps its argument body clean - a whole-set equality here
+        // would pin deny-list content instead of scanner behavior.
+        for (api, context) in [
+            ("std::fs::read", "async fn"),
+            ("std::fs::write", "async block"),
+            ("std::sync::Mutex::lock", "async fn"),
+            ("std::thread::sleep", "async fn"),
+        ] {
+            assert_eq!(
+                found.iter().filter(|(a, c)| *a == api && *c == context).count(),
+                1,
+                "{api} must be flagged exactly once in context {context}, found: {found:?}"
+            );
+        }
         for violation in &violations {
             assert_eq!(violation.file, ERROR_FIXTURE);
             assert!(!violation.code.is_empty());
@@ -668,9 +688,18 @@ mod tests {
 
     #[test]
     fn spawn_blocking_bodies_are_exempt_even_on_one_line() {
+        // The `spawn_blocking` argument body runs on a blocking thread (U3
+        // keeps the `BraceKind::Blocking` exemption; U13 removes it). The
+        // body's `std::fs::read` must never be flagged. The top-level
+        // `spawn_blocking` CALL itself is not asserted either way: it is
+        // flagged only once the U1 deny-list entry lands (KD2 bans the call;
+        // the exemption covers the argument body, not the call).
         let source = "pub async fn load(path: &Path) -> Vec<u8> {\n    tokio::task::spawn_blocking(|| std::fs::read(path)).await.unwrap_or_default()\n}\n";
         let violations = scan_source("x.rs", source, &deny_list());
-        assert!(violations.is_empty(), "{violations:?}");
+        assert!(
+            violations.iter().all(|violation| violation.api != "std::fs::read"),
+            "a spawn_blocking argument body is exempt from the gate: {violations:?}"
+        );
     }
 
     #[test]
@@ -722,5 +751,84 @@ mod tests {
         let source = "pub fn make() {\n    let g = async fn_pointer();\n    if g {\n        std::fs::read(\"/x\").unwrap();\n    }\n}\n";
         let violations = scan_source("x.rs", source, &deny_list());
         assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    #[test]
+    fn extended_roots_flag_async_contexts() {
+        // A denied API inside an async fn in a newly-covered crate root is
+        // flagged exactly like one in the broker or daemon: U3 puts
+        // d2b-resource-runtime, d2b-core, and d2bd-runtime in the default
+        // scan set, so a call in an async fn under one of those roots is a
+        // violation (the substrate crates still convert in U4/U5/U17).
+        let violations = scan_source(
+            "packages/d2b-resource-runtime/src/watch.rs",
+            include_str!("../tests/fixtures/async-gate/blocking_in_async_fn.rs"),
+            &deny_list(),
+        );
+        assert!(
+            violations.iter().any(|violation| {
+                violation.api == "std::fs::read" && violation.context == "async fn"
+            }),
+            "a denied call in an async fn under a covered root must flag: {:?}",
+            violations.iter().map(Violation::render).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn default_scan_paths_cover_the_extended_roots() {
+        let repo_root = {
+            let mut path = std::env::current_dir().expect("current dir");
+            loop {
+                if path.join("Cargo.toml").is_file()
+                    && path.join("BUILD.bazel").is_file()
+                    && path.join("flake.nix").is_file()
+                {
+                    break path;
+                }
+                if !path.pop() {
+                    panic!("cannot locate repo root");
+                }
+            }
+        };
+        let paths = default_scan_paths(&repo_root).expect("default scan paths resolve");
+        for suffix in [
+            "packages/d2b-broker",
+            "packages/d2bd",
+            "packages/d2b-resource-runtime",
+            "packages/d2b-core",
+            "packages/d2bd-runtime",
+        ] {
+            assert!(
+                paths.iter().any(|path| path.ends_with(suffix)),
+                "default scan roots must include {suffix}: {paths:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_thread_recv_loops_are_not_flagged() {
+        // R4's sanctioned shape: a blocking `sync_channel`/`mpsc` recv on the
+        // worker's own thread (the loader_worker pattern). It is not an async
+        // context, so even a denied API there must not flag.
+        let source = "pub fn spawn_spec_writer() {\n    std::thread::spawn(move || {\n        loop {\n            let job = std::sync::mpsc::Receiver::recv(&rx).expect(\"writer gone\");\n            write_job(job);\n        }\n    });\n}\n";
+        let violations = scan_source("x.rs", source, &deny_list());
+        assert!(
+            violations.is_empty(),
+            "a worker thread's blocking recv is not an async context: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn worker_recv_in_async_context_is_flagged() {
+        // The same recv relocated onto a runtime worker is a violation: R4's
+        // allowance is worker-thread-only, never an async context.
+        let source = "pub async fn receive() {\n    std::sync::mpsc::Receiver::recv(&rx).unwrap();\n}\n";
+        let violations = scan_source("x.rs", source, &deny_list());
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.api == "std::sync::mpsc::Receiver::recv"),
+            "a sync recv inside an async fn must flag: {violations:?}"
+        );
     }
 }
