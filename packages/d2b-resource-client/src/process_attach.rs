@@ -802,7 +802,7 @@ mod tests {
     use std::{
         collections::VecDeque,
         sync::{
-            Arc, Mutex,
+            Arc,
             atomic::{AtomicUsize, Ordering},
         },
     };
@@ -863,23 +863,25 @@ mod tests {
 
     #[derive(Default)]
     struct FakeStream {
-        sent: Mutex<Vec<Vec<u8>>>,
-        received: Mutex<VecDeque<Vec<u8>>>,
+        sent: tokio::sync::Mutex<Vec<Vec<u8>>>,
+        received: tokio::sync::Mutex<VecDeque<Vec<u8>>>,
         closes: AtomicUsize,
         cancels: AtomicUsize,
     }
 
     impl NamedStreamTransport for Arc<FakeStream> {
         fn send(&self, bytes: Vec<u8>) -> impl Future<Output = Result<(), ClientError>> + Send {
-            self.sent.lock().unwrap().push(bytes);
+            // Sync trait surface (returns a ready future): non-blocking
+            // try_lock fails closed (plan U4 sync-consumer pattern).
+            self.sent.try_lock().expect("sent lock").push(bytes);
             core::future::ready(Ok(()))
         }
 
         fn receive(&self) -> impl Future<Output = Result<Vec<u8>, ClientError>> + Send {
             let result = self
                 .received
-                .lock()
-                .unwrap()
+                .try_lock()
+                .expect("received lock")
                 .pop_front()
                 .ok_or(ClientError::SessionLost);
             core::future::ready(result)
@@ -897,10 +899,10 @@ mod tests {
     }
 
     struct FakeSession {
-        outcomes: Mutex<VecDeque<Result<Arc<FakeStream>, ClientError>>>,
+        outcomes: tokio::sync::Mutex<VecDeque<Result<Arc<FakeStream>, ClientError>>>,
         opens: AtomicUsize,
         gate: Option<Arc<tokio::sync::Notify>>,
-        seen: Mutex<Vec<ProcessAttachOpenRequest>>,
+        seen: tokio::sync::Mutex<Vec<ProcessAttachOpenRequest>>,
     }
 
     impl FakeSession {
@@ -909,10 +911,10 @@ mod tests {
             gate: Option<Arc<tokio::sync::Notify>>,
         ) -> Self {
             Self {
-                outcomes: Mutex::new(outcomes.into()),
+                outcomes: tokio::sync::Mutex::new(outcomes.into()),
                 opens: AtomicUsize::new(0),
                 gate,
-                seen: Mutex::new(Vec::new()),
+                seen: tokio::sync::Mutex::new(Vec::new()),
             }
         }
     }
@@ -937,12 +939,14 @@ mod tests {
             _relative_timeout_nanos: u64,
         ) -> impl Future<Output = Result<Self::Stream, ClientError>> + Send {
             self.opens.fetch_add(1, Ordering::AcqRel);
-            self.seen.lock().unwrap().push(request);
+            // Sync trait surface (returns a future): non-blocking try_lock
+            // fails closed (plan U4 sync-consumer pattern).
+            self.seen.try_lock().expect("seen lock").push(request);
             let gate = self.gate.clone();
             let result = self
                 .outcomes
-                .lock()
-                .unwrap()
+                .try_lock()
+                .expect("outcomes lock")
                 .pop_front()
                 .unwrap_or(Err(ClientError::SessionLost));
             async move {
@@ -957,7 +961,7 @@ mod tests {
     struct FakeConnector {
         session: Arc<FakeSession>,
         pin: ZoneSessionPin,
-        requested_services: Arc<Mutex<Vec<ZoneServiceKind>>>,
+        requested_services: Arc<tokio::sync::Mutex<Vec<ZoneServiceKind>>>,
     }
 
     impl ZoneSessionConnector for FakeConnector {
@@ -969,7 +973,10 @@ mod tests {
             service: ZoneServiceKind,
         ) -> impl Future<Output = Result<(Self::Session, ZoneSessionPin), ClientError>> + Send
         {
-            self.requested_services.lock().unwrap().push(service);
+            self.requested_services
+                .try_lock()
+                .expect("requested services lock")
+                .push(service);
             core::future::ready(Ok((Arc::clone(&self.session), self.pin.clone())))
         }
     }
@@ -1010,14 +1017,16 @@ mod tests {
         )
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn authorized_attach_opens_a_named_stream_and_closes_once() {
         let stream = Arc::new(FakeStream {
-            received: Mutex::new(VecDeque::from([b"output".to_vec()])),
+            received: tokio::sync::Mutex::new(VecDeque::from([b"output".to_vec()])),
             ..Default::default()
         });
         let session = Arc::new(FakeSession::new(vec![Ok(Arc::clone(&stream))], None));
-        let requested_services = Arc::new(Mutex::new(Vec::new()));
+        let requested_services = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let client = client(FakeConnector {
             session,
             pin: pin(ZoneServiceKind::Zone),
@@ -1036,7 +1045,7 @@ mod tests {
             .unwrap();
         assert_eq!(attached.stream_name(), PROCESS_ATTACH_STREAM_NAME);
         assert_eq!(
-            requested_services.lock().unwrap().as_slice(),
+            requested_services.lock().await.as_slice(),
             &[ZoneServiceKind::Zone]
         );
         attached.send(b"input").await.unwrap();
@@ -1047,6 +1056,8 @@ mod tests {
         assert!(attached.is_closed());
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn process_attach_stream_round_trips_the_shared_named_frame_codec() {
         let response = NamedProcessStreamResponseFrame::new(
@@ -1056,7 +1067,7 @@ mod tests {
             ),
         );
         let stream = Arc::new(FakeStream {
-            received: Mutex::new(VecDeque::from([serde_json::to_vec(&response).unwrap()])),
+            received: tokio::sync::Mutex::new(VecDeque::from([serde_json::to_vec(&response).unwrap()])),
             ..Default::default()
         });
         let request = NamedProcessStreamRequestFrame::new(
@@ -1064,7 +1075,7 @@ mod tests {
             d2b_contracts_control::public_wire::NamedProcessStreamRequest::Close,
         );
         let session = Arc::new(FakeSession::new(vec![Ok(Arc::clone(&stream))], None));
-        let requested_services = Arc::new(Mutex::new(Vec::new()));
+        let requested_services = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let client = client(FakeConnector {
             session,
             pin: pin(ZoneServiceKind::Zone),
@@ -1082,11 +1093,13 @@ mod tests {
             .unwrap();
         attached.send_frame(&request).await.unwrap();
         let sent: NamedProcessStreamRequestFrame =
-            serde_json::from_slice(&stream.sent.lock().unwrap()[0]).unwrap();
+            serde_json::from_slice(&stream.sent.lock().await[0]).unwrap();
         assert_eq!(sent, request);
         assert_eq!(attached.receive_frame().await.unwrap(), response);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn cancellation_stops_a_pending_open_and_does_not_leak_a_stream() {
         let gate = Arc::new(tokio::sync::Notify::new());
@@ -1094,7 +1107,7 @@ mod tests {
             vec![Ok(Arc::new(FakeStream::default()))],
             Some(gate),
         ));
-        let requested_services = Arc::new(Mutex::new(Vec::new()));
+        let requested_services = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let client = client(FakeConnector {
             session,
             pin: pin(ZoneServiceKind::Zone),
@@ -1118,6 +1131,8 @@ mod tests {
         assert_eq!(task.await.unwrap().unwrap_err(), ClientError::Cancelled);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn retry_classification_retries_transport_but_not_authorization() {
         let first = Arc::new(FakeStream::default());
@@ -1125,7 +1140,7 @@ mod tests {
             vec![Err(ClientError::TransportFailed), Ok(first)],
             None,
         ));
-        let requested_services = Arc::new(Mutex::new(Vec::new()));
+        let requested_services = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let first_client = client(FakeConnector {
             session: Arc::clone(&session),
             pin: pin(ZoneServiceKind::Zone),
@@ -1155,7 +1170,7 @@ mod tests {
         let denied_client = client(FakeConnector {
             session: denied_session.clone(),
             pin: pin(ZoneServiceKind::Zone),
-            requested_services: Arc::new(Mutex::new(Vec::new())),
+            requested_services: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         });
         let error = denied_client
             .attach(
@@ -1201,7 +1216,7 @@ mod tests {
         let client = client(FakeConnector {
             session,
             pin: pin(ZoneServiceKind::Zone),
-            requested_services: Arc::new(Mutex::new(Vec::new())),
+            requested_services: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         });
         let wrong_zone = ProcessAttachTarget::ephemeral_process(
             zone("other"),
@@ -1266,7 +1281,7 @@ mod tests {
                 [4; 32],
             )
             .unwrap(),
-            requested_services: Arc::new(Mutex::new(Vec::new())),
+            requested_services: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         };
         let client = ProcessAttachClient::with_clock(
             RouteTable::new(vec![RouteRecord::new(
@@ -1291,6 +1306,8 @@ mod tests {
         assert!(result.is_ok());
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn reused_session_evidence_is_denied_by_the_zone_pin() {
         let session = Arc::new(FakeSession::new(
@@ -1300,7 +1317,7 @@ mod tests {
         let client = client(FakeConnector {
             session: Arc::clone(&session),
             pin: pin(ZoneServiceKind::Resource),
-            requested_services: Arc::new(Mutex::new(Vec::new())),
+            requested_services: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         });
         let error = client
             .attach(
@@ -1356,6 +1373,9 @@ mod tests {
             .enable_time()
             .build()
             .unwrap();
+        // Plain #[test] harness driving one async call synchronously;
+        // sanctioned cfg(test) helper per plan R11.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         runtime.block_on(future)
     }
 }

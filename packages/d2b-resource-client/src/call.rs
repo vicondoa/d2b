@@ -273,6 +273,11 @@ impl Future for CancellationFuture {
         }
 
         let state = Arc::clone(&self.state);
+        // The waker registry is a core executor primitive: `Future::poll`
+        // and `Drop` are synchronous by construction (no async form exists),
+        // and the critical section is a short push/retain with no suspension
+        // point; the std lock is the sanctioned synchronous path (plan R11).
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let mut waiters = state.waiters.lock().unwrap();
         if state.cancelled.load(Ordering::Acquire) {
             return Poll::Ready(());
@@ -300,6 +305,7 @@ impl Drop for CancellationFuture {
         let Some(registered) = self.registered.take() else {
             return;
         };
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let mut waiters = self.state.waiters.lock().unwrap();
         waiters.retain(|(id, _)| *id != registered);
     }
@@ -323,6 +329,9 @@ impl CancellationToken {
     /// Request cancellation. Idempotent.
     pub fn cancel(&self) {
         if !self.state.cancelled.swap(true, Ordering::AcqRel) {
+            // Synchronous cancellation surface (no async form): the waker
+            // drain is a short take/wake with no suspension point (plan R11).
+            #[allow(clippy::disallowed_methods, reason = "synchronous path")]
             let waiters = std::mem::take(&mut *self.state.waiters.lock().unwrap());
             for (_, waiter) in waiters {
                 waiter.wake();
@@ -471,6 +480,8 @@ mod tests {
 
     /// The delay is driven by the caller's executor: with a Tokio runtime
     /// installed it rides that runtime's timer.
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn retry_backoff_rides_the_caller_runtime_timer() {
         let token = CancellationToken::default();
@@ -478,6 +489,8 @@ mod tests {
     }
 
     /// An already-cancelled call refuses immediately instead of sleeping.
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn retry_backoff_observes_cancellation() {
         let token = CancellationToken::default();
