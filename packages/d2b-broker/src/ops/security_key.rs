@@ -333,13 +333,14 @@ mod tests {
     async fn trusted_selector_resolves_one_fido_hidraw_and_refuses_ambiguity() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path().join("hidraw");
-        std::fs::create_dir_all(root.join("hidraw0/device")).expect("hidraw0");
-        std::fs::write(root.join("hidraw0/device/idVendor"), "1050\n").expect("vendor");
-        std::fs::write(root.join("hidraw0/device/idProduct"), "0407\n").expect("product");
-        std::fs::write(
+        tokio::fs::create_dir_all(root.join("hidraw0/device")).await.expect("hidraw0");
+        tokio::fs::write(root.join("hidraw0/device/idVendor"), "1050\n").await.expect("vendor");
+        tokio::fs::write(root.join("hidraw0/device/idProduct"), "0407\n").await.expect("product");
+        tokio::fs::write(
             root.join("hidraw0/device/report_descriptor"),
             [0x06, 0xD0, 0xF1],
         )
+        .await
         .expect("descriptor");
         let selector = SecurityKeySelector {
             selector_id: "primary".to_owned(),
@@ -354,13 +355,14 @@ mod tests {
         assert_eq!(resolved.selector_label, "primary");
         assert!(resolved.descriptor_verified);
 
-        std::fs::create_dir_all(root.join("hidraw1/device")).expect("hidraw1");
-        std::fs::write(root.join("hidraw1/device/idVendor"), "1050\n").expect("vendor");
-        std::fs::write(root.join("hidraw1/device/idProduct"), "0407\n").expect("product");
-        std::fs::write(
+        tokio::fs::create_dir_all(root.join("hidraw1/device")).await.expect("hidraw1");
+        tokio::fs::write(root.join("hidraw1/device/idVendor"), "1050\n").await.expect("vendor");
+        tokio::fs::write(root.join("hidraw1/device/idProduct"), "0407\n").await.expect("product");
+        tokio::fs::write(
             root.join("hidraw1/device/report_descriptor"),
             [0x06, 0xD0, 0xF1],
         )
+        .await
         .expect("descriptor");
         assert!(matches!(
             resolve_selector("primary", &[selector], &root).await,
@@ -427,11 +429,12 @@ mod tests {
     async fn is_fido_device_rejects_readable_non_fido_descriptor_without_group_fallback() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let device_dir = tmp.path().join("hidraw0/device");
-        std::fs::create_dir_all(&device_dir).expect("device dir");
-        std::fs::write(
+        tokio::fs::create_dir_all(&device_dir).await.expect("device dir");
+        tokio::fs::write(
             device_dir.join("report_descriptor"),
             [0x00, 0x01, 0x02, 0x03],
         )
+        .await
         .expect("write descriptor");
 
         assert!(
@@ -445,11 +448,12 @@ mod tests {
     async fn is_fido_device_accepts_readable_fido_descriptor() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let device_dir = tmp.path().join("hidraw0/device");
-        std::fs::create_dir_all(&device_dir).expect("device dir");
-        std::fs::write(
+        tokio::fs::create_dir_all(&device_dir).await.expect("device dir");
+        tokio::fs::write(
             device_dir.join("report_descriptor"),
             [0x06, 0xD0, 0xF1, 0x09, 0x01],
         )
+        .await
         .expect("write descriptor");
 
         assert!(is_fido_device(&tmp.path().join("hidraw0")).await);

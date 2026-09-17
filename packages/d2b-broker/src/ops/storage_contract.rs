@@ -42,7 +42,7 @@ impl std::fmt::Display for StorageContractError {
 
 impl std::error::Error for StorageContractError {}
 
-pub fn reconcile_storage_scope(
+pub async fn reconcile_storage_scope(
     resolver: &BundleResolver,
     storage_ref: &BundleOpId,
     apply: bool,
@@ -79,7 +79,7 @@ pub fn reconcile_storage_scope(
             path_hash,
         });
     }
-    validate_owned_root(&path_buf, storage_ref.as_str())?;
+    validate_owned_root(&path_buf, storage_ref.as_str()).await?;
     if apply && apply_is_check_only(&path_buf) {
         return Err(StorageContractError::Refused {
             subject: storage_ref.as_str().to_owned(),
@@ -157,7 +157,7 @@ pub fn reconcile_storage_scope(
 /// `runtime.rs` maps the returned `UnknownLock` to a `BundleIntentMissing`
 /// error, so this stub keeps the audit/`ValidateLockSpec` surface wired while
 /// never trusting an identity it cannot resolve.
-pub fn validate_lock_spec(
+pub async fn validate_lock_spec(
     _resolver: &BundleResolver,
     lock_ref: &BundleOpId,
 ) -> Result<ValidateLockSpecResponse, StorageContractError> {
@@ -174,7 +174,7 @@ fn apply_is_check_only(path: &Path) -> bool {
     path.starts_with("/etc/d2b")
 }
 
-fn validate_owned_root(path: &Path, subject: &str) -> Result<(), StorageContractError> {
+async fn validate_owned_root(path: &Path, subject: &str) -> Result<(), StorageContractError> {
     validate_owned_root_against(
         path,
         subject,
@@ -185,9 +185,10 @@ fn validate_owned_root(path: &Path, subject: &str) -> Result<(), StorageContract
             Path::new("/var/cache/d2b"),
         ],
     )
+    .await
 }
 
-fn validate_owned_root_against(
+async fn validate_owned_root_against(
     path: &Path,
     subject: &str,
     roots: &[&Path],
@@ -209,8 +210,8 @@ fn validate_owned_root_against(
             subject: subject.to_owned(),
             reason: "storage-path-outside-owned-roots".to_owned(),
         })?;
-    let canonical_root = canonicalize_existing_or_nearest_ancestor(root, subject)?;
-    let canonical_target = canonicalize_existing_or_nearest_ancestor(path, subject)?;
+    let canonical_root = canonicalize_existing_or_nearest_ancestor(root, subject).await?;
+    let canonical_target = canonicalize_existing_or_nearest_ancestor(path, subject).await?;
     if !canonical_target.starts_with(&canonical_root) {
         return Err(StorageContractError::Refused {
             subject: subject.to_owned(),
@@ -220,14 +221,14 @@ fn validate_owned_root_against(
     Ok(())
 }
 
-fn canonicalize_existing_or_nearest_ancestor(
+async fn canonicalize_existing_or_nearest_ancestor(
     path: &Path,
     subject: &str,
 ) -> Result<PathBuf, StorageContractError> {
     let mut current = path;
     let mut missing_suffix = Vec::new();
     loop {
-        match std::fs::canonicalize(current) {
+        match tokio::fs::canonicalize(current).await {
             Ok(canonical) => {
                 let mut resolved = canonical;
                 for component in missing_suffix.iter().rev() {
@@ -355,60 +356,60 @@ mod tests {
     };
     use std::collections::BTreeMap;
 
-    #[test]
-    fn template_paths_are_check_only_unless_expanded() {
+    #[tokio::test]
+    async fn template_paths_are_check_only_unless_expanded() {
         assert!(has_unexpanded_template("/run/d2b/vms/<vm>"));
         assert!(!has_unexpanded_template("/run/d2b"));
     }
 
-    #[test]
-    fn etc_paths_are_apply_check_only() {
+    #[tokio::test]
+    async fn etc_paths_are_apply_check_only() {
         assert!(apply_is_check_only(Path::new("/etc/d2b")));
         assert!(apply_is_check_only(Path::new("/etc/d2b/bundle.json")));
         assert!(!apply_is_check_only(Path::new("/run/d2b")));
     }
 
-    #[test]
-    fn owned_roots_are_closed() {
-        assert!(validate_owned_root(Path::new("/run/d2b"), "x").is_ok());
+    #[tokio::test]
+    async fn owned_roots_are_closed() {
+        assert!(validate_owned_root(Path::new("/run/d2b"), "x").await.is_ok());
         assert_refused_reason(
-            validate_owned_root(Path::new("/var/lib/d2b/../../etc/malicious"), "x"),
+            validate_owned_root(Path::new("/var/lib/d2b/../../etc/malicious"), "x").await,
             "storage-path-parent-dir-refused",
         );
         assert_refused_reason(
-            validate_owned_root(Path::new("/var/lib/d2b/../d2b-escape"), "x"),
+            validate_owned_root(Path::new("/var/lib/d2b/../d2b-escape"), "x").await,
             "storage-path-parent-dir-refused",
         );
         assert_refused_reason(
-            validate_owned_root(Path::new("/home/not-d2b"), "x"),
+            validate_owned_root(Path::new("/home/not-d2b"), "x").await,
             "storage-path-outside-owned-roots",
         );
     }
 
-    #[test]
-    fn canonical_root_check_rejects_symlink_escape() {
+    #[tokio::test]
+    async fn canonical_root_check_rejects_symlink_escape() {
         let tmp = project_scratch("canonical-root-check-rejects-symlink-escape");
         let root = tmp.path().join("root");
-        std::fs::create_dir_all(&root).unwrap();
+        tokio::fs::create_dir_all(&root).await.unwrap();
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink("/etc", root.join("escape")).unwrap();
             assert_refused_reason(
-                validate_owned_root_against(&root.join("escape/passwd"), "x", &[&root]),
+                validate_owned_root_against(&root.join("escape/passwd"), "x", &[&root]).await,
                 "storage-path-escapes-owned-root",
             );
         }
     }
 
-    #[test]
-    fn mode_parser_reads_octal() {
+    #[tokio::test]
+    async fn mode_parser_reads_octal() {
         assert_eq!(parse_mode("0750", "x").unwrap(), 0o750);
         assert_eq!(parse_mode("0", "x").unwrap(), 0);
         assert!(parse_mode("bad", "x").is_err());
     }
 
-    #[test]
-    fn reconcile_refuses_non_directory_apply_without_mutation() {
+    #[tokio::test]
+    async fn reconcile_refuses_non_directory_apply_without_mutation() {
         let resolver = resolver_with_storage_path(
             "path:regular-file",
             "/var/lib/d2b/storage-contract-regular-file",
@@ -416,12 +417,13 @@ mod tests {
         );
 
         let err = reconcile_storage_scope(&resolver, &BundleOpId::new("path:regular-file"), true)
+            .await
             .expect_err("regular files are check-only in broker reconcile");
         assert_refused_reason(Err(err), "storage-apply-supported-for-directory-only");
     }
 
-    #[test]
-    fn reconcile_external_grant_skips_filesystem_root_validation() {
+    #[tokio::test]
+    async fn reconcile_external_grant_skips_filesystem_root_validation() {
         let resolver = resolver_with_storage_path(
             "path:external-grant",
             "/sys/class/net/work-l2",
@@ -430,6 +432,7 @@ mod tests {
 
         let checked =
             reconcile_storage_scope(&resolver, &BundleOpId::new("path:external-grant"), true)
+                .await
                 .expect(
                     "external grant rows are check-only and do not validate as filesystem paths",
                 );
@@ -437,8 +440,8 @@ mod tests {
         assert!(!checked.applied);
     }
 
-    #[test]
-    fn reconcile_refuses_etc_d2b_apply_attempts() {
+    #[tokio::test]
+    async fn reconcile_refuses_etc_d2b_apply_attempts() {
         let resolver = resolver_with_storage_path(
             "path:config-root",
             "/etc/d2b/bundle.json",
@@ -446,12 +449,13 @@ mod tests {
         );
 
         let err = reconcile_storage_scope(&resolver, &BundleOpId::new("path:config-root"), true)
+            .await
             .expect_err("nix-managed config roots are not broker-mutated");
         assert_refused_reason(Err(err), "storage-config-root-is-nix-managed");
     }
 
-    #[test]
-    fn broker_storage_and_sync_requests_are_opaque_id_only() {
+    #[tokio::test]
+    async fn broker_storage_and_sync_requests_are_opaque_id_only() {
         let storage = serde_json::to_value(
             d2b_contracts_broker::broker_wire::ReconcileStorageScopeRequest {
                 storage_ref: BundleOpId::new("path:run-root"),

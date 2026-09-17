@@ -49,6 +49,7 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::Write as _;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -339,6 +340,7 @@ struct DurableRecord {
     completed_at_ms: Option<u64>,
 }
 
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 impl CellStore {
     /// An in-memory store with no durable file.
     pub fn in_memory() -> Self {
@@ -898,7 +900,7 @@ fn durable_snapshot(records: &BTreeMap<CellKey, CellRecord>) -> DurableFile {
 #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn load(root: &Path) -> Result<BTreeMap<CellKey, CellRecord>, CellStoreError> {
     let path = cell_durable_path(root);
-    let bytes = match std::fs::read(&path) {
+    let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(BTreeMap::new());
@@ -959,14 +961,14 @@ fn persist_locked(
     let Some(root) = root else {
         return Ok(());
     };
-    let metadata = match std::fs::symlink_metadata(root) {
+    let metadata = match fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::DirBuilder::new()
+            fs::DirBuilder::new()
                 .mode(0o750)
                 .create(root)
                 .map_err(CellStoreError::Io)?;
-            std::fs::symlink_metadata(root).map_err(CellStoreError::Io)?
+            fs::symlink_metadata(root).map_err(CellStoreError::Io)?
         }
         Err(error) => return Err(CellStoreError::Io(error)),
     };
@@ -978,7 +980,7 @@ fn persist_locked(
     }
     let row_path = cell_durable_path(root);
     let temp_path = root.join(format!(".{STATE_CELLS_FILE}.tmp"));
-    match std::fs::symlink_metadata(&temp_path) {
+    match fs::symlink_metadata(&temp_path) {
         Ok(metadata) if metadata.file_type().is_symlink() || metadata.mode() & 0o022 != 0 => {
             return Err(CellStoreError::CorruptDurable(format!(
                 "{}: temp file has wrong posture",
@@ -986,14 +988,14 @@ fn persist_locked(
             )));
         }
         Ok(_) => {
-            std::fs::remove_file(&temp_path).map_err(CellStoreError::Io)?;
+            fs::remove_file(&temp_path).map_err(CellStoreError::Io)?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(CellStoreError::Io(error)),
     }
     let bytes = serde_json::to_vec(&durable_snapshot(records))
         .map_err(|error| CellStoreError::CorruptDurable(error.to_string()))?;
-    let mut file = std::fs::OpenOptions::new()
+    let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
@@ -1002,14 +1004,14 @@ fn persist_locked(
         .map_err(CellStoreError::Io)?;
     if file.write_all(&bytes).is_err() || file.sync_data().is_err() {
         drop(file);
-        let _ = std::fs::remove_file(&temp_path);
+        let _ = fs::remove_file(&temp_path);
         return Err(CellStoreError::Io(std::io::Error::other(
             "state cell durable write failed",
         )));
     }
     drop(file);
-    std::fs::rename(&temp_path, &row_path).map_err(|error| {
-        let _ = std::fs::remove_file(&temp_path);
+    fs::rename(&temp_path, &row_path).map_err(|error| {
+        let _ = fs::remove_file(&temp_path);
         CellStoreError::Io(error)
     })?;
     std::fs::File::open(root)

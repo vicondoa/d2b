@@ -190,6 +190,7 @@ impl StoreSyncObservabilityRecord {
 /// existing directory - doing so would clobber that grant. We only
 /// create the tree when it is missing (standalone broker tests, or a
 /// first run before tmpfiles ran). Refuses a symlinked leaf.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn ensure_export_dir(export_dir: &Path) -> io::Result<()> {
     match fs::symlink_metadata(export_dir) {
         Ok(meta) => {
@@ -239,6 +240,7 @@ fn ensure_export_dir(export_dir: &Path) -> io::Result<()> {
 /// host-confidential audit record is the source of truth; a failed
 /// export write must never fail the StoreSync operation. The
 /// `io::Result` is returned only so the caller can log it.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn append_export_record(
     export_dir: &Path,
     record: &StoreSyncObservabilityRecord,

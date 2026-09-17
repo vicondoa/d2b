@@ -461,6 +461,40 @@ impl TrustedContextStore {
         })
     }
 
+    /// Open the store from an async context: the bootstrap barrier runs
+    /// over the async channel legs, so an executor worker never parks on
+    /// the blocking boundary.
+    pub async fn open_async(
+        root: impl Into<PathBuf>,
+    ) -> Result<Self, TrustedContextStoreError> {
+        let root = root.into();
+        let (commands, receiver) = mpsc::channel::<ContextCommand>(Self::WORKER_QUEUE_DEPTH);
+        std::thread::Builder::new()
+            .name("d2b-broker-trusted-context".to_owned())
+            .spawn(move || context_worker_loop(receiver))
+            .map_err(|error| TrustedContextStoreError::Io {
+                detail: format!("spawn trusted-context worker: {error}"),
+            })?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        commands
+            .send(ContextCommand::Bootstrap {
+                root: root.clone(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| TrustedContextStoreError::Io {
+                detail: "trusted-context worker unavailable".to_owned(),
+            })?;
+        reply_rx
+            .await
+            .map_err(|_| TrustedContextStoreError::Io {
+                detail: "trusted-context worker unavailable".to_owned(),
+            })??;
+        Ok(Self {
+            writer: ContextWriter { commands },
+        })
+    }
+
     /// The epoch this store is currently minting with.
     pub fn epoch(&self) -> u64 {
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -530,6 +564,34 @@ impl TrustedContextStore {
             })?
     }
 
+    /// Cache one daemon publication, monotonically, from an async context.
+    ///
+    /// The async twin of [`TrustedContextStore::publish`]: the dispatch
+    /// chain runs on the broker's reactor, so the command is sent and the
+    /// reply awaited in async time instead of parking an executor worker on
+    /// the blocking boundary.
+    pub async fn publish_async(
+        &self,
+        values: &PublishTrustedContextValues,
+    ) -> Result<u64, TrustedContextStoreError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.writer
+            .commands
+            .send(ContextCommand::Publish {
+                values: values.clone(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| TrustedContextStoreError::Io {
+                detail: "trusted-context worker unavailable".to_owned(),
+            })?;
+        reply_rx
+            .await
+            .map_err(|_| TrustedContextStoreError::Io {
+                detail: "trusted-context worker unavailable".to_owned(),
+            })?
+    }
+
     /// Mint one context block for a Zone the broker holds values for.
     ///
     /// The envelope's mint call: refuses with the stale-context code until
@@ -562,14 +624,16 @@ impl TrustedContextStore {
     ///
     /// The wire shape is the acknowledgement the daemon reads its epoch
     /// from; production dispatch routes the publish variant through this
-    /// same method, so the wire and the store never disagree. Runs on the
-    /// dispatch worker's thread (a dedicated blocking worker per plan R4),
-    /// so the blocking channel boundary is the sanctioned one.
-    pub fn publication_reply(
+    /// same method, so the wire and the store never disagree. Async: the
+    /// dispatch chain runs on the broker's reactor, so the command is sent
+    /// and the reply awaited in async time instead of parking an executor
+    /// worker on the blocking boundary (the worker itself remains the
+    /// dedicated bounded worker per plan R4).
+    pub async fn publication_reply(
         &self,
         values: &PublishTrustedContextValues,
     ) -> Result<PublishTrustedContextResponse, TrustedContextStoreError> {
-        let epoch = self.publish(values)?;
+        let epoch = self.publish_async(values).await?;
         Ok(PublishTrustedContextResponse {
             broker_epoch: epoch,
         })
@@ -785,6 +849,16 @@ static TRUSTED_CONTEXT_STORE: std::sync::OnceLock<TrustedContextStore> = std::sy
 /// caching under a half-open state.
 pub(crate) fn init_trusted_context_store(state_dir: &Path) -> Result<(), TrustedContextStoreError> {
     let store = TrustedContextStore::open(state_dir)?;
+    let _ = TRUSTED_CONTEXT_STORE.set(store);
+    Ok(())
+}
+
+/// The async twin of [`init_trusted_context_store`], for the dispatch path
+/// that opens the store lazily on the first publication arrival.
+pub(crate) async fn init_trusted_context_store_async(
+    state_dir: &Path,
+) -> Result<(), TrustedContextStoreError> {
+    let store = TrustedContextStore::open_async(state_dir).await?;
     let _ = TRUSTED_CONTEXT_STORE.set(store);
     Ok(())
 }

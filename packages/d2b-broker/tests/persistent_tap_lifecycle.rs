@@ -183,7 +183,7 @@ async fn failed_create_leaves_no_realization_and_retry_is_safe() {
         loaded
     );
 
-    let _ = std::fs::remove_dir_all(root);
+    tokio::fs::remove_dir_all(&root).await.unwrap();
 }
 
 #[tokio::test]
@@ -205,7 +205,7 @@ async fn persistence_rejects_a_swapped_tap_identity_before_writing() {
             .join(format!("{}.json", attachment_id().as_str()))
             .exists()
     );
-    let _ = std::fs::remove_dir_all(root);
+    tokio::fs::remove_dir_all(&root).await.unwrap();
 }
 
 #[test]

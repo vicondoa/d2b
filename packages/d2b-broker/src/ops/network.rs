@@ -1097,7 +1097,7 @@ mod tests {
             .unwrap()
             .join("target")
             .join(format!("network-realization-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let _ = tokio::fs::remove_dir_all(&root).await;
         fs::DirBuilder::new().mode(0o750).create(&root).unwrap();
         let attachment_id = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
         let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
@@ -1174,7 +1174,7 @@ mod tests {
             .await,
             Err(NetworkOpError::RealizationUnavailable)
         );
-        let _ = fs::remove_dir_all(root);
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]
@@ -1184,7 +1184,7 @@ mod tests {
             .unwrap()
             .join("target")
             .join(format!("network-realization-retry-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let _ = tokio::fs::remove_dir_all(&root).await;
         fs::DirBuilder::new().mode(0o750).create(&root).unwrap();
         let attachment_id = ResourceUid::parse("523e4567-e89b-42d3-a456-426614174004").unwrap();
         let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
@@ -1220,10 +1220,10 @@ mod tests {
             .mode(0o750)
             .create(&attachments)
             .unwrap();
-        fs::write(
+        tokio::fs::write(
             attachments.join(format!(".{}.json.tmp", attachment_id.as_str())),
             b"stale",
-        )
+        ).await
         .unwrap();
         let ifname = d2b_contracts_resource::v3::derive_network_ifname(
             &create.zone_uid,
@@ -1242,7 +1242,7 @@ mod tests {
                 .await,
             Err(NetworkOpError::RealizationConflict)
         );
-        let _ = fs::remove_dir_all(root);
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]
@@ -1255,7 +1255,7 @@ mod tests {
                 "network-realization-tombstone-{}",
                 std::process::id()
             ));
-        let _ = fs::remove_dir_all(&root);
+        let _ = tokio::fs::remove_dir_all(&root).await;
         fs::DirBuilder::new().mode(0o750).create(&root).unwrap();
         let attachment_id = ResourceUid::parse("623e4567-e89b-42d3-a456-426614174005").unwrap();
         let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
@@ -1319,6 +1319,6 @@ mod tests {
             .is_ok()
         );
         assert_eq!(backend.deletes.get(), 0);
-        let _ = fs::remove_dir_all(root);
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 }

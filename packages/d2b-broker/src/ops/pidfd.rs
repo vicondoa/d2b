@@ -339,6 +339,7 @@ pub mod test_harness {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl PidfdSpawner for FakePidfdSpawner {
         fn spawn(
             &self,

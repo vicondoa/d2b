@@ -78,6 +78,7 @@ impl Drop for FdLease {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn send_fds(sock: RawFd, payload: &[u8], fds: &[RawFd]) -> io::Result<()> {
     let iov = [IoSlice::new(payload)];
     let sent = if fds.is_empty() {
@@ -124,6 +125,7 @@ pub fn recv_fds_with_capacity_allow_empty(
     recv_fds_with_capacity_inner(sock, payload_capacity, false)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn recv_fds_with_capacity_inner(
     sock: RawFd,
     payload_capacity: usize,

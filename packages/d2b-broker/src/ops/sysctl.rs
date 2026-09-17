@@ -259,8 +259,8 @@ mod tests {
     async fn apply_writes_value_and_returns_outcome() {
         let dir = scratch();
         let leaf = dir.join("net/ipv6/conf/x");
-        fs::create_dir_all(&leaf).unwrap();
-        fs::write(leaf.join("disable_ipv6"), b"0\n").unwrap();
+        tokio::fs::create_dir_all(&leaf).await.unwrap();
+        tokio::fs::write(leaf.join("disable_ipv6"), b"0\n").await.unwrap();
         let intent = SysctlIntent {
             key: "net.ipv6.conf.x.disable_ipv6".into(),
             value: "1".into(),
@@ -275,7 +275,7 @@ mod tests {
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].value_before, "0");
         assert_eq!(outcomes[0].value_after, "1");
-        fs::remove_dir_all(dir).ok();
+        tokio::fs::remove_dir_all(dir).await.ok();
     }
 
     #[tokio::test]
@@ -283,9 +283,9 @@ mod tests {
     async fn drift_after_write_fails_closed() {
         let dir = scratch();
         let leaf = dir.join("net/ipv6/conf/x");
-        fs::create_dir_all(&leaf).unwrap();
+        tokio::fs::create_dir_all(&leaf).await.unwrap();
         let path = leaf.join("disable_ipv6");
-        fs::write(&path, b"sticky\n").unwrap();
+        tokio::fs::write(&path, b"sticky\n").await.unwrap();
         let intent = SysctlIntent {
             key: "net.ipv6.conf.x.disable_ipv6".into(),
             value: "1".into(),
@@ -298,7 +298,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(outcomes[0].value_after, "1");
-        fs::remove_dir_all(dir).ok();
+        tokio::fs::remove_dir_all(dir).await.ok();
     }
 
     #[tokio::test]

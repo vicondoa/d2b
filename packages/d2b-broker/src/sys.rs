@@ -246,6 +246,7 @@ pub fn tun_set_group(fd: &OwnedFd, gid: u32) -> io::Result<()> {
 ///   atomic replace, preserving parent-dir mode;
 /// - [`read_to_string_nofollow`] - symlink-refusing read;
 /// - [`ensure_dir_path_safe`] / [`remove_path_safe`] - fd-relative mkdir / unlink.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub mod path_safe {
     use std::ffi::OsStr;
     use std::fs::{self, File, OpenOptions};
@@ -1526,6 +1527,7 @@ pub mod path_safe {
 /// in practice; `pidfd.rs` documents it.
 pub mod pidfd_sys {
     use std::ffi::CString;
+    use std::fs;
     use std::io;
     use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -1951,7 +1953,7 @@ pub mod pidfd_sys {
     /// the file is missing or field 22 isn't parseable.
     pub fn read_proc_stat_start_time(pid: i32) -> io::Result<u64> {
         let path = format!("/proc/{pid}/stat");
-        let stat = std::fs::read_to_string(&path)?;
+        let stat = fs::read_to_string(&path)?;
         super::super::ops::pidfd::parse_proc_stat_start_time(&stat)
             .ok_or_else(|| io::Error::other(format!("could not parse field 22 from {path}")))
     }
@@ -2165,7 +2167,7 @@ pub mod pidfd_sys {
 
     #[allow(unsafe_code)]
     pub fn load_seccomp_program(path: &Path) -> io::Result<SeccompProgram> {
-        let bytes = std::fs::read(path)?;
+        let bytes = fs::read(path)?;
         let filter_size = std::mem::size_of::<libc::sock_filter>();
         if bytes.is_empty() || bytes.len() % filter_size != 0 {
             return Err(io::Error::new(
@@ -2369,7 +2371,7 @@ pub mod pidfd_sys {
             // (no path, no kind), so the refusal was indistinguishable from
             // any other spawn failure.
             let metadata =
-                std::fs::metadata(path_ref).map_err(|err| device_bind_error(path, err))?;
+                fs::metadata(path_ref).map_err(|err| device_bind_error(path, err))?;
             let file_type = metadata.file_type();
             let kind = if file_type.is_dir() {
                 PreparedDeviceBindKind::Directory

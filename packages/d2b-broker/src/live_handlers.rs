@@ -386,7 +386,9 @@ pub async fn live_usbip_bind(
 ) -> Result<(), LiveHandlerError> {
     crate::ops::usbip_lock::acquire_lock(lock_path, vm_name, daemon_uid, daemon_gid)
         .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?;
-    match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id) {
+    match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
+        .await
+    {
         Err(e) => {
             let _ = crate::ops::usbip_lock::release_lock(lock_path, vm_name);
             return Err(LiveHandlerError::UsbipLock(e.to_string()));
@@ -408,7 +410,9 @@ pub async fn live_usbip_bind(
         let _ = crate::ops::usbip_lock::release_lock(lock_path, vm_name);
         return Err(LiveHandlerError::ReconcileExec(e));
     }
-    match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id) {
+    match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
+        .await
+    {
         Err(e) => {
             let _ = crate::ops::usbip_lock::release_lock(lock_path, vm_name);
             Err(LiveHandlerError::UsbipLock(e.to_string()))
@@ -458,11 +462,13 @@ pub async fn live_usbip_unbind(
         None => return Ok(()),
     }
     match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
+        .await
         .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?
     {
         crate::ops::usbip_host::UsbipDriverBinding::Unbound => return Ok(()),
         crate::ops::usbip_host::UsbipDriverBinding::BoundToUsbipHost => {
             crate::ops::usbip_host::ensure_usbip_host_driver_unbind_supported(sysfs_root)
+                .await
                 .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?;
         }
         crate::ops::usbip_host::UsbipDriverBinding::BoundToOtherDriver { driver } => {
@@ -488,6 +494,7 @@ pub async fn live_usbip_unbind(
         .await
         .map_err(LiveHandlerError::ReconcileExec)?;
     match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
+        .await
         .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?
     {
         crate::ops::usbip_host::UsbipDriverBinding::BoundToUsbipHost => {
@@ -3420,7 +3427,7 @@ mod tests {
 
         let root = TestDir::new("usbip-unbind-preserves-claim");
         let lock_dir = root.join("locks");
-        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        tokio::fs::create_dir_all(&lock_dir).await.expect("create lock dir");
         let lock_path = lock_dir.join("1-2");
         let sysfs_root = fake_usbip_sysfs(&root, "1-2");
         crate::ops::usbip_lock::acquire_lock(
@@ -3454,7 +3461,7 @@ mod tests {
     async fn usbip_bind_same_vm_replay_skips_shellout_and_preserves_claim() {
         let root = TestDir::new("usbip-bind-same-vm-replay");
         let lock_dir = root.join("locks");
-        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        tokio::fs::create_dir_all(&lock_dir).await.expect("create lock dir");
         let lock_path = lock_dir.join("1-2");
         crate::ops::usbip_lock::acquire_lock(
             &lock_path,
@@ -3494,7 +3501,7 @@ mod tests {
     async fn usbip_bind_shellout_failure_releases_claim_for_retry() {
         let root = TestDir::new("usbip-bind-failure-releases-claim");
         let lock_dir = root.join("locks");
-        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        tokio::fs::create_dir_all(&lock_dir).await.expect("create lock dir");
         let lock_path = lock_dir.join("1-2");
         let sysfs_root = fake_unbound_usbip_sysfs(&root, "1-2");
         let exec = FakeReconcileExecutor::new();
@@ -3537,7 +3544,7 @@ mod tests {
     async fn usbip_bind_initial_driver_inspection_failure_releases_claim() {
         let root = TestDir::new("usbip-bind-initial-inspect-failure");
         let lock_dir = root.join("locks");
-        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        tokio::fs::create_dir_all(&lock_dir).await.expect("create lock dir");
         let lock_path = lock_dir.join("1-2");
         let sysfs_root = fake_unbound_usbip_sysfs(&root, "1-2");
         let exec = FakeReconcileExecutor::new();
@@ -3572,7 +3579,7 @@ mod tests {
     async fn usbip_bind_post_bind_driver_inspection_failure_releases_claim() {
         let root = TestDir::new("usbip-bind-post-inspect-failure");
         let lock_dir = root.join("locks");
-        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        tokio::fs::create_dir_all(&lock_dir).await.expect("create lock dir");
         let lock_path = lock_dir.join("1-2");
         let sysfs_root = fake_unbound_usbip_sysfs(&root, "1-2");
         let exec = FakeReconcileExecutor::new();
@@ -3611,7 +3618,7 @@ mod tests {
     async fn usbip_bind_non_converged_driver_releases_claim() {
         let root = TestDir::new("usbip-bind-non-converged-releases-claim");
         let lock_dir = root.join("locks");
-        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        tokio::fs::create_dir_all(&lock_dir).await.expect("create lock dir");
         let lock_path = lock_dir.join("1-2");
         let sysfs_root = fake_unbound_usbip_sysfs(&root, "1-2");
         let exec = FakeReconcileExecutor::new();
@@ -3649,7 +3656,7 @@ mod tests {
     async fn usbip_unbind_aborts_stream_before_driver_unbind_and_preserves_claim_for_acl_phase() {
         let root = TestDir::new("usbip-unbind-order");
         let lock_dir = root.join("locks");
-        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        tokio::fs::create_dir_all(&lock_dir).await.expect("create lock dir");
         let lock_path = lock_dir.join("1-2");
         let sysfs_root = fake_usbip_sysfs(&root, "1-2");
         crate::ops::usbip_lock::acquire_lock(
@@ -3701,7 +3708,7 @@ mod tests {
     async fn usbip_unbind_fd_release_timeout_preserves_claim_without_driver_unbind() {
         let root = TestDir::new("usbip-unbind-release-timeout");
         let lock_dir = root.join("locks");
-        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        tokio::fs::create_dir_all(&lock_dir).await.expect("create lock dir");
         let lock_path = lock_dir.join("1-2");
         let sysfs_root = fake_usbip_sysfs(&root, "1-2");
         crate::ops::usbip_lock::acquire_lock(
@@ -3824,10 +3831,10 @@ mod tests {
         let exec = FakeReconcileExecutor::new();
         let root = TestDir::new("nm-unmanaged-foreign");
         let intent = sample_nm_unmanaged_intent(&root);
-        std::fs::write(
+        tokio::fs::write(
             &intent.file_path,
             "# foreign NetworkManager configuration\n[keyfile]\n",
-        )
+        ).await
         .unwrap();
 
         assert!(matches!(
@@ -3848,10 +3855,10 @@ mod tests {
         let exec = FakeReconcileExecutor::new();
         let root = TestDir::new("nm-unmanaged-legacy");
         let intent = sample_nm_unmanaged_intent(&root);
-        std::fs::write(
+        tokio::fs::write(
             &intent.file_path,
             "# managed by d2b broker - do not edit by hand\n[keyfile]\nunmanaged-devices=interface-name:d2b-*\n",
-        )
+        ).await
         .unwrap();
 
         assert!(matches!(
@@ -3871,11 +3878,11 @@ mod tests {
     async fn update_host_runtime_nft_hash_rewrites_runtime_json() {
         let root = TestDir::new("host-runtime-nft-hash");
         let runtime = sample_host_runtime(root.join("host-runtime.json"));
-        std::fs::create_dir_all(runtime.path.parent().expect("runtime parent")).unwrap();
-        std::fs::write(
+        tokio::fs::create_dir_all(runtime.path.parent().expect("runtime parent")).await.unwrap();
+        tokio::fs::write(
             &runtime.path,
             runtime.render_json().expect("render runtime"),
-        )
+        ).await
         .unwrap();
 
         update_host_runtime_nft_hash(&runtime.path, Some("0123456789abcdef"))
@@ -3888,7 +3895,7 @@ mod tests {
                 .expect("read host runtime hash"),
             Some("0123456789abcdef".to_owned())
         );
-        let updated = std::fs::read_to_string(&runtime.path).expect("read updated runtime");
+        let updated = tokio::fs::read_to_string(&runtime.path).await.expect("read updated runtime");
         assert!(updated.contains("\"nftAppliedHash\": \"0123456789abcdef\""));
         assert!(updated.contains("\"derivedIfname\": \"nlvvm1\""));
     }
@@ -3977,7 +3984,7 @@ mod tests {
         // `create-if-never-provisioned`/`fail-closed` lifecycle owns the
         // directory, and the spawn hook fences identity plus the presence the
         // lifecycle leaves behind.
-        std::fs::create_dir_all(&state_dir).expect("state volume directory");
+        tokio::fs::create_dir_all(&state_dir).await.expect("state volume directory");
         let plan = resource_backed_swtpm_plan(&state_dir, &runtime_dir);
         assert!(
             maybe_harden_swtpm_dir(&plan, Some(&identity))
@@ -3998,7 +4005,7 @@ mod tests {
             LiveHandlerError::SwtpmDirHardening { reason, .. }
                 if reason == reasons::STATE_DIR_NOT_PROVISIONED
         ));
-        std::fs::create_dir_all(&state_dir).expect("restore the state volume directory");
+        tokio::fs::create_dir_all(&state_dir).await.expect("restore the state volume directory");
 
         // The one-shot flush opens the worker's control socket inside that
         // same directory instead of writing into it, so it is admitted while
@@ -4022,7 +4029,7 @@ mod tests {
                 .expect("one-shot flush passes")
                 .is_none()
         );
-        std::fs::create_dir_all(&state_dir).expect("restore the state volume directory");
+        tokio::fs::create_dir_all(&state_dir).await.expect("restore the state volume directory");
 
         // Without a trusted identity the launch fails closed by derivation.
         let refusal = maybe_harden_swtpm_dir(&plan, None)
@@ -5131,7 +5138,7 @@ mod tests {
         let dir = TestDir::new("spawn-runner-netns");
         let status_path = dir.join("status.txt");
         let netns_path = dir.join("netns.txt");
-        let current_netns = std::fs::read_link("/proc/self/ns/net")
+        let current_netns = tokio::fs::read_link("/proc/self/ns/net").await
             .expect("read current netns")
             .display()
             .to_string();
@@ -5191,8 +5198,8 @@ mod tests {
             nix::sys::wait::WaitStatus::Exited(_, 0)
         ));
 
-        let status = std::fs::read_to_string(&status_path).expect("read child status");
-        let netns = std::fs::read_to_string(&netns_path).expect("read child netns");
+        let status = tokio::fs::read_to_string(&status_path).await.expect("read child status");
+        let netns = tokio::fs::read_to_string(&netns_path).await.expect("read child netns");
         let cap_eff = status
             .lines()
             .find_map(|line| {
@@ -5336,7 +5343,7 @@ mod tests {
         std::fs::create_dir(&runtime).expect("create runtime dir");
         // Plant a regular file where the socket should be.
         let socket_path = runtime.join("wayland-type-test");
-        std::fs::write(&socket_path, b"not a socket").expect("write file");
+        tokio::fs::write(&socket_path, b"not a socket").await.expect("write file");
         let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), Some("wayland-type-test"));
         let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
             .await

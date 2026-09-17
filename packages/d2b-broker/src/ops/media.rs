@@ -2355,7 +2355,7 @@ mod tests {
         });
 
         let mut client = QmpClient::connect(&socket).await.expect("connect fake qmp");
-        let file = std::fs::File::open("/dev/null").expect("open harmless fd");
+        let file = tokio::fs::File::open("/dev/null").await.expect("open harmless fd");
         let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Attach)
             .expect("scaffold");
         let commands = qmp_attach(
@@ -2626,7 +2626,7 @@ mod tests {
         });
 
         let mut client = QmpClient::connect(&socket).await.expect("connect fake qmp");
-        let file = std::fs::File::open("/dev/null").expect("open harmless fd");
+        let file = tokio::fs::File::open("/dev/null").await.expect("open harmless fd");
         let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Attach)
             .expect("scaffold");
         let mut commands = qmp_attach(
@@ -2888,7 +2888,7 @@ mod tests {
         let vm_dir = root.join("media");
         let record_path = vm_dir.join("installer-usb.json");
         assert_eq!(
-            std::fs::metadata(&root)
+            tokio::fs::metadata(&root).await
                 .expect("registry root metadata")
                 .permissions()
                 .mode()
@@ -2896,7 +2896,7 @@ mod tests {
             0o700
         );
         assert_eq!(
-            std::fs::metadata(&vm_dir)
+            tokio::fs::metadata(&vm_dir).await
                 .expect("registry vm metadata")
                 .permissions()
                 .mode()
@@ -2904,14 +2904,14 @@ mod tests {
             0o700
         );
         assert_eq!(
-            std::fs::metadata(&record_path)
+            tokio::fs::metadata(&record_path).await
                 .expect("registry record metadata")
                 .permissions()
                 .mode()
                 & 0o777,
             0o600
         );
-        let raw = std::fs::read_to_string(record_path).expect("record json");
+        let raw = tokio::fs::read_to_string(record_path).await.expect("record json");
         assert!(raw.contains("usb-Vendor_SecretSerial"));
     }
 
@@ -2934,14 +2934,14 @@ mod tests {
             .expect("write udev rules");
 
         assert_eq!(
-            std::fs::metadata(&path)
+            tokio::fs::metadata(&path).await
                 .expect("udev rule metadata")
                 .permissions()
                 .mode()
                 & 0o777,
             0o600
         );
-        let text = std::fs::read_to_string(&path).expect("udev rules");
+        let text = tokio::fs::read_to_string(&path).await.expect("udev rules");
         assert!(text.contains("ENV{UDISKS_IGNORE}=\"1\""));
         assert!(text.contains("*/dev/disk/by-id/usb-Vendor_SecretSerial*"));
         assert!(text.contains("*/dev/disk/by-id/usb-Vendor_SecretSerial-part1*"));
@@ -3170,15 +3170,15 @@ mod tests {
         assert!(audit.udev_rule_written);
         assert!(!audit.udev_reloaded);
 
-        let record = std::fs::read_to_string(registry_root.join("media/installer-usb.json"))
+        let record = tokio::fs::read_to_string(registry_root.join("media/installer-usb.json")).await
             .expect("registry record");
         assert!(record.contains("usb-Vendor_SecretSerial"));
 
-        let index = std::fs::read_to_string(redacted_index).expect("redacted index");
+        let index = tokio::fs::read_to_string(redacted_index).await.expect("redacted index");
         assert!(index.contains("identityHash"));
         assert!(!index.contains("usb-Vendor_SecretSerial"));
 
-        let rules = std::fs::read_to_string(rules_path).expect("udev rules");
+        let rules = tokio::fs::read_to_string(rules_path).await.expect("udev rules");
         assert!(rules.contains("ENV{UDISKS_IGNORE}=\"1\""));
         assert!(rules.contains("*/dev/disk/by-id/usb-Vendor_SecretSerial*"));
     }
@@ -3294,11 +3294,11 @@ mod tests {
 
         let root = tempfile::tempdir().expect("tempdir");
         let loop_dir = root.path().join("block/loop0/loop");
-        std::fs::create_dir_all(&loop_dir).expect("loop dir");
-        std::fs::write(
+        tokio::fs::create_dir_all(&loop_dir).await.expect("loop dir");
+        tokio::fs::write(
             loop_dir.join("backing_file"),
             "/var/lib/d2b/images/space image.img\n",
-        )
+        ).await
         .expect("backing file");
 
         assert!(image_has_loop_backing(root.path(), image)

@@ -811,6 +811,7 @@ async fn spawn_process(
             &role,
             &mut plan_input.mount_policy,
         )
+        .await
         .map_err(|error| {
             errored(format!(
                 "spawn-process: {}",
@@ -821,28 +822,30 @@ async fn spawn_process(
     // The stale-socket preflight cleanups (the retired arm's three
     // `cleanup_*_stale_socket` calls), on the final argv the daemon-side
     // handler composed.
-    crate::runtime::cleanup_cloud_hypervisor_stale_sockets(&role, &plan_input.argv).map_err(
-        |error| {
+    crate::runtime::cleanup_cloud_hypervisor_stale_sockets(&role, &plan_input.argv)
+        .await
+        .map_err(|error| {
             errored(format!(
                 "spawn-process: {}",
                 crate::runtime::broker_error_kernel_detail(error)
             ))
-        },
-    )?;
-    crate::runtime::cleanup_video_stale_socket(&role, &plan_input.argv).map_err(|error| {
-        errored(format!(
-            "spawn-process: {}",
-            crate::runtime::broker_error_kernel_detail(error)
-        ))
-    })?;
-    crate::runtime::cleanup_otel_host_bridge_stale_socket(&role, &plan_input.argv).map_err(
-        |error| {
+        })?;
+    crate::runtime::cleanup_video_stale_socket(&role, &plan_input.argv)
+        .await
+        .map_err(|error| {
             errored(format!(
                 "spawn-process: {}",
                 crate::runtime::broker_error_kernel_detail(error)
             ))
-        },
-    )?;
+        })?;
+    crate::runtime::cleanup_otel_host_bridge_stale_socket(&role, &plan_input.argv)
+        .await
+        .map_err(|error| {
+            errored(format!(
+                "spawn-process: {}",
+                crate::runtime::broker_error_kernel_detail(error)
+            ))
+        })?;
     // The serving-worker ACL grant (the retired arm's
     // `prepare_runner_launch_identity` serving posture): before the
     // spawn and before any descriptor is passed to the child, open the

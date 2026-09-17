@@ -34,6 +34,7 @@ use d2b_contracts_broker::broker_wire::{
 /// Picked up at compile time from `Cargo.toml`.
 pub const BROKER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub(crate) fn new_event_id() -> io::Result<String> {
     fs::read_to_string("/proc/sys/kernel/random/uuid").map(|uuid| uuid.trim().to_owned())
 }
@@ -455,6 +456,7 @@ impl AuditLog {
                 reply: reply_tx,
             })
             .map_err(|_| io::Error::other("audit worker unavailable"))?;
+        #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
         reply_rx
             .recv()
             .map_err(|_| io::Error::other("audit worker unavailable"))??;
@@ -1255,6 +1257,7 @@ impl Drop for AuditLog {
             .send(AuditCommand::Shutdown { exited: exited_tx })
             .is_ok()
         {
+            #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
             let _ = exited_rx.recv();
         }
     }

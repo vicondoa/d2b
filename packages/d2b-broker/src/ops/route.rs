@@ -813,7 +813,7 @@ mod tests {
         let record_path = root
             .join("network-routes")
             .join(format!("{}.json", intent.route_name.as_deref().unwrap()));
-        let before = std::fs::read(&record_path).unwrap();
+        let before = tokio::fs::read(&record_path).await.unwrap();
         let mut foreign = intent.clone();
         foreign.ownership_marker = Some("d2b managed: foreign".to_owned());
         for destroy in [false, true] {
@@ -824,7 +824,7 @@ mod tests {
                 Err(ApplyWithPreflightError::ForeignRoute)
             );
             assert!(exec.take_log().is_empty());
-            assert_eq!(std::fs::read(&record_path).unwrap(), before);
+            assert_eq!(tokio::fs::read(&record_path).await.unwrap(), before);
         }
         cleanup_route_test(&root);
     }

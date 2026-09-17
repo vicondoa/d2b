@@ -6,6 +6,7 @@
 //! the system manager or an exact same-UID user manager, performs all manager
 //! calls, and returns only a closed identity tuple plus an optional pidfd.
 
+use std::fs;
 use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -158,6 +159,7 @@ fn user_bus_path(uid: u32) -> PathBuf {
 /// that UID.  This prevents a caller from selecting an arbitrary session bus
 /// while still allowing the broker to keep manager connections out of the
 /// daemon and Provider processes.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn manager_connection(
     intent: &ResolvedRunnerIntent,
     domain: SystemdUnitDomain,
@@ -167,10 +169,10 @@ fn manager_connection(
         SystemdUnitDomain::User => {
             let runtime_dir = PathBuf::from("/run/user").join(intent.uid.to_string());
             let bus_path = user_bus_path(intent.uid);
-            let runtime_metadata = std::fs::metadata(&runtime_dir)
+            let runtime_metadata = fs::metadata(&runtime_dir)
                 .map_err(|_| SystemdError::UserManagerUnavailable)?;
             let bus_metadata =
-                std::fs::metadata(&bus_path).map_err(|_| SystemdError::UserManagerUnavailable)?;
+                fs::metadata(&bus_path).map_err(|_| SystemdError::UserManagerUnavailable)?;
             if !runtime_metadata.is_dir()
                 || runtime_metadata.uid() != intent.uid
                 || !bus_metadata.file_type().is_socket()
@@ -395,6 +397,7 @@ fn read_identity(
     }))
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn wait_identity(
     request: &d2b_contracts_broker::broker_wire::SystemdUnitRequest,
     intent: &ResolvedRunnerIntent,
@@ -532,6 +535,7 @@ pub fn stop(
     manager
         .call_method("StopUnit", &(name.as_str(), "replace"))
         .map_err(|_| SystemdError::Stop)?;
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     let deadline = Instant::now() + IDENTITY_READY_TIMEOUT;
     loop {
         match read_identity(&request.unit, &intent, &connection, &name) {

@@ -1285,7 +1285,7 @@ mod tests {
         let cfg = s.cfg();
         // The racer wins the create.
         fs::create_dir(&paths.swtpm_dir).unwrap();
-        fs::write(paths.swtpm_dir.join("attacker-nvram"), b"evil").unwrap();
+        tokio::fs::write(paths.swtpm_dir.join("attacker-nvram"), b"evil").await.unwrap();
 
         let per_vm_root_fd = path_safe::open_dir_path_safe(&paths.per_vm_root).unwrap();
         let err = create_fresh_swtpm_dir(&per_vm_root_fd, &cfg).unwrap_err();
@@ -1307,8 +1307,8 @@ mod tests {
             .expect("provision");
         // Drop an NVRAM-ish file + drift mode + add an ACL.
         let nvram = paths.swtpm_dir.join("tpm2-00.permall");
-        fs::write(&nvram, b"nvram-state").unwrap();
-        fs::set_permissions(&paths.swtpm_dir, fs::Permissions::from_mode(0o770)).unwrap();
+        tokio::fs::write(&nvram, b"nvram-state").await.unwrap();
+        tokio::fs::set_permissions(&paths.swtpm_dir, fs::Permissions::from_mode(0o770)).await.unwrap();
         let _ = pidfd_sys::run_setfacl_op_on_fd(
             path_safe::open_dir_path_safe(&paths.swtpm_dir)
                 .unwrap()
@@ -1324,7 +1324,7 @@ mod tests {
         assert_eq!(audit.marker_result, SwtpmMarkerResult::Verified);
         assert_eq!(mode_of(&paths.swtpm_dir), 0o700);
         // Contents preserved.
-        assert_eq!(fs::read(&nvram).unwrap(), b"nvram-state");
+        assert_eq!(tokio::fs::read(&nvram).await.unwrap(), b"nvram-state");
         // ACL cleared.
         let (a, d) = path_safe::fd_extended_acl_present(
             path_safe::open_dir_path_safe(&paths.swtpm_dir)
@@ -1343,9 +1343,9 @@ mod tests {
         s.make_per_vm_root(&paths);
         let cfg = s.cfg();
         // Pre-existing correct-owner dir, NO marker (legacy deployment).
-        fs::create_dir_all(&paths.swtpm_dir).unwrap();
-        fs::set_permissions(&paths.swtpm_dir, fs::Permissions::from_mode(0o700)).unwrap();
-        fs::write(paths.swtpm_dir.join("tpm2-00.permall"), b"legacy").unwrap();
+        tokio::fs::create_dir_all(&paths.swtpm_dir).await.unwrap();
+        tokio::fs::set_permissions(&paths.swtpm_dir, fs::Permissions::from_mode(0o700)).await.unwrap();
+        tokio::fs::write(paths.swtpm_dir.join("tpm2-00.permall"), b"legacy").await.unwrap();
 
         let err = harden(&paths, &cfg)
             .await
@@ -1362,8 +1362,8 @@ mod tests {
         s.make_per_vm_root(&paths);
         let cfg = s.cfg();
         let legacy = paths.per_vm_root.join("swtpm-legacy");
-        fs::create_dir_all(&legacy).unwrap();
-        fs::write(legacy.join("tpm2-00.permall"), b"legacy").unwrap();
+        tokio::fs::create_dir_all(&legacy).await.unwrap();
+        tokio::fs::write(legacy.join("tpm2-00.permall"), b"legacy").await.unwrap();
 
         let err = harden(&paths, &cfg)
             .await
@@ -1384,7 +1384,7 @@ mod tests {
         let mut cfg = s.cfg();
         // The dir on disk is owned by the current uid; configure a
         // DIFFERENT expected uid so the owner check trips.
-        fs::create_dir_all(&paths.swtpm_dir).unwrap();
+        tokio::fs::create_dir_all(&paths.swtpm_dir).await.unwrap();
         cfg.expected_uid = cur_uid().wrapping_add(424_242);
 
         let err = harden(&paths, &cfg)
@@ -1406,7 +1406,7 @@ mod tests {
         s.make_per_vm_root(&paths);
         let cfg = s.cfg();
         let target = s.root.join("evil-target");
-        fs::create_dir_all(&target).unwrap();
+        tokio::fs::create_dir_all(&target).await.unwrap();
         std::os::unix::fs::symlink(&target, &paths.swtpm_dir).unwrap();
 
         let err = harden(&paths, &cfg)
@@ -1422,7 +1422,7 @@ mod tests {
         let paths = s.paths("zeta");
         s.make_per_vm_root(&paths);
         let cfg = s.cfg();
-        fs::write(&paths.swtpm_dir, b"i am a file").unwrap();
+        tokio::fs::write(&paths.swtpm_dir, b"i am a file").await.unwrap();
 
         let err = harden(&paths, &cfg)
             .await
@@ -1441,7 +1441,7 @@ mod tests {
         harden(&paths, &cfg)
             .await
             .expect("provision");
-        fs::remove_dir_all(&paths.swtpm_dir).unwrap();
+        tokio::fs::remove_dir_all(&paths.swtpm_dir).await.unwrap();
 
         let err = harden(&paths, &cfg)
             .await
@@ -1465,9 +1465,9 @@ mod tests {
         // allocated) before creating the replacement prevents inode
         // reuse from accidentally matching the marked identity.
         let stash = paths.per_vm_root.join("swtpm-stash");
-        fs::rename(&paths.swtpm_dir, &stash).unwrap();
+        tokio::fs::rename(&paths.swtpm_dir, &stash).await.unwrap();
         fs::create_dir(&paths.swtpm_dir).unwrap();
-        fs::set_permissions(&paths.swtpm_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        tokio::fs::set_permissions(&paths.swtpm_dir, fs::Permissions::from_mode(0o700)).await.unwrap();
 
         let err = harden(&paths, &cfg)
             .await
@@ -1500,12 +1500,12 @@ mod tests {
         let cfg = s.cfg();
         // Pre-create runtime dir with a distinctive mode + a sibling
         // file + a stale tpm.sock.
-        fs::create_dir_all(&paths.runtime_dir).unwrap();
-        fs::set_permissions(&paths.runtime_dir, fs::Permissions::from_mode(0o751)).unwrap();
+        tokio::fs::create_dir_all(&paths.runtime_dir).await.unwrap();
+        tokio::fs::set_permissions(&paths.runtime_dir, fs::Permissions::from_mode(0o751)).await.unwrap();
         let sibling = paths.runtime_dir.join("vsock.sock");
-        fs::write(&sibling, b"keepme").unwrap();
+        tokio::fs::write(&sibling, b"keepme").await.unwrap();
         let stale = paths.runtime_dir.join("tpm.sock");
-        fs::write(&stale, b"stale").unwrap();
+        tokio::fs::write(&stale, b"stale").await.unwrap();
 
         harden(&paths, &cfg)
             .await
@@ -1566,8 +1566,8 @@ mod tests {
         // semantics must deny the rename/unlink.
         let s = Scratch::new("sticky");
         let paths = s.paths("mu");
-        fs::create_dir_all(&paths.per_vm_root).unwrap();
-        fs::set_permissions(&paths.per_vm_root, fs::Permissions::from_mode(0o3770)).unwrap();
+        tokio::fs::create_dir_all(&paths.per_vm_root).await.unwrap();
+        tokio::fs::set_permissions(&paths.per_vm_root, fs::Permissions::from_mode(0o3770)).await.unwrap();
         let owner_uid: u32 = 65_531;
         let foreign_uid: u32 = 65_532;
         let cfg = SwtpmHardenConfig {

@@ -129,6 +129,7 @@ pub fn audit_for(
 /// `OwnedFd` is `O_CLOEXEC` (`std::fs::OpenOptions` sets that by
 /// default on Linux); the broker's `SCM_RIGHTS` send path clears
 /// CLOEXEC on the recipient side only.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn open_device_fd(path: &Path, read_write: bool) -> Result<OwnedFd, std::io::Error> {
     use std::fs::OpenOptions;
     use std::os::unix::fs::OpenOptionsExt;

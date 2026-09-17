@@ -16,6 +16,7 @@ pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 /// waits before it tries again, bounded by the dial's own budget.
 const DIAL_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn connect_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     let fd = socket(
         AddressFamily::Unix,
@@ -51,6 +52,7 @@ pub fn send_json_frame<T: Serialize>(fd: RawFd, value: &T) -> io::Result<()> {
 /// file descriptors. When the fd slice is empty this is byte-equivalent
 /// to a pure `send()` frame for backward compatibility with all existing
 /// broker / daemon callers; fd-bearing responses use the same framing.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn send_json_frame_with_fds<T: Serialize>(
     fd: RawFd,
     value: &T,
@@ -83,6 +85,7 @@ pub fn send_json_frame_with_fds<T: Serialize>(
     crate::fd_passing::send_fds(fd, &frame, fds)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn recv_json_frame<T: DeserializeOwned>(fd: RawFd) -> io::Result<Option<T>> {
     let mut buffer = vec![0_u8; MAX_FRAME_SIZE + 4];
     let read = recv(fd, &mut buffer, MsgFlags::empty()).map_err(io_error)?;
@@ -334,6 +337,7 @@ pub async fn connect_seqpacket_bounded(
 }
 
 /// Accept one connection from a nonblocking listening socket.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn accept_seqpacket(listener: &OwnedFd) -> io::Result<OwnedFd> {
     loop {
         match accept4(

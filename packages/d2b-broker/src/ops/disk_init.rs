@@ -1046,7 +1046,7 @@ mod tests {
             .join("vms")
             .join("test-vm")
             .join("store-overlay.img");
-        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        tokio::fs::create_dir_all(target.parent().unwrap()).await.unwrap();
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
@@ -1057,7 +1057,7 @@ mod tests {
 
         assert!(target.exists(), "file must exist after creation");
 
-        let meta = fs::metadata(&target).expect("stat file");
+        let meta = tokio::fs::metadata(&target).await.expect("stat file");
         // Size should be at least `size_bytes` (fallocate may round up).
         assert!(
             meta.len() >= 4096,
@@ -1074,7 +1074,7 @@ mod tests {
         assert_eq!(meta.uid(), nix::unistd::geteuid().as_raw());
         assert!(has_ext4_superblock(&fs::File::open(&target).unwrap(), &target).unwrap());
 
-        let _ = fs::remove_dir_all(&scratch);
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
     }
 
     #[tokio::test]
@@ -1095,10 +1095,10 @@ mod tests {
         .expect("existing image validates");
         assert_eq!(outcome, DiskInitOutcome::Skipped);
 
-        let meta = fs::metadata(&target).expect("stat file");
+        let meta = tokio::fs::metadata(&target).await.expect("stat file");
         assert_eq!(meta.len(), 4096);
 
-        let _ = fs::remove_dir_all(&scratch);
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
     }
 
     #[tokio::test]
@@ -1119,7 +1119,7 @@ mod tests {
         assert_eq!(outcome, DiskInitOutcome::Repaired);
         assert!(has_ext4_superblock(&fs::File::open(&target).unwrap(), &target).unwrap());
 
-        let _ = fs::remove_dir_all(&scratch);
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
     }
 
     #[tokio::test]
@@ -1138,11 +1138,11 @@ mod tests {
         .await
         .expect("zero-length image repairs");
         assert_eq!(outcome, DiskInitOutcome::Repaired);
-        let meta = fs::metadata(&target).expect("stat repaired image");
+        let meta = tokio::fs::metadata(&target).await.expect("stat repaired image");
         assert_eq!(meta.len(), 4096);
         assert!(has_ext4_superblock(&fs::File::open(&target).unwrap(), &target).unwrap());
 
-        let _ = fs::remove_dir_all(&scratch);
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
     }
 
     #[tokio::test]
@@ -1150,8 +1150,8 @@ mod tests {
     async fn existing_non_ext4_with_data_fails_closed() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
-        fs::write(&target, vec![0xAA; 4096]).unwrap();
-        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        tokio::fs::write(&target, vec![0xAA; 4096]).await.unwrap();
+        tokio::fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).await.unwrap();
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
@@ -1168,7 +1168,7 @@ mod tests {
         );
         assert!(err.to_string().contains("inspect and back up"));
 
-        let _ = fs::remove_dir_all(&scratch);
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
     }
 
     #[tokio::test]
@@ -1193,10 +1193,10 @@ mod tests {
         .await
         .expect("safe stale posture repairs automatically");
         assert_eq!(outcome, DiskInitOutcome::PostureRepaired);
-        let mode = fs::metadata(&target).unwrap().mode() & 0o777;
+        let mode = tokio::fs::metadata(&target).await.unwrap().mode() & 0o777;
         assert_eq!(mode, 0o600);
 
-        let _ = fs::remove_dir_all(&scratch);
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
     }
 
     #[tokio::test]
@@ -1215,11 +1215,11 @@ mod tests {
         .await
         .expect("sparse stale posture repairs and formats");
         assert_eq!(outcome, DiskInitOutcome::RepairedWithPosture);
-        let meta = fs::metadata(&target).unwrap();
+        let meta = tokio::fs::metadata(&target).await.unwrap();
         assert_eq!(meta.mode() & 0o777, 0o600);
         assert!(has_ext4_superblock(&fs::File::open(&target).unwrap(), &target).unwrap());
 
-        let _ = fs::remove_dir_all(&scratch);
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
     }
 
     #[tokio::test]
@@ -1240,9 +1240,9 @@ mod tests {
             .expect_err("multiply-linked image must fail closed");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("link count"));
-        assert_eq!(fs::metadata(&target).unwrap().mode() & 0o777, 0o644);
+        assert_eq!(tokio::fs::metadata(&target).await.unwrap().mode() & 0o777, 0o644);
 
-        let _ = fs::remove_dir_all(&scratch);
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
     }
 
     #[test]
@@ -1293,7 +1293,7 @@ mod tests {
             rendered.len()
         );
 
-        let _ = fs::remove_dir_all(&scratch);
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
     }
 
     #[tokio::test]
@@ -1302,7 +1302,7 @@ mod tests {
         let scratch = scratch_root();
         let real = scratch.join("real.img");
         let link = scratch.join("link.img");
-        fs::write(&real, b"x").unwrap();
+        tokio::fs::write(&real, b"x").await.unwrap();
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let spec = test_spec(link, 4096, true);
         let tool = fake_mkfs_tool(&scratch);
@@ -1312,7 +1312,7 @@ mod tests {
             .expect_err("symlink must fail closed");
         assert!(err.to_string().contains("O_NOFOLLOW"));
 
-        let _ = fs::remove_dir_all(&scratch);
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
     }
 
     #[tokio::test]
@@ -1336,7 +1336,7 @@ mod tests {
             .expect_err("intermediate symlink must fail closed");
         assert!(err.to_string().contains("open parent directory"));
 
-        let _ = fs::remove_dir_all(&scratch);
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
     }
 
     #[tokio::test]
@@ -1358,7 +1358,7 @@ mod tests {
                 || err.to_string().contains("Invalid argument")
         );
 
-        let _ = fs::remove_dir_all(&scratch);
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
     }
 
     #[test]

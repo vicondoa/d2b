@@ -6,9 +6,9 @@
 //! on vendor/product plus physical bus/port/sysfs topology; serial-like
 //! descriptors are intentionally ignored.
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 use d2b_core::bundle_resolver::ResolvedUsbipBindIntent;
 use d2b_core::host::VendorProductPair;
@@ -167,23 +167,23 @@ pub struct UsbipHostDeviceInspection {
     pub driver: UsbipDriverBinding,
 }
 
-pub fn enforce_usbip_physical_policy(
+pub async fn enforce_usbip_physical_policy(
     intent: &ResolvedUsbipBindIntent,
     sysfs_root: &Path,
 ) -> Result<UsbipHostDeviceInspection, UsbipHostInspectionError> {
-    let inspection = inspect_usbip_host_device(sysfs_root, &intent.bus_id)?;
+    let inspection = inspect_usbip_host_device(sysfs_root, &intent.bus_id).await?;
     enforce_allowlist(intent, inspection.vendor, inspection.product)?;
     Ok(inspection)
 }
 
-pub fn inspect_usbip_host_device(
+pub async fn inspect_usbip_host_device(
     sysfs_root: &Path,
     bus_id: &str,
 ) -> Result<UsbipHostDeviceInspection, UsbipHostInspectionError> {
-    inspect_usbip_host_device_with_reader(sysfs_root, bus_id, &FsSysfsAttrReader)
+    inspect_usbip_host_device_with_reader(sysfs_root, bus_id, &FsSysfsAttrReader).await
 }
 
-fn inspect_usbip_host_device_with_reader<R: SysfsAttrReader>(
+async fn inspect_usbip_host_device_with_reader<R: SysfsAttrReader>(
     sysfs_root: &Path,
     bus_id: &str,
     reader: &R,
@@ -198,7 +198,7 @@ fn inspect_usbip_host_device_with_reader<R: SysfsAttrReader>(
     }
 
     let device_dir = sysfs_root.join(bus_id);
-    match fs::metadata(&device_dir) {
+    match tokio::fs::metadata(&device_dir).await {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => {
             return Err(UsbipHostInspectionError::PathSafetyViolation {
@@ -220,20 +220,19 @@ fn inspect_usbip_host_device_with_reader<R: SysfsAttrReader>(
         }
     }
 
-    let initial_devnum = read_decimal_attr(reader, &device_dir, bus_id, "devnum")?;
-    let vendor = read_hex_attr(reader, &device_dir, bus_id, "idVendor")?;
-    let product = read_hex_attr(reader, &device_dir, bus_id, "idProduct")?;
-    let observed_bus = read_decimal_attr(reader, &device_dir, bus_id, "busnum")?;
+    let initial_devnum = read_decimal_attr(reader, &device_dir, bus_id, "devnum").await?;
+    let vendor = read_hex_attr(reader, &device_dir, bus_id, "idVendor").await?;
+    let product = read_hex_attr(reader, &device_dir, bus_id, "idProduct").await?;
+    let observed_bus = read_decimal_attr(reader, &device_dir, bus_id, "busnum").await?;
     let observed_ports =
-        parse_port_chain(&read_required_attr(reader, &device_dir, bus_id, "devpath")?).map_err(
-            |value| UsbipHostInspectionError::AttrParse {
+        parse_port_chain(&read_required_attr(reader, &device_dir, bus_id, "devpath").await?)
+            .map_err(|value| UsbipHostInspectionError::AttrParse {
                 bus_id: bus_id.to_owned(),
                 attr: "devpath",
                 value,
-            },
-        )?;
+            })?;
     let observed_devnum =
-        read_decimal_attr(reader, &device_dir, bus_id, "devnum").map_err(|error| match error {
+        read_decimal_attr(reader, &device_dir, bus_id, "devnum").await.map_err(|error| match error {
             UsbipHostInspectionError::MissingRequiredAttr { attr: "devnum", .. } => {
                 UsbipHostInspectionError::DeviceDepartedDuringInspection {
                     bus_id: bus_id.to_owned(),
@@ -269,17 +268,17 @@ fn inspect_usbip_host_device_with_reader<R: SysfsAttrReader>(
         device_node: PathBuf::from(format!(
             "/dev/bus/usb/{observed_bus:03}/{observed_devnum:03}"
         )),
-        driver: inspect_usbip_driver_binding(sysfs_root, bus_id)?,
+        driver: inspect_usbip_driver_binding(sysfs_root, bus_id).await?,
     })
 }
 
-pub fn inspect_usbip_driver_binding(
+pub async fn inspect_usbip_driver_binding(
     sysfs_root: &Path,
     bus_id: &str,
 ) -> Result<UsbipDriverBinding, UsbipHostInspectionError> {
     validate_bus_id_for_path(bus_id)?;
     let driver_link = sysfs_root.join(bus_id).join("driver");
-    match fs::read_link(&driver_link) {
+    match tokio::fs::read_link(&driver_link).await {
         Ok(target) => {
             let driver = target
                 .file_name()
@@ -304,11 +303,11 @@ pub fn inspect_usbip_driver_binding(
     }
 }
 
-pub fn ensure_usbip_host_driver_unbind_supported(
+pub async fn ensure_usbip_host_driver_unbind_supported(
     sysfs_root: &Path,
 ) -> Result<(), UsbipHostInspectionError> {
     let unbind_path = usbip_host_driver_attr_path(sysfs_root, "unbind")?;
-    match fs::metadata(&unbind_path) {
+    match tokio::fs::metadata(&unbind_path).await {
         Ok(metadata) if metadata.is_file() => Ok(()),
         Ok(_) => Err(UsbipHostInspectionError::DriverUnbindUnsupported {
             detail: format!("{} is not a sysfs attribute file", unbind_path.display()),
@@ -409,24 +408,30 @@ fn parse_port_chain(raw: &str) -> Result<Vec<u8>, String> {
 }
 
 trait SysfsAttrReader {
-    fn read_to_string(&self, path: &Path) -> io::Result<String>;
+    fn read_to_string<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = io::Result<String>> + Send + 'a>>;
 }
 
 struct FsSysfsAttrReader;
 
 impl SysfsAttrReader for FsSysfsAttrReader {
-    fn read_to_string(&self, path: &Path) -> io::Result<String> {
-        fs::read_to_string(path)
+    fn read_to_string<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = io::Result<String>> + Send + 'a>> {
+        Box::pin(tokio::fs::read_to_string(path))
     }
 }
 
-fn read_hex_attr<R: SysfsAttrReader>(
+async fn read_hex_attr<R: SysfsAttrReader>(
     reader: &R,
     device_dir: &Path,
     bus_id: &str,
     attr: &'static str,
 ) -> Result<u16, UsbipHostInspectionError> {
-    let raw = read_required_attr(reader, device_dir, bus_id, attr)?;
+    let raw = read_required_attr(reader, device_dir, bus_id, attr).await?;
     u16::from_str_radix(raw.trim_start_matches("0x"), 16).map_err(|_| {
         UsbipHostInspectionError::AttrParse {
             bus_id: bus_id.to_owned(),
@@ -436,13 +441,13 @@ fn read_hex_attr<R: SysfsAttrReader>(
     })
 }
 
-fn read_decimal_attr<R: SysfsAttrReader>(
+async fn read_decimal_attr<R: SysfsAttrReader>(
     reader: &R,
     device_dir: &Path,
     bus_id: &str,
     attr: &'static str,
 ) -> Result<u16, UsbipHostInspectionError> {
-    let raw = read_required_attr(reader, device_dir, bus_id, attr)?;
+    let raw = read_required_attr(reader, device_dir, bus_id, attr).await?;
     raw.parse::<u16>()
         .map_err(|_| UsbipHostInspectionError::AttrParse {
             bus_id: bus_id.to_owned(),
@@ -451,14 +456,14 @@ fn read_decimal_attr<R: SysfsAttrReader>(
         })
 }
 
-fn read_required_attr<R: SysfsAttrReader>(
+async fn read_required_attr<R: SysfsAttrReader>(
     reader: &R,
     device_dir: &Path,
     bus_id: &str,
     attr: &'static str,
 ) -> Result<String, UsbipHostInspectionError> {
     let path = device_dir.join(attr);
-    match reader.read_to_string(&path) {
+    match reader.read_to_string(&path).await {
         Ok(raw) => Ok(raw.trim_end_matches(&['\r', '\n'][..]).to_owned()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             Err(UsbipHostInspectionError::MissingRequiredAttr {
@@ -479,8 +484,9 @@ fn read_required_attr<R: SysfsAttrReader>(
 mod tests {
     use super::*;
     use d2b_core::host::VendorProductPair;
-    use std::cell::Cell;
+    use std::fs;
     use std::os::unix::fs::symlink;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn temp_root(name: &str) -> PathBuf {
         let base = crate::test_scratch_root().join("usbip-host-tests");
@@ -508,7 +514,7 @@ mod tests {
     struct SequencedDevnumReader {
         first: &'static str,
         second: SecondDevnumRead,
-        devnum_reads: Cell<usize>,
+        devnum_reads: AtomicUsize,
     }
 
     impl SequencedDevnumReader {
@@ -516,7 +522,7 @@ mod tests {
             Self {
                 first,
                 second: SecondDevnumRead::Value(second),
-                devnum_reads: Cell::new(0),
+                devnum_reads: AtomicUsize::new(0),
             }
         }
 
@@ -524,27 +530,32 @@ mod tests {
             Self {
                 first,
                 second: SecondDevnumRead::Error(io::ErrorKind::NotFound),
-                devnum_reads: Cell::new(0),
+                devnum_reads: AtomicUsize::new(0),
             }
         }
     }
 
     impl SysfsAttrReader for SequencedDevnumReader {
-        fn read_to_string(&self, path: &Path) -> io::Result<String> {
-            if path.file_name().and_then(|name| name.to_str()) != Some("devnum") {
-                return fs::read_to_string(path);
-            }
+        fn read_to_string<'a>(
+            &'a self,
+            path: &'a Path,
+        ) -> Pin<Box<dyn Future<Output = io::Result<String>> + Send + 'a>> {
+            Box::pin(async move {
+                if path.file_name().and_then(|name| name.to_str()) != Some("devnum") {
+                    return tokio::fs::read_to_string(path).await;
+                }
 
-            let read_index = self.devnum_reads.get();
-            self.devnum_reads.set(read_index + 1);
-            match read_index {
-                0 => Ok(format!("{}\n", self.first)),
-                1 => match self.second {
-                    SecondDevnumRead::Value(value) => Ok(format!("{value}\n")),
-                    SecondDevnumRead::Error(kind) => Err(io::Error::from(kind)),
-                },
-                _ => panic!("unexpected extra devnum read"),
-            }
+                let read_index = self.devnum_reads.load(Ordering::Relaxed);
+                self.devnum_reads.store(read_index + 1, Ordering::Relaxed);
+                match read_index {
+                    0 => Ok(format!("{}\n", self.first)),
+                    1 => match self.second {
+                        SecondDevnumRead::Value(value) => Ok(format!("{value}\n")),
+                        SecondDevnumRead::Error(kind) => Err(io::Error::from(kind)),
+                    },
+                    _ => panic!("unexpected extra devnum read"),
+                }
+            })
         }
     }
 
@@ -560,8 +571,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn enforces_vendor_product_and_physical_topology() {
+    #[tokio::test]
+    async fn enforces_vendor_product_and_physical_topology() {
         let root = temp_root("match");
         write_device(&root, "1-2.3", "1050", "0407", "2.3");
         symlink(
@@ -577,32 +588,34 @@ mod tests {
             }]),
             &root,
         )
+        .await
         .expect("policy matches");
         assert_eq!(
             inspection.device_node,
             PathBuf::from("/dev/bus/usb/001/007")
         );
         assert_eq!(inspection.driver, UsbipDriverBinding::BoundToUsbipHost);
-        let _ = fs::remove_dir_all(root);
+        tokio::fs::remove_dir_all(root).await.expect("cleanup");
     }
 
-    #[test]
-    fn rejects_serial_only_or_empty_allowlist_policy() {
+    #[tokio::test]
+    async fn rejects_serial_only_or_empty_allowlist_policy() {
         let root = temp_root("allowlist-missing");
         write_device(&root, "1-2.3", "1050", "0407", "2.3");
-        fs::write(root.join("1-2.3").join("serial"), b"spoofable\n").expect("serial");
+        tokio::fs::write(root.join("1-2.3").join("serial"), b"spoofable\n").await.expect("serial");
 
         let error = enforce_usbip_physical_policy(&intent(Vec::new()), &root)
+            .await
             .expect_err("missing allowlist fails closed");
         assert!(matches!(
             error,
             UsbipHostInspectionError::AllowlistMissing { .. }
         ));
-        let _ = fs::remove_dir_all(root);
+        tokio::fs::remove_dir_all(root).await.expect("cleanup");
     }
 
-    #[test]
-    fn rejects_topology_mismatch_even_when_vid_pid_match() {
+    #[tokio::test]
+    async fn rejects_topology_mismatch_even_when_vid_pid_match() {
         let root = temp_root("topology-mismatch");
         write_device(&root, "1-2.3", "1050", "0407", "2.4");
 
@@ -613,21 +626,23 @@ mod tests {
             }]),
             &root,
         )
+        .await
         .expect_err("topology mismatch fails");
         assert!(matches!(
             error,
             UsbipHostInspectionError::TopologyMismatch { .. }
         ));
-        let _ = fs::remove_dir_all(root);
+        tokio::fs::remove_dir_all(root).await.expect("cleanup");
     }
 
-    #[test]
-    fn rejects_devnum_change_during_identity_inspection() {
+    #[tokio::test]
+    async fn rejects_devnum_change_during_identity_inspection() {
         let root = temp_root("devnum-change");
         write_device(&root, "1-2.3", "1050", "0407", "2.3");
         let reader = SequencedDevnumReader::changing("7", "8");
 
         let error = inspect_usbip_host_device_with_reader(&root, "1-2.3", &reader)
+            .await
             .expect_err("devnum change fails closed");
         assert!(matches!(
             error,
@@ -637,57 +652,58 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(reader.devnum_reads.get(), 2);
-        let _ = fs::remove_dir_all(root);
+        assert_eq!(reader.devnum_reads.load(Ordering::Relaxed), 2);
+        tokio::fs::remove_dir_all(root).await.expect("cleanup");
     }
 
-    #[test]
-    fn rejects_device_departure_during_identity_inspection() {
+    #[tokio::test]
+    async fn rejects_device_departure_during_identity_inspection() {
         let root = temp_root("devnum-departed");
         write_device(&root, "1-2.3", "1050", "0407", "2.3");
         let reader = SequencedDevnumReader::departing_after_first_read("7");
 
         let error = inspect_usbip_host_device_with_reader(&root, "1-2.3", &reader)
+            .await
             .expect_err("device departure fails closed");
         assert!(matches!(
             error,
             UsbipHostInspectionError::DeviceDepartedDuringInspection { .. }
         ));
-        assert_eq!(reader.devnum_reads.get(), 2);
-        let _ = fs::remove_dir_all(root);
+        assert_eq!(reader.devnum_reads.load(Ordering::Relaxed), 2);
+        tokio::fs::remove_dir_all(root).await.expect("cleanup");
     }
 
-    #[test]
-    fn rejects_invalid_busid_before_path_join() {
+    #[tokio::test]
+    async fn rejects_invalid_busid_before_path_join() {
         let root = temp_root("invalid-busid");
-        let error = inspect_usbip_host_device(&root, "../1-2").expect_err("invalid bus id");
+        let error = inspect_usbip_host_device(&root, "../1-2").await.expect_err("invalid bus id");
         assert!(matches!(
             error,
             UsbipHostInspectionError::InvalidBusId { .. }
         ));
-        let _ = fs::remove_dir_all(root);
+        tokio::fs::remove_dir_all(root).await.expect("cleanup");
     }
 
-    #[test]
-    fn checks_usbip_host_driver_unbind_support_explicitly() {
+    #[tokio::test]
+    async fn checks_usbip_host_driver_unbind_support_explicitly() {
         let root = temp_root("unbind-support")
             .join("sys")
             .join("bus")
             .join("usb")
             .join("devices");
-        fs::create_dir_all(&root).expect("devices root");
+        tokio::fs::create_dir_all(&root).await.expect("devices root");
         let driver = root.parent().unwrap().join("drivers").join("usbip-host");
-        fs::create_dir_all(&driver).expect("driver root");
-        fs::write(driver.join("unbind"), b"").expect("unbind attr");
-        ensure_usbip_host_driver_unbind_supported(&root).expect("unbind supported");
+        tokio::fs::create_dir_all(&driver).await.expect("driver root");
+        tokio::fs::write(driver.join("unbind"), b"").await.expect("unbind attr");
+        ensure_usbip_host_driver_unbind_supported(&root).await.expect("unbind supported");
 
-        fs::remove_file(driver.join("unbind")).expect("remove attr");
+        tokio::fs::remove_file(driver.join("unbind")).await.expect("remove attr");
         let error =
-            ensure_usbip_host_driver_unbind_supported(&root).expect_err("missing attr fails");
+            ensure_usbip_host_driver_unbind_supported(&root).await.expect_err("missing attr fails");
         assert!(matches!(
             error,
             UsbipHostInspectionError::DriverUnbindUnsupported { .. }
         ));
-        let _ = fs::remove_dir_all(root.ancestors().nth(4).unwrap());
+        tokio::fs::remove_dir_all(root.ancestors().nth(4).unwrap()).await.expect("cleanup");
     }
 }

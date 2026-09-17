@@ -449,7 +449,6 @@ async fn sync_parent(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use d2b_contracts_broker::host_generation::{
         HandoffCallerRole, HostGenerationHandoffIntent, SourceGenerationCompatibilityFloorV1,
     };
@@ -481,20 +480,20 @@ mod tests {
             std::process::id(),
             std::thread::current().name().unwrap_or("test")
         ));
-        let _ = fs::remove_dir_all(&directory);
+        let _ = tokio::fs::remove_dir_all(&directory).await;
         let first = apply(&directory, &request()).await.unwrap();
         let second = apply(&directory, &request()).await.unwrap();
         assert_eq!(first.state, HandoffState::Completed);
         assert_eq!(first, second);
         assert!(!first.source_remains_usable);
-        let _ = fs::remove_dir_all(directory);
+        let _ = tokio::fs::remove_dir_all(directory).await;
     }
 
     #[tokio::test]
     async fn target_substitution_is_refused_before_journal_mutation() {
         let directory = PathBuf::from("target")
             .join(format!("d2b-handoff-substitution-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&directory);
+        let _ = tokio::fs::remove_dir_all(&directory).await;
         let mut request = request();
         request.target = ResourceRef::parse("Host/other").unwrap();
         assert!(matches!(
@@ -506,7 +505,7 @@ mod tests {
         // The flock needs the state dir itself, but the journal must not
         // have been touched: no `host-generation-handoffs` subtree exists.
         assert!(!directory.join(JOURNAL_DIR).exists());
-        let _ = fs::remove_dir_all(directory);
+        let _ = tokio::fs::remove_dir_all(directory).await;
     }
 
     #[tokio::test]

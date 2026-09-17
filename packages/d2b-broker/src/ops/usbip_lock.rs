@@ -86,6 +86,7 @@ pub fn ensure_lock_root(parent: &Path) -> Result<OwnedFd, UsbipLockError> {
 }
 
 /// Acquire a per-busid lock; refuses if already held.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn acquire_lock(
     lock_path: &Path,
     owner_vm: &str,

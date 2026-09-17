@@ -1284,6 +1284,7 @@ fn chown_atomic_target(path: &Path, uid: u32, gid: u32) -> Result<(), ReconcileE
 mod fake {
     use super::*;
     use std::collections::BTreeMap;
+    use std::fs;
     use std::sync::Mutex;
 
     /// Recording fake executor for unit/integration tests. Captures
@@ -1523,7 +1524,7 @@ mod fake {
                     && expected_bus_id == bus_id
                 {
                     let _ =
-                        std::fs::write(sysfs_root.join(bus_id).join("driver"), b"not-a-symlink");
+                        fs::write(sysfs_root.join(bus_id).join("driver"), b"not-a-symlink");
                 }
                 if subcommand == UsbipSubcommand::Unbind {
                     let prior = self.log.lock().unwrap();
@@ -1538,7 +1539,7 @@ mod fake {
                             )
                         })
                     {
-                        let _ = std::fs::remove_file(sysfs_root.join(bus_id).join("driver"));
+                        let _ = fs::remove_file(sysfs_root.join(bus_id).join("driver"));
                     }
                     drop(prior);
                 }
@@ -1696,9 +1697,9 @@ mod tests {
         exec.write_atomic_file(&target, b"127.0.0.1 localhost\n", 0o644)
             .await
             .unwrap();
-        let read = std::fs::read_to_string(&target).unwrap();
+        let read = tokio::fs::read_to_string(&target).await.unwrap();
         assert_eq!(read, "127.0.0.1 localhost\n");
-        let perms = std::fs::metadata(&target).unwrap().permissions();
+        let perms = tokio::fs::metadata(&target).await.unwrap().permissions();
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(perms.mode() & 0o777, 0o644);
     }
@@ -1770,9 +1771,9 @@ mod tests {
     async fn system_shutdown_usbip_streams_writes_sockfd_down_when_used() {
         let root = usbip_stream_test_root("used");
         let device = root.join("1-2");
-        std::fs::create_dir_all(&device).expect("device");
-        std::fs::write(device.join("usbip_status"), b"2\n").expect("status");
-        std::fs::write(device.join("usbip_sockfd"), b"7\n").expect("sockfd");
+        tokio::fs::create_dir_all(&device).await.expect("device");
+        tokio::fs::write(device.join("usbip_status"), b"2\n").await.expect("status");
+        tokio::fs::write(device.join("usbip_sockfd"), b"7\n").await.expect("sockfd");
 
         SystemReconcileExecutor
             .shutdown_usbip_streams(&root, "1-2")
@@ -1780,10 +1781,10 @@ mod tests {
             .expect("shutdown succeeds");
 
         assert_eq!(
-            std::fs::read_to_string(device.join("usbip_sockfd")).unwrap(),
+            tokio::fs::read_to_string(device.join("usbip_sockfd")).await.unwrap(),
             "-1\n"
         );
-        let _ = std::fs::remove_dir_all(root);
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]
@@ -1791,9 +1792,9 @@ mod tests {
     async fn system_shutdown_usbip_streams_skips_available_device() {
         let root = usbip_stream_test_root("available");
         let device = root.join("1-2");
-        std::fs::create_dir_all(&device).expect("device");
-        std::fs::write(device.join("usbip_status"), b"1\n").expect("status");
-        std::fs::write(device.join("usbip_sockfd"), b"7\n").expect("sockfd");
+        tokio::fs::create_dir_all(&device).await.expect("device");
+        tokio::fs::write(device.join("usbip_status"), b"1\n").await.expect("status");
+        tokio::fs::write(device.join("usbip_sockfd"), b"7\n").await.expect("sockfd");
 
         SystemReconcileExecutor
             .shutdown_usbip_streams(&root, "1-2")
@@ -1801,10 +1802,10 @@ mod tests {
             .expect("available has no stream");
 
         assert_eq!(
-            std::fs::read_to_string(device.join("usbip_sockfd")).unwrap(),
+            tokio::fs::read_to_string(device.join("usbip_sockfd")).await.unwrap(),
             "7\n"
         );
-        let _ = std::fs::remove_dir_all(root);
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]
@@ -1812,15 +1813,15 @@ mod tests {
     async fn system_waits_for_usbip_stream_fd_release_before_unbind() {
         let root = usbip_stream_test_root("release");
         let device = root.join("1-2");
-        std::fs::create_dir_all(&device).expect("device");
-        std::fs::write(device.join("usbip_status"), b"1\n").expect("status");
+        tokio::fs::create_dir_all(&device).await.expect("device");
+        tokio::fs::write(device.join("usbip_status"), b"1\n").await.expect("status");
 
         SystemReconcileExecutor
             .wait_usbip_stream_fd_release(&root, "1-2")
             .await
             .expect("available status proves fd release");
 
-        let _ = std::fs::remove_dir_all(root);
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]
@@ -1828,8 +1829,8 @@ mod tests {
     async fn usbip_stream_fd_release_timeout_is_fail_closed() {
         let root = usbip_stream_test_root("release-timeout");
         let device = root.join("1-2");
-        std::fs::create_dir_all(&device).expect("device");
-        std::fs::write(device.join("usbip_status"), b"2\n").expect("status");
+        tokio::fs::create_dir_all(&device).await.expect("device");
+        tokio::fs::write(device.join("usbip_status"), b"2\n").await.expect("status");
 
         let err =
             super::wait_usbip_stream_fd_release(&root, "1-2", Duration::from_millis(1))
@@ -1845,7 +1846,7 @@ mod tests {
             other => panic!("expected TimedOut, got {other:?}"),
         }
 
-        let _ = std::fs::remove_dir_all(root);
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[test]
@@ -1942,7 +1943,7 @@ exit 7
         }
 
         if let Some(root) = helper.parent() {
-            let _ = std::fs::remove_dir_all(root);
+            let _ = tokio::fs::remove_dir_all(root).await;
         }
     }
 
@@ -1969,7 +1970,7 @@ exit 0
         .expect("bind helper should succeed");
 
         if let Some(root) = helper.parent() {
-            let _ = std::fs::remove_dir_all(root);
+            let _ = tokio::fs::remove_dir_all(root).await;
         }
     }
 

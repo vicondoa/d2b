@@ -401,10 +401,10 @@ mod tests {
     async fn write_marker_block_preserves_foreign_lines_in_executor_payload() {
         let dir = scratch_dir("hosts-merge");
         let path = dir.join("hosts");
-        fs::write(
+        tokio::fs::write(
             &path,
             "127.0.0.1 localhost\n# d2b-managed begin\n10.0.0.2 old\n# d2b-managed end\n192.168.1.1 router\n",
-        )
+        ).await
         .unwrap();
         let intent = ResolvedHostsIntent {
             intent_id: "hosts:host".to_owned(),
@@ -443,10 +443,10 @@ mod tests {
     async fn network_marker_block_refuses_foreign_existing_block() {
         let dir = scratch_dir("hosts-foreign-marker");
         let path = dir.join("hosts");
-        fs::write(
+        tokio::fs::write(
             &path,
             "127.0.0.1 localhost\n# d2b-managed begin\n# d2b managed: foreign\n# d2b-managed end\n",
-        )
+        ).await
         .unwrap();
         let intent = ResolvedHostsIntent {
             intent_id: "network-hosts:zone:network:name".to_owned(),
@@ -467,7 +467,7 @@ mod tests {
             Err(WriteMarkerBlockError::ForeignOwnership)
         ));
         assert!(exec.take_log().is_empty());
-        fs::remove_dir_all(dir).ok();
+        tokio::fs::remove_dir_all(dir).await.ok();
     }
 
     #[tokio::test]
@@ -479,7 +479,7 @@ mod tests {
         let before = format!(
             "127.0.0.1 localhost\n# d2b-managed begin\n# d2b managed: {foreign_marker}\n# d2b-managed end\n"
         );
-        fs::write(&path, &before).unwrap();
+        tokio::fs::write(&path, &before).await.unwrap();
         let intent = ResolvedHostsIntent {
             intent_id: "network-hosts:zone:network:name".to_owned(),
             path: path.clone(),
@@ -503,6 +503,6 @@ mod tests {
         assert!(merged.contains(foreign_marker));
         assert!(merged.contains(expected_marker));
         assert!(merged.starts_with(&before));
-        fs::remove_dir_all(dir).ok();
+        tokio::fs::remove_dir_all(dir).await.ok();
     }
 }

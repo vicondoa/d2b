@@ -16,9 +16,8 @@
 //! the parent, never read on the component), and only a leaf the consumer owns
 //! is opened `O_RDONLY`. Do not reintroduce read-on-traversal-only opens.
 
-use std::fs::OpenOptions;
 use std::os::fd::AsFd;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use d2b_host::hardlink_farm;
@@ -308,7 +307,7 @@ enum MissingLevel {
 /// A declared `required` level that is absent is refused: the declaration is
 /// normative, and a silent no-op would let the live validation and the
 /// applier read the same declaration differently.
-pub(crate) fn posture_store_view_matrix_paths(
+pub(crate) async fn posture_store_view_matrix_paths(
     store_root: &Path,
     vm: &str,
 ) -> Result<(), PostureError> {
@@ -318,6 +317,7 @@ pub(crate) fn posture_store_view_matrix_paths(
         resolve_principals()?,
         MissingLevel::Refuse,
     )
+    .await
 }
 
 /// [`posture_store_view_matrix_paths`] for StoreSync's pre-build pass.
@@ -327,7 +327,7 @@ pub(crate) fn posture_store_view_matrix_paths(
 /// very first sync of a farm); absence is logged and skipped, never treated as
 /// drift. Every other caller - including the strict pass the same StoreSync
 /// runs after a successful build - treats it as drift.
-pub(crate) fn posture_store_view_matrix_paths_before_build(
+pub(crate) async fn posture_store_view_matrix_paths_before_build(
     store_root: &Path,
     vm: &str,
 ) -> Result<(), PostureError> {
@@ -337,6 +337,7 @@ pub(crate) fn posture_store_view_matrix_paths_before_build(
         resolve_principals()?,
         MissingLevel::Tolerate,
     )
+    .await
 }
 
 /// [`posture_store_view_matrix_paths`] with the host principals supplied by
@@ -349,16 +350,16 @@ pub(crate) fn posture_store_view_matrix_paths_before_build(
 ///
 /// The tree's own levels come from the declared contract, so a level cannot
 /// exist in the code without being declared (or vice versa).
-fn posture_store_view_matrix_paths_with(
+async fn posture_store_view_matrix_paths_with(
     store_root: &Path,
     vm: &str,
     principals: Principals,
     missing: MissingLevel,
 ) -> Result<(), PostureError> {
-    posture_daemon_traverse_ancestors(store_root, principals.daemon_gid)?;
+    posture_daemon_traverse_ancestors(store_root, principals.daemon_gid).await?;
     for level in contract_store_view_levels(&principals, vm)? {
         let path = resolved_path(store_root, &level);
-        posture_existing(&path, &level, missing)?;
+        posture_existing(&path, &level, missing).await?;
     }
     Ok(())
 }
@@ -390,7 +391,7 @@ fn posture_store_view_matrix_paths_with(
 /// `open_anchored_directory`), so search is the only right the chain must
 /// grant - never read and never write. A future edit must not reintroduce a
 /// read-on-traversal-only open here or at that walk.
-fn posture_daemon_traverse_ancestors(
+async fn posture_daemon_traverse_ancestors(
     store_root: &Path,
     daemon_gid: Gid,
 ) -> Result<(), PostureError> {
@@ -404,7 +405,7 @@ fn posture_daemon_traverse_ancestors(
     // chowns or chmods the matrix root or anything below it.
     let matrix_root = store_root.parent().unwrap_or(store_root);
     for directory in matrix_root.ancestors().skip(1) {
-        let meta = match std::fs::symlink_metadata(directory) {
+        let meta = match tokio::fs::symlink_metadata(directory).await {
             Ok(meta) => meta,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
             Err(err) => return Err(io_error(directory, format!("stat: {err}"))),
@@ -428,14 +429,15 @@ fn posture_daemon_traverse_ancestors(
         chown(directory, None, Some(daemon_gid))
             .map_err(|err| io_error(directory, format!("chown: {err}")))?;
         if mode & 0o010 == 0 {
-            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(mode | 0o010))
+            tokio::fs::set_permissions(directory, std::fs::Permissions::from_mode(mode | 0o010))
+                .await
                 .map_err(|err| io_error(directory, format!("chmod group-traverse: {err}")))?;
         }
     }
     Ok(())
 }
 
-pub(crate) fn plant_live_marker_with_matrix_posture(
+pub(crate) async fn plant_live_marker_with_matrix_posture(
     store_root: &Path,
     vm: &str,
 ) -> Result<(), PostureError> {
@@ -444,12 +446,13 @@ pub(crate) fn plant_live_marker_with_matrix_posture(
     let live = hardlink_farm::live_dir(store_root);
     let marker = live.join(format!(".d2b-marker-{vm}"));
     let tmp = live.join(format!(".d2b-marker-{vm}.tmp"));
-    let _ = std::fs::remove_file(&tmp);
-    let file = OpenOptions::new()
+    let _ = tokio::fs::remove_file(&tmp).await;
+    let file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(level.mode)
         .open(&tmp)
+        .await
         .map_err(|err| io_error(&tmp, format!("create marker tmp: {err}")))?;
     crate::sys::path_safe::fchown(
         file.as_fd(),
@@ -460,22 +463,24 @@ pub(crate) fn plant_live_marker_with_matrix_posture(
     crate::sys::path_safe::fchmod(file.as_fd(), level.mode)
         .map_err(|err| io_error(&tmp, format!("fchmod marker tmp: {err}")))?;
     file.sync_all()
+        .await
         .map_err(|err| io_error(&tmp, format!("fsync marker tmp: {err}")))?;
     drop(file);
-    std::fs::rename(&tmp, &marker)
+    tokio::fs::rename(&tmp, &marker)
+        .await
         .map_err(|err| io_error(&marker, format!("rename marker tmp: {err}")))?;
-    if let Ok(dir) = std::fs::File::open(&live) {
-        let _ = dir.sync_all();
+    if let Ok(dir) = tokio::fs::File::open(&live).await {
+        let _ = dir.sync_all().await;
     }
-    posture_existing(&marker, &level, MissingLevel::Refuse)
+    posture_existing(&marker, &level, MissingLevel::Refuse).await
 }
 
 /// Posture the broker's host-only integrity record
 /// (`state/integrity-unknown.json`) from its declared contract row.
-pub(crate) fn posture_host_only_file(path: &Path) -> Result<(), PostureError> {
+pub(crate) async fn posture_host_only_file(path: &Path) -> Result<(), PostureError> {
     let principals = resolve_principals()?;
     let level = contract_store_view_level(&principals, "state/integrity-unknown.json", "")?;
-    posture_existing(path, &level, MissingLevel::Refuse)
+    posture_existing(path, &level, MissingLevel::Refuse).await
 }
 
 /// Stamp one declared level's posture on an existing path.
@@ -485,12 +490,12 @@ pub(crate) fn posture_host_only_file(path: &Path) -> Result<(), PostureError> {
 /// integrity record), while a missing `required` row is drift - unless the
 /// pass is the bring-up pass that runs before the level is created
 /// ([`MissingLevel::Tolerate`]).
-fn posture_existing(
+async fn posture_existing(
     path: &Path,
     level: &ResolvedLevel,
     missing: MissingLevel,
 ) -> Result<(), PostureError> {
-    let meta = match std::fs::symlink_metadata(path) {
+    let meta = match tokio::fs::symlink_metadata(path).await {
         Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             if !level.required {
@@ -526,7 +531,8 @@ fn posture_existing(
     }
     chown(path, Some(level.owner), Some(level.group))
         .map_err(|err| io_error(path, format!("chown: {err}")))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(level.mode))
+    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(level.mode))
+        .await
         .map_err(|err| io_error(path, format!("chmod {:o}: {err}", level.mode)))?;
     Ok(())
 }
@@ -630,8 +636,8 @@ mod tests {
         std::fs::symlink_metadata(path).expect("stat").gid()
     }
 
-    #[test]
-    fn matrix_posture_makes_the_ancestor_chain_group_traversable() {
+    #[tokio::test]
+    async fn matrix_posture_makes_the_ancestor_chain_group_traversable() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (farm, ancestors) = farm_chain(dir.path());
         let matrix = matrix_root(&farm);
@@ -643,7 +649,7 @@ mod tests {
         }
         materialize_declared_rows(&farm, "acceptance-guest");
 
-        posture_store_view_matrix_paths(&farm, "acceptance-guest").expect("posture");
+        posture_store_view_matrix_paths(&farm, "acceptance-guest").await.expect("posture");
 
         let daemon_gid = Gid::current().as_raw();
         for ancestor in &ancestors {
@@ -693,8 +699,8 @@ mod tests {
         assert_eq!(gid_of(&farm), daemon_gid);
     }
 
-    #[test]
-    fn matrix_posture_leaves_an_already_searchable_chain_untouched() {
+    #[tokio::test]
+    async fn matrix_posture_leaves_an_already_searchable_chain_untouched() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (farm, ancestors) = farm_chain(dir.path());
         let (guests_dir, zone_dir, zones_dir) = (
@@ -713,7 +719,7 @@ mod tests {
         set_mode(&zones_dir, 0o700);
         materialize_declared_rows(&farm, "acceptance-guest");
 
-        posture_store_view_matrix_paths(&farm, "acceptance-guest").expect("posture");
+        posture_store_view_matrix_paths(&farm, "acceptance-guest").await.expect("posture");
 
         assert_eq!(mode_of(&guests_dir), 0o750, "searchable ancestor untouched");
         assert_eq!(
@@ -735,8 +741,8 @@ mod tests {
     /// daemon principal's primary group. StoreSync runs immediately before the
     /// fail-closed ownership preflight on every VM start, so the sync itself
     /// tripped the drift check and `OwnershipMatrixDrift` refused the start.
-    #[test]
-    fn matrix_posture_leaves_the_matrix_root_ownership_untouched() {
+    #[tokio::test]
+    async fn matrix_posture_leaves_the_matrix_root_ownership_untouched() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (farm, ancestors) = farm_chain(dir.path());
         let matrix = matrix_root(&farm);
@@ -759,6 +765,7 @@ mod tests {
             },
             MissingLevel::Refuse,
         )
+        .await
         .expect("posture");
 
         assert_eq!(
@@ -777,19 +784,22 @@ mod tests {
     /// as it does to the live validation: a declared `required` level that is
     /// absent is drift, while an absent optional row (the live marker before
     /// its first plant, the VM-level integrity record) is posture-if-present.
-    #[test]
-    fn missing_required_levels_are_drift_and_optional_levels_are_not() {
+    #[tokio::test]
+    async fn missing_required_levels_are_drift_and_optional_levels_are_not() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (farm, _ancestors) = farm_chain(dir.path());
         // Only the optional rows exist; every required level is absent.
         let marker = farm.join("live").join(".d2b-marker-acceptance-guest");
         let integrity = farm.join("state").join("integrity-unknown.json");
         for path in [&marker, &integrity] {
-            std::fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
-            std::fs::write(path, b"").expect("write optional row");
+            tokio::fs::create_dir_all(path.parent().expect("parent"))
+                .await
+                .expect("create parent");
+            tokio::fs::write(path, b"").await.expect("write optional row");
         }
 
         let refusal = posture_store_view_matrix_paths(&farm, "acceptance-guest")
+            .await
             .expect_err("an absent declared required level is drift");
         assert!(
             refusal
@@ -799,6 +809,7 @@ mod tests {
         );
 
         posture_store_view_matrix_paths_before_build(&farm, "acceptance-guest")
+            .await
             .expect("the bring-up pass tolerates the levels the build creates");
 
         // The optional rows were still postured by both passes; the required
@@ -809,8 +820,8 @@ mod tests {
     /// The posture applied to every materialized contract row equals the row
     /// `state-posture-contract.json` declares. If a row's mode is edited in the
     /// declaration without the live posture moving (or vice versa), this fails.
-    #[test]
-    fn every_declared_store_view_row_is_the_posture_applied() {
+    #[tokio::test]
+    async fn every_declared_store_view_row_is_the_posture_applied() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (farm, _ancestors) = farm_chain(dir.path());
         let principals = test_principals();
@@ -821,19 +832,22 @@ mod tests {
         // posture deliberately no-ops on absent levels.
         for level in &rows {
             let path = resolved_path(&farm, level);
-            match level.kind {
-                PathKind::Dir => std::fs::create_dir_all(&path),
+            let materialized = match level.kind {
+                PathKind::Dir => tokio::fs::create_dir_all(&path).await,
                 PathKind::File => {
                     if let Some(parent) = path.parent() {
-                        std::fs::create_dir_all(parent).expect("declared file parent materializes");
+                        tokio::fs::create_dir_all(parent)
+                            .await
+                            .expect("declared file parent materializes");
                     }
-                    std::fs::write(&path, b"")
+                    tokio::fs::write(&path, b"").await
                 }
-            }
-            .unwrap_or_else(|err| panic!("materialize declared row {}: {err}", path.display()));
+            };
+            materialized
+                .unwrap_or_else(|err| panic!("materialize declared row {}: {err}", path.display()));
         }
 
-        posture_store_view_matrix_paths(&farm, "acceptance-guest").expect("posture");
+        posture_store_view_matrix_paths(&farm, "acceptance-guest").await.expect("posture");
 
         for level in &rows {
             let path = resolved_path(&farm, level);

@@ -304,6 +304,7 @@ async fn run_store_sync_inner(
     // here on a farm's first sync. The strict pass after a successful build
     // (and every other caller) refuses a missing required level as drift.
     posture_store_view_matrix_paths_before_build(&intent.hardlink_farm_path, &intent.vm)
+        .await
         .map_err(|err| posture_error(ErrorStage::Lock, err))?;
 
     // Reconcile possible stale `state/current.tmp` / `meta/current.tmp`
@@ -375,6 +376,7 @@ async fn run_store_sync_inner(
 
         let metadata_started = Instant::now();
         posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm)
+            .await
             .map_err(|err| posture_error(ErrorStage::Metadata, err))?;
         hardlink_farm::write_meta_db_dump(
             &intent.hardlink_farm_path,
@@ -393,6 +395,7 @@ async fn run_store_sync_inner(
             .await
             .map_err(|e| StoreSyncError::at(ErrorStage::CurrentSwap, e))?;
         plant_live_marker_with_matrix_posture(&intent.hardlink_farm_path, &intent.vm)
+            .await
             .map_err(|err| posture_error(ErrorStage::Marker, err))?;
         timings.metadata_ms = elapsed_ms(metadata_started);
         (counts.linked, counts.skipped)

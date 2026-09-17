@@ -6,7 +6,6 @@ use std::io;
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::pin::Pin;
 #[cfg(not(feature = "layer1-bootstrap"))]
-use std::io::Read;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::os::unix::fs::FileTypeExt;
@@ -1219,6 +1218,7 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
         ))),
     });
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     runtime.block_on(serve(server, listener))
 }
 
@@ -1525,6 +1525,7 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
             // the pool's bounded-worker semantics are unchanged.
             #[cfg(not(feature = "layer1-bootstrap"))]
             {
+                #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
                 envelope_call_runtime().block_on(answer_request(
                     envelope,
                     request_fds,
@@ -1652,7 +1653,7 @@ async fn answer_request(
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
     if config.profile == BrokerProfile::Guest
-        && let Err(error) = validate_guest_process_binding(&request)
+        && let Err(error) = validate_guest_process_binding(&request).await
     {
         return Ok(RequestOutcome::Reply(error.into_response(), Vec::new()));
     }
@@ -3153,27 +3154,24 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             // The store's channel boundary is a blocking one by design
             // (the single writer's commands are `blocking_send` /
             // `blocking_recv`, sanctioned for a dedicated blocking worker
-            // per plan R4). The dispatch chain now runs on the broker's
-            // async runtime, so the store calls hop out through
-            // `block_in_place` to a blocking thread - the same dedicated
-            // blocking-worker shape - instead of panicking on a runtime
-            // worker that must never block.
+            // per plan R4). The dispatch chain runs on the broker's async
+            // runtime, so the store calls use the async channel legs
+            // (`send().await` + awaited reply) instead of parking an
+            // executor worker on the blocking boundary.
             if crate::envelope::trusted_context_store().is_none() {
-                tokio::task::block_in_place(|| {
-                    crate::envelope::init_trusted_context_store(&config.state_dir)
-                })
-                .map_err(|error| {
-                    BrokerError::LiveHandler(format!(
-                        "trusted-context store unavailable: {error}"
-                    ))
-                })?;
+                crate::envelope::init_trusted_context_store_async(&config.state_dir)
+                    .await
+                    .map_err(|error| {
+                        BrokerError::LiveHandler(format!(
+                            "trusted-context store unavailable: {error}"
+                        ))
+                    })?;
             }
-            let reply = tokio::task::block_in_place(|| {
-                crate::envelope::trusted_context_store()
-                    .expect("the lazy init above just opened the store")
-                    .publication_reply(&req)
-            })
-            .map_err(|error| {
+            let reply = crate::envelope::trusted_context_store()
+                .expect("the lazy init above just opened the store")
+                .publication_reply(&req)
+                .await
+                .map_err(|error| {
                 BrokerError::LiveHandler(format!(
                     "trusted-context publication refused: {}",
                     error.code()
@@ -3426,6 +3424,7 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 &req.storage_ref,
                 req.apply,
             )
+            .await
             .map_err(|err| match err {
                 crate::ops::storage_contract::StorageContractError::UnknownStorage(id) => {
                     BrokerError::BundleIntentMissing {
@@ -3462,7 +3461,9 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         RealBrokerRequest::ValidateLockSpec(req) => {
             let resolver = require_resolver(resolver)?;
             let response =
-                crate::ops::storage_contract::validate_lock_spec(resolver, &req.lock_ref).map_err(
+                crate::ops::storage_contract::validate_lock_spec(resolver, &req.lock_ref)
+                    .await
+                    .map_err(
                     |err| match err {
                         crate::ops::storage_contract::StorageContractError::UnknownLock(id) => {
                             BrokerError::BundleIntentMissing {
@@ -4520,6 +4521,7 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 &intent,
                 usb_device_sysfs_root(),
             )
+            .await
             .map_err(|err| map_usbip_host_inspection_error_for_intent(&intent, err))?;
             let expected_identity = (inspection.vendor, inspection.product);
             let (audit_device_identity, rotation_audit) = usb_audit_device_identity_for_busid(
@@ -4528,7 +4530,8 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 expected_identity,
                 &config.state_dir,
                 config.test_mode,
-            )?;
+            )
+            .await?;
             if let Some(rotation_audit) = rotation_audit
                 && let Some(rotation_audit_dedupe_key) =
                     mark_usb_audit_serial_hmac_rotation_audit_logged(&rotation_audit)
@@ -4631,7 +4634,8 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                         &intent,
                         req.preserve_durable_claim,
                         revoke_error,
-                    ));
+                    )
+                    .await);
                 }
                 if !req.preserve_durable_claim {
                     crate::ops::usbip_lock::release_lock(&intent.lock_path, &intent.vm_name)
@@ -4762,6 +4766,7 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 usb_device_sysfs_root(),
                 &req.bus_id,
             )
+            .await
             .map_err(|err| {
                 BrokerError::LiveHandler(format!(
                     "explicit usbip bind sysfs inspection failed for bus_id={}: {err}",
@@ -4779,7 +4784,8 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 expected_identity,
                 &config.state_dir,
                 config.test_mode,
-            )?;
+            )
+            .await?;
 
             // Emit serial key rotation audit if needed (same policy as UsbipBind).
             if let Some(rotation_audit) = rotation_audit
@@ -4956,7 +4962,8 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 host_nft_intent,
                 &req.bus_id,
                 &rule_body,
-            )?;
+            )
+            .await?;
 
             let nft_binary = nft_binary_path();
             let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
@@ -7171,7 +7178,8 @@ impl DispatchBackend for LiveDispatchBackend {
                     kind: "nft",
                     intent_id: d2b_core::bundle_resolver::intent_id_nft_host(),
                 })?;
-            let decision = build_usbip_firewall_decision(resolver, host_nft_intent, intent)?;
+            let decision = build_usbip_firewall_decision(resolver, host_nft_intent, intent)
+                .await?;
             let nft_binary = nft_binary_path();
             let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
             let nft_script = decision.batch.render_nft_script();
@@ -7631,15 +7639,15 @@ static TEST_USBIP_LOCK_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static TEST_KERNEL_BUNDLE_RESOLVER: OnceLock<std::sync::Arc<BundleResolver>> = OnceLock::new();
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u16, u16), BrokerError> {
+async fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u16, u16), BrokerError> {
     if d2b_contracts::usbip::validate_bus_id(bus_id).is_err() {
         return Err(BrokerError::Protocol(format!(
             "invalid USB bus_id for sysfs lookup: {bus_id:?}"
         )));
     }
     let device_dir = sysfs_root.join(bus_id);
-    let vendor = read_hex_u16(device_dir.join("idVendor"), bus_id)?;
-    let product = read_hex_u16(device_dir.join("idProduct"), bus_id)?;
+    let vendor = read_hex_u16(device_dir.join("idVendor"), bus_id).await?;
+    let product = read_hex_u16(device_dir.join("idProduct"), bus_id).await?;
     Ok((vendor, product))
 }
 
@@ -7666,7 +7674,7 @@ struct UsbAuditSerialHmacKeyring {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn usb_audit_device_identity_for_busid(
+async fn usb_audit_device_identity_for_busid(
     sysfs_root: &Path,
     bus_id: &str,
     identity: (u16, u16),
@@ -7679,9 +7687,9 @@ fn usb_audit_device_identity_for_busid(
     ),
     BrokerError,
 > {
-    let serial = read_usb_serial_for_audit(sysfs_root, bus_id);
+    let serial = read_usb_serial_for_audit(sysfs_root, bus_id).await;
     let keyring = match serial.as_deref() {
-        Some(_) => Some(usb_audit_serial_hmac_keyring(state_dir, test_mode)?),
+        Some(_) => Some(usb_audit_serial_hmac_keyring(state_dir, test_mode).await?),
         None => None,
     };
     let rotation_audit = keyring
@@ -7835,7 +7843,7 @@ fn log_usb_audit_serial_hmac_rotation_window(keyring: &UsbAuditSerialHmacKeyring
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn usb_audit_serial_hmac_keyring(
+async fn usb_audit_serial_hmac_keyring(
     state_dir: &Path,
     test_mode: bool,
 ) -> Result<UsbAuditSerialHmacKeyring, BrokerError> {
@@ -7845,15 +7853,18 @@ fn usb_audit_serial_hmac_keyring(
         &key_dir.join(USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE),
         UsbAuditSerialHmacKeySlot::Current,
         test_mode,
-    )? {
+    )
+    .await?
+    {
         Some(key) => key,
-        None => create_usb_audit_serial_hmac_key(&key_dir, test_mode)?,
+        None => create_usb_audit_serial_hmac_key(&key_dir, test_mode).await?,
     };
     let previous = read_usb_audit_serial_hmac_key_file(
         &key_dir.join(USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_FILE),
         UsbAuditSerialHmacKeySlot::Previous,
         test_mode,
-    )?;
+    )
+    .await?;
 
     let keyring = UsbAuditSerialHmacKeyring { current, previous };
     log_usb_audit_serial_hmac_rotation_window(&keyring);
@@ -7890,7 +7901,7 @@ fn ensure_usb_audit_serial_hmac_key_dir(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn read_usb_audit_serial_hmac_key_file(
+async fn read_usb_audit_serial_hmac_key_file(
     path: &Path,
     slot: UsbAuditSerialHmacKeySlot,
     test_mode: bool,
@@ -7908,21 +7919,22 @@ fn read_usb_audit_serial_hmac_key_file(
             )));
         }
     };
-    let mut file = fs::File::from(owned_fd_from_raw(fd));
-    validate_usb_audit_serial_hmac_key_metadata(&file, test_mode)?;
+    use tokio::io::AsyncReadExt as _;
+    let file = tokio::fs::File::from_std(fs::File::from(owned_fd_from_raw(fd)));
+    validate_usb_audit_serial_hmac_key_metadata(&file, test_mode).await?;
     let mut contents = String::new();
-    file.read_to_string(&mut contents).map_err(|err| {
+    file.take(u64::MAX).read_to_string(&mut contents).await.map_err(|err| {
         BrokerError::LiveHandler(format!("read USB audit serial HMAC key failed: {err}"))
     })?;
     parse_usb_audit_serial_hmac_key(&contents, slot).map(Some)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn validate_usb_audit_serial_hmac_key_metadata(
-    file: &fs::File,
+async fn validate_usb_audit_serial_hmac_key_metadata(
+    file: &tokio::fs::File,
     test_mode: bool,
 ) -> Result<(), BrokerError> {
-    let metadata = file.metadata().map_err(|err| {
+    let metadata = file.metadata().await.map_err(|err| {
         BrokerError::LiveHandler(format!("stat USB audit serial HMAC key failed: {err}"))
     })?;
     if !metadata.is_file() || metadata.mode() & 0o077 != 0 || (!test_mode && metadata.uid() != 0) {
@@ -7934,17 +7946,17 @@ fn validate_usb_audit_serial_hmac_key_metadata(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn create_usb_audit_serial_hmac_key(
+async fn create_usb_audit_serial_hmac_key(
     key_dir: &Path,
     test_mode: bool,
 ) -> Result<UsbAuditSerialHmacKey, BrokerError> {
-    let key = generate_usb_audit_serial_hmac_key()?;
+    let key = generate_usb_audit_serial_hmac_key().await?;
     let dir_fd = crate::sys::path_safe::open_dir_path_safe(key_dir).map_err(|err| {
         BrokerError::LiveHandler(format!(
             "open USB audit serial HMAC key directory failed: {err}"
         ))
     })?;
-    match write_new_usb_audit_serial_hmac_key_file(&dir_fd, &key) {
+    match write_new_usb_audit_serial_hmac_key_file(&dir_fd, &key).await {
         Ok(()) => {}
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
         Err(err) => {
@@ -7957,34 +7969,36 @@ fn create_usb_audit_serial_hmac_key(
         &key_dir.join(USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE),
         UsbAuditSerialHmacKeySlot::Current,
         test_mode,
-    )?
+    )
+    .await?
     .ok_or_else(|| {
         BrokerError::LiveHandler("USB audit serial HMAC key disappeared after creation".to_owned())
     })
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn write_new_usb_audit_serial_hmac_key_file(
+async fn write_new_usb_audit_serial_hmac_key_file(
     dir_fd: &OwnedFd,
     key: &UsbAuditSerialHmacKey,
 ) -> io::Result<()> {
+    use tokio::io::AsyncWriteExt as _;
     let fd = crate::sys::path_safe::create_file_at_safe(
         dir_fd,
         USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE,
         libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
         0o400,
     )?;
-    let mut file = fs::File::from(fd);
-    std::io::Write::write_all(&mut file, render_usb_audit_serial_hmac_key(key).as_bytes())?;
+    let mut file = tokio::fs::File::from_std(fs::File::from(fd));
+    file.write_all(render_usb_audit_serial_hmac_key(key).as_bytes()).await?;
     crate::sys::path_safe::fchmod(file.as_fd(), 0o400)?;
-    file.sync_all()?;
+    file.sync_all().await?;
     rustix::fs::fsync(dir_fd).map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
     Ok(())
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, BrokerError> {
-    let random = read_high_entropy_bytes(USB_AUDIT_SERIAL_HMAC_RANDOM_BYTES)?;
+async fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, BrokerError> {
+    let random = read_high_entropy_bytes(USB_AUDIT_SERIAL_HMAC_RANDOM_BYTES).await?;
     let (key, id_bytes) = random.split_at(USB_AUDIT_SERIAL_HMAC_KEY_BYTES);
     Ok(UsbAuditSerialHmacKey {
         slot: UsbAuditSerialHmacKeySlot::Current,
@@ -7994,14 +8008,15 @@ fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, BrokerE
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn read_high_entropy_bytes(len: usize) -> Result<Vec<u8>, BrokerError> {
-    let mut file = fs::File::open("/dev/urandom").map_err(|err| {
+async fn read_high_entropy_bytes(len: usize) -> Result<Vec<u8>, BrokerError> {
+    use tokio::io::AsyncReadExt as _;
+    let mut file = tokio::fs::File::open("/dev/urandom").await.map_err(|err| {
         BrokerError::LiveHandler(format!(
             "open kernel CSPRNG for USB audit key failed: {err}"
         ))
     })?;
     let mut bytes = vec![0u8; len];
-    file.read_exact(&mut bytes).map_err(|err| {
+    file.read_exact(&mut bytes).await.map_err(|err| {
         BrokerError::LiveHandler(format!(
             "read kernel CSPRNG for USB audit key failed: {err}"
         ))
@@ -8091,12 +8106,12 @@ fn lower_hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn read_usb_serial_for_audit(sysfs_root: &Path, bus_id: &str) -> Option<String> {
+async fn read_usb_serial_for_audit(sysfs_root: &Path, bus_id: &str) -> Option<String> {
     if d2b_contracts::usbip::validate_bus_id(bus_id).is_err() {
         return None;
     }
     let path = sysfs_root.join(bus_id).join("serial");
-    match fs::read_to_string(path) {
+    match tokio::fs::read_to_string(path).await {
         Ok(raw) => {
             let trimmed = raw.trim().to_owned();
             (!trimmed.is_empty()).then_some(trimmed)
@@ -8106,21 +8121,21 @@ fn read_usb_serial_for_audit(sysfs_root: &Path, bus_id: &str) -> Option<String> 
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn usb_device_node_for_busid(sysfs_root: &Path, bus_id: &str) -> Result<PathBuf, BrokerError> {
+async fn usb_device_node_for_busid(sysfs_root: &Path, bus_id: &str) -> Result<PathBuf, BrokerError> {
     d2b_contracts::usbip::validate_bus_id(bus_id)
         .map_err(|err| BrokerError::LiveHandler(format!("invalid usbip bus_id: {err:?}")))?;
     let device_dir = sysfs_root.join(bus_id);
-    let busnum = read_usb_decimal_attr(&device_dir, "busnum", bus_id)?;
-    let devnum = read_usb_decimal_attr(&device_dir, "devnum", bus_id)?;
+    let busnum = read_usb_decimal_attr(&device_dir, "busnum", bus_id).await?;
+    let devnum = read_usb_decimal_attr(&device_dir, "devnum", bus_id).await?;
     Ok(PathBuf::from(format!(
         "/dev/bus/usb/{busnum:03}/{devnum:03}"
     )))
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn read_usb_decimal_attr(device_dir: &Path, attr: &str, bus_id: &str) -> Result<u16, BrokerError> {
+async fn read_usb_decimal_attr(device_dir: &Path, attr: &str, bus_id: &str) -> Result<u16, BrokerError> {
     let path = device_dir.join(attr);
-    let raw = fs::read_to_string(&path).map_err(|err| {
+    let raw = tokio::fs::read_to_string(&path).await.map_err(|err| {
         BrokerError::LiveHandler(format!(
             "read USB {attr} for bus_id={bus_id} at {} failed: {err}",
             path.display()
@@ -8142,12 +8157,14 @@ enum TestUsbipBackendAclEvent {
 }
 
 #[cfg(all(test, not(feature = "layer1-bootstrap")))]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn test_usbip_backend_acl_events() -> &'static Mutex<Vec<TestUsbipBackendAclEvent>> {
     static EVENTS: OnceLock<Mutex<Vec<TestUsbipBackendAclEvent>>> = OnceLock::new();
     EVENTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 #[cfg(all(test, not(feature = "layer1-bootstrap")))]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn take_test_usbip_backend_acl_events() -> Vec<TestUsbipBackendAclEvent> {
     let mut events = test_usbip_backend_acl_events()
         .lock()
@@ -8235,7 +8252,7 @@ async fn rollback_usbip_bind_after_acl_grant_failure<B: DispatchBackend>(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn handle_usbip_acl_revoke_failure_after_unbind(
+async fn handle_usbip_acl_revoke_failure_after_unbind(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
     preserve_durable_claim: bool,
     revoke_error: BrokerError,
@@ -8252,7 +8269,9 @@ fn handle_usbip_acl_revoke_failure_after_unbind(
     match crate::ops::usbip_host::inspect_usbip_driver_binding(
         usb_device_sysfs_root(),
         &intent.bus_id,
-    ) {
+    )
+    .await
+    {
         Ok(crate::ops::usbip_host::UsbipDriverBinding::BoundToUsbipHost) => {
             warn!(
                 bus_id = %intent.bus_id,
@@ -8300,7 +8319,7 @@ const USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP: std::time::Duration =
     std::time::Duration::from_millis(100);
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn retry_usbip_backend_acl_grant<V, G, R, S>(
+async fn retry_usbip_backend_acl_grant<'a, V, G, R, S>(
     uid: u32,
     mut verify_device_node: V,
     mut grant_acl: G,
@@ -8308,36 +8327,36 @@ async fn retry_usbip_backend_acl_grant<V, G, R, S>(
     mut sleep: S,
 ) -> Result<(), BrokerError>
 where
-    V: FnMut() -> Result<PathBuf, BrokerError>,
-    G: for<'a> FnMut(
-            &'a Path,
+    V: FnMut() -> Pin<Box<dyn Future<Output = Result<PathBuf, BrokerError>> + Send + 'a>>,
+    G: for<'b> FnMut(
+            &'b Path,
             u32,
-        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>,
-    R: for<'a> FnMut(
-            &'a Path,
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'b>>,
+    R: for<'b> FnMut(
+            &'b Path,
             u32,
-        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>,
-    S: FnMut(),
+        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'b>>,
+    S: FnMut() -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
 {
     let mut last_error = None;
 
     for _ in 0..USBIP_BACKEND_ACL_GRANT_ATTEMPTS {
-        let device_node = match verify_device_node() {
+        let device_node = match verify_device_node().await {
             Ok(device_node) => device_node,
             Err(error) => {
                 last_error = Some(error);
-                sleep();
+                sleep().await;
                 continue;
             }
         };
 
         if let Err(error) = grant_acl(&device_node, uid).await {
             last_error = Some(error);
-            sleep();
+            sleep().await;
             continue;
         }
 
-        match verify_device_node() {
+        match verify_device_node().await {
             Ok(current_device_node) if current_device_node == device_node => return Ok(()),
             Ok(current_device_node) => {
                 let _ = revoke_acl(&device_node, uid).await;
@@ -8352,7 +8371,7 @@ where
                 last_error = Some(error);
             }
         }
-        sleep();
+        sleep().await;
     }
 
     Err(last_error.unwrap_or_else(|| {
@@ -8379,7 +8398,7 @@ async fn grant_usbip_backend_device_acl(
     }
     #[cfg(not(test))]
     {
-        fn verify_usbip_device_node(
+        async fn verify_usbip_device_node(
             intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
             expected_identity: (u16, u16),
         ) -> Result<PathBuf, BrokerError> {
@@ -8387,6 +8406,7 @@ async fn grant_usbip_backend_device_acl(
                 intent,
                 usb_device_sysfs_root(),
             )
+            .await
             .map_err(|err| map_usbip_host_inspection_error_for_intent(intent, err))?;
             let current_identity = (inspection.vendor, inspection.product);
             let current_device_node = inspection.device_node;
@@ -8403,7 +8423,7 @@ async fn grant_usbip_backend_device_acl(
         }
         retry_usbip_backend_acl_grant(
             runner.uid,
-            || verify_usbip_device_node(intent, expected_identity),
+            || Box::pin(verify_usbip_device_node(intent, expected_identity)),
             |device_node, uid| {
                 Box::pin(async move {
                     crate::live_handlers::live_grant_verified_device_acl(device_node, uid)
@@ -8418,7 +8438,11 @@ async fn grant_usbip_backend_device_acl(
                         .map_err(|err| BrokerError::LiveHandler(err.to_string()))
                 })
             },
-            || std::thread::sleep(USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP),
+            || {
+                Box::pin(async {
+                    tokio::time::sleep(USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP).await
+                })
+            },
         )
         .await
     }
@@ -8440,9 +8464,12 @@ async fn revoke_usbip_backend_device_acl(
     }
     #[cfg(not(test))]
     {
-        let inspection =
-            crate::ops::usbip_host::enforce_usbip_physical_policy(intent, usb_device_sysfs_root())
-                .map_err(|err| map_usbip_host_inspection_error_for_intent(intent, err))?;
+        let inspection = crate::ops::usbip_host::enforce_usbip_physical_policy(
+            intent,
+            usb_device_sysfs_root(),
+        )
+        .await
+        .map_err(|err| map_usbip_host_inspection_error_for_intent(intent, err))?;
         let device_node = inspection.device_node;
         crate::live_handlers::live_revoke_verified_device_acl(&device_node, runner.uid)
             .await
@@ -8454,11 +8481,13 @@ async fn revoke_usbip_backend_device_acl(
 async fn reconcile_active_usbip_backend_acls(
     resolver: &Arc<BundleResolver>,
 ) -> Result<(), BrokerError> {
-    for intent in active_locked_usbip_bind_intents(resolver)? {
+    for intent in active_locked_usbip_bind_intents(resolver).await? {
         let inspection = match crate::ops::usbip_host::enforce_usbip_physical_policy(
             &intent,
             usb_device_sysfs_root(),
-        ) {
+        )
+        .await
+        {
             Ok(inspection) => inspection,
             Err(crate::ops::usbip_host::UsbipHostInspectionError::DeviceMissing { bus_id }) => {
                 tracing::debug!(
@@ -8653,7 +8682,7 @@ async fn grant_explicit_usbip_backend_acl(
     {
         retry_usbip_backend_acl_grant(
             backend_uid,
-            || verify_explicit_usbip_device_stable(bus_id, expected_identity),
+            || Box::pin(verify_explicit_usbip_device_stable(bus_id, expected_identity)),
             |device_node, uid| {
                 Box::pin(async move {
                     crate::live_handlers::live_grant_verified_device_acl(device_node, uid)
@@ -8668,7 +8697,11 @@ async fn grant_explicit_usbip_backend_acl(
                         .map_err(|err| BrokerError::LiveHandler(err.to_string()))
                 })
             },
-            || std::thread::sleep(USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP),
+            || {
+                Box::pin(async {
+                    tokio::time::sleep(USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP).await
+                })
+            },
         )
         .await
     }
@@ -8678,12 +8711,13 @@ async fn grant_explicit_usbip_backend_acl(
 /// `inspect_usbip_host_device` (no allowlist check) to verify the device at
 /// `bus_id` still matches `expected_identity` and `expected_device_node`.
 #[cfg(all(not(feature = "layer1-bootstrap"), not(test)))]
-fn verify_explicit_usbip_device_stable(
+async fn verify_explicit_usbip_device_stable(
     bus_id: &str,
     expected_identity: (u16, u16),
 ) -> Result<PathBuf, BrokerError> {
     let inspection =
         crate::ops::usbip_host::inspect_usbip_host_device(usb_device_sysfs_root(), bus_id)
+            .await
             .map_err(|err| {
                 BrokerError::LiveHandler(format!(
                     "explicit USBIP device stability check failed for bus_id={bus_id}: {err}"
@@ -8722,9 +8756,12 @@ async fn revoke_explicit_usbip_backend_acl(
     }
     #[cfg(not(test))]
     {
-        let inspection =
-            crate::ops::usbip_host::inspect_usbip_host_device(usb_device_sysfs_root(), bus_id)
-                .map_err(|err| {
+        let inspection = crate::ops::usbip_host::inspect_usbip_host_device(
+            usb_device_sysfs_root(),
+            bus_id,
+        )
+        .await
+        .map_err(|err| {
                     BrokerError::LiveHandler(format!(
                         "explicit USBIP revoke inspection failed for bus_id={bus_id}: {err}"
                     ))
@@ -8744,15 +8781,19 @@ async fn revoke_explicit_usbip_backend_acl(
 ///
 /// Entries for `excluding_bus_id` are skipped (caller adds its own carveout).
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn collect_active_explicit_usbip_carveouts(
+async fn collect_active_explicit_usbip_carveouts(
     resolver: &BundleResolver,
     excluding_bus_id: &str,
 ) -> Vec<(String, String)> {
-    let Ok(entries) = std::fs::read_dir("/run/d2b/locks/usbip") else {
+    let Ok(mut entries) = tokio::fs::read_dir("/run/d2b/locks/usbip").await else {
         return Vec::new();
     };
-    entries
-        .filter_map(Result::ok)
+    let mut collected = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        collected.push(entry);
+    }
+    collected
+        .into_iter()
         .filter_map(|entry| {
             let bus_id = entry.file_name().into_string().ok()?;
             d2b_contracts::usbip::validate_bus_id(&bus_id).ok()?;
@@ -8810,7 +8851,7 @@ fn collect_active_explicit_usbip_carveouts(
 /// the host nft base, preserves all currently-active declared and explicit
 /// carve-outs, and inserts the new carve-out for `bus_id`.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn build_usbip_explicit_firewall_decision(
+async fn build_usbip_explicit_firewall_decision(
     resolver: &BundleResolver,
     host_nft_intent: &d2b_core::bundle_resolver::ResolvedNftIntent,
     bus_id: &str,
@@ -8851,7 +8892,7 @@ fn build_usbip_explicit_firewall_decision(
     }
 
     // Add carveouts for active dynamic (declared wildcard) USBIP busids.
-    for bind_intent in active_dynamic_usbip_bind_intents(resolver) {
+    for bind_intent in active_dynamic_usbip_bind_intents(resolver).await {
         let firewall_id = d2b_core::bundle_resolver::intent_id_usbip_firewall(
             &bind_intent.env,
             &bind_intent.bus_id,
@@ -8875,7 +8916,7 @@ fn build_usbip_explicit_firewall_decision(
     // Add carveouts for currently active explicit busids (not in bundle, but locked).
     // Reconstructed on-the-fly from the lock owner's manifest entry + env host config.
     for (explicit_bus_id, explicit_rule_body) in
-        collect_active_explicit_usbip_carveouts(resolver, bus_id)
+        collect_active_explicit_usbip_carveouts(resolver, bus_id).await
     {
         let carveout_id = format!("explicit:{explicit_bus_id}");
         if !inserted.insert(carveout_id) {
@@ -8942,7 +8983,7 @@ fn wire_role_id_for_intent(intent: &d2b_core::bundle_resolver::ResolvedRunnerInt
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn validate_guest_process_binding(
+async fn validate_guest_process_binding(
     request: &d2b_contracts_broker::broker_wire::BrokerRequest,
 ) -> Result<(), BrokerError> {
     use d2b_contracts_broker::broker_wire::BrokerRequest;
@@ -8965,7 +9006,7 @@ fn validate_guest_process_binding(
             resolved: "nonzero-target-session-boot-assignment-generations".to_owned(),
         });
     }
-    let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|_| {
+    let boot_id = tokio::fs::read_to_string("/proc/sys/kernel/random/boot_id").await.map_err(|_| {
         BrokerError::SpawnRunnerIntentMismatch {
             field: "guest_execution.boot_identity_digest",
             requested: "present".to_owned(),
@@ -9865,8 +9906,8 @@ fn validate_spawn_runner_request_matches_intent(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn read_hex_u16(path: PathBuf, bus_id: &str) -> Result<u16, BrokerError> {
-    let raw = fs::read_to_string(&path).map_err(|err| {
+async fn read_hex_u16(path: PathBuf, bus_id: &str) -> Result<u16, BrokerError> {
+    let raw = tokio::fs::read_to_string(&path).await.map_err(|err| {
         BrokerError::LiveHandler(format!(
             "read USB identity for bus_id={bus_id} at {} failed: {err}",
             path.display()
@@ -9881,11 +9922,12 @@ fn read_hex_u16(path: PathBuf, bus_id: &str) -> Result<u16, BrokerError> {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn enforce_usbip_allowlist(
+async fn enforce_usbip_allowlist(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
     sysfs_root: &Path,
 ) -> Result<(u16, u16), BrokerError> {
     let inspection = crate::ops::usbip_host::enforce_usbip_physical_policy(intent, sysfs_root)
+        .await
         .map_err(|err| map_usbip_host_inspection_error_for_intent(intent, err))?;
     Ok((inspection.vendor, inspection.product))
 }
@@ -9933,7 +9975,7 @@ fn map_usbip_host_inspection_error_for_intent(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn extend_usbip_backend_device_binds(
+pub(crate) async fn extend_usbip_backend_device_binds(
     resolver: &BundleResolver,
     vm_id: &str,
     role_id: &str,
@@ -9966,19 +10008,25 @@ pub(crate) fn extend_usbip_backend_device_binds(
         if owner != intent.vm_name {
             continue;
         }
-        let inspection =
-            crate::ops::usbip_host::enforce_usbip_physical_policy(intent, usb_device_sysfs_root())
-                .map_err(|err| map_usbip_host_inspection_error_for_intent(intent, err))?;
+        let inspection = crate::ops::usbip_host::enforce_usbip_physical_policy(
+            intent,
+            usb_device_sysfs_root(),
+        )
+        .await
+        .map_err(|err| map_usbip_host_inspection_error_for_intent(intent, err))?;
         let device_node = inspection.device_node;
         binds.insert(device_node.display().to_string());
     }
-    for intent in active_dynamic_usbip_bind_intents(resolver) {
+    for intent in active_dynamic_usbip_bind_intents(resolver).await {
         if intent.env != env {
             continue;
         }
-        let inspection =
-            crate::ops::usbip_host::enforce_usbip_physical_policy(&intent, usb_device_sysfs_root())
-                .map_err(|err| map_usbip_host_inspection_error_for_intent(&intent, err))?;
+        let inspection = crate::ops::usbip_host::enforce_usbip_physical_policy(
+            &intent,
+            usb_device_sysfs_root(),
+        )
+        .await
+        .map_err(|err| map_usbip_host_inspection_error_for_intent(&intent, err))?;
         let device_node = inspection.device_node;
         binds.insert(device_node.display().to_string());
     }
@@ -10073,7 +10121,7 @@ fn audio_state_value<'a>(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn cleanup_cloud_hypervisor_stale_sockets(
+pub(crate) async fn cleanup_cloud_hypervisor_stale_sockets(
     role: &d2b_contracts_broker::broker_wire::RunnerRole,
     argv: &[String],
 ) -> Result<(), BrokerError> {
@@ -10084,7 +10132,7 @@ pub(crate) fn cleanup_cloud_hypervisor_stale_sockets(
         return Ok(());
     }
     for path in cloud_hypervisor_socket_paths(argv) {
-        cleanup_stale_unix_socket(&path)?;
+        cleanup_stale_unix_socket(&path).await?;
     }
     Ok(())
 }
@@ -10129,25 +10177,25 @@ fn bind_cloud_hypervisor_guest_uid(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn cleanup_video_stale_socket(
+pub(crate) async fn cleanup_video_stale_socket(
     role: &d2b_contracts_broker::broker_wire::RunnerRole,
     argv: &[String],
 ) -> Result<(), BrokerError> {
     if !matches!(role, d2b_contracts_broker::broker_wire::RunnerRole::Video) {
         return Ok(());
     }
-    let path = video_socket_path(argv)?;
+    let path = video_socket_path(argv).await?;
     if !path.starts_with("/run/d2b-video/") {
         return Err(BrokerError::LiveHandler(format!(
             "video socket preflight refusing non-d2b socket path {}",
             path.display()
         )));
     }
-    cleanup_stale_unix_socket_without_probe(&path, "video socket preflight")
+    cleanup_stale_unix_socket_without_probe(&path, "video socket preflight").await
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn video_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
+async fn video_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
     let mut iter = argv.iter();
     while let Some(arg) = iter.next() {
         if arg == "--socket-path" {
@@ -10175,7 +10223,7 @@ fn video_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
 // Mirror the cloud-hypervisor / video preflight: drop a provably-stale
 // (non-listening) socket before spawn so obs-VM restarts self-heal.
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn cleanup_otel_host_bridge_stale_socket(
+pub(crate) async fn cleanup_otel_host_bridge_stale_socket(
     role: &d2b_contracts_broker::broker_wire::RunnerRole,
     argv: &[String],
 ) -> Result<(), BrokerError> {
@@ -10192,7 +10240,7 @@ pub(crate) fn cleanup_otel_host_bridge_stale_socket(
             path.display()
         )));
     }
-    cleanup_stale_unix_socket_without_probe(&path, "otel-host-bridge socket preflight")
+    cleanup_stale_unix_socket_without_probe(&path, "otel-host-bridge socket preflight").await
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -10238,8 +10286,8 @@ fn cloud_hypervisor_socket_paths(argv: &[String]) -> Vec<PathBuf> {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
-    let metadata = match fs::symlink_metadata(path) {
+async fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => {
@@ -10255,7 +10303,7 @@ fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
             path.display()
         )));
     }
-    match std::os::unix::net::UnixStream::connect(path) {
+    match tokio::net::UnixStream::connect(path).await {
         Ok(_) => Err(BrokerError::LiveHandler(format!(
             "cloud-hypervisor socket preflight found active listener at {}",
             path.display()
@@ -10266,7 +10314,7 @@ fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
                 io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
             ) =>
         {
-            fs::remove_file(path).map_err(|remove_err| {
+            tokio::fs::remove_file(path).await.map_err(|remove_err| {
                 BrokerError::LiveHandler(format!(
                     "cloud-hypervisor socket preflight could not remove stale {}: {remove_err}",
                     path.display()
@@ -10281,8 +10329,8 @@ fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn cleanup_stale_unix_socket_without_probe(path: &Path, context: &str) -> Result<(), BrokerError> {
-    let metadata = match fs::symlink_metadata(path) {
+async fn cleanup_stale_unix_socket_without_probe(path: &Path, context: &str) -> Result<(), BrokerError> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => {
@@ -10298,13 +10346,13 @@ fn cleanup_stale_unix_socket_without_probe(path: &Path, context: &str) -> Result
             path.display()
         )));
     }
-    if unix_socket_listening_path(path) {
+    if unix_socket_listening_path(path).await {
         return Err(BrokerError::LiveHandler(format!(
             "{context} found active listener at {}",
             path.display()
         )));
     }
-    fs::remove_file(path).map_err(|remove_err| {
+    tokio::fs::remove_file(path).await.map_err(|remove_err| {
         BrokerError::LiveHandler(format!(
             "{context} could not remove stale {}: {remove_err}",
             path.display()
@@ -10313,10 +10361,10 @@ fn cleanup_stale_unix_socket_without_probe(path: &Path, context: &str) -> Result
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn unix_socket_listening_path(path: &Path) -> bool {
+async fn unix_socket_listening_path(path: &Path) -> bool {
     const SO_ACCEPTCON: u64 = 0x0001_0000;
     let expected = path.to_string_lossy();
-    let Ok(contents) = fs::read_to_string("/proc/net/unix") else {
+    let Ok(contents) = tokio::fs::read_to_string("/proc/net/unix").await else {
         return false;
     };
     contents.lines().skip(1).any(|line| {
@@ -10332,7 +10380,7 @@ fn unix_socket_listening_path(path: &Path) -> bool {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn build_usbip_firewall_decision(
+async fn build_usbip_firewall_decision(
     resolver: &BundleResolver,
     host_nft_intent: &d2b_core::bundle_resolver::ResolvedNftIntent,
     current: &d2b_core::bundle_resolver::ResolvedUsbipFirewallIntent,
@@ -10372,7 +10420,7 @@ fn build_usbip_firewall_decision(
             )
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
     }
-    for bind_intent in active_dynamic_usbip_bind_intents(resolver) {
+    for bind_intent in active_dynamic_usbip_bind_intents(resolver).await {
         let firewall_id = d2b_core::bundle_resolver::intent_id_usbip_firewall(
             &bind_intent.env,
             &bind_intent.bus_id,
@@ -10437,14 +10485,18 @@ fn parse_usbip_firewall_intent_id(intent_id: &str) -> Option<(String, String)> {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn active_dynamic_usbip_bind_intents(
+async fn active_dynamic_usbip_bind_intents(
     resolver: &BundleResolver,
 ) -> Vec<d2b_core::bundle_resolver::ResolvedUsbipBindIntent> {
-    let Ok(entries) = std::fs::read_dir("/run/d2b/locks/usbip") else {
+    let Ok(mut entries) = tokio::fs::read_dir("/run/d2b/locks/usbip").await else {
         return Vec::new();
     };
-    entries
-        .filter_map(Result::ok)
+    let mut collected = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        collected.push(entry);
+    }
+    collected
+        .into_iter()
         .filter_map(|entry| {
             let bus_id = entry.file_name().into_string().ok()?;
             d2b_contracts::usbip::validate_bus_id(&bus_id).ok()?;
@@ -10455,7 +10507,7 @@ fn active_dynamic_usbip_bind_intents(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn active_locked_usbip_bind_intents(
+async fn active_locked_usbip_bind_intents(
     resolver: &BundleResolver,
 ) -> Result<Vec<d2b_core::bundle_resolver::ResolvedUsbipBindIntent>, BrokerError> {
     let mut out = Vec::new();
@@ -10474,7 +10526,7 @@ fn active_locked_usbip_bind_intents(
         }
         out.push(intent.clone());
     }
-    out.extend(active_dynamic_usbip_bind_intents(resolver));
+    out.extend(active_dynamic_usbip_bind_intents(resolver).await);
     Ok(out)
 }
 
@@ -10646,6 +10698,7 @@ fn handle_export_broker_audit(
     Ok(export_broker_audit_ok_response(lines))
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn validate_socket_parent(path: &Path, test_mode: bool) -> Result<(), RunError> {
     let parent = path.parent().ok_or_else(|| {
         RunError::Usage(format!(
@@ -10682,6 +10735,7 @@ fn validate_socket_parent(path: &Path, test_mode: bool) -> Result<(), RunError> 
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn prepare_socket_path(path: &Path) -> io::Result<()> {
     if fs::symlink_metadata(path).is_ok() {
         path_safe::remove_nofollow(path)?;
@@ -11817,6 +11871,7 @@ fn start_sigchld_reaper(runtime: &tokio::runtime::Runtime, audit_log: Arc<AuditL
     // write the same forensic ChildReaped record the SIGCHLD loop does.
     let _ = broker_audit_log_handle().set(Arc::clone(&audit_log));
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     let sigchld = runtime.block_on(async {
         use tokio::signal::unix::{SignalKind, signal};
 
@@ -17824,7 +17879,7 @@ mod tests {
         // A non-bridge role must short-circuit Ok before touching argv or
         // the filesystem, even with an otherwise-dangerous argv.
         let argv = vec!["UNIX-LISTEN:/etc/shadow,fork".to_owned()];
-        cleanup_otel_host_bridge_stale_socket(&RunnerRole::CloudHypervisor, &argv)
+        envelope_call_runtime().block_on(cleanup_otel_host_bridge_stale_socket(&RunnerRole::CloudHypervisor, &argv))
             .expect("non-bridge role is a no-op");
     }
 
@@ -17837,7 +17892,7 @@ mod tests {
         // path before the guarded `cleanup_stale_unix_socket_without_probe`.
         let argv = vec!["UNIX-LISTEN:/tmp/evil.sock,fork".to_owned()];
         assert!(
-            cleanup_otel_host_bridge_stale_socket(&RunnerRole::OtelHostBridge, &argv).is_err(),
+            envelope_call_runtime().block_on(cleanup_otel_host_bridge_stale_socket(&RunnerRole::OtelHostBridge, &argv)).is_err(),
             "socket path outside /run/d2b/otel/ must be refused"
         );
     }
@@ -17982,7 +18037,7 @@ mod tests {
 
         let intent = find_usbip_bind_intent_for(&bundle.resolver, "corp-vm", "1-2.3")
             .expect("bundle usbip bind intent");
-        let err = enforce_usbip_allowlist(&intent, &sysfs_root)
+        let err = envelope_call_runtime().block_on(enforce_usbip_allowlist(&intent, &sysfs_root))
             .expect_err("device outside allowlist must be rejected");
         match err {
             BrokerError::UsbipDeviceNotAllowed {
@@ -18017,7 +18072,7 @@ mod tests {
 
         let intent = find_usbip_bind_intent_for(&bundle.resolver, "corp-vm", "1-2.3")
             .expect("bundle usbip bind intent");
-        let err = enforce_usbip_allowlist(&intent, &sysfs_root)
+        let err = envelope_call_runtime().block_on(enforce_usbip_allowlist(&intent, &sysfs_root))
             .expect_err("missing required allowlist must fail closed");
         match err {
             BrokerError::UsbipPolicyMismatch { busid, reason } => {
@@ -18053,7 +18108,7 @@ mod tests {
 
         let intent = find_usbip_bind_intent_for(&bundle.resolver, "corp-vm", "1-2.3")
             .expect("bundle usbip bind intent");
-        let err = enforce_usbip_allowlist(&intent, &sysfs_root)
+        let err = envelope_call_runtime().block_on(enforce_usbip_allowlist(&intent, &sysfs_root))
             .expect_err("topology mismatch must fail closed as policy");
         match &err {
             BrokerError::UsbipPolicyMismatch { busid, reason } => {
@@ -19160,11 +19215,11 @@ mod tests {
         )
         .expect("seed lock");
 
-        let error = handle_usbip_acl_revoke_failure_after_unbind(
+        let error = envelope_call_runtime().block_on(handle_usbip_acl_revoke_failure_after_unbind(
             &intent,
             false,
             BrokerError::LiveHandler("revoke failed".to_owned()),
-        );
+        ));
 
         assert!(matches!(
             error,
@@ -19204,11 +19259,11 @@ mod tests {
         )
         .expect("seed lock");
 
-        let error = handle_usbip_acl_revoke_failure_after_unbind(
+        let error = envelope_call_runtime().block_on(handle_usbip_acl_revoke_failure_after_unbind(
             &intent,
             false,
             BrokerError::LiveHandler("revoke failed".to_owned()),
-        );
+        ));
 
         assert!(matches!(
             error,
@@ -19244,7 +19299,7 @@ mod tests {
         let node = PathBuf::from("/dev/bus/usb/001/007");
         let result = envelope_call_runtime().block_on(retry_usbip_backend_acl_grant(
             1002,
-            || Ok(node.clone()),
+            || Box::pin(async { Ok(node.clone()) }),
             |path, _uid| {
                 log.borrow_mut().grants.push(path.to_owned());
                 Box::pin(async { Ok(()) })
@@ -19253,7 +19308,10 @@ mod tests {
                 log.borrow_mut().revokes.push(path.to_owned());
                 Box::pin(async { Ok(()) })
             },
-            || log.borrow_mut().sleeps += 1,
+            || {
+                log.borrow_mut().sleeps += 1;
+                Box::pin(async {})
+            },
         ));
         assert!(result.is_ok(), "stable node must succeed immediately");
         let log = log.into_inner();
@@ -19281,11 +19339,12 @@ mod tests {
             || {
                 let n = *call_count.borrow();
                 *call_count.borrow_mut() += 1;
-                match n {
+                let outcome = match n {
                     0 => Ok(node_a.clone()), // first pre-grant verify → A
                     1 => Ok(node_b.clone()), // post-grant verify → B (changed!)
                     _ => Ok(node_b.clone()), // subsequent calls → B (stable)
-                }
+                };
+                Box::pin(async move { outcome })
             },
             |path, _uid| {
                 log.borrow_mut().grants.push(path.to_owned());
@@ -19295,7 +19354,10 @@ mod tests {
                 log.borrow_mut().revokes.push(path.to_owned());
                 Box::pin(async { Ok(()) })
             },
-            || log.borrow_mut().sleeps += 1,
+            || {
+                log.borrow_mut().sleeps += 1;
+                Box::pin(async {})
+            },
         ));
         assert!(result.is_ok(), "must converge after transient node change");
         let log = log.into_inner();
@@ -19325,7 +19387,10 @@ mod tests {
         let err_msg = "identity changed: VID/PID mismatch";
         let result = envelope_call_runtime().block_on(retry_usbip_backend_acl_grant(
             1002,
-            || Err(BrokerError::LiveHandler(err_msg.to_owned())),
+            || {
+                let error = BrokerError::LiveHandler(err_msg.to_owned());
+                Box::pin(async move { Err(error) })
+            },
             |path, _uid| {
                 log.borrow_mut().grants.push(path.to_owned());
                 Box::pin(async { Ok(()) })
@@ -19334,7 +19399,10 @@ mod tests {
                 log.borrow_mut().revokes.push(path.to_owned());
                 Box::pin(async { Ok(()) })
             },
-            || log.borrow_mut().sleeps += 1,
+            || {
+                log.borrow_mut().sleeps += 1;
+                Box::pin(async {})
+            },
         ));
         assert!(result.is_err(), "must fail when verify never succeeds");
         let log = log.into_inner();
@@ -19368,7 +19436,8 @@ mod tests {
                 *counter.borrow_mut() += 1;
                 // Each call returns a unique node so post-grant verify
                 // always sees a "changed" path.
-                Ok(PathBuf::from(format!("{base}{n:03}")))
+                let outcome = Ok(PathBuf::from(format!("{base}{n:03}")));
+                Box::pin(async move { outcome })
             },
             |path, _uid| {
                 log.borrow_mut().grants.push(path.to_owned());
@@ -19378,7 +19447,10 @@ mod tests {
                 log.borrow_mut().revokes.push(path.to_owned());
                 Box::pin(async { Ok(()) })
             },
-            || log.borrow_mut().sleeps += 1,
+            || {
+                log.borrow_mut().sleeps += 1;
+                Box::pin(async {})
+            },
         ));
         assert!(result.is_err(), "must fail when node never stabilizes");
         let log = log.into_inner();
@@ -19419,11 +19491,12 @@ mod tests {
             || {
                 let n = *call_count.borrow();
                 *call_count.borrow_mut() += 1;
-                match n {
+                let outcome = match n {
                     0 => Ok(node_a.clone()),
                     1 => Ok(node_b.clone()), // post-grant re-check sees B
                     _ => Ok(node_b.clone()), // stable from here on
-                }
+                };
+                Box::pin(async move { outcome })
             },
             |path, _uid| {
                 log.borrow_mut().grants.push(path.to_owned());
@@ -19438,7 +19511,10 @@ mod tests {
                     ))
                 })
             },
-            || log.borrow_mut().sleeps += 1,
+            || {
+                log.borrow_mut().sleeps += 1;
+                Box::pin(async {})
+            },
         ));
         // The revoke error must not surface as the final result; the
         // retry on node B must succeed.
@@ -19685,36 +19761,39 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn usb_audit_serial_hmac_keyring_creates_root_only_current_key_and_reads_previous() {
+    #[tokio::test]
+    async fn usb_audit_serial_hmac_keyring_creates_root_only_current_key_and_reads_previous() {
         use std::os::unix::fs::PermissionsExt;
 
         let state_dir = test_audit_dir("usb-audit-hmac-keyring");
-        fs::create_dir_all(&state_dir).expect("create state dir");
+        tokio::fs::create_dir_all(&state_dir).await.expect("create state dir");
         let key_dir = usb_audit_serial_hmac_key_dir(&state_dir);
-        fs::create_dir_all(&key_dir).expect("create key dir");
+        tokio::fs::create_dir_all(&key_dir).await.expect("create key dir");
         let previous = UsbAuditSerialHmacKey {
             slot: UsbAuditSerialHmacKeySlot::Previous,
             key_id: "audit-key-previous".to_owned(),
             key: b"fedcba9876543210fedcba9876543210".to_vec(),
         };
         let previous_path = key_dir.join(USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_FILE);
-        fs::write(&previous_path, render_usb_audit_serial_hmac_key(&previous))
+        tokio::fs::write(&previous_path, render_usb_audit_serial_hmac_key(&previous))
+            .await
             .expect("write previous key");
-        let mut perms = fs::metadata(&previous_path)
+        let mut perms = tokio::fs::metadata(&previous_path)
+            .await
             .expect("stat previous key")
             .permissions();
         perms.set_mode(0o400);
-        fs::set_permissions(&previous_path, perms).expect("chmod previous key");
+        tokio::fs::set_permissions(&previous_path, perms).await.expect("chmod previous key");
 
-        let keyring = usb_audit_serial_hmac_keyring(&state_dir, true).expect("keyring loads");
+        let keyring = usb_audit_serial_hmac_keyring(&state_dir, true).await.expect("keyring loads");
         assert_eq!(keyring.current.slot, UsbAuditSerialHmacKeySlot::Current);
         assert!(keyring.current.key_id.starts_with("usb-audit-"));
         assert_eq!(keyring.current.key.len(), USB_AUDIT_SERIAL_HMAC_KEY_BYTES);
         assert_eq!(keyring.previous, Some(previous));
 
         let current_path = key_dir.join(USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE);
-        let mode = fs::metadata(&current_path)
+        let mode = tokio::fs::metadata(&current_path)
+            .await
             .expect("stat current key")
             .mode()
             & 0o777;
@@ -19722,7 +19801,7 @@ mod tests {
 
         let first_current = keyring.current.clone();
         let loaded_again =
-            usb_audit_serial_hmac_keyring(&state_dir, true).expect("keyring loads again");
+            usb_audit_serial_hmac_keyring(&state_dir, true).await.expect("keyring loads again");
         assert_eq!(loaded_again.current, first_current);
     }
 

@@ -485,6 +485,7 @@ pub mod test_harness {
         pub error_kind: Option<String>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl AuditSink for RecordingAuditSink {
         fn record(
             &self,

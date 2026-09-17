@@ -1459,7 +1459,7 @@ mod tests {
     async fn read_persisted_nft_hash_reads_host_runtime_hash() {
         let root = TestDir::new("nft-host-runtime");
         let runtime_path = root.join("host-runtime.json");
-        std::fs::write(
+        tokio::fs::write(
             &runtime_path,
             serde_json::json!({
                 "schemaVersion": "v2",
@@ -1469,7 +1469,7 @@ mod tests {
                 "ifnames": []
             })
             .to_string(),
-        )
+        ).await
         .unwrap();
 
         assert_eq!(
@@ -1483,7 +1483,7 @@ mod tests {
     async fn read_persisted_nft_hash_falls_back_to_legacy_sidecar() {
         let root = TestDir::new("nft-sidecar-fallback");
         let runtime_path = root.join("host-runtime.json");
-        std::fs::write(
+        tokio::fs::write(
             &runtime_path,
             serde_json::json!({
                 "schemaVersion": "v2",
@@ -1493,16 +1493,16 @@ mod tests {
                 "ifnames": []
             })
             .to_string(),
-        )
+        ).await
         .unwrap();
         let sidecar_path = root.join("nft-hash.json");
-        std::fs::write(
+        tokio::fs::write(
             &sidecar_path,
             serde_json::to_vec(&NftHashSidecar {
                 table_hash_after_apply: "feedfacefeedface".to_owned(),
             })
             .unwrap(),
-        )
+        ).await
         .unwrap();
 
         assert_eq!(
