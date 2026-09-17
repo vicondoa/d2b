@@ -567,6 +567,9 @@ impl RevocableRouteLease {
         Arc::clone(&self.endpoint)
     }
 
+    // Route-lease revocation is a brief non-suspending critical section shared
+    // with synchronous teardown paths;the lease flag has no async form here.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) fn with_active<T>(&self, action: impl FnOnce() -> T) -> Result<T, RegistryError> {
         let revoked = self
             .state
@@ -733,6 +736,9 @@ impl Registry {
         );
     }
 
+    // Session removal marks the lease revoked in a brief non-suspending critical
+    // section;the lease flag has no async form (see with_active).
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) fn remove(&mut self, session: SessionId) -> bool {
         let Some(registered) = self.sessions.remove(&session) else {
             return false;

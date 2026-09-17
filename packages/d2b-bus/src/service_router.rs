@@ -81,6 +81,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn audited_route_gate_records_only_the_closed_route_shape() {
         let mut table = RouteTable::default();
         table.register("d2b.audit.v3", ["Export"]).unwrap();

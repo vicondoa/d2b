@@ -236,6 +236,7 @@ fn controller_peer_child() {
     UnixStream::connect_addr(&address).unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn child_verified_peer() -> VerifiedUnixPeer {
     let name = format!(
         "d2b-controller-peer-{}-{}",
@@ -624,6 +625,7 @@ fn bus_with_config(config: BusConfig) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
     ZoneBus::new(zone, BusAuthorizer::new(native, state).unwrap(), config).unwrap()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn verified_peer_evidence_cannot_author_a_subject_without_registrar_state() {
     let (_bus, registrar) = bus();
@@ -651,6 +653,7 @@ async fn verified_peer_evidence_cannot_author_a_subject_without_registrar_state(
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn registrar_rejects_ambiguous_same_peer_subject_registration() {
     let (_bus, registrar) = bus();
@@ -697,6 +700,7 @@ async fn registrar_rejects_ambiguous_same_peer_subject_registration() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn committed_controller_subject_installation_binds_an_exact_verified_peer() {
     let (_bus, registrar) = bus();
@@ -720,6 +724,7 @@ async fn committed_controller_subject_installation_binds_an_exact_verified_peer(
         .unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn committed_controller_subject_carries_authoritative_context() {
     let (_bus, registrar) = bus();
@@ -771,6 +776,7 @@ async fn committed_controller_subject_carries_authoritative_context() {
     echo.abort();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn exact_controller_subject_records_are_consumed_once() {
     let (_bus, registrar) = bus();
@@ -818,6 +824,7 @@ async fn exact_controller_subject_records_are_consumed_once() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn exact_resource_subject_restart_replaces_before_capacity_check() {
     let (_bus, registrar) = bus_with_config(BusConfig {
@@ -871,6 +878,7 @@ async fn exact_resource_subject_restart_replaces_before_capacity_check() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn exact_resource_subject_restart_rejects_old_peer_and_admits_new_peer() {
     let (_bus, registrar) = bus_with_config(BusConfig {
@@ -946,6 +954,7 @@ async fn exact_resource_subject_restart_rejects_old_peer_and_admits_new_peer() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn exact_resource_subjects_with_different_processes_remain_distinct() {
     let (_bus, registrar) = bus_with_config(BusConfig {
@@ -983,6 +992,7 @@ async fn exact_resource_subjects_with_different_processes_remain_distinct() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn a_shared_provider_uid_cannot_select_a_resource_controller() {
     let (_bus, registrar) = bus();
@@ -1017,6 +1027,7 @@ async fn a_shared_provider_uid_cannot_select_a_resource_controller() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn explicitly_installed_system_core_subject_still_registers() {
     let (_bus, registrar) = bus();
@@ -1038,6 +1049,7 @@ async fn explicitly_installed_system_core_subject_still_registers() {
         .unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn service_registration_returns_the_only_transport_reader() {
     let (_bus, mut registrar) = bus();
@@ -1067,6 +1079,7 @@ async fn service_registration_returns_the_only_transport_reader() {
     echo.abort();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn registrar_rejects_a_session_minted_for_another_bus_instance() {
     let (_first_bus, first_registrar) = bus();
@@ -1327,6 +1340,7 @@ impl ResourceStoreBackend for ScopedStore {
         unreachable!("scoped commit proof does not read through the backend")
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn list(&self, request: StoreListRequest) -> Result<StoreListResult, StoreError> {
         self.lists.lock().unwrap().push(request);
         Ok(StoreListResult {
@@ -1337,6 +1351,7 @@ impl ResourceStoreBackend for ScopedStore {
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn watch(&self, request: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
         self.watches.lock().unwrap().push(request);
         Ok(StoreWatchReceipt {
@@ -1359,6 +1374,7 @@ impl ResourceStoreBackend for ScopedStore {
         unreachable!("scoped commit proof does not inspect schemas through the backend")
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn commit_verified(
         &self,
         mutation: d2b_contracts_resource::v3::SealedMutation,
@@ -1493,6 +1509,7 @@ fn query_frame(method: &str) -> Vec<u8> {
     frame
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
     let (_bus, mut registrar, assignments, native, state) = scoped_bus();
@@ -1678,6 +1695,7 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
     caller_echo.abort();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
     let (_bus, mut registrar, assignments, native, state) = scoped_bus();
@@ -1971,6 +1989,7 @@ fn ttrpc_frame(stream_id: u32, payload: &[u8]) -> Vec<u8> {
     frame
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecycle() {
     let (bus, mut registrar) = bus();
@@ -2165,6 +2184,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn cancelled_stream_id_reuse_rejects_the_late_response() {
     let (_bus, mut registrar) = bus_with_config(BusConfig {
@@ -2272,6 +2292,7 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
     caller_echo.abort();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn preseeded_counter_response_is_not_accepted_by_a_later_invocation() {
     let (_bus, mut registrar) = bus();
@@ -2345,6 +2366,7 @@ async fn preseeded_counter_response_is_not_accepted_by_a_later_invocation() {
     caller_echo.abort();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn concurrent_invocations_dispatch_out_of_order_responses() {
     let (_bus, mut registrar) = bus();
@@ -2431,6 +2453,7 @@ async fn concurrent_invocations_dispatch_out_of_order_responses() {
     caller_echo.abort();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn uncorrelatable_response_terminates_every_waiter() {
     let (_bus, mut registrar) = bus();
@@ -2519,6 +2542,7 @@ async fn uncorrelatable_response_terminates_every_waiter() {
     caller_echo.abort();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn revocation_waits_for_an_admitted_batch_before_returning() {
     let (_bus, mut registrar) = bus();
@@ -2591,6 +2615,7 @@ async fn revocation_waits_for_an_admitted_batch_before_returning() {
     caller_echo.abort();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn reconnect_rejects_a_control_batch_queued_behind_an_admitted_write() {
     let (_bus, mut registrar) = bus();
@@ -2682,6 +2707,7 @@ async fn reconnect_rejects_a_control_batch_queued_behind_an_admitted_write() {
     caller_echo.abort();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn receive_failure_terminates_without_retaining_the_operation() {
     let (_bus, mut registrar) = bus();
@@ -2749,6 +2775,7 @@ async fn receive_failure_terminates_without_retaining_the_operation() {
     caller_echo.abort();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn deadline_signals_the_correlated_remote_request() {
     let (_bus, mut registrar) = bus();
@@ -2836,6 +2863,7 @@ async fn deadline_signals_the_correlated_remote_request() {
     remote_task.await.unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn explicit_cancel_signals_the_correlated_remote_request() {
     let (_bus, mut registrar) = bus();
@@ -2923,6 +2951,7 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
     remote_task.await.unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn dropped_invoke_signals_the_correlated_remote_request() {
     let (_bus, mut registrar) = bus();

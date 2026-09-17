@@ -362,6 +362,7 @@ mod tests {
         (OwnedFd::from(left), OwnedFd::from(right))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn an_allocator_issued_seqpacket_opens_an_inherited_within_zone_transport() {
         let (local, peer) = prearmed_seqpacket_pair().expect("create a prearmed pair");
@@ -383,6 +384,7 @@ mod tests {
         drop(peer);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn an_allocator_issued_stream_opens_an_attachment_free_zone_link_transport() {
         let (local, peer) = allocated_stream_pair();
@@ -404,6 +406,7 @@ mod tests {
         drop(peer);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_declared_kind_that_contradicts_the_request_is_refused() {
         let (local, peer) = prearmed_seqpacket_pair().expect("create a prearmed pair");
@@ -421,6 +424,7 @@ mod tests {
         drop(peer);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_stream_descriptor_presented_as_a_seqpacket_is_refused_by_the_kernel_kind() {
         let (local, peer) = allocated_stream_pair();
@@ -445,6 +449,7 @@ mod tests {
         drop(peer);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn an_inherited_descriptor_that_was_not_prearmed_is_refused() {
         let (local, peer) = allocated_stream_pair();
@@ -466,6 +471,7 @@ mod tests {
         drop(peer);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_zone_link_plan_never_opens_a_within_zone_seqpacket() {
         let (local, peer) = prearmed_seqpacket_pair().expect("create a prearmed pair");
@@ -483,6 +489,7 @@ mod tests {
         drop(peer);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_within_zone_plan_never_opens_a_zone_link_stream() {
         let (local, peer) = allocated_stream_pair();
@@ -498,6 +505,7 @@ mod tests {
         drop(peer);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_blocking_allocator_descriptor_is_refused_rather_than_repaired() {
         let (left, right) = UnixStream::pair().expect("create a Unix stream pair");

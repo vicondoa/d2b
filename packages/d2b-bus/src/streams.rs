@@ -554,6 +554,10 @@ impl StreamBridge {
         }
     }
 
+    // Bridge state is mutated in brief non-suspending critical sections;the
+    // same state is closed synchronously from Drop teardown (OutgoingStream/
+    // IncomingStream), so the lock has no async form here.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn lock(&self) -> MutexGuard<'_, BridgeState> {
         self.state
             .lock()
@@ -811,6 +815,7 @@ mod tests {
     struct RecordingObserver(Mutex<Vec<(BusEvent, BusFailureReason)>>);
 
     impl BusObserver for RecordingObserver {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn record(&self, event: BusEvent, reason: BusFailureReason) {
             self.0.lock().unwrap().push((event, reason));
         }
@@ -863,6 +868,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn queued_stream_shedding_is_observed_for_every_close_path() {
         let observer = Arc::new(RecordingObserver::default());
         let bridge = bridge_with_observer(32, observer.clone());
@@ -941,6 +947,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn per_stream_and_aggregate_credit_apply_before_enqueue() {
         let bridge = bridge(6);
@@ -973,6 +980,7 @@ mod tests {
         outgoing.send(vec![2]).unwrap();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn bounded_watch_delivery_waits_for_transport_credit() {
         let bridge = bridge(16);
@@ -1000,6 +1008,7 @@ mod tests {
         assert_eq!(frame.payload(), &[1, 2, 3, 4]);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn ready_streams_are_served_round_robin() {
         let bridge = bridge(32);
@@ -1033,6 +1042,7 @@ mod tests {
         assert_eq!(observed[2].stream().as_str(), "watch:first");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn principals_can_reuse_names_and_are_scheduled_before_their_streams() {
         let bridge = bridge(32);
@@ -1124,6 +1134,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn receive_waits_for_arrival_and_close_wakes_waiters() {
         let bridge = bridge(16);
@@ -1152,6 +1163,7 @@ mod tests {
         assert_eq!(closed, Err(StreamError::StreamClosed));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn session_cancellation_closes_both_stream_directions() {
         let bridge = bridge(32);
@@ -1171,6 +1183,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn concurrent_stream_opens_saturate_aggregate_credit() {
         const ATTEMPTS: usize = 16;
@@ -1224,6 +1237,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn concurrent_senders_exhaust_exact_byte_credit() {
         const ATTEMPTS: usize = 32;

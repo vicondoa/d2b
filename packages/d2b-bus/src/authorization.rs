@@ -194,6 +194,10 @@ impl BusAuthorizer {
             }
         };
         if let Some(registry) = &self.assignments {
+            // The assignment registry lock is an externally supplied std Mutex
+            // (d2bd-runtime's AssignmentRegistry);the validation is a brief
+            // non-suspending critical section on the sync authorization surface.
+            #[allow(clippy::disallowed_methods, reason = "synchronous path")]
             registry
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -272,6 +276,11 @@ impl BusAuthorizer {
             .max(state.snapshot.policy_revision)
     }
 
+    // Policy state is evaluated in brief non-suspending critical sections behind
+    // the synchronous SessionAcceptor surface (component_session_acceptor
+    // closures)and pub sync API consumed by the daemon;the lock has no async
+    // form here.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn lock(&self) -> MutexGuard<'_, AuthorizationRuntime> {
         self.runtime
             .lock()
@@ -1176,6 +1185,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn assignment_authorization_rejects_revoked_and_stale_registry_scope() {
         let (context, registry, identity, _query, mutation, _) = assignment_fixture();
         let commit_call = ResourceCall::ScopedCommitBatch {
@@ -1324,6 +1334,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn policy_commit_fences_the_previous_session_lease() {
         let claims = context(

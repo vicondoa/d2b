@@ -913,6 +913,10 @@ impl BusCore {
         )
     }
 
+    // Active-session gauges are updated in a brief non-suspending critical
+    // section fed from async registration/reconnect flows and sync teardown
+    // accounting;the std lock stays short and never crosses an await.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn record_session_registered(&self, session: SessionId) {
         let (direction, transport) = self.session_metrics(session);
         let active = {
@@ -950,6 +954,8 @@ impl BusCore {
         }
     }
 
+    // Peer of record_session_registered: brief non-suspending gauge update.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn record_session_disconnected_values(
         &self,
         direction: BusDirection,
@@ -1088,12 +1094,21 @@ impl BusCore {
         self.observer.record(BusEvent::TombstoneEviction, reason);
     }
 
+    // Route tables are mutated in brief non-suspending critical sections; the
+    // same state is touched by synchronous cleanup/Drop paths and sync trait
+    // contracts (BusEndpoint::terminalize_cancel, invalidate_session), so the
+    // lock has no async form here.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn lock_registry(&self) -> MutexGuard<'_, Registry> {
         self.registry
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    // Operation bookkeeping is a brief non-suspending critical sectionshared
+    // with synchronous teardown (Drop impls of OperationLease/BusStream)and
+    // the operation table has no async form here.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn lock_operations(&self) -> MutexGuard<'_, OperationTable> {
         self.operations
             .lock()
@@ -1748,6 +1763,11 @@ impl AuthoritativeUnixSubjectResolver {
         }
     }
 
+    // Subject tables are read/written in brief non-suspending critical sections
+    // behind synchronous public surfaces (component_session_acceptor and
+    // ZoneRegistrar::install_*), so they have no async form.
+
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn resolve_for_service(
         &self,
         peer: PeerCredentials,
@@ -1794,6 +1814,7 @@ impl AuthoritativeUnixSubjectResolver {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn install(&self, subject: UnixSubjectRecord, zone: &ZoneId) -> d2b_session::Result<()> {
         if subject.zone_ref.name().as_str() != zone.as_str() {
             return Err(d2b_session::SessionError::new(
@@ -1821,6 +1842,7 @@ impl AuthoritativeUnixSubjectResolver {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn install_many(
         &self,
         new_subjects: Vec<UnixSubjectRecord>,
@@ -2265,7 +2287,7 @@ impl ZoneRegistrar {
         self.unix_subjects.install(subject, &self.core.zone)
     }
 
-    #[cfg(test)]
+#[cfg(test)]
     pub(crate) fn register(
         &mut self,
         registration: SessionRegistration,
@@ -2320,7 +2342,7 @@ impl ZoneRegistrar {
             .validate_reconnect(previous.session, &registration)?;
         let previous_metrics = self.core.session_metrics(previous.session);
         let invalidation = self.core.lock_registry().invalidate(previous.session);
-        if let Some(invalidation) = invalidation {
+        if let Some(invalidation) = invalidation{
             invalidation.await;
         }
         let session = self
@@ -2454,6 +2476,11 @@ impl ComponentResponses {
                         }
                     };
                     let accepted = {
+                        // Brief non-suspending endpoint-state critical section;the
+                        // same state is locked by the sync BusEndpoint trait paths
+                        // (invalidate_session/terminalize_cancel), so it has no
+                        // async form.
+                        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
                         let mut state = self
                             .state
                             .lock()
@@ -2492,6 +2519,9 @@ impl ComponentResponses {
         }
     }
 
+    // Brief non-suspending response-waiter mutation;state has no async form
+    // because sync BusEndpoint trait paths lock it too.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn deliver(&self, request_id: d2b_session::contract::RequestId, response: ComponentResponse) {
         let sender = {
             let mut state = self
@@ -2505,6 +2535,7 @@ impl ComponentResponses {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn has_waiter(&self, request_id: &d2b_session::contract::RequestId) -> bool {
         self.state
             .lock()
@@ -2513,6 +2544,7 @@ impl ComponentResponses {
             .contains_key(request_id)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn terminate(&self, error: EndpointError) {
         let waiters = {
             let mut state = self
@@ -2534,6 +2566,9 @@ impl ComponentResponses {
         }
         let stream_id = ttrpc_stream_id(&frame).map_err(|_| EndpointError::Rejected)?;
         {
+            // Brief non-suspending critical section;locked by sync trait paths
+            // too (invalidate_session/terminalize_cancel), so no async form.
+            #[allow(clippy::disallowed_methods, reason = "synchronous path")]
             let mut state = self
                 .state
                 .lock()
@@ -2684,6 +2719,7 @@ impl ComponentActivity {
 }
 
 impl ComponentEndpoint {
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn is_revoked(&self) -> bool {
         self.activity
             .lock()
@@ -2691,6 +2727,7 @@ impl ComponentEndpoint {
             .revoked
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn remove_active(
         &self,
         operation: &OperationId,
@@ -2713,7 +2750,12 @@ fn publish_component_request(
     publish_component_request_with_hook(activity, responses, operation, request, || {})
 }
 
-fn publish_component_request_with_hook(
+// Component request publication takes both endpoint locks in one brief
+    // non-suspending critical section;the same state is locked by the sync
+    // BusEndpoint trait paths (invalidate_session/terminalize_cancel), so
+    // the locks have no async form.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    fn publish_component_request_with_hook(
     activity: &Mutex<ComponentActivity>,
     responses: &Mutex<ComponentResponseState>,
     operation: OperationId,
@@ -2746,7 +2788,10 @@ fn publish_component_request_with_hook(
     Ok(receiver)
 }
 
-fn terminalize_component_request(
+// Required by the synchronous BusEndpoint::terminalize_cancel trait path;
+    // brief non-suspending critical section.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    fn terminalize_component_request(
     activity: &Mutex<ComponentActivity>,
     responses: &Mutex<ComponentResponseState>,
     operation: &OperationId,
@@ -2769,6 +2814,8 @@ fn terminalize_component_request(
 
 #[async_trait::async_trait]
 impl crate::registry::BusEndpoint for ComponentEndpoint {
+    // Sync BusEndpoint trait contract;brief non-suspending activity revocation.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn invalidate_session(&self) -> crate::registry::SessionInvalidation {
         let writer_fence = self.cancellation.revoke_generation_writes();
         let revocations = self
@@ -2834,12 +2881,17 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         let now_tick = self.clock.now_tick();
         let caller_stream_id =
             ttrpc_stream_id(request.payload()).map_err(|_| EndpointError::Rejected)?;
-        let internal_stream_id = match self
-            .correlations
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .allocate()
-        {
+        let correlation = {
+            // Brief non-suspending correlation allocation;the same lock is
+            // used from sync paths, and no await happens while it is held.
+            #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+            let mut correlations = self
+                .correlations
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            correlations.allocate()
+        };
+        let internal_stream_id = match correlation {
             Ok(stream_id) => stream_id,
             Err(CorrelationAllocationError::Entropy) => return Err(EndpointError::Internal),
             Err(CorrelationAllocationError::ReconnectRequired) => {
@@ -3268,7 +3320,7 @@ impl ZoneRegistrar {
         });
         let direction = BusDirection::from_context(Some(binding.context()));
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
-        let session = match self.core.lock_registry().register(registration) {
+let session = match self.core.lock_registry().register(registration) {
             Ok(session) => session,
             Err(error) => {
                 self.core
@@ -3287,7 +3339,7 @@ impl ZoneRegistrar {
         })
     }
 
-    pub async fn reconnect_component_session(
+pub async fn reconnect_component_session(
         &mut self,
         mut previous: BusIngress,
         session: AuthenticatedComponentSession<ComponentSessionAdmission>,
@@ -3328,7 +3380,7 @@ impl ZoneRegistrar {
             .validate_reconnect(previous.session, &registration)?;
         let previous_metrics = self.core.session_metrics(previous.session);
         let invalidation = self.core.lock_registry().invalidate(previous.session);
-        if let Some(invalidation) = invalidation {
+        if let Some(invalidation) = invalidation{
             invalidation.await;
         }
         let session = self
@@ -4029,6 +4081,7 @@ impl BusIngress {
     }
 
     #[cfg(test)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn wait_for_invocation_hook(&self, after_resolve: bool) {
         let hook = {
             let hooks = self
@@ -4049,6 +4102,7 @@ impl BusIngress {
     }
 
     #[cfg(test)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn wait_for_cancel_transition_hook(&self) {
         let hook = self
             .core
@@ -4432,6 +4486,7 @@ mod tests {
             })
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn call_count(&self) -> usize {
             self.calls.lock().unwrap().len()
         }
@@ -4440,10 +4495,12 @@ mod tests {
             self.cancel_count.load(Ordering::Acquire)
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn has_active_request(&self, operation: &OperationId) -> bool {
             self.active_requests.lock().unwrap().contains_key(operation)
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn has_response_waiter(&self, operation: &OperationId) -> bool {
             self.response_waiters
                 .lock()
@@ -4454,6 +4511,7 @@ mod tests {
 
     #[async_trait]
     impl BusEndpoint for RecordingEndpoint {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn invoke(&self, request: DeliveredInvocation) -> Result<BusResponse, EndpointError> {
             let operation = request.operation().id().clone();
             self.active_requests
@@ -4478,6 +4536,7 @@ mod tests {
             Ok(BusResponse::new(self.response.clone()))
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn open_stream(&self, request: DeliveredStream) -> Result<(), EndpointError> {
             self.calls.lock().unwrap().push((
                 request.route().clone(),
@@ -4488,6 +4547,7 @@ mod tests {
             Ok(())
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn terminalize_cancel(
             &self,
             operation: &OperationId,
@@ -4644,6 +4704,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn component_cancel_terminalization_removes_activity_and_response_waiter() {
         let operation = OperationId::parse("component-cancel").unwrap();
         let attempt = Cancellation::new();
@@ -4681,6 +4742,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn component_publication_rejects_an_already_cancelled_attempt_without_state() {
         let operation = OperationId::parse("component-pre-cancel").unwrap();
         let attempt = Cancellation::new();
@@ -4710,6 +4772,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn component_cancellation_contending_during_publication_removes_all_state() {
         let operation = OperationId::parse("component-contended-cancel").unwrap();
         let attempt = Cancellation::new();
@@ -4952,6 +5015,7 @@ mod tests {
     struct CaptureObserver(Mutex<Vec<(BusEvent, BusFailureReason)>>);
 
     impl BusObserver for CaptureObserver {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn record(&self, event: BusEvent, reason: BusFailureReason) {
             self.0.lock().unwrap().push((event, reason));
         }
@@ -5085,6 +5149,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn committed_subject_install_is_instance_bound_and_default_deny() {
         let (_bus_a, registrar_a, issuer_a) = subject_issuer_bus();
         let (_bus_b, registrar_b, issuer_b) = subject_issuer_bus();
@@ -5263,6 +5328,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn exact_routes_deliver_only_to_the_named_recipient() {
         let zone = ZoneId::parse("dev").unwrap();
@@ -5449,6 +5515,7 @@ mod tests {
         drop(bus);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn exact_route_is_required_and_no_direct_resource_fallback_exists() {
         let mut harness = resource_harness(
@@ -5551,6 +5618,7 @@ mod tests {
         assert_eq!(harness.endpoint.call_count(), 1);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn zone_mismatch_is_rejected_before_delivery() {
         let harness = resource_harness(
@@ -5584,6 +5652,7 @@ mod tests {
         assert_eq!(harness.endpoint.call_count(), 0);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn diagnostics_require_the_exact_service_method_and_grant_no_invoke() {
         let exact = harness(HarnessSpec {
@@ -5650,6 +5719,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn relay_and_target_verb_are_independently_required() {
         let no_relay = resource_harness(
@@ -5864,6 +5934,7 @@ mod tests {
         drop(bus);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn list_and_watch_selectors_survive_an_adjacent_hop_exactly() {
         let mut list = resource_harness(
@@ -5963,6 +6034,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn policy_replacement_revokes_a_previously_authorized_route() {
         let harness = resource_harness(
@@ -6007,6 +6079,7 @@ mod tests {
         assert_eq!(harness.endpoint.call_count(), 1);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconnect_replaces_routes_and_refuses_the_old_generation() {
         let harness = resource_harness(
@@ -6100,6 +6173,7 @@ mod tests {
         drop(bus);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn revoke_between_resolution_and_begin_rejects_the_route_lease() {
         let harness = resource_harness(
@@ -6141,6 +6215,7 @@ mod tests {
         assert_eq!(harness.endpoint.call_count(), 0);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn revoke_after_begin_cancels_before_endpoint_invocation() {
         let harness = resource_harness(
@@ -6180,6 +6255,7 @@ mod tests {
         wait_for_endpoint_cancellation(&harness.endpoint).await;
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn revoke_cancels_an_in_progress_endpoint_invocation() {
         let endpoint = RecordingEndpoint::blocking();
@@ -6209,6 +6285,7 @@ mod tests {
         assert_eq!(endpoint.cancellation_count(), 1);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconnect_cancels_queued_and_in_progress_invocations() {
         for queued in [true, false] {
@@ -6271,6 +6348,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn cancellation_uses_the_pinned_reverse_route() {
         let endpoint = RecordingEndpoint::blocking();
@@ -6311,6 +6389,7 @@ mod tests {
         assert_eq!(endpoint.cancel_count.load(Ordering::Acquire), 1);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn cancellation_revalidates_the_attempt_after_authorization() {
         let endpoint = RecordingEndpoint::blocking();
@@ -6382,6 +6461,7 @@ mod tests {
         assert!(replacement.await.is_ok());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn cancellation_delivery_failure_never_holds_operation_capacity() {
         let endpoint = RecordingEndpoint::failing_cancel();
@@ -6440,6 +6520,7 @@ mod tests {
         assert_eq!(endpoint.cancellation_count(), 3);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn full_cancel_delivery_pool_still_terminalizes_and_teardown_aborts_pending() {
         let endpoint = RecordingEndpoint::pending_cancel();
@@ -6496,6 +6577,7 @@ mod tests {
         assert_eq!(harness.caller.core.cancel_deliveries.len(), 0);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(start_paused = true)]
     async fn pending_cancel_delivery_has_a_fixed_timeout() {
         let endpoint = RecordingEndpoint::pending_cancel();
@@ -6546,6 +6628,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn concurrent_invocations_saturate_the_operation_bound() {
         let endpoint = RecordingEndpoint::blocking();
@@ -6595,6 +6678,7 @@ mod tests {
         assert_eq!(endpoint.call_count(), 1);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn deadline_expires_before_endpoint_delivery() {
         let harness = resource_harness(
@@ -6621,6 +6705,7 @@ mod tests {
         assert_eq!(harness.endpoint.call_count(), 0);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(start_paused = true)]
     async fn active_deadline_cancels_a_hung_endpoint_and_reclaims_the_slot() {
         let endpoint = RecordingEndpoint::blocking();
@@ -6671,6 +6756,7 @@ mod tests {
         assert!(second.is_ok());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn dropping_invoke_future_reclaims_capacity_and_retains_the_id_tombstone() {
         let harness = resource_harness(
@@ -6746,6 +6832,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn oversized_endpoint_response_is_rejected_after_lease_cleanup() {
         let endpoint = RecordingEndpoint::oversized();
@@ -6786,6 +6873,7 @@ mod tests {
         assert_eq!(harness.endpoint.call_count(), 2);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn bus_observer_receives_only_closed_failure_labels() {
         let observer = Arc::new(CaptureObserver::default());
@@ -6921,6 +7009,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn routed_named_stream_enforces_credit_and_preserves_watch_query() {
         let harness = resource_harness(
@@ -6966,6 +7055,7 @@ mod tests {
         stream.close().await.unwrap();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn router_stream_and_disconnect_paths_emit_closed_bus_metrics() {
         let telemetry = Arc::new(RecordingTelemetry::default());

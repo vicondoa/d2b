@@ -321,6 +321,10 @@ impl PendingCancelDeliveries {
         self.lock_entries().len()
     }
 
+    // Cancel-delivery bookkeeping is a brief non-suspending critical section;
+    // entry completion also runs from Drop teardown (PendingCancelDeliveryLease),
+    // so the lock has no async form here.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn lock_entries(&self) -> MutexGuard<'_, Vec<PendingCancelDelivery>> {
         self.entries
             .lock()
@@ -1190,6 +1194,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn pending_cancel_delivery_state_is_attempt_keyed_and_bounded() {
         let mut table = OperationTable::new(2, 2).unwrap();
@@ -1235,6 +1240,7 @@ mod tests {
         assert_eq!(pending.len(), 1);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn pending_cancel_delivery_has_an_independent_per_source_bound() {
         let mut table = OperationTable::new(3, 3).unwrap();

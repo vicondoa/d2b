@@ -5,8 +5,20 @@ edition = "2024"
 publish = false
 license.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "forbid"
+# Mirrors the workspace table (kept local because a crate-local [lints]
+# cannot coexist with `workspace = true`): the opt-in cfg flags used by
+# d2b-bus/d2bd tests are declared so `unexpected_cfgs` stays quiet.
+unexpected_cfgs = { level = "warn", check-cfg = [
+    "cfg(test_root)",
+    "cfg(d2b_capability_trait_mutation, values(\"authenticated-component-session-clone\", \"authenticated-component-session-default\", \"component-session-admission-clone\", \"component-session-admission-default\", \"component-session-admission-from-unit\", \"session-acceptor-clone\", \"session-acceptor-default\", \"verified-unix-peer-clone\", \"verified-unix-peer-default\", \"verified-unix-peer-from-unit\"))",
+] }
+
+[lints.clippy]
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
 
 [dependencies]
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }

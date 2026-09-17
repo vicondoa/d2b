@@ -489,10 +489,12 @@ mod tests {
             }
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn record(&self, call: Call) {
             self.calls.lock().expect("the call log").push(call);
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn calls(&self) -> Vec<Call> {
             self.calls.lock().expect("the call log").clone()
         }
@@ -525,6 +527,7 @@ mod tests {
             unimplemented(Vec::new())
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn register_inbound_call(
             &self,
             request_id: RequestId,
@@ -849,6 +852,7 @@ mod tests {
         StreamId::new(0x0100).expect("a named-stream channel")
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn authenticated_driver_lane_binds_the_exact_zone_link_profile() {
         let (authenticated, admission, _verifier) = authenticated_route(3).await;
@@ -860,6 +864,7 @@ mod tests {
         assert!(session.is_open());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn stale_or_revoked_route_admission_fences_the_driver_lane() {
         let (authenticated, admission, verifier) = authenticated_route(3).await;
@@ -880,6 +885,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn route_admission_cannot_be_substituted_across_authenticated_sessions() {
         let (original, admission, _verifier) = authenticated_route(3).await;
@@ -895,6 +901,7 @@ mod tests {
         drop(original);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn current_policy_revision_is_rechecked_before_driver_use() {
         let (authenticated, admission, verifier) = authenticated_route(3).await;
@@ -917,6 +924,7 @@ mod tests {
         assert!(!session.is_open());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn unready_enrollment_rejects_a_verified_route_before_driver_admission() {
         let (authenticated, admission, _verifier) = authenticated_route(3).await;
@@ -952,6 +960,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn per_hop_credit_is_forwarded_in_consumed_plaintext_bytes() {
         let driver = Arc::new(FakeDriver::new(3));
@@ -963,6 +972,7 @@ mod tests {
         assert_eq!(driver.calls(), vec![Call::Grant(4_096)]);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_zero_credit_grant_reaches_no_peer() {
         let driver = Arc::new(FakeDriver::new(3));
@@ -974,6 +984,7 @@ mod tests {
         assert!(driver.calls().is_empty());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_cancel_is_delivered_under_the_sessions_own_generation() {
         let driver = Arc::new(FakeDriver::new(11));
@@ -985,6 +996,7 @@ mod tests {
         assert_eq!(driver.calls(), vec![Call::Cancel(11)]);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_disconnected_session_refuses_traffic_immediately() {
         let driver = Arc::new(FakeDriver::new(3));
@@ -1028,6 +1040,7 @@ mod tests {
         assert_eq!(driver.calls(), vec![Call::Reset]);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_revoked_session_refuses_everything_including_reset() {
         let driver = Arc::new(FakeDriver::new(3));
@@ -1047,6 +1060,7 @@ mod tests {
         assert!(driver.calls().is_empty());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn revocation_is_not_downgraded_by_a_later_disconnect() {
         let driver = Arc::new(FakeDriver::new(3));
@@ -1059,6 +1073,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_happy_path_forwards_open_send_credit_and_close_in_order() {
         let driver = Arc::new(FakeDriver::new(5));
@@ -1090,6 +1105,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn closing_the_session_fences_it_first() {
         let driver = Arc::new(FakeDriver::new(3));

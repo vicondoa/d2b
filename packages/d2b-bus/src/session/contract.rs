@@ -872,6 +872,10 @@ impl RouteAdmissionIssuer {
     /// Issue evidence using only runtime-owned identity, policy, and clock
     /// state. The caller cannot supply those claims.
     #[allow(dead_code)]
+    // Route admission authority state is read/updated in brief non-suspending
+    // critical sections behind synchronized admission flows and the sync
+    // ZoneLinkSession guard surface (admit/is_open/revalidate);no async form.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) fn issue(
         &self,
         request: ZoneLinkRouteAdmissionRequest,
@@ -926,6 +930,7 @@ impl RouteAdmissionIssuer {
 
 impl RouteAdmissionVerifier {
     /// Consume and verify one sealed route admission.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn verify(
         &self,
         evidence: RouteAdmissionEvidence,
@@ -1001,6 +1006,7 @@ impl RouteAdmissionVerifier {
 
     /// Atomically replace the runtime route policy snapshot.
     #[allow(dead_code)]
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) fn update_policy(
         &self,
         required_capability: ZoneRouteCapability,
@@ -1025,6 +1031,7 @@ impl RouteAdmissionVerifier {
     }
 
     #[allow(dead_code)]
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) fn revoke(&self) {
         self.authority
             .state
@@ -1422,6 +1429,7 @@ mod route_admission_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stale_controller_and_reconnect_generations_fail_closed() {
         let (issuer, verifier) = route_admission_pair();
         let evidence = issuer.issue(request()).expect("issue");
