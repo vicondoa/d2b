@@ -29,6 +29,8 @@ enum SessionDisposition {
     Shutdown,
 }
 
+// CLI entry point: drives the runtime synchronously at process start.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn main() {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -239,6 +241,7 @@ mod tests {
         assert!(!should_reconnect(CloseReason::PeerRequested));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn initial_handshake_failure_sends_one_bootstrap_then_is_terminal() {
         let runtime = tokio::runtime::Builder::new_current_thread()

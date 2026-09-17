@@ -1,5 +1,6 @@
 use std::process::Command;
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn no_bootstrap_descriptor_fails_closed() {
     let binary = std::env::args()
