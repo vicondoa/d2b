@@ -30,6 +30,11 @@ fn workflow() -> String {
     if let Ok(current_dir) = std::env::current_dir() {
         candidates.push(current_dir.join(relative));
     }
+    // Cargo runs integration tests from the workspace root, but this crate
+    // can also be built in contexts where the CWD is the package dir or an
+    // execroot; resolve from the manifest dir too (packages/xtask -> root).
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    candidates.push(manifest.join("../../").join(relative));
     for path in candidates {
         if let Ok(workflow) = std::fs::read_to_string(&path) {
             return workflow;
