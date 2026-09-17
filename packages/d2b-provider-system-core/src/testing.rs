@@ -6,7 +6,7 @@
 
 use std::future::Future;
 use std::pin::pin;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use std::task::{Context, Poll, Waker};
 
 use d2b_contracts_resource::v3::ResourceRef;
@@ -66,7 +66,7 @@ impl ScriptedDiscoveryPort {
     }
 
     /// Script a port whose discovery fails.
-    pub const fn failing(error: SystemCoreError) -> Self {
+    pub fn failing(error: SystemCoreError) -> Self {
         Self {
             result: None,
             error: Some(error),
@@ -76,7 +76,7 @@ impl ScriptedDiscoveryPort {
 
     /// How many times discovery was called.
     pub fn call_count(&self) -> u32 {
-        self.calls.lock().map(|calls| *calls).unwrap_or_default()
+        self.calls.try_lock().ok().map(|calls| *calls).unwrap_or_default()
     }
 }
 
@@ -86,9 +86,8 @@ impl UserDiscoveryEffectPort for ScriptedDiscoveryPort {
         _user_ref: &ResourceRef,
         _spec: &UserSpec,
     ) -> Result<Option<DiscoveredUser>, SystemCoreError> {
-        if let Ok(mut calls) = self.calls.lock() {
-            *calls += 1;
-        }
+        let mut calls = self.calls.lock().await;
+        *calls += 1;
         if let Some(error) = self.error {
             return Err(error);
         }
