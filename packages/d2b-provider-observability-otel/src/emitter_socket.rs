@@ -72,6 +72,10 @@ impl core::fmt::Debug for EmitterSocket {
 
 impl EmitterSocket {
     /// Bind a per-Zone socket without replacing an existing pathname.
+    ///
+    /// Sync public surface: one-shot AF_UNIX path setup (mkdir, chmod, inode
+    /// identity capture) has no async form and runs before any event loop hops.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn bind(path: impl AsRef<Path>, capacity_bytes: usize) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
@@ -269,6 +273,9 @@ impl EmitterSocket {
         &self.path
     }
 
+    // Short stat read at the nonblocking drain boundary: the identity check must
+    // see the exact bound inode before each drain pass, without a runtime hop.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn validate_bound_identity(&mut self) -> io::Result<()> {
         let metadata = fs::symlink_metadata(&self.path)?;
         let stat = fstat(&self.socket)?;
@@ -309,6 +316,9 @@ impl EmitterSocket {
 }
 
 impl Drop for EmitterSocket {
+    // Drop is sync-only:the inode-checked socket unlink must happen here.
+
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn drop(&mut self) {
         if let Ok(metadata) = fs::symlink_metadata(&self.path)
             && metadata.file_type().is_socket()
@@ -324,6 +334,9 @@ impl Drop for EmitterSocket {
     }
 }
 
+// Sync helper over the bind path's parent:orts stat/canonicalize checks at
+// the bind boundary,no async form exists for the deny-by-identity sequence.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn validate_socket_parent(path: &Path) -> io::Result<()> {
     if !path.is_absolute() {
         return Err(io::Error::new(
@@ -379,6 +392,7 @@ mod tests {
         path
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cleanup_socket(path: PathBuf) {
         let parent = path.parent().map(Path::to_path_buf);
         let _ = fs::remove_file(path);
@@ -467,6 +481,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn inode_checked_drop_does_not_remove_replacement_socket() {
         let path = test_socket_path("race");
         let receiver = EmitterSocket::bind(&path, 512).unwrap();
