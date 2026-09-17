@@ -658,6 +658,7 @@ mod tests {
 
     // -- factory -------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn factory_registers_exactly_the_user_resource_type() {
         let factory = UserDriverFactory::new(RecordingEffects::new());
@@ -671,6 +672,7 @@ mod tests {
     /// The declaration registers the type and the registry serves the
     /// declared factory, so a User row reaches its driver through the
     /// registry alone.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_registry_serves_the_declared_factory_for_a_user_row() {
         let effects = RecordingEffects::new();
@@ -691,6 +693,7 @@ mod tests {
 
     // -- validate ------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_accepts_the_bootstrap_user_row() {
         let (mut ctx, _effects, _manager, _requeue, mut driver) = user_fixture().await;
@@ -700,6 +703,7 @@ mod tests {
             .expect("User spec validates without a provider ref (the old exact-fixture shape)");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_rejects_a_malformed_user_spec() {
         let mut ctx = fixture(
@@ -714,6 +718,7 @@ mod tests {
 
     // -- recover -------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_without_touching_the_target() {
         let (mut ctx, effects, _manager, _requeue, mut driver) = user_fixture().await;
@@ -727,6 +732,7 @@ mod tests {
 
     // -- reconcile -----------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_discovers_once_per_desired_generation() {
         let (mut ctx, effects, manager, _requeue, mut driver) = user_fixture().await;
@@ -754,6 +760,7 @@ mod tests {
         assert!(manager.call_order().is_empty());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_publishes_the_user_discovery_projection() {
         let (mut ctx, effects, _manager, _requeue, mut driver) = user_fixture().await;
@@ -768,6 +775,7 @@ mod tests {
         assert_eq!(status.report().discovery, UserDiscoveryCondition::Discovered);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_maps_a_discovery_failure_to_a_retryable_failure() {
         let (mut ctx, effects, _manager, _requeue, mut driver) = user_fixture().await;
@@ -779,6 +787,7 @@ mod tests {
 
     // -- finalize: owned children retire before the delete no-op (F3) ---------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_finalizes_owned_children_before_the_delete_noop() {
         let effects = RecordingEffects::new();
@@ -802,6 +811,7 @@ mod tests {
 
     // -- delete --------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_converges_without_effects_or_child_mutation() {
         let (mut ctx, effects, manager, _requeue, mut driver) = user_fixture().await;
@@ -812,6 +822,7 @@ mod tests {
 
     // -- no-spawn surface (KTD13) --------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn driver_operations_stay_off_every_spawn_surface() {
         let (mut ctx, _effects, manager, requeue, mut driver) = user_fixture().await;
