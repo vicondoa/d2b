@@ -669,7 +669,8 @@ pub fn telemetry_binding_descriptor() -> DriverDescriptor {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
     use std::time::Duration;
 
     use d2b_resource_runtime::context::{
@@ -705,29 +706,28 @@ mod tests {
             })
         }
 
-        fn seed(&self, row: StoredDesiredResource) {
-            self.rows.lock().expect("rows").push(row);
+        async fn seed(&self, row: StoredDesiredResource) {
+            self.rows.lock().await.push(row);
         }
 
-        fn seed_child(&self, zone: &str, reference: &str, spec: serde_json::Value) {
+        async fn seed_child(&self, zone: &str, reference: &str, spec: serde_json::Value) {
             let mut row = row(zone, reference, spec);
             row.owner_uid = Some(self.parent_uid);
             row.provenance = ResourceProvenance::Resource;
-            self.seed(row);
+            self.seed(row).await;
         }
 
-        fn log(&self) -> Vec<String> {
-            self.log.lock().expect("log").clone()
+        async fn log(&self) -> Vec<String> {
+            self.log.lock().await.clone()
         }
 
-        fn watch_targets(&self) -> Vec<ResourceKey> {
-            self.watch_targets.lock().expect("watch targets").clone()
+        async fn watch_targets(&self) -> Vec<ResourceKey> {
+            self.watch_targets.lock().await.clone()
         }
 
-        fn rows_of_type(&self, type_name: &str) -> Vec<StoredDesiredResource> {
+        async fn rows_of_type(&self, type_name: &str) -> Vec<StoredDesiredResource> {
             self.rows
-                .lock()
-                .expect("rows")
+                .lock().await
                 .iter()
                 .filter(|row| row.key.type_name == type_name)
                 .cloned()
@@ -746,7 +746,7 @@ mod tests {
             _parent: &ResourceKey,
             child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            let mut rows = self.rows.lock().expect("rows");
+            let mut rows = self.rows.lock().await;
             let existing = rows.iter_mut().find(|row| {
                 row.key.type_name == child.type_name.as_str() && row.key.name == child.name
             });
@@ -780,7 +780,7 @@ mod tests {
                     (EnsureOutcome::Created(row), "created")
                 }
             };
-            self.log.lock().expect("log").push(format!(
+            self.log.lock().await.push(format!(
                 "ensure:{}/{}:{label}",
                 child.type_name.as_str(),
                 child.name
@@ -794,8 +794,7 @@ mod tests {
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
             Ok(self
                 .rows
-                .lock()
-                .expect("rows")
+                .lock().await
                 .iter()
                 .find(|row| row.key == *key)
                 .cloned())
@@ -812,13 +811,11 @@ mod tests {
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.log
-                .lock()
-                .expect("log")
+                .lock().await
                 .push(format!("delete:{}/{}", key.type_name, key.name));
             if let Some(row) = self
                 .rows
-                .lock()
-                .expect("rows")
+                .lock().await
                 .iter_mut()
                 .find(|row| row.key == *key)
             {
@@ -833,8 +830,7 @@ mod tests {
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
             Ok(self
                 .rows
-                .lock()
-                .expect("rows")
+                .lock().await
                 .iter()
                 .filter(|row| row.owner_uid == Some(owner_uid))
                 .cloned()
@@ -846,7 +842,7 @@ mod tests {
             _subscriber: &ResourceKey,
             registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            let mut targets = self.watch_targets.lock().expect("watch targets");
+            let mut targets = self.watch_targets.lock().await;
             targets.push(registration.target.clone());
             Ok(WatchId(targets.len() as u64))
         }
@@ -863,14 +859,15 @@ mod tests {
     }
 
     impl RecordingRequeue {
-        fn scheduled(&self) -> Vec<Duration> {
-            self.scheduled.lock().expect("scheduled").clone()
+        async fn scheduled(&self) -> Vec<Duration> {
+            self.scheduled.lock().await.clone()
         }
     }
 
     impl RequeueScheduler for RecordingRequeue {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn schedule(&self, _key: ResourceKey, after: Duration) -> RequeueId {
-            let mut scheduled = self.scheduled.lock().expect("scheduled");
+            let mut scheduled = self.scheduled.try_lock().expect("scheduled");
             scheduled.push(after);
             RequeueId(scheduled.len() as u64)
         }
@@ -966,6 +963,8 @@ mod tests {
 
     // -- factory -------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn factory_registers_only_the_binding_type() {
         let factory = TelemetryBindingDriverFactory::new();
@@ -978,6 +977,8 @@ mod tests {
     }
 
     // -- validate ------------------------------------------------------------
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
     #[tokio::test]
     async fn validate_rejects_a_malformed_spec() {
@@ -993,6 +994,8 @@ mod tests {
         assert_eq!(failure.class(), FailureClass::Retryable);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn validate_accepts_a_provider_declared_spec() {
         let mut fixture = fixture(binding_row(binding_spec(TELEMETRY_PROVIDER_REF)));
@@ -1002,16 +1005,18 @@ mod tests {
 
     // -- reconcile -----------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn binding_reconcile_ensures_provider_declared_children_then_converges() {
         let mut fixture = fixture(binding_row(binding_spec(TELEMETRY_PROVIDER_REF)));
-        fixture.manager.seed(service_row());
-        fixture.manager.seed(target_row());
+        fixture.manager.seed(service_row()).await;
+        fixture.manager.seed(target_row()).await;
         let mut driver = driver(&fixture).await;
 
         let outcome = driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         assert_eq!(outcome, ReconcileOutcome::Satisfied);
-        let log = fixture.manager.log();
+        let log = fixture.manager.log().await;
         assert_eq!(log.len(), 2, "collector Process then ingest Endpoint: {log:?}");
         assert!(
             log[0].starts_with("ensure:Process/") && log[0].ends_with(":created"),
@@ -1024,7 +1029,7 @@ mod tests {
 
         // The collector is a Process resource (KTD13): the Process
         // controller launches it, this driver only ensures the row.
-        let processes = fixture.manager.rows_of_type("Process");
+        let processes = fixture.manager.rows_of_type("Process").await;
         assert_eq!(processes.len(), 1);
         let process_spec = fixture.manager.spec_of(&processes[0]);
         assert_eq!(process_spec["template"], "otel-collector");
@@ -1032,7 +1037,7 @@ mod tests {
         assert_eq!(process_spec["executionRef"], "Host/host-system");
         assert_eq!(process_spec["processClass"], "service");
         assert_eq!(process_spec["domain"], "system");
-        let endpoints = fixture.manager.rows_of_type("Endpoint");
+        let endpoints = fixture.manager.rows_of_type("Endpoint").await;
         assert_eq!(endpoints.len(), 1);
         let endpoint_spec = fixture.manager.spec_of(&endpoints[0]);
         assert_eq!(endpoint_spec["providerRef"], TELEMETRY_PROVIDER_REF);
@@ -1050,13 +1055,13 @@ mod tests {
         assert!(!status.fenced);
         assert!(!status.converged);
         assert_eq!(status.desired_children.len(), 2);
-        assert_eq!(fixture.requeue.scheduled(), vec![TELEMETRY_BINDING_RESYNC]);
+        assert_eq!(fixture.requeue.scheduled().await, vec![TELEMETRY_BINDING_RESYNC]);
 
         // Second pass: the owned child set is current; every ensure is a
         // no-op and no resync is scheduled.
         let outcome = driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         assert_eq!(outcome, ReconcileOutcome::Satisfied);
-        let log = fixture.manager.log();
+        let log = fixture.manager.log().await;
         assert_eq!(log.len(), 4, "both desired children re-ensured: {log:?}");
         assert!(
             log[2].ends_with(":unchanged") && log[3].ends_with(":unchanged"),
@@ -1070,11 +1075,13 @@ mod tests {
         // fail-closed projection while readiness is unobservable.
         assert_eq!(status.phase, PHASE_DEGRADED);
         assert_eq!(
-            fixture.requeue.scheduled(),
+            fixture.requeue.scheduled().await,
             vec![TELEMETRY_BINDING_RESYNC],
             "converged owners stop rescheduling"
         );
     }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
     #[tokio::test]
     async fn binding_reconcile_fences_a_dangling_service_dependency() {
@@ -1085,8 +1092,8 @@ mod tests {
 
         let outcome = driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         assert_eq!(outcome, ReconcileOutcome::Satisfied);
-        assert!(fixture.manager.log().is_empty(), "fenced owners mutate nothing");
-        assert!(fixture.manager.rows_of_type("Process").is_empty());
+        assert!(fixture.manager.log().await.is_empty(), "fenced owners mutate nothing");
+        assert!(fixture.manager.rows_of_type("Process").await.is_empty());
         let Some(status) = fixture.ctx.status::<TelemetryBindingStatus>() else {
             panic!("binding status");
         };
@@ -1094,22 +1101,24 @@ mod tests {
         assert!(!status.converged);
         assert_eq!(status.phase, PHASE_DEGRADED);
         assert_eq!(
-            fixture.requeue.scheduled(),
+            fixture.requeue.scheduled().await,
             vec![TELEMETRY_BINDING_RESYNC],
             "the preserved resync re-evaluates the fence"
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn binding_reconcile_fences_a_foreign_provider() {
         let mut fixture = fixture(binding_row(binding_spec("Provider/other")));
-        fixture.manager.seed(service_row());
-        fixture.manager.seed(target_row());
+        fixture.manager.seed(service_row()).await;
+        fixture.manager.seed(target_row()).await;
         let mut driver = driver(&fixture).await;
 
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         assert!(
-            fixture.manager.log().is_empty(),
+            fixture.manager.log().await.is_empty(),
             "a foreign Provider never derives children"
         );
         assert!(
@@ -1120,29 +1129,31 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn binding_reconcile_retires_obsolete_children_endpoint_first() {
         let mut fixture = fixture(binding_row(binding_spec(TELEMETRY_PROVIDER_REF)));
-        fixture.manager.seed(service_row());
-        fixture.manager.seed(target_row());
+        fixture.manager.seed(service_row()).await;
+        fixture.manager.seed(target_row()).await;
         // Owned children the current target no longer derives (the old Core
         // owner diff retired these).
         fixture.manager.seed_child(
             "dev",
             "Process/telemetry-forwarder-aaaaaaaa",
             serde_json::json!({"providerRef": "Provider/system-minijail"}),
-        );
+        ).await;
         fixture.manager.seed_child(
             "dev",
             "Endpoint/telemetry-forwarder-endpoint-bbbbbbbb",
             serde_json::json!({"providerRef": TELEMETRY_PROVIDER_REF}),
-        );
+        ).await;
         let mut driver = driver(&fixture).await;
 
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         let deletes = fixture
             .manager
-            .log()
+            .log().await
             .into_iter()
             .filter(|entry| entry.starts_with("delete:"))
             .collect::<Vec<_>>();
@@ -1156,18 +1167,20 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn dependency_watches_are_registered_once_per_target() {
         let mut fixture = fixture(binding_row(binding_spec(TELEMETRY_PROVIDER_REF)));
-        fixture.manager.seed(service_row());
-        fixture.manager.seed(target_row());
+        fixture.manager.seed(service_row()).await;
+        fixture.manager.seed(target_row()).await;
         let mut driver = driver(&fixture).await;
 
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         let mut targets = fixture
             .manager
-            .watch_targets()
+            .watch_targets().await
             .into_iter()
             .map(|key| format!("{}/{}", key.type_name, key.name))
             .collect::<Vec<_>>();
@@ -1183,11 +1196,13 @@ mod tests {
 
     // -- recover -------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn binding_recover_adopts_only_a_current_owned_child_set() {
         let mut fixture = fixture(binding_row(binding_spec(TELEMETRY_PROVIDER_REF)));
-        fixture.manager.seed(service_row());
-        fixture.manager.seed(target_row());
+        fixture.manager.seed(service_row()).await;
+        fixture.manager.seed(target_row()).await;
         let mut driver = driver(&fixture).await;
 
         assert_eq!(
@@ -1206,18 +1221,20 @@ mod tests {
 
     // -- delete --------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn delete_runs_no_effect_past_the_manager_cascade() {
         let mut fixture = fixture(binding_row(binding_spec(TELEMETRY_PROVIDER_REF)));
-        fixture.manager.seed(service_row());
-        fixture.manager.seed(target_row());
+        fixture.manager.seed(service_row()).await;
+        fixture.manager.seed(target_row()).await;
         let mut driver = driver(&fixture).await;
 
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
-        let before = fixture.manager.log().len();
+        let before = fixture.manager.log().await.len();
         driver.delete(&mut fixture.ctx).await.expect("delete");
         assert_eq!(
-            fixture.manager.log().len(),
+            fixture.manager.log().await.len(),
             before,
             "the manager cascades owned children before the driver delete pass"
         );
