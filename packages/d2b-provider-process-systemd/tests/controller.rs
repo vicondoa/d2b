@@ -157,6 +157,10 @@ fn controller_dispatches_start_adopt_and_stop() {
     );
 }
 
+// The test drives a real current-thread runtime synchronously because it
+// exercises Notify/pending behavior the crate's single-poll test driver
+// cannot represent.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn controller_rejects_launches_when_the_bounded_permit_is_saturated() {
     let ticket = fixtures::ticket_builder()
@@ -194,6 +198,10 @@ fn controller_rejects_launches_when_the_bounded_permit_is_saturated() {
     });
 }
 
+// The test drives a real current-thread runtime synchronously because it
+// exercises Notify/pending behavior the crate's single-poll test driver
+// cannot represent.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn launch_slots_do_not_block_adoption_or_stop() {
     let ticket = fixtures::ticket_builder()
@@ -239,6 +247,10 @@ fn launch_slots_do_not_block_adoption_or_stop() {
     });
 }
 
+// The test drives a real current-thread runtime synchronously because it
+// exercises Notify/pending behavior the crate's single-poll test driver
+// cannot represent.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn controller_times_out_pending_start_adopt_and_stop_operations() {
     let ticket = fixtures::ticket_builder()
