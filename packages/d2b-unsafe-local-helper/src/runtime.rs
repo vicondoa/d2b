@@ -326,6 +326,10 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         })
     }
 
+    // Runs entirely on a dedicated operation worker thread (bounded
+    // admission via MAX_HELPER_QUEUE_DEPTH in the helper's client loop) -
+    // the sanctioned plan-R4 dedicated-worker boundary, never an executor.
+    #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
     pub fn launch(
         &self,
         request: HelperLaunchRequest,
@@ -461,6 +465,8 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         })
     }
 
+    // Executed on the dedicated operation worker thread (plan-R4 boundary).
+    #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
     fn commit_scope(
         &self,
         persisted: &PersistedScope,
@@ -486,6 +492,10 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         let _ = self.manager.stop_scope(scope);
     }
 
+    // Runs on the helper process main thread, inside HelperClient::run's
+    // sync service loop - reachable only from the binary's CLI entry point,
+    // never on an executor worker.
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     pub fn snapshot(&self, generation: u64) -> Result<HelperSnapshot, RuntimeError> {
         if generation == 0 {
             return Err(RuntimeError::InvalidRequest);
@@ -541,6 +551,9 @@ fn launch_fingerprint(request: &HelperLaunchRequest) -> Result<[u8; 32], Runtime
     Ok(Sha256::digest(encoded).into())
 }
 
+// Only reached from the binary's CLI entry path (ScopeRuntime::new /
+// setup) on the helper process main thread - never on an executor.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn validate_immutable_proxy_binary(path: &Path) -> Result<(), RuntimeError> {
     if !path.is_absolute()
         || !path.starts_with("/nix/store")
@@ -681,6 +694,10 @@ struct BlockedSupervisor {
 }
 
 impl BlockedSupervisor {
+    // Runs on the dedicated operation worker thread (plan-R4 boundary); the
+    // child's stdio pipes are blocked on synchronously there, never on an
+    // executor.
+    #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
     fn spawn(spec: &SupervisorSpec) -> Result<Self, RuntimeError> {
         let encoded = serde_json::to_vec(spec).map_err(|_| RuntimeError::Internal)?;
         if encoded.len() > MAX_LEDGER_BYTES as usize {
@@ -714,6 +731,11 @@ impl BlockedSupervisor {
         self.child.as_ref().expect("supervisor child present").id()
     }
 
+    // The sanctioned plan-R4 channel boundary: the launch-operation thread
+    // (the dedicated bounded worker) blocks on the bounded sync_channel ack
+    // from the dedicated start-ack reader thread; the reader blocks on the
+    // supervisor's stdout pipe on its own thread. No executor is involved.
+    #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
     fn release_and_wait_started(&mut self) -> Result<(), RuntimeError> {
         let mut stdin = self.stdin.take().ok_or(RuntimeError::Internal)?;
         stdin
@@ -738,6 +760,9 @@ impl BlockedSupervisor {
         }
     }
 
+    // Runs on the dedicated operation worker thread (plan-R4 boundary) as
+    // a teardown fallback; also reachable from Drop on the same path.
+    #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
     fn abort(&mut self) {
         self.stdin.take();
         self.stdout.take();
@@ -747,6 +772,9 @@ impl BlockedSupervisor {
         }
     }
 
+    // Dedicated reaper worker thread (plan-R4 boundary) blocks on the
+    // supervisor child's exit on its own thread; never on an executor.
+    #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
     fn reap_in_background(mut self) {
         self.stdin.take();
         self.stdout.take();
@@ -768,6 +796,10 @@ impl Drop for BlockedSupervisor {
     }
 }
 
+// The supervisor child's own process entry (bin `scope-supervisor`
+// subcommand, reachable only from main); its stdio protocol is a
+// synchronous pipe conversation that never runs on an executor.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn run_scope_supervisor() -> Result<(), RuntimeError> {
     let mut length = [0u8; 4];
     std::io::stdin()
@@ -804,6 +836,8 @@ fn run_supervisor_spec(
     }
 }
 
+// Runs in the supervisor child process (CLI entry; never an executor).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn spawn_app(spec: &SupervisorSpec) -> Result<Child, RuntimeError> {
     Command::new(&spec.program)
         .args(&spec.args)
@@ -817,6 +851,8 @@ fn spawn_app(spec: &SupervisorSpec) -> Result<Child, RuntimeError> {
         .map_err(|_| RuntimeError::ExecutableUnavailable)
 }
 
+// Runs in the supervisor child process (CLI entry; never an executor).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn run_plain_supervisor(
     spec: &SupervisorSpec,
     started_ack: &mut impl Write,
@@ -834,6 +870,8 @@ fn run_plain_supervisor(
     Ok(())
 }
 
+// Runs in the supervisor child process (CLI entry; never an executor).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn run_graphical_supervisor(
     spec: &SupervisorSpec,
     graphical: &GraphicalSupervisorSpec,
@@ -885,6 +923,8 @@ fn run_graphical_supervisor(
     wait_for_graphical_exit(app.as_mut().ok_or(RuntimeError::Internal)?, &mut proxy)
 }
 
+// Runs in the supervisor child process (CLI entry; never an executor).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn spawn_proxy(graphical: &GraphicalSupervisorSpec) -> Result<Child, RuntimeError> {
     Command::new(&graphical.proxy_binary)
         .args(proxy_arguments(graphical)?)
@@ -919,6 +959,8 @@ fn proxy_arguments(graphical: &GraphicalSupervisorSpec) -> Result<Vec<OsString>,
     ])
 }
 
+// Runs in the supervisor child process (CLI entry; never an executor).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn terminate_and_reap(child: &mut Child) {
     if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill();
@@ -961,6 +1003,8 @@ struct PrivateGraphicalRuntime {
 }
 
 impl PrivateGraphicalRuntime {
+    // Runs in the supervisor child process (CLI entry; never an executor).
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn prepare(spec: &GraphicalSupervisorSpec) -> Result<Self, RuntimeError> {
         let directory = PrivateGraphicalDirectory::prepare(spec)?;
         let readiness_path = spec.readiness_socket()?;
@@ -1000,6 +1044,8 @@ struct PrivateGraphicalDirectory {
 }
 
 impl PrivateGraphicalDirectory {
+    // Runs in the supervisor child process (CLI entry; never an executor).
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn prepare(spec: &GraphicalSupervisorSpec) -> Result<Self, RuntimeError> {
         let directory = spec.private_directory()?;
         let mut builder = fs::DirBuilder::new();
@@ -1031,6 +1077,9 @@ impl PrivateGraphicalDirectory {
 }
 
 impl Drop for PrivateGraphicalDirectory {
+    // Synchronous teardown in a Drop impl - no async context can exist
+    // there; removal must complete before the directory's lifetime ends.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
@@ -1053,6 +1102,8 @@ impl<'a> ReadinessChannel<'a> {
         })
     }
 
+    // Runs in the supervisor child process (CLI entry; never an executor).
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn expect(
         &mut self,
         expected_stage: ProxyReadinessStage,
@@ -1115,6 +1166,8 @@ impl<'a> ReadinessChannel<'a> {
         }
     }
 
+    // Runs in the supervisor child process (CLI entry; never an executor).
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn read_event(&mut self) -> Result<Option<ProxyReadinessEvent>, RuntimeError> {
         if let Some(event) = decode_buffered_event(&mut self.buffered)? {
             return Ok(Some(event));
@@ -1195,6 +1248,9 @@ fn stage_failure(stage: ProxyReadinessStage) -> RuntimeError {
 /// The directory must be absolute, a real directory (never a symlink), owned
 /// by `expected_uid`, searchable only by that uid, and free of setuid/setgid/
 /// sticky bits.
+// Runs on the helper main thread and in the supervisor child process
+// (both CLI entry paths; never an executor).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn validate_runtime_directory(
     directory: &Path,
     expected_uid: u32,
@@ -1217,6 +1273,9 @@ fn validate_runtime_directory(
     Ok(())
 }
 
+// Runs once at helper startup on the CLI main thread (ScopeRuntime
+// construction); never on an executor.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_ledger(path: &Path) -> Result<PersistedScopeLedger, RuntimeError> {
     match fs::metadata(path) {
         Ok(metadata) if metadata.len() > MAX_LEDGER_BYTES => {
@@ -1255,6 +1314,8 @@ fn load_ledger(path: &Path) -> Result<PersistedScopeLedger, RuntimeError> {
     Ok(ledger)
 }
 
+// Executed on the dedicated operation worker thread (plan-R4 boundary).
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 pub(crate) fn persist_ledger(
     path: &Path,
     ledger: &PersistedScopeLedger,
@@ -1297,6 +1358,8 @@ mod tests {
     struct Scratch(PathBuf);
 
     impl Scratch {
+        // Plain #[test] fs scaffolding (no async runtime).
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn new() -> Self {
             let mut random = [0u8; 8];
             getrandom::getrandom(&mut random).unwrap();
@@ -1311,6 +1374,8 @@ mod tests {
     }
 
     impl Drop for Scratch {
+        // Plain #[test] scaffolding teardown.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
@@ -1339,6 +1404,8 @@ mod tests {
         }
     }
 
+    // Plain #[test] helper (no async runtime).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn read_test_event(channel: &mut ReadinessChannel<'_>) -> ProxyReadinessEvent {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
@@ -1379,6 +1446,8 @@ mod tests {
     }
 
     #[test]
+    // Plain #[test] harness driving std threads and locks synchronously.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn concurrent_reservation_allows_only_one_launch_owner() {
         const CONTENDERS: usize = 16;
         let ledger = Arc::new(Mutex::new(RuntimeLedger::default()));
@@ -1613,6 +1682,8 @@ mod tests {
     }
 
     #[test]
+    // Plain #[test] harness driving blocking socket writes.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn readiness_parser_is_bounded_and_rejects_malformed_frames() {
         let scratch = Scratch::new();
         let socket = scratch.0.join("unused.sock");
@@ -1643,6 +1714,8 @@ mod tests {
     }
 
     #[test]
+    // Plain #[test] harness driving blocking socket/thread/fs work.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fake_proxy_and_app_complete_typed_readiness_and_cleanup() {
         let scratch = Scratch::new();
         let spec = graphical_spec(scratch.0.clone());
@@ -1733,6 +1806,8 @@ mod tests {
     struct DelayedFailingAck;
 
     impl Write for DelayedFailingAck {
+        // Plain #[test] fake that deliberately blocks (no async runtime).
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
             std::thread::sleep(Duration::from_millis(250));
             Err(std::io::Error::new(
@@ -1747,6 +1822,8 @@ mod tests {
     }
 
     #[test]
+    // Plain #[test] harness spanning child processes and fs markers.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn plain_supervisor_reaps_child_when_started_ack_fails() {
         let scratch = Scratch::new();
         let marker = scratch.0.join("child-pid");
@@ -1778,6 +1855,8 @@ mod tests {
     }
 
     #[test]
+    // Plain #[test] harness spawning child processes synchronously.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn first_client_wait_fails_immediately_when_app_exits() {
         let scratch = Scratch::new();
         let spec = graphical_spec(scratch.0.clone());
@@ -1813,6 +1892,8 @@ mod tests {
     }
 
     #[test]
+    // Plain #[test] harness spawning a child process synchronously.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn readiness_wait_uses_an_absolute_deadline() {
         let scratch = Scratch::new();
         let spec = graphical_spec(scratch.0.clone());
@@ -1841,6 +1922,8 @@ mod tests {
     }
 
     #[test]
+    // Plain #[test] child-hold helper driving sleep and an fs marker.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn test_child_hold() {
         if let Some(marker) = std::env::var_os("D2B_TEST_PID_MARKER") {
             fs::write(marker, std::process::id().to_string()).unwrap();

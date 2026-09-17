@@ -90,6 +90,10 @@ impl SystemdUserScopeManager {
         Self::default()
     }
 
+    // Sync public trait surface backed by zbus's blocking-api Connection; the
+    // helper process has no executor, so a blocking zbus method call can
+    // never park an executor worker.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn with_connection<T>(
         &self,
         operation: impl FnOnce(&Connection) -> Result<T, ScopeError>,
@@ -327,6 +331,9 @@ fn is_timeout(error: &zbus::Error) -> bool {
     )
 }
 
+// Polling loop on the synchronous zbus surface (start_scope); no async
+// form exists on this helper process's call path - never an executor.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn await_scope_identity<F>(
     mut query: F,
     timeout: Duration,

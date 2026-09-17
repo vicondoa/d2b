@@ -246,6 +246,10 @@ fn wait_for_control_or_response(
     Err(ProtocolError::ConnectFailed)
 }
 
+// Called from the dedicated operation worker threads (plan-R4 boundary)
+// to nudge the helper's main loop; the write is on a nonblocking pipe
+// and never on an executor.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn wake_response_loop(response_wakeup: &UnixStream) -> Result<(), ProtocolError> {
     let mut response_wakeup = response_wakeup;
     loop {
@@ -258,6 +262,9 @@ fn wake_response_loop(response_wakeup: &UnixStream) -> Result<(), ProtocolError>
     }
 }
 
+// Runs on the helper process main thread inside HelperClient::run's sync
+// service loop (CLI entry; never an executor).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn drain_response_wakeup(response_wakeup: &UnixStream) -> Result<(), ProtocolError> {
     let mut response_wakeup = response_wakeup;
     let mut buffer = [0u8; MAX_HELPER_QUEUE_DEPTH];
@@ -324,6 +331,9 @@ fn effective_socket_buffers_sufficient(send_size: usize, recv_size: usize) -> bo
         && recv_size >= MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES
 }
 
+// Runs on the helper process main thread inside HelperClient::run's sync
+// service loop (CLI entry; never an executor).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn send_frame<T: serde::Serialize>(socket: &Socket, frame: &T) -> Result<(), ProtocolError> {
     let payload = serde_json::to_vec(frame).map_err(|_| ProtocolError::InvalidFrame)?;
     if payload.len() > MAX_HELPER_FRAME_SIZE {
@@ -341,6 +351,9 @@ pub fn send_frame<T: serde::Serialize>(socket: &Socket, frame: &T) -> Result<(),
     Ok(())
 }
 
+// Runs on the helper process main thread inside HelperClient::run's sync
+// service loop (CLI entry; never an executor).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn receive_frame<T: serde::de::DeserializeOwned>(
     socket: &Socket,
     encoded: &mut [u8],

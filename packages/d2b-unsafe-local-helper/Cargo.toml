@@ -6,8 +6,16 @@ publish = false
 license.workspace = true
 description = "Same-uid user-session runtime helper for d2b unsafe-local workloads"
 
-[lints]
-workspace = true
+# U18: the helper is a synchronous subprocess (no executor anywhere in its
+# call graph), so every surviving blocking-API site carries an inline,
+# policy-tracked allow with a sanctioned reason; deny keeps new sites out.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

@@ -168,6 +168,9 @@ fn valid_key(key: &str) -> bool {
         && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
+// Short stat predicate at a synchronous data-layer boundary (resolved
+// program lookup; no async form needed for the pure existence/mode check).
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn executable_file(path: &Path) -> bool {
     std::fs::metadata(path)
         .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
