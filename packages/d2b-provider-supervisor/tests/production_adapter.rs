@@ -101,6 +101,7 @@ impl DeterministicBackend {
         )
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn record(&self, call: &'static str) {
         self.calls.lock().unwrap().push(call);
     }
@@ -321,6 +322,7 @@ fn stale_minijail_candidate_is_stopped_exactly_before_replacement_launch() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn fault_matrix_fails_closed() {
     let ticket = fixtures::ticket_builder()
@@ -508,6 +510,7 @@ impl BrokerLaunchResolver for FixedBrokerResolver {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn broker_backend_uses_the_production_spawn_envelope_and_pidfd_handoff() {
     use std::io::{IoSlice, IoSliceMut};
@@ -699,6 +702,7 @@ fn broker_backend_uses_the_production_spawn_envelope_and_pidfd_handoff() {
     server.join().unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn read_self_start_time() -> u64 {
     let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
     let close = stat.rfind(')').unwrap();
@@ -710,6 +714,7 @@ fn read_self_start_time() -> u64 {
         .unwrap()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn blocking_effects_do_not_stall_the_async_executor() {
     const CALLS: usize = 200;
@@ -851,6 +856,7 @@ impl ParallelLaunchBackend {
 impl ProcessEffectBackend for ParallelLaunchBackend {
     type Handle = ();
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn launch(
         &self,
         _request: ProcessRequest,
@@ -926,6 +932,7 @@ fn parallel_ticket(index: usize) -> d2b_provider_process::LaunchTicket {
     .unwrap()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread")]
 async fn ready_process_launches_reach_the_provider_adapter_in_parallel() {
     use tokio::sync::Semaphore;

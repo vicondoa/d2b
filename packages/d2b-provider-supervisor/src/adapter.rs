@@ -5,9 +5,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{
-    Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError, channel, sync_channel,
+    Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel,
 };
 use std::sync::{Arc, Mutex, Weak};
+use tokio::sync::Mutex as AsyncMutex;
 use std::task::{Context, Poll, Waker};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -23,22 +24,14 @@ use tracing::{debug, error, warn};
 /// Default upper bound for concurrent blocking process effects.
 pub const DEFAULT_BLOCKING_LIMIT: usize = 16;
 
-/// Log a poisoned process-effect state lock and map it to the caller's outcome.
-fn poisoned_state_lock(outcome: ProcessEffectError) -> ProcessEffectError {
-    error!(
-        provider = "supervisor",
-        lock = "runtime-state",
-        "process effect state lock poisoned; process table authority lost"
-    );
-    outcome
-}
+
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
 struct BlockingPool {
     sender: Option<SyncSender<Job>>,
     workers: Vec<JoinHandle<()>>,
-    deadline_sender: Option<Sender<Deadline>>,
+    deadline_sender: Option<SyncSender<Deadline>>,
     deadline_worker: Option<JoinHandle<()>>,
 }
 
@@ -65,7 +58,11 @@ impl BlockingPool {
                     .expect("create bounded process effect worker")
             })
             .collect();
-        let (deadline_sender, deadline_receiver) = channel();
+        // Bounded deadline queue: capacity is twice the blocking-pool limit, so a
+        // registration can never outgrow the in-flight job set; when full the
+        // async caller's try_send refuses (same launch-failed policy as the
+        // disconnected arm) instead of blocking the executor worker.
+        let (deadline_sender, deadline_receiver) = sync_channel::<Deadline>(limit * 2);
         let deadline_worker = std::thread::Builder::new()
             .name("d2b-process-deadlines".to_owned())
             .spawn(move || deadline_worker(deadline_receiver))
@@ -100,7 +97,7 @@ impl BlockingPool {
             .deadline_sender
             .as_ref()
             .expect("deadline sender present")
-            .send(Deadline {
+            .try_send(Deadline {
                 at: deadline,
                 state: Arc::downgrade(&deadline_state),
             })
@@ -143,6 +140,10 @@ impl BlockingPool {
 }
 
 impl Drop for BlockingPool {
+    // Worker teardown joins the deadline worker: Drop is synchronous by
+    // construction (no executor is available), and the workers finish as
+    // soon as their channels close, so the join is bounded.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn drop(&mut self) {
         self.sender.take();
         self.workers.clear();
@@ -153,6 +154,9 @@ impl Drop for BlockingPool {
     }
 }
 
+// Dedicated bounded worker per plan R4: this fn runs on its own pool
+// worker thread and blocks on the bounded sync_channel admission queue.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn worker(receiver: Arc<Mutex<Receiver<Job>>>) {
     loop {
         let job = {
@@ -185,6 +189,12 @@ impl<T> Default for JobState<T> {
 }
 
 impl<T> JobState<T> {
+    // Synchronous by construction: the completion slot is written from the
+    // bounded worker thread and from async callers' error arms, and read
+    // from the sync `Future::poll` half. The Future trait cannot await, so
+    // the slot must stay a std mutex; the critical sections are short and
+    // never held across a suspension point.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn complete(&self, result: Result<T, ProcessEffectError>) {
         if self.completed.swap(true, Ordering::AcqRel) {
             return;
@@ -195,6 +205,7 @@ impl<T> JobState<T> {
         self.wake();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn wake(&self) {
         if let Ok(mut waker) = self.waker.lock()
             && let Some(waker) = waker.take()
@@ -214,6 +225,10 @@ impl<T: Send> DeadlineState for JobState<T> {
     }
 }
 
+// Dedicated bounded worker per plan R4: the deadline registrations are
+// bounded by the pool's in-flight job limit (each job registers exactly one),
+// and this fn blocks on the queue only on its own dedicated thread.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn deadline_worker(receiver: Receiver<Deadline>) {
     let mut deadlines = Vec::<Deadline>::new();
     loop {
@@ -257,6 +272,11 @@ struct JobFuture<T> {
 impl<T> Future for JobFuture<T> {
     type Output = Result<T, ProcessEffectError>;
 
+    // Synchronous by construction: `Future::poll` is a sync trait method
+    // (no await possible), so the shared completion slot must be a std
+    // mutex; the critical sections are short and never held across a
+    // suspension point.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         if let Ok(mut result) = self.state.result.lock()
             && let Some(result) = result.take()
@@ -309,7 +329,7 @@ pub struct ProviderSupervisor<B: ProcessEffectBackend> {
 struct Inner<B: ProcessEffectBackend> {
     backend: Arc<B>,
     pool: BlockingPool,
-    state: Arc<Mutex<RuntimeState<B::Handle>>>,
+    state: Arc<AsyncMutex<RuntimeState<B::Handle>>>,
     default_timeout: Duration,
 }
 
@@ -343,7 +363,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             inner: Arc::new(Inner {
                 backend: Arc::new(backend),
                 pool: BlockingPool::new(blocking_limit),
-                state: Arc::new(Mutex::new(RuntimeState::default())),
+                state: Arc::new(AsyncMutex::new(RuntimeState::default())),
                 default_timeout,
             }),
         }
@@ -370,17 +390,19 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         &self,
         identity: &ProcessIdentityDigest,
     ) -> Result<(), ProcessConformanceError> {
-        let handle = self.handle(identity).map_err(map_error)?;
+        let handle = self.handle(identity).await.map_err(map_error)?;
         let finalize_handle = Arc::clone(&handle);
         let finalize_identity = *identity;
         let state = Arc::clone(&self.inner.state);
+        // The closure runs on the dedicated blocking worker, so the async
+        // mutex is taken with its synchronous blocking variant there.
         let result = self
             .blocking(self.inner.default_timeout, move |backend| {
                 let result = backend.finalize(finalize_handle.as_ref());
-                if result.is_ok() || result == Err(ProcessEffectError::Vanished) {
-                    let mut state = state
-                        .lock()
-                        .map_err(|_| poisoned_state_lock(ProcessEffectError::StopFailed))?;
+                if result.is_ok() || result == Err(ProcessEffectError::Vanished){
+                    // Dedicated blocking worker thread: blocking here parks only
+                    // this worker, never an executor thread.
+                    let mut state = state.blocking_lock();
                     if state
                         .handles
                         .get(&finalize_identity)
@@ -403,7 +425,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         &self,
         identity: &ProcessIdentityDigest,
     ) -> Result<Option<std::os::fd::OwnedFd>, ProcessConformanceError> {
-        let handle = self.handle(identity).map_err(map_error)?;
+        let handle = self.handle(identity).await.map_err(map_error)?;
         self.blocking(self.inner.default_timeout, move |backend| {
             backend.take_controller_bootstrap(handle.as_ref())
         })
@@ -411,7 +433,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         .map_err(map_error)
     }
 
-    fn remember(
+    async fn remember(
         &self,
         identity: ProcessIdentityDigest,
         handle: B::Handle,
@@ -419,59 +441,59 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         self.inner
             .state
             .lock()
-            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?
+            .await
             .handles
             .insert(identity, Arc::new(handle));
         Ok(())
     }
 
-    fn begin_launch(&self, ticket: &LaunchTicket) -> Result<ResourceUid, ProcessEffectError> {
+    async fn begin_launch(&self, ticket: &LaunchTicket) -> Result<ResourceUid, ProcessEffectError> {
         let operation_uid = ticket.operation().operation_uid().clone();
         let mut state = self
             .inner
             .state
             .lock()
-            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
+            .await;
         if !state.launches.insert(operation_uid.clone()) {
             return Err(ProcessEffectError::Busy);
         }
         Ok(operation_uid)
     }
 
-    fn quarantine_launch(&self, operation_uid: &ResourceUid) -> Result<bool, ProcessEffectError> {
+    async fn quarantine_launch(&self, operation_uid: &ResourceUid) -> Result<bool, ProcessEffectError> {
         let state = self
             .inner
             .state
             .lock()
-            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
+            .await;
         Ok(state.launches.contains(operation_uid))
     }
 
-    fn finish_launch_success(&self, operation_uid: &ResourceUid) -> Result<(), ProcessEffectError> {
+    async fn finish_launch_success(&self, operation_uid: &ResourceUid) -> Result<(), ProcessEffectError> {
         self.inner
             .state
             .lock()
-            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?
+            .await
             .launches
             .remove(operation_uid);
         Ok(())
     }
 
-    fn handle(
+    async fn handle(
         &self,
         identity: &ProcessIdentityDigest,
     ) -> Result<Arc<B::Handle>, ProcessEffectError> {
         self.inner
             .state
             .lock()
-            .map_err(|_| poisoned_state_lock(ProcessEffectError::StopFailed))?
+            .await
             .handles
             .get(identity)
             .cloned()
             .ok_or(ProcessEffectError::Vanished)
     }
 
-    fn quarantine_handle(
+    async fn quarantine_handle(
         &self,
         identity: ProcessIdentityDigest,
         handle: &Arc<B::Handle>,
@@ -480,7 +502,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             .inner
             .state
             .lock()
-            .map_err(|_| poisoned_state_lock(ProcessEffectError::StopFailed))?;
+            .await;
         Ok(state
             .handles
             .get(&identity)
@@ -493,7 +515,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         request: ProcessLaunchRequest,
         timeout: Duration,
     ) -> Result<LaunchedProcess, ProcessConformanceError> {
-        let operation_uid = self.begin_launch(ticket).map_err(map_error)?;
+        let operation_uid = self.begin_launch(ticket).await.map_err(map_error)?;
         let backend = Arc::clone(&self.inner.backend);
         let state = Arc::clone(&self.inner.state);
         let worker_operation_uid = operation_uid.clone();
@@ -506,8 +528,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                 match (launch, late) {
                     (Err(error), late) => {
                         state
-                            .lock()
-                            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?
+                            .blocking_lock()
                             .launches
                             .remove(&worker_operation_uid);
                         if late {
@@ -520,8 +541,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                         let (observation, handle) = launch.into_parts();
                         let identity = observation.identity();
                         state
-                            .lock()
-                            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?
+                            .blocking_lock()
                             .handles
                             .insert(identity, Arc::new(handle));
                         Ok(LaunchOutcome::OnTime(observation))
@@ -531,15 +551,12 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                         let identity = observation.identity();
                         let handle = Arc::new(handle);
                         state
-                            .lock()
-                            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?
+                            .blocking_lock()
                             .handles
                             .insert(identity, Arc::clone(&handle));
                         match backend.stop(handle.as_ref(), ProcessStopClass::Terminate) {
                             Ok(()) | Err(ProcessEffectError::Vanished) => {
-                                let mut state = state.lock().map_err(|_| {
-                                    poisoned_state_lock(ProcessEffectError::StopFailed)
-                                })?;
+                                let mut state = state.blocking_lock();
                                 if state
                                     .handles
                                     .get(&identity)
@@ -571,7 +588,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                     provider = "supervisor",
                     "launch effect exceeded its deadline"
                 );
-                return if self.quarantine_launch(&operation_uid).map_err(map_error)? {
+                return if self.quarantine_launch(&operation_uid).await.map_err(map_error)? {
                     warn!(
                         provider = "supervisor",
                         "late launch quarantined; reporting adoption-ambiguous"
@@ -588,6 +605,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             LaunchOutcome::OnTime(observation) => observation,
         };
         self.finish_launch_success(&operation_uid)
+            .await
             .map_err(map_error)?;
         let identity = observation.identity();
         Ok(LaunchedProcess {
@@ -674,6 +692,7 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
             .await
             .map_err(map_error)?;
         self.remember(candidate.identity, handle)
+            .await
             .map_err(map_error)?;
         Ok(PidfdEvidence::held())
     }
@@ -683,7 +702,7 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
         identity: &ProcessIdentityDigest,
         class: StopClass,
     ) -> Result<(), ProcessConformanceError> {
-        let handle = self.handle(identity).map_err(map_error)?;
+        let handle = self.handle(identity).await.map_err(map_error)?;
         let backend_class = match class {
             StopClass::Drain => ProcessStopClass::Drain,
             StopClass::Terminate => ProcessStopClass::Terminate,
@@ -700,9 +719,7 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
                     let result = backend.stop(stop_handle.as_ref(), backend_class);
                     let late = Instant::now() >= deadline;
                     if matches!(result, Ok(()) | Err(ProcessEffectError::Vanished)) {
-                        let mut state = state
-                            .lock()
-                            .map_err(|_| poisoned_state_lock(ProcessEffectError::StopFailed))?;
+                        let mut state = state.blocking_lock();
                         if state
                             .handles
                             .get(&stop_identity)
@@ -730,6 +747,7 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
             if matches!(result, Err(ProcessEffectError::DeadlineExceeded))
                 && self
                     .quarantine_handle(*identity, &handle)
+                    .await
                     .map_err(map_error)?
             {
                 warn!(
@@ -752,12 +770,23 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
 impl<R: BrokerLaunchResolver> ProviderSupervisor<BrokerProcessBackend<R>> {
     /// Verify that a peer PID still names the exact process represented by a
     /// retained broker pidfd and opaque process identity.
-    pub fn matches_peer_process(
+pub fn matches_peer_process(
         &self,
         identity: &ProcessIdentityDigest,
         peer_pid: i32,
     ) -> Result<bool, ProcessConformanceError> {
-        let handle = self.handle(identity).map_err(map_error)?;
+        // Sync public surface with no async form: the runtime state lock is
+        // taken fail-closed via try_lock rather than blocking an executor worker.
+        let state = match self.inner.state.try_lock() {
+            Ok(state) => state,
+            Err(_) => return Err(ProcessConformanceError::DeadlineExceeded),
+        };
+        let handle = state
+            .handles
+            .get(identity)
+            .cloned()
+            .ok_or(ProcessConformanceError::PidfdUnavailable)?;
+        drop(state);
         self.inner
             .backend
             .matches_peer_process(handle.as_ref(), peer_pid)
@@ -847,6 +876,7 @@ mod tests {
     impl ProcessEffectBackend for ControlledBackend {
         type Handle = ();
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn launch(
             &self,
             _request: ProcessRequest,
@@ -909,6 +939,7 @@ mod tests {
         )
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn wait_until(timeout: Duration, predicate: impl Fn() -> bool) {
         let deadline = Instant::now() + timeout;
         while !predicate() {
@@ -917,6 +948,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn timed_out_launch_is_quarantined_until_late_cleanup_succeeds() {
         let (backend, started, release, live) = controlled_backend(false);
@@ -946,16 +978,17 @@ mod tests {
         );
         thread.join().unwrap();
         {
-            let state = supervisor.inner.state.lock().unwrap();
+            let state = supervisor.inner.state.blocking_lock();
             assert_eq!(state.launches.len(), 1);
         }
         release.send(()).unwrap();
         wait_until(Duration::from_millis(250), || !live.load(Ordering::Acquire));
-        let state = supervisor.inner.state.lock().unwrap();
+        let state = supervisor.inner.state.blocking_lock();
         assert!(state.launches.is_empty());
         assert!(state.handles.is_empty());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn a_late_launch_cleanup_failure_stays_quarantined_and_tracked() {
         let (backend, started, release, live) = controlled_backend(true);
@@ -986,9 +1019,9 @@ mod tests {
         assert!(live.load(Ordering::Acquire));
         release.send(()).unwrap();
         wait_until(Duration::from_millis(250), || {
-            !supervisor.inner.state.lock().unwrap().handles.is_empty()
+            !supervisor.inner.state.blocking_lock().handles.is_empty()
         });
-        let state = supervisor.inner.state.lock().unwrap();
+        let state = supervisor.inner.state.blocking_lock();
         assert_eq!(state.launches.len(), 1);
         assert_eq!(state.handles.len(), 1);
     }
@@ -1002,6 +1035,7 @@ mod tests {
     impl ProcessEffectBackend for HungStopBackend {
         type Handle = ();
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn launch(
             &self,
             _request: ProcessRequest,
@@ -1034,6 +1068,7 @@ mod tests {
             Ok(())
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn stop(
             &self,
             _handle: &Self::Handle,
@@ -1048,6 +1083,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn hung_late_launch_cleanup_is_bounded_and_quarantined() {
         let (stop_started_sender, stop_started_receiver) = channel();
@@ -1085,11 +1121,12 @@ mod tests {
             .recv_timeout(Duration::from_millis(250))
             .unwrap();
         assert!(live.load(Ordering::Acquire));
-        let state = supervisor.inner.state.lock().unwrap();
+        let state = supervisor.inner.state.blocking_lock();
         assert_eq!(state.launches.len(), 1);
         assert_eq!(state.handles.len(), 1);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn hung_terminate_is_bounded_and_quarantined() {
         let (stop_started_sender, stop_started_receiver) = channel();
@@ -1125,7 +1162,7 @@ mod tests {
         stop_started_receiver
             .recv_timeout(Duration::from_millis(250))
             .unwrap();
-        let state = supervisor.inner.state.lock().unwrap();
+        let state = supervisor.inner.state.blocking_lock();
         assert!(state.handles.contains_key(&launched.identity));
     }
 
@@ -1144,7 +1181,7 @@ mod tests {
         for _ in 0..64 {
             let launched = block_on(supervisor.launch(&ticket)).unwrap();
             block_on(supervisor.stop(&launched.identity, StopClass::Terminate)).unwrap();
-            assert!(supervisor.inner.state.lock().unwrap().handles.is_empty());
+            assert!(supervisor.inner.state.blocking_lock().handles.is_empty());
         }
     }
 
@@ -1161,7 +1198,7 @@ mod tests {
         let ticket = fixtures::ticket_builder().build().unwrap();
         let launched = block_on(supervisor.launch(&ticket)).unwrap();
         block_on(supervisor.finalize_identity(&launched.identity)).unwrap();
-        assert!(supervisor.inner.state.lock().unwrap().handles.is_empty());
+        assert!(supervisor.inner.state.blocking_lock().handles.is_empty());
     }
 
     struct ProbeOnlyBackend {

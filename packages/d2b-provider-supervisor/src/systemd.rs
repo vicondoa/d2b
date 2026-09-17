@@ -233,7 +233,11 @@ impl<O: SystemdEffectOwner> SystemdProcessBackend<O> {
         }
     }
 
-    fn record(&self, identity: SystemdInvocationIdentity) -> Result<(), ProcessEffectError> {
+    // Sync by construction:this ledger sits behind the sync `ProcessEffectBackend`
+// trait surface, invoked only from the dedicated blocking workers (or sync
+// test harnesses); critical section short, no suspension inside the guard.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn record(&self, identity: SystemdInvocationIdentity) -> Result<(), ProcessEffectError> {
         let mut observations = self.observations.lock().map_err(|_| {
             error!(
                 provider = "supervisor",
@@ -252,7 +256,10 @@ impl<O: SystemdEffectOwner> SystemdProcessBackend<O> {
         Ok(())
     }
 
-    fn take_observation(
+    // Sync by construction: backend ledger behind the sync trait surface (see
+// `record`); critical section short, no suspension inside.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn take_observation(
         &self,
         identity: &ProcessIdentityDigest,
     ) -> Result<SystemdInvocationIdentity, ProcessEffectError> {
@@ -328,6 +335,7 @@ mod tests {
         .unwrap()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn pending_systemd_observations_are_bounded_and_consumed() {
         let backend = SystemdProcessBackend::new(Owner);
@@ -517,7 +525,10 @@ impl BrokerSystemdEffectOwner {
         Ok((intent, unit))
     }
 
-    fn remember(
+    // Sync by construction: unit-request ledger behind the sync wire+trait
+// surface on dedicated blocking workers; critical sections short.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn remember(
         &self,
         identity: &SystemdInvocationIdentity,
         request: SystemdUnitRequest,
@@ -535,7 +546,10 @@ impl BrokerSystemdEffectOwner {
         Ok(())
     }
 
-    fn request_for(
+    // Sync by construction: unit-request ledger behind the sync wire+trait
+// surface (see `remember`).
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn request_for(
         &self,
         identity: &SystemdInvocationIdentity,
     ) -> Result<SystemdUnitRequest, ProcessEffectError> {
@@ -553,7 +567,10 @@ impl BrokerSystemdEffectOwner {
             .ok_or(ProcessEffectError::IdentityChanged)
     }
 
-    fn take_request(
+    // Sync by construction: unit-request ledger behind the sync wire+trait
+// surface (see `remember`).
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn take_request(
         &self,
         identity: &SystemdInvocationIdentity,
     ) -> Result<SystemdUnitRequest, ProcessEffectError> {

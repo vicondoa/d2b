@@ -1181,7 +1181,12 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
         }
     }
 
-    fn record(&self, observed: BrokerObservedProcess) -> Result<(), ProcessEffectError> {
+    // Sync by construction: this ledger sits behind the sync
+// `ProcessEffectBackend` trait surface, invoked only from the dedicated
+// blocking workers (or sync test harnesses); the critical section is short
+// and never held across a suspension point.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn record(&self, observed: BrokerObservedProcess) -> Result<(), ProcessEffectError> {
         let mut observations = self.observations.lock().map_err(|_| {
             error!(
                 provider = "supervisor",
@@ -1200,7 +1205,10 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
         Ok(())
     }
 
-    fn take_observation(
+    // Sync by construction: backend ledger behind the sync trait surface (see
+// `record`); critical section short, no suspension inside the guard.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn take_observation(
         &self,
         identity: &ProcessIdentityDigest,
     ) -> Result<BrokerObservedProcess, ProcessEffectError> {
@@ -1740,6 +1748,11 @@ pub(crate) struct BrokerFrame {
 }
 
 impl BrokerFrame {
+    // Sync by construction: the descriptor table lives behind the sync broker
+    // wire boundary, read once during reply unwrap on a dedicated blocking
+    // worker; critical section short, no suspension inside.
+
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) fn take_fd(&self, index: u32) -> Result<OwnedFd, ProcessEffectError> {
         self.fds
             .lock()
@@ -1994,6 +2007,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn pending_broker_observations_are_bounded_and_consumed() {
         let backend = BrokerProcessBackend::with_socket_profile_and_role(
@@ -2331,6 +2345,7 @@ mod tests {
     }
 
     /// Write one bundle artifact with the production verifier's 0640 posture.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_fixture_artifact(path: &Path, bytes: &[u8]) {
         use std::os::unix::fs::PermissionsExt as _;
         if let Some(parent) = path.parent() {
@@ -2580,6 +2595,10 @@ mod tests {
     }
 }
 
+// Short /proc read at a sync boundary: these helpers are called from the
+// sync backend trait surface (dedicated blocking workers) only; the read is
+// a one-shot open/read/close of a tiny procfs file with no async form.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_pidfd_process_id(pidfd: &OwnedFd) -> Result<Option<i32>, ProcessEffectError> {
     let contents = match fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd())) {
         Ok(contents) => contents,
@@ -2623,6 +2642,8 @@ fn read_pidfd_process_id(pidfd: &OwnedFd) -> Result<Option<i32>, ProcessEffectEr
 /// A dying child is therefore indistinguishable from an absent one by design -
 /// both are *gone*, never a start-time *drift* - and callers must classify
 /// it as such (`launch_adoption_error`).
+// Short /proc read at a sync boundary (see `read_pidfd_process_id`).
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_proc_start_time(pid: i32) -> Result<Option<u64>, ProcessEffectError> {
     let content = match fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(content) => content,
