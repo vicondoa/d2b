@@ -68,6 +68,9 @@ impl AsyncHidrawDevice {
     }
 
     /// Read a single 64-byte CTAPHID report from the physical token.
+    // Readiness-gated non-blocking read inside `AsyncFd::try_io`;the std
+    // `Read` impl over the raw fd is the sanctioned AsyncFd shape.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub async fn read_report(&self) -> std::io::Result<CtaphidReport> {
         loop {
             let mut guard = self.file.readable().await?;
@@ -91,6 +94,9 @@ impl AsyncHidrawDevice {
     }
 
     /// Write a single 64-byte CTAPHID report to the physical token.
+    // Readiness-gated non-blocking write inside `AsyncFd::try_io`;the std
+    // `Write` impl over the raw fd is the sanctioned AsyncFd shape.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub async fn write_report(&self, report: &CtaphidReport) -> std::io::Result<()> {
         let mut hidraw_report = [0u8; CTAPHID_REPORT_SIZE + 1];
         hidraw_report[1..].copy_from_slice(report);
@@ -231,7 +237,10 @@ pub fn authenticate_peer<F: std::os::fd::AsFd>(
 }
 
 /// Bind (and tighten) the per-VM relay socket the accept loop serves.
-pub fn bind_accept_socket(path: &Path) -> std::io::Result<StdUnixListener> {
+// Short mkdir/unlink/chmod on the socket path at a sync public surface;
+    // converting to async would ripple the crate's exported API beyond scope。
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn bind_accept_socket(path: &Path) -> std::io::Result<StdUnixListener> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -376,7 +385,11 @@ impl SkSessionTable {
 }
 
 /// Spawn the per-VM accept loop over one bound relay socket.
-pub fn spawn_accept_loop(
+// Dedicated per-VM accept thread owning its own current-thread runtime;
+    // this thread never runs an executor worker, so the runtime bridge is
+    // the sanctioned sync boundary for that dedicated thread.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn spawn_accept_loop(
     listener: StdUnixListener,
     vm_id: String,
     expected_uid: u32,
@@ -602,6 +615,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn test_scratch_dir(name: &str) -> PathBuf {
         static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(1);
         let root = PathBuf::from("t").join("sk");
@@ -850,6 +864,7 @@ mod tests {
     // CTAPHID framing (recv_report_async / send_report_async round-trip)
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn framing_round_trip_over_buffer() {
         let mut buf = [0u8; CTAPHID_REPORT_SIZE];
@@ -867,6 +882,7 @@ mod tests {
         assert_eq!(received, buf);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn framing_rejects_wrong_length_prefix() {
         let mut wire: Vec<u8> = Vec::new();
@@ -914,6 +930,7 @@ mod tests {
     // Hidraw device wrapper (hermetic: uses /dev/null, no unsafe)
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn hidraw_device_from_owned_fd_wraps_without_unsafe() {
         let (left, right) = std::os::unix::net::UnixStream::pair().expect("socket pair");
@@ -925,6 +942,7 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn hidraw_device_write_report_to_socket_succeeds() {
         let (left, mut right) = std::os::unix::net::UnixStream::pair().expect("socket pair");
@@ -942,6 +960,7 @@ mod tests {
         assert_eq!(&written[1..], &report);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn hidraw_device_write_report_prefixes_report_id() {
         let (left, mut right) = std::os::unix::net::UnixStream::pair().expect("socket pair");
@@ -984,6 +1003,7 @@ mod tests {
         ));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn accept_socket_bind_creates_socket() {
         let dir = test_scratch_dir("accept-socket-bind");
@@ -1003,6 +1023,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn run_connection_rejects_mismatched_peer() {
         let (stream, _peer) = tokio_socket_pair();
@@ -1026,6 +1047,7 @@ mod tests {
         .expect("mismatched peer should return quickly");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn run_connection_rejects_disabled_vm() {
         let (stream, _peer) = tokio_socket_pair();
@@ -1041,6 +1063,7 @@ mod tests {
         .expect("disabled vm should return quickly");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn run_connection_acquires_and_releases_lease() {
         let (stream, peer) = tokio_socket_pair();
@@ -1064,6 +1087,7 @@ mod tests {
         assert!(matches!(state.lock().lease, RelayLeaseState::Available));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn sk_session_table_abort_on_duplicate_register() {
         let mut table = SkSessionTable::default();
@@ -1107,6 +1131,7 @@ mod tests {
         assert!(table.claim_backing("vm-b", backing));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn live_same_vm_claim_is_adopted() {
         let mut table = SkSessionTable::default();
@@ -1121,6 +1146,7 @@ mod tests {
         assert!(!table.claim_backing("vm-b", backing));
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn stopping_vm_releases_backing_and_aborts_relay() {
         let mut table = SkSessionTable::default();
