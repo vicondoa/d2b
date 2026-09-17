@@ -47,12 +47,14 @@ const ADMIN_FIXTURE: &str = r#"{
   "brokerVersion": null
 }"#;
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn write_fixture(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, body).expect("write auth-status fixture");
     path
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_auth_status(
     fixture: &std::path::Path,
     test_uid: u32,

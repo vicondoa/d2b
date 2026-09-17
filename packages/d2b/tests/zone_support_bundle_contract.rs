@@ -8,6 +8,7 @@ use nix::sys::socket::{
 };
 use serde_json::Value;
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn frame_recv(fd: i32) -> Value {
     let mut bytes = vec![0; 1 << 20];
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -25,6 +26,7 @@ fn frame_recv(fd: i32) -> Value {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn frame_send(fd: i32, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     let mut frame = (body.len() as u32).to_le_bytes().to_vec();
@@ -32,6 +34,7 @@ fn frame_send(fd: i32, value: &Value) {
     assert_eq!(send(fd, &frame, MsgFlags::empty()).unwrap(), frame.len());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn support_server(path: &Path, response: Value) -> std::thread::JoinHandle<()> {
     let _ = std::fs::remove_file(path);
     let listener = socket(
@@ -73,6 +76,7 @@ fn support_server(path: &Path, response: Value) -> std::thread::JoinHandle<()> {
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_support_bundle(socket_path: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_d2b"))
         .args(["zone", "support-bundle", "--zone", "work"])
@@ -82,6 +86,7 @@ fn run_support_bundle(socket_path: &Path) -> std::process::Output {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn support_bundle_is_admin_only_and_redacts_bounded_status_fields() {
     let temporary = tempfile::tempdir().unwrap();
     let socket_path = temporary.path().join("public.sock");
@@ -171,6 +176,7 @@ fn support_bundle_is_admin_only_and_redacts_bounded_status_fields() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn support_bundle_rejects_an_unavailable_admin_session() {
     let temporary = tempfile::tempdir().unwrap();
     let socket_path = temporary.path().join("public.sock");

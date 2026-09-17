@@ -642,6 +642,7 @@ fn cli_contract_sections_and_help_flags_match_documented_surface() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn host_cli_error_golden_table_is_closed_and_complete() {
     let golden_dir = repo_root().join("tests/golden/cli-output");
     let required_fields = BTreeSet::from([
@@ -766,6 +767,7 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn read_zone_cli_contract() -> String {
     let path = repo_root().join("docs/reference/zone-cli-contract.md");
     fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))

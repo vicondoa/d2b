@@ -33,6 +33,7 @@ static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
 /// This is the sync/async boundary. It must not be called from inside a
 /// future the runtime is already driving (that would panic); teardown paths
 /// that can run there check [`inside_runtime`] first.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
     RUNTIME.block_on(future)
 }

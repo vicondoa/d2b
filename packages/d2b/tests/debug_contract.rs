@@ -25,6 +25,7 @@ use nix::sys::socket::{
     AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
 };
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn socket_path(name: &str) -> PathBuf {
     let path = env::temp_dir().join(format!(
         "d2b-debug-contract-{name}-{}.sock",
@@ -37,6 +38,7 @@ fn socket_path(name: &str) -> PathBuf {
 /// A live listening socket that never answers, so the zone reads as present
 /// but not serving. The thread is detached on drop; a test can legitimately
 /// end while it is still waiting for a connection.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn unanswering_socket(path: &Path) -> std::thread::JoinHandle<()> {
     let _ = std::fs::remove_file(path);
     let listener = socket(
@@ -59,6 +61,7 @@ fn unanswering_socket(path: &Path) -> std::thread::JoinHandle<()> {
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_debug(socket: &Path, args: &[&str]) -> (i32, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_d2b"))
         .env("D2B_PUBLIC_SOCKET", socket)

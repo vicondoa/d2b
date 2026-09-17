@@ -29,6 +29,7 @@ use common::{TestPeer, spawn_d2bd_once};
 const V3_ERROR_KEYS: &[&str] = &["errorClass", "message", "ok", "schemaVersion", "zoneRef"];
 
 /// Write a non-executable / `exit 99` poison-pill the CLI must never exec.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn write_poison_pill(dir: &Path) -> std::path::PathBuf {
     let p = dir.join("legacy-poison.sh");
     let mut f = std::fs::File::create(&p).expect("create poison");
@@ -44,6 +45,7 @@ fn write_poison_pill(dir: &Path) -> std::path::PathBuf {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn audit_reports_daemon_down_without_bash_fallback() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let poison = write_poison_pill(tmp.path());
@@ -103,6 +105,7 @@ fn audit_reports_daemon_down_without_bash_fallback() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn audit_strict_returns_not_yet_implemented_envelope() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let missing = tmp.path().join("strict.sock");
@@ -128,6 +131,7 @@ fn audit_strict_returns_not_yet_implemented_envelope() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn audit_relays_daemon_auditresponse_frames() {
     // In-process SOCK_SEQPACKET mock daemon: hello -> helloOk -> audit ->
     // auditResponse{entries}. The CLI relays the records to stdout verbatim.
@@ -160,6 +164,7 @@ fn audit_relays_daemon_auditresponse_frames() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn audit_rejects_legacy_lines_response() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let sock = tmp.path().join("mock-legacy-lines.sock");
@@ -194,6 +199,7 @@ fn audit_rejects_legacy_lines_response() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn audit_relays_multiple_paginated_auditresponse_frames() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let sock = tmp.path().join("mock-paginated.sock");
@@ -220,6 +226,7 @@ fn audit_relays_multiple_paginated_auditresponse_frames() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn audit_admin_rejected_against_live_daemon_without_fallback() {
     let Some(daemon) = spawn_d2bd_once(&TestPeer::launcher()) else {
         eprintln!("SKIP: D2B_TEST_D2BD_BIN unset (daemon-spawn harness unavailable)");
@@ -287,6 +294,7 @@ fn audit_admin_rejected_against_live_daemon_without_fallback() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn audit_names_a_stalled_daemon_as_a_bounded_deadline() {
     // The audit path used to have no timeout at all: a daemon that accepted
     // the connection and then went silent parked the CLI in `recv` forever.
@@ -343,6 +351,7 @@ fn spawn_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
 /// A mock daemon that completes the handshake, receives the audit request, and
 /// then answers nothing until the client gives up. This is the stall the
 /// audit's deadline bound exists for.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn spawn_stalled_audit_mock(path: &Path) -> std::thread::JoinHandle<()> {
     use nix::sys::socket::{
         AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
@@ -390,6 +399,7 @@ fn spawn_stalled_audit_mock(path: &Path) -> std::thread::JoinHandle<()> {
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn spawn_single_audit_response_mock(path: &Path, response: Value) -> std::thread::JoinHandle<()> {
     use nix::sys::socket::{
         AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
@@ -429,6 +439,7 @@ fn spawn_single_audit_response_mock(path: &Path, response: Value) -> std::thread
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn spawn_paginated_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
     use d2b_contracts_broker::broker_wire::AuditExportCursor;
     use nix::sys::socket::{
@@ -508,6 +519,7 @@ fn spawn_paginated_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()>
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn recv_frame(fd: std::os::fd::RawFd) -> Value {
     let mut buf = vec![0u8; 1 << 20];
     let n = nix::sys::socket::recv(fd, &mut buf, nix::sys::socket::MsgFlags::empty())
@@ -519,6 +531,7 @@ fn recv_frame(fd: std::os::fd::RawFd) -> Value {
     serde_json::from_slice(body).expect("frame json")
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn recv_frame_with_timeout(fd: std::os::fd::RawFd) -> Value {
     use nix::errno::Errno;
     use nix::sys::socket::{MsgFlags, recv};
@@ -547,6 +560,7 @@ fn recv_frame_with_timeout(fd: std::os::fd::RawFd) -> Value {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn send_frame(fd: std::os::fd::RawFd, payload: &Value) {
     let body = serde_json::to_vec(payload).expect("serialize frame");
     let mut framed = (body.len() as u32).to_le_bytes().to_vec();

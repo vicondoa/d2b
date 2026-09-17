@@ -373,7 +373,7 @@ impl CellStore {
         std::thread::Builder::new()
             .name("d2b-broker-cell-store".to_owned())
             .spawn(move || cell_worker_loop(receiver))
-            .map_err(|error| CellStoreError::Io(error))?;
+            .map_err(CellStoreError::Io)?;
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         commands
             .send(CellCommand::Bootstrap {

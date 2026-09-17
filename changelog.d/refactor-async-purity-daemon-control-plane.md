@@ -26,6 +26,16 @@ blocking calls.
   argument bodies; every covered crate flips to deny (per-crate lint tables).
 - Tests: process-global registry serialized behind one shared test guard so
   reap/spawn tests no longer race on shared state.
+- CLI (d2b): the offline operator surface (doctor checks, activation staging,
+  host validate, zone audit) is genuinely synchronous CLI-only code; its 24
+  production blocking sites take per-fn `CLI-only path` allows (the R11
+  inventory class, same treatment xtask got), 87 test-context sites take
+  per-fn `cfg(test) helper` allows, and the seqpacket transport's non-blocking
+  connect retry loop keeps its AsyncFd-over-non-blocking-descriptor pattern
+  under a per-fn allow (no tokio seqpacket connect form exists; the CLI's
+  current-thread runtime never runs daemon workers). R13: no conversion
+  changed timing, ordering, or scheduling semantics - every site keeps its
+  exact synchronous behavior under its per-fn allow.
 
 The hard ban applies to production and test code; the only sanctioned
 exceptions are the dedicated bounded-worker channel boundary (R4) and

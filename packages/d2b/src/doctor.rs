@@ -231,6 +231,7 @@ fn check_broker_socket(context: &CliContext, report: &mut DoctorReport) {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn unix_socket_path_is_bound(path: &Path) -> bool {
     let mut candidates = vec![path.display().to_string()];
     if let Ok(canonical) = path.canonicalize() {
@@ -361,6 +362,7 @@ fn signoz_health_url(signoz_url: &str) -> Result<String, String> {
 /// Minimal HTTP/1.1 GET against the documented Prometheus scrape URL.
 /// Restricted to `http://<host>:<port>/<path>` - the daemon-metrics
 /// reference doc pins HTTP-on-loopback, so we don't pull TLS in here.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn probe_http_metrics(url: &str) -> Result<u16, String> {
     let parsed = parse_http_url(url)?;
     let addr = (parsed.host.as_str(), parsed.port)
@@ -479,6 +481,7 @@ enum PidfdState {
     ParseError(String),
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_pidfd_entries(daemon_state_dir: &Path) -> PidfdEntries {
     let path = daemon_state_dir.join("pidfd-table.json");
     let bytes = match std::fs::read(&path) {
@@ -647,6 +650,7 @@ struct PersistedOptionalMissing {
     reason: String,
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_kernel_module_matrix(daemon_state_dir: &Path, report: &mut DoctorReport) {
     let path = daemon_state_dir.join("kernel-module-report.json");
     let bytes = match std::fs::read(&path) {
@@ -749,6 +753,7 @@ fn outcome_kind(outcome: &serde_json::Value) -> Option<&str> {
     outcome.get("kind").and_then(|v| v.as_str())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_autostart_status(daemon_state_dir: &Path, report: &mut DoctorReport) {
     let path = daemon_state_dir.join("autostart-report.json");
     let bytes = match std::fs::read(&path) {
@@ -860,6 +865,7 @@ struct PersistedShutdownDegradedMarker {
     elapsed_ms: u64,
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_graceful_shutdown_status(
     daemon_state_dir: &Path,
     pidfd_entries: &PidfdEntries,
@@ -1004,6 +1010,7 @@ fn live_primary_vmm_entries(pidfd_entries: &PidfdEntries) -> Vec<Value> {
 
 const STORAGE_LIFECYCLE_REMEDIATION: &str = "rebuild the host configuration so /etc/d2b storage/sync contracts are regenerated, then restart d2bd";
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_storage_lifecycle_report(daemon_state_dir: &Path, report: &mut DoctorReport) {
     let path = daemon_state_dir.join("storage-lifecycle-report.json");
     let bytes = match std::fs::read(&path) {
@@ -1173,6 +1180,7 @@ fn sync_contract_reason_slug(reason: &SyncContractValidationReason) -> &'static 
 
 /// Read `/proc/<pid>/status` and return its lines, or `None` if the
 /// file is absent (process exited).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_proc_status(pid: i32) -> Option<String> {
     std::fs::read_to_string(format!("/proc/{pid}/status")).ok()
 }
@@ -1191,6 +1199,7 @@ fn parse_proc_status_field(status: &str, field: &str) -> Option<String> {
 /// The format is: `pid (comm) state ...`; `comm` may contain spaces
 /// and parentheses, so we locate the *last* `)` and take the next
 /// non-whitespace character.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_proc_stat_state(pid: i32) -> Option<char> {
     let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let after_comm = text.rfind(')')?.checked_add(1)?;
@@ -1532,6 +1541,7 @@ struct PersistedEnvEntry {
 /// (`br-*-lan` / `br-*-up`) only when the file is absent or
 /// unparseable - a successfully-parsed empty file means "no envs
 /// declared" and suppresses the fallback.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn collect_bridge_names(daemon_state_dir: &Path) -> Vec<String> {
     let envs_path = daemon_state_dir.join("envs.json");
     if let Ok(bytes) = std::fs::read(&envs_path)
@@ -1561,6 +1571,7 @@ fn collect_bridge_names(daemon_state_dir: &Path) -> Vec<String> {
     sysfs_d2b_bridges()
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn sysfs_d2b_bridges() -> Vec<String> {
     let Ok(rd) = std::fs::read_dir("/sys/class/net") else {
         return Vec::new();
@@ -1662,6 +1673,7 @@ fn check_bridge_ipv6_sysctl(daemon_state_dir: &Path, report: &mut DoctorReport) 
 }
 
 /// Run `sysctl -n <key>` and return trimmed stdout, or an error string.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn run_sysctl_n(key: &str) -> Result<String, String> {
     let out = system_tool_command("sysctl")
         .args(["-n", key])
@@ -1842,6 +1854,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn pidfd_loose_parser_extracts_known_runners() {
         let json = serde_json::json!({
             "entries": [
@@ -1864,11 +1877,13 @@ mod tests {
         assert_eq!(table.entries[1].role, "usbip");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_state(dir: &Path, name: &str, value: serde_json::Value) {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join(name), serde_json::to_vec_pretty(&value).unwrap()).unwrap();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn unique_scratch(label: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "d2b-doctor-{label}-{}-{}",
@@ -1883,6 +1898,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn kernel_module_matrix_clean_is_pass() {
         let dir = unique_scratch("km-pass");
         write_state(
@@ -1902,6 +1918,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn kernel_module_matrix_optional_is_warn() {
         let dir = unique_scratch("km-warn");
         write_state(
@@ -1925,6 +1942,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn kernel_module_matrix_required_missing_is_fail() {
         let dir = unique_scratch("km-fail");
         write_state(
@@ -1944,6 +1962,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn autostart_status_failed_is_fail() {
         let dir = unique_scratch("autostart-fail");
         write_state(
@@ -1965,6 +1984,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn autostart_status_degraded_is_warn() {
         let dir = unique_scratch("autostart-warn");
         write_state(
@@ -1983,6 +2003,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn autostart_status_pass_when_all_started() {
         let dir = unique_scratch("autostart-pass");
         write_state(
@@ -2002,6 +2023,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn storage_lifecycle_report_clean_is_pass() {
         let dir = unique_scratch("storage-life-pass");
         write_state(
@@ -2028,6 +2050,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn storage_lifecycle_report_degraded_is_fail_without_dynamic_detail_leak() {
         let dir = unique_scratch("storage-life-fail");
         write_state(
@@ -2094,6 +2117,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn storage_lifecycle_report_legacy_bundle_is_warn_with_remediation() {
         let dir = unique_scratch("storage-life-legacy");
         write_state(
@@ -2122,6 +2146,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn storage_lifecycle_report_missing_is_warn() {
         let dir = unique_scratch("storage-life-missing");
         let mut report = DoctorReport::default();
@@ -2132,6 +2157,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn storage_lifecycle_report_unparseable_is_warn() {
         let dir = unique_scratch("storage-life-unparseable");
         std::fs::write(dir.join("storage-lifecycle-report.json"), b"{not-json").unwrap();
@@ -2144,6 +2170,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn storage_lifecycle_report_io_error_is_warn() {
         let dir = unique_scratch("storage-life-io");
         std::fs::create_dir(dir.join("storage-lifecycle-report.json")).unwrap();
@@ -2375,6 +2402,7 @@ mod tests {
 
     // Verify the zombie-detection path using a real exited child.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn broker_reap_health_fail_on_zombie() {
         // Spawn a child that exits immediately, then check its state
         // before waitpid - it should be in Z state.
@@ -2404,6 +2432,7 @@ mod tests {
     // --- check_bridge_ipv6_sysctl ---
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn bridge_ipv6_sysctl_warn_when_no_bridges() {
         let dir = unique_scratch("bridge-sysctl-no-bridges");
         let mut report = DoctorReport::default();
@@ -2426,6 +2455,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn collect_bridge_names_from_envs_json() {
         let dir = unique_scratch("bridge-collect");
         write_state(

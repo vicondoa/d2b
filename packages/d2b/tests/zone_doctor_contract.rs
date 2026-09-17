@@ -10,6 +10,7 @@ use nix::sys::socket::{
 };
 use serde_json::Value;
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn frame_recv(fd: i32) -> Value {
     let mut bytes = vec![0; 1 << 20];
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -27,6 +28,7 @@ fn frame_recv(fd: i32) -> Value {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn frame_send(fd: i32, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     let mut frame = (body.len() as u32).to_le_bytes().to_vec();
@@ -34,6 +36,7 @@ fn frame_send(fd: i32, value: &Value) {
     assert_eq!(send(fd, &frame, MsgFlags::empty()).unwrap(), frame.len());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn status_server(path: &Path, response: Value) -> JoinHandle<()> {
     let _ = std::fs::remove_file(path);
     let listener = socket(
@@ -109,6 +112,7 @@ fn healthy_status(telemetry: Value) -> Value {
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_doctor(socket_path: &Path, manifest: Option<&Path>) -> std::process::Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_d2b"));
     command
@@ -120,6 +124,7 @@ fn run_doctor(socket_path: &Path, manifest: Option<&Path>) -> std::process::Outp
     command.output().unwrap()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_doctor_with_audit_dir(socket_path: &Path, audit_dir: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_d2b"))
         .args(["zone", "doctor", "--zone", "work", "--json"])
@@ -130,6 +135,7 @@ fn run_doctor_with_audit_dir(socket_path: &Path, audit_dir: &Path) -> std::proce
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn doctor_returns_zero_for_a_ready_zone_and_uses_a_resource_read() {
     let temporary = tempfile::tempdir().unwrap();
     let socket_path = temporary.path().join("public.sock");
@@ -153,6 +159,7 @@ fn doctor_returns_zero_for_a_ready_zone_and_uses_a_resource_read() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn doctor_treats_absent_otel_as_a_warning_without_host_probe_side_effects() {
     let temporary = tempfile::tempdir().unwrap();
     let socket_path = temporary.path().join("public.sock");
@@ -186,6 +193,7 @@ fn doctor_treats_absent_otel_as_a_warning_without_host_probe_side_effects() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn doctor_reads_a_redirected_audit_inventory_and_reports_a_chain_break() {
     let temporary = tempfile::tempdir().unwrap();
     let socket_path = temporary.path().join("public.sock");
@@ -223,6 +231,7 @@ fn doctor_reads_a_redirected_audit_inventory_and_reports_a_chain_break() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn doctor_returns_one_for_a_quarantined_zone_and_keeps_details_redacted() {
     let temporary = tempfile::tempdir().unwrap();
     let socket_path = temporary.path().join("public.sock");

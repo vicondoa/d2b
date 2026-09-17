@@ -1046,12 +1046,14 @@ impl TerminalHostIo for RealHostIo {
         read_stdin_nonblocking(buf)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn write_stdout(&mut self, data: &[u8]) -> io::Result<()> {
         let mut handle = io::stdout().lock();
         handle.write_all(data)?;
         handle.flush()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn write_stderr(&mut self, data: &[u8]) -> io::Result<()> {
         let mut handle = io::stderr().lock();
         handle.write_all(data)?;
@@ -1177,6 +1179,7 @@ impl InstalledSignals {
 impl TerminalSignalSource for InstalledSignals {
     type Signal = ExecSignal;
 
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn drain(&mut self) -> Vec<ExecSignal> {
         let mut queue = self
             .pending
@@ -1190,6 +1193,7 @@ impl TerminalSignalSource for InstalledSignals {
 /// thread - so spawned threads inherit the block and the terminal-driven
 /// signals are forwarded into the guest rather than acting on the host CLI -
 /// and spawn a sigwait thread that enqueues each as an [`ExecSignal`].
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn install_signals() -> io::Result<InstalledSignals> {
     use nix::sys::signal::{SigSet, Signal};
 

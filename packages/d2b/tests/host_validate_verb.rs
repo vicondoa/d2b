@@ -20,6 +20,7 @@ struct Sandbox {
 }
 
 impl Sandbox {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn new() -> Self {
         let tmp = target_tempdir();
         let scripts_full = tmp.path().join("scripts-full");
@@ -43,6 +44,7 @@ impl Sandbox {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn reset_evidence(&self) {
         if self.evidence.exists() {
             fs::remove_dir_all(&self.evidence).expect("clear evidence dir");
@@ -50,6 +52,7 @@ impl Sandbox {
         fs::create_dir_all(&self.evidence).expect("recreate evidence dir");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn run(&self, scripts_dir: &Path, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_d2b"))
             .args(args)
@@ -60,6 +63,7 @@ impl Sandbox {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn target_tempdir() -> tempfile::TempDir {
     let base = std::env::var_os("TEST_TMPDIR")
         .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
@@ -120,6 +124,7 @@ fn catalog_waves() -> Vec<String> {
         .collect()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn options_readiness_waves() -> Vec<String> {
     let path = repo_root().join("nixos-modules/options-daemon.nix");
     fs::read_to_string(&path)
@@ -162,6 +167,7 @@ fn catalog_validator_scripts() -> Vec<String> {
     scripts.into_iter().collect()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn stage_catalog_validators(dir: &Path) -> Vec<String> {
     let scripts = catalog_validator_scripts();
     for name in &scripts {
@@ -189,6 +195,7 @@ fn wave<'a>(envelope: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("wave {name:?} missing from envelope:\n{envelope:#}"))
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn json_files(dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
         .unwrap_or_else(|err| panic!("read evidence dir {}: {err}", dir.display()))
@@ -280,6 +287,7 @@ fn host_validate_dry_run_reports_catalog_waves_and_writes_no_evidence() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn host_validate_apply_wave_p1_writes_canonical_evidence_only_for_p1() {
     let sandbox = Sandbox::new();
     sandbox.reset_evidence();

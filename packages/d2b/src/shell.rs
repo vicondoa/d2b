@@ -220,6 +220,7 @@ fn detach_or_kill(
     Ok(0)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn status(
     context: &ZoneContext,
     args: &ShellStatusArgs,
@@ -343,6 +344,7 @@ mod tests {
     }
 
     impl SessionClient for RecordingClient {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn invoke(
             &self,
             request: &[u8],
@@ -357,6 +359,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn json_open_creates_without_opening_a_terminal_stream() {
         let client = Arc::new(RecordingClient {
             requests: Mutex::new(Vec::new()),

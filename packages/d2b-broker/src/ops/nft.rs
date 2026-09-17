@@ -817,6 +817,7 @@ async fn acquire_projection_lock() -> Result<ProjectionLock, ProjectionMutationE
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .mode(0o640)
         .custom_flags(nix::libc::O_CLOEXEC)
         .open(&path)

@@ -60,12 +60,14 @@ pub struct DaemonOnce {
 impl DaemonOnce {
     /// Wait for the daemon process to exit (it serves a single request in
     /// `--once` mode) and return its exit status.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn wait(mut self) -> std::process::ExitStatus {
         self.child.wait().expect("wait for d2bd")
     }
 }
 
 impl Drop for DaemonOnce {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn drop(&mut self) {
         // Best-effort: if --once already returned this is a no-op.
         let _ = self.child.kill();
@@ -110,6 +112,7 @@ pub fn spawn_d2bd_once(peer: &TestPeer) -> Option<DaemonOnce> {
     spawn_d2bd_inner(peer)
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn spawn_d2bd_inner(peer: &TestPeer) -> Option<DaemonOnce> {
     let bin = d2bd_bin()?;
 
@@ -204,6 +207,7 @@ fn spawn_d2bd_inner(peer: &TestPeer) -> Option<DaemonOnce> {
 }
 
 /// Poll until `path` is a socket or the timeout elapses.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub fn wait_for_socket(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {

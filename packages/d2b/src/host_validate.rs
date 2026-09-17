@@ -465,6 +465,7 @@ fn build_evidence_payload(spec: &WaveSpec, req: &ValidateRequest) -> Value {
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_evidence(path: &Path, payload: &Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -516,6 +517,7 @@ fn compute_operator_signature(wave: &str, req: &ValidateRequest, timestamp: &str
     format!("sha256:{}", sha256_hex(input.as_bytes()))
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_hostname() -> String {
     // Avoid an extra crate dep - read /etc/hostname or fall back to
     // the HOSTNAME env var.
@@ -822,6 +824,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn apply_writes_canonical_evidence_for_ready_waves() {
         let tmp = tempdir();
         let scripts = tmp.join("scripts");
@@ -880,6 +883,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn explicit_operator_signature_is_passed_through() {
         let tmp = tempdir();
         let scripts = tmp.join("scripts");
@@ -904,6 +908,7 @@ mod tests {
 
     // ----- in-tree tempdir helper (avoids adding `tempfile` dep) -----
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn tempdir() -> PathBuf {
         let base = std::env::temp_dir();
         let nanos = SystemTime::now()

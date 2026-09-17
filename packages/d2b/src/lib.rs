@@ -82,6 +82,7 @@ thread_local! {
 pub(crate) static TEST_STDOUT_CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub(crate) fn with_test_stdout_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
     let _guard = TEST_STDOUT_CAPTURE_LOCK
         .lock()
@@ -97,6 +98,7 @@ pub(crate) fn with_test_stdout_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>)
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub(crate) fn with_test_output_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>, Vec<u8>) {
     let _guard = TEST_STDOUT_CAPTURE_LOCK
         .lock()
@@ -125,6 +127,7 @@ pub(crate) fn print_stderr(text: &str) {
     let _ = write_stderr_bytes(text.as_bytes());
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn write_stdout_bytes(bytes: &[u8]) -> io::Result<()> {
     #[cfg(test)]
     {
@@ -145,6 +148,7 @@ pub(crate) fn write_stdout_bytes(bytes: &[u8]) -> io::Result<()> {
     stdout.flush()
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn write_stderr_bytes(bytes: &[u8]) -> io::Result<()> {
     #[cfg(test)]
     {
@@ -165,6 +169,7 @@ pub(crate) fn write_stderr_bytes(bytes: &[u8]) -> io::Result<()> {
     stderr.flush()
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn report_failure(err: CliFailure) -> i32 {
     let mut stderr = io::stderr().lock();
     if let Some(rendered_stderr) = err.rendered_stderr {

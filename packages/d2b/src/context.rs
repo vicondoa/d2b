@@ -233,6 +233,7 @@ where
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn read_json_file<T>(path: &Path) -> Result<T, io::Error>
 where
     T: for<'de> Deserialize<'de>,
@@ -241,6 +242,7 @@ where
     serde_json::from_slice(&data).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn read_symlink_target(path: &Path) -> Option<String> {
     fs::read_link(path)
         .ok()
@@ -454,6 +456,7 @@ impl CliSocket {
     /// queue is full, where a non-blocking connect refuses with `EAGAIN`; the
     /// retry loop stays inside the budget rather than parking the thread in
     /// the kernel on a wedged listener.
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     pub(crate) async fn connect(path: &Path, budget: Duration) -> io::Result<Self> {
         let fd = socket(
             AddressFamily::Unix,
@@ -2691,6 +2694,7 @@ pub(crate) fn converted_resource_types() -> &'static [&'static str; 36] {
     &V3_CONVERTED_RESOURCE_TYPES
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn read_spec(spec_file: Option<&Path>, spec_stdin: bool) -> Result<Value, CliFailure> {
     if spec_file.is_some() == spec_stdin {
         return Err(CliFailure::new(
@@ -2716,6 +2720,7 @@ pub(crate) fn read_spec(spec_file: Option<&Path>, spec_stdin: bool) -> Result<Va
         .map_err(|_| CliFailure::new(2, "resource-schema-invalid: spec must be JSON"))
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_bounded_file(path: &Path) -> Result<Vec<u8>, CliFailure> {
     let file =
         fs::File::open(path).map_err(|_| CliFailure::new(1, "failed to read resource spec"))?;
@@ -3077,6 +3082,7 @@ mod tests {
         }
 
         #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn cli_socket_rejects_ancillary_file_descriptors() {
             let (socket, server) = test_socket_pair();
             let file = std::fs::File::open("/dev/null").expect("open descriptor fixture");
@@ -3132,6 +3138,7 @@ mod tests {
     }
 
     impl SessionClient for MockClient {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn invoke(
             &self,
             request: &[u8],
@@ -3209,6 +3216,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn resource_spec_files_are_bounded_before_json_parsing() {
         let path = std::env::temp_dir().join(format!(
             "d2b-resource-spec-{}-{}.json",
@@ -3223,6 +3231,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn injected_context_adds_frozen_envelope_fields() {
         let client = Arc::new(MockClient {
             requests: Mutex::new(Vec::new()),
@@ -3248,6 +3257,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn explicit_zone_changes_the_request_target_but_keeps_the_root_listener() {
         let client = Arc::new(MockClient {
             requests: Mutex::new(Vec::new()),
@@ -3273,6 +3283,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn injected_process_attach_uses_the_typed_zone_attach_operation() {
         let client = Arc::new(MockClient {
             requests: Mutex::new(Vec::new()),
@@ -3319,6 +3330,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cli_attach_stream_drop_sends_a_typed_cancel_frame() {
         let (client, server) = test_socket_pair();
         let server = std::thread::spawn(move || {
@@ -3333,6 +3345,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cli_attach_stream_retries_partial_stdin_writes() {
         let (client, server) = test_socket_pair();
         let server = std::thread::spawn(move || {
@@ -3406,6 +3419,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cli_attach_stream_delivers_final_bytes_then_reports_eof() {
         let (client, server) = test_socket_pair();
         let server = std::thread::spawn(move || {
@@ -3444,6 +3458,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cli_attach_stream_never_interprets_stdin_as_resize_control() {
         let (client, server) = test_socket_pair();
         let stdin = br#"{"type":"namedStreamResize","rows":1,"cols":1}"#.to_vec();
@@ -3486,6 +3501,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cli_attach_stream_names_a_stalled_round_trip_as_a_deadline() {
         // The interactive shell counts on this bound: a peer that stops
         // answering must end the round trip as a named deadline instead of

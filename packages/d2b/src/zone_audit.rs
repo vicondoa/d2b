@@ -885,6 +885,7 @@ fn is_segment_name(name: &str) -> bool {
 }
 
 /// Inspect audit segment inventory without exposing record contents.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn audit_directory_health(path: &Path) -> Option<(u32, bool)> {
     let mut paths = fs::read_dir(path)
         .ok()?

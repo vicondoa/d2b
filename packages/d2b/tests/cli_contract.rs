@@ -50,6 +50,7 @@ fn assert_zone_unavailable_envelope(value: &Value, missing_socket: &Path) {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_with_missing_socket(args: &[&str], missing_socket: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_d2b"))
         .args(args)
@@ -59,6 +60,7 @@ fn run_with_missing_socket(args: &[&str], missing_socket: &Path) -> Output {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn list_json_matches_smoke_inventory_and_schema() {
     let Some(fixtures) = fixtures_dir() else {
         eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
@@ -169,6 +171,7 @@ fn v3_mutations_fail_closed_with_the_zone_envelope() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn explicit_zone_uses_the_root_listener_and_keeps_the_zone_target() {
     let missing_public = Path::new("zone-only-clean-break-child-public.sock");
     let out = Command::new(env!("CARGO_BIN_EXE_d2b"))

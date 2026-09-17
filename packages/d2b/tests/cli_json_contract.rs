@@ -81,6 +81,7 @@ impl ZoneFixtureEnv {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn run(&self, args: &[&str]) -> std::process::Output {
         Command::new(env!("CARGO_BIN_EXE_d2b"))
             .args(args)
@@ -218,6 +219,7 @@ fn status_reports_pending_restart_with_consistent_current_booted() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn audit_json_stays_json_on_tty_with_daemon_down_envelope() {
     // The bash gate used `script -q -e -c "$CLI audit --json" /dev/null` to give
     // the CLI a real PTY, proving `audit --json` stays the JSON envelope even on
@@ -291,6 +293,7 @@ fn open_pts_slave(path: &Path) -> OwnedFd {
 /// slave fds, a Linux PTY master read returns `EIO` rather than a clean EOF;
 /// treat that as the terminator. The audit envelope (~600 bytes) fits inside
 /// the PTY buffer, so the child never blocks waiting for us to read.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn drain_pty_master(master: OwnedFd) -> Vec<u8> {
     let mut file = std::fs::File::from(master);
     let mut out = Vec::new();

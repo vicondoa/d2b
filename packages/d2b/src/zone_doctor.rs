@@ -394,6 +394,7 @@ fn apply_optional_fixture_reads(input: &mut DoctorInput) {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_fixture(names: &[&str]) -> Option<Value> {
     let path = names.iter().find_map(std::env::var_os)?;
     let bytes = fs::read(path).ok()?;

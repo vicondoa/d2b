@@ -87,6 +87,7 @@ fn record_hash(previous: &str, canonical: &[u8]) -> String {
     )
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn frame_recv(fd: i32) -> Value {
     let mut bytes = vec![0; 1 << 20];
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -104,6 +105,7 @@ fn frame_recv(fd: i32) -> Value {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn frame_send(fd: i32, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     let mut frame = (body.len() as u32).to_le_bytes().to_vec();
@@ -111,6 +113,7 @@ fn frame_send(fd: i32, value: &Value) {
     assert_eq!(send(fd, &frame, MsgFlags::empty()).unwrap(), frame.len());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn diagnostic_server(
     path: &Path,
     expected: impl FnOnce(&Value) + Send + 'static,
@@ -152,6 +155,7 @@ fn diagnostic_server(
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_export(
     socket_path: &Path,
     after: Option<&str>,
@@ -171,6 +175,7 @@ fn run_export(
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn audit_export_uses_only_the_diagnostic_session_grant() {
     let temporary = tempfile::tempdir().unwrap();
     let socket_path = temporary.path().join("public.sock");
@@ -200,6 +205,7 @@ fn audit_export_uses_only_the_diagnostic_session_grant() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn audit_export_reports_a_chain_break_inline_without_echoing_bad_input() {
     let temporary = tempfile::tempdir().unwrap();
     let socket_path = temporary.path().join("public.sock");

@@ -40,6 +40,7 @@ struct ScratchPaths {
     tool_path: PathBuf,
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn write_executable(path: &PathBuf, contents: &str) {
     std::fs::write(path, contents).expect("write executable fixture");
     let mut permissions = std::fs::metadata(path)
@@ -71,6 +72,7 @@ fn scratch() -> (TempDir, ScratchPaths) {
     (tmp, paths)
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_cli(paths: &ScratchPaths, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_d2b"))
         .env_clear()

@@ -174,6 +174,7 @@ pub(crate) fn config_approve_core(staging: &Path, target: &Path) -> Result<usize
     config_approve_core_with_digest(staging, target, None)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn config_approve_core_with_digest(
     staging: &Path,
     target: &Path,
@@ -217,6 +218,7 @@ pub(crate) fn config_approve_core_with_digest(
     Ok(bytes.len())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn config_reject_core(staging: &Path) -> Result<bool, CliFailure> {
     if staging.exists() {
         std::fs::remove_file(staging)
@@ -238,6 +240,7 @@ pub(crate) fn warn_pending_staged_config(guest: &str) {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn warn_all_pending_staged_configs() {
     let base = config_staging_base();
     let mut pending = Vec::new();
@@ -260,6 +263,7 @@ pub(crate) fn warn_all_pending_staged_configs() {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
     use std::io::Write as _;
 
@@ -380,6 +384,7 @@ fn target_call(
     Ok(0)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn config(
     context: &ZoneContext,
     args: &ActivationConfigArgs,
@@ -628,6 +633,7 @@ fn strip_config_response_envelope(mut value: serde_json::Value) -> serde_json::V
     value
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_staged_document(
     context: &ZoneContext,
     staging: &std::path::Path,
@@ -824,6 +830,7 @@ fn invoke_config_status(
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn config_view_identifier(
     path: &std::path::Path,
     context: &ZoneContext,
@@ -870,6 +877,7 @@ mod tests {
     struct ScratchDir(PathBuf);
 
     impl ScratchDir {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn new(label: &str) -> Self {
             let nonce = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -892,6 +900,7 @@ mod tests {
     }
 
     impl Drop for ScratchDir {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
@@ -906,6 +915,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn config_approve_publishes_exact_bytes_and_consumes_staging() {
         let scratch = ScratchDir::new("approve");
         let staging = scratch.path().join("work.guest.nix");
@@ -929,6 +939,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn config_approve_digest_mismatch_keeps_staging_and_target() {
         let scratch = ScratchDir::new("digest-mismatch");
         let staging = scratch.path().join("work.guest.nix");

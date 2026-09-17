@@ -61,6 +61,7 @@ impl UsbEnv {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn run(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_d2b"))
             .env_clear()
@@ -80,6 +81,7 @@ impl UsbEnv {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn write_executable(path: &Path, contents: &str) {
     std::fs::write(path, contents).expect("write executable fixture");
     let mut permissions = std::fs::metadata(path)

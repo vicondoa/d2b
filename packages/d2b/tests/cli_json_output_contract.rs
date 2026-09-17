@@ -37,6 +37,7 @@ struct FixtureEnv {
 }
 
 impl FixtureEnv {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn new() -> Option<Self> {
         let fixtures = fixtures_dir()?;
         let tmp = target_tempdir("cli-json-output-contract");
@@ -63,6 +64,7 @@ impl FixtureEnv {
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn run(&self, args: &[&str], envs: &[(&str, &Path)]) -> Output {
         let mut cmd = base_command(args, &self.home, &self.runtime);
         cmd.env("D2B_MANIFEST_PATH", self.tree.join("manifest.json"))
@@ -94,6 +96,7 @@ fn fixtures_dir() -> Option<PathBuf> {
         })
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn target_tempdir(prefix: &str) -> tempfile::TempDir {
     let base = std::env::var_os("TEST_TMPDIR")
         .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
@@ -140,6 +143,7 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn golden(name: &str) -> String {
     let path = repo_root().join("tests/golden/cli-output").join(name);
     let raw =
@@ -280,6 +284,7 @@ fn assert_zone_unavailable_modes(env: &FixtureEnv, args: &[&str], label: &str) {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn normal_zone_runtime_ignores_retired_state_paths() {
     let Some(env) = FixtureEnv::new() else {
         return;
@@ -357,6 +362,7 @@ fn normalized_runtime_golden(name: &str) -> String {
     expected.replace("with the required socket ACLs", "with socket ACLs")
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn build_hermetic_bundle_tree(fixtures: &Path, dir: &Path) {
     fs::create_dir_all(dir.join("closures")).expect("mk closures dir");
     for name in [
@@ -431,6 +437,7 @@ fn status_goldens_preserve_v04_bash_subset() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn audit_output_matches_cli_json_drift_goldens() {
     let scratch = short_socket_tempdir("cjaudit");
     let home = scratch.path().join("home");
@@ -469,6 +476,7 @@ fn audit_output_matches_cli_json_drift_goldens() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn auth_status_output_matches_goldens() {
     let Some(env) = FixtureEnv::new() else {
         return;
@@ -636,6 +644,7 @@ fn usb_security_key_sessions_not_yet_implemented() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn usb_probe_json_deserializes_to_public_output_contract() {
     let scratch = short_repo_tempdir(".cli-json.usb-probe.");
     let home = scratch.path().join("home");
@@ -673,6 +682,7 @@ fn split_daemon_audit_lines(expected: &str) -> Vec<String> {
     body.split('\n').map(str::to_owned).collect()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn spawn_audit_mock_daemon(path: &Path, lines: Vec<String>) -> std::thread::JoinHandle<()> {
     let _ = fs::remove_file(path);
     let listener = socket(
@@ -723,6 +733,7 @@ fn spawn_audit_mock_daemon(path: &Path, lines: Vec<String>) -> std::thread::Join
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn spawn_usb_probe_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
     let _ = fs::remove_file(path);
     let listener = socket(
@@ -771,6 +782,7 @@ fn spawn_usb_probe_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn recv_frame(fd: std::os::fd::RawFd) -> Value {
     let mut buf = vec![0_u8; 1 << 20];
     let n = nix::sys::socket::recv(fd, &mut buf, nix::sys::socket::MsgFlags::empty())
@@ -782,6 +794,7 @@ fn recv_frame(fd: std::os::fd::RawFd) -> Value {
     serde_json::from_slice(body).expect("frame json")
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn send_frame(fd: std::os::fd::RawFd, payload: &Value) {
     let body = serde_json::to_vec(payload).expect("serialize frame");
     let mut framed = (body.len() as u32).to_le_bytes().to_vec();

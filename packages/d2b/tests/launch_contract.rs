@@ -1,6 +1,7 @@
 use std::process::Command;
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn retired_launch_is_rejected_without_fallback_or_argument_leakage() {
     let dir = tempfile::tempdir().expect("test dir");
     let output = Command::new(env!("CARGO_BIN_EXE_d2b"))
@@ -23,6 +24,7 @@ fn retired_launch_is_rejected_without_fallback_or_argument_leakage() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn launch_rejects_public_command_arguments() {
     let output = Command::new(env!("CARGO_BIN_EXE_d2b"))
         .args([

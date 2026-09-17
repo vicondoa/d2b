@@ -1524,10 +1524,9 @@ fn append_locked(
     #[cfg(test)]
     if let Some(capture) = &state.capture
         && let Some(record) = capture_record
+        && let Ok(mut records) = capture.lock()
     {
-        if let Ok(mut records) = capture.lock() {
-            records.push(record);
-        }
+        records.push(record);
     }
 
     // Keep the worker's serial position through the bounded retention scan

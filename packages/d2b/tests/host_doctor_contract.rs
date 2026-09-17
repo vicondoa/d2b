@@ -137,6 +137,7 @@ struct Sandbox {
 }
 
 impl Sandbox {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn new() -> Self {
         let tmp = tempfile::tempdir().expect("tempdir");
         let state_dir = tmp.path().join("daemon-state");
@@ -154,6 +155,7 @@ impl Sandbox {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_state(&self, name: &str, contents: &str) {
         std::fs::write(self.state_dir.join(name), contents)
             .unwrap_or_else(|err| panic!("write {name}: {err}"));
@@ -172,6 +174,7 @@ impl Sandbox {
 
     /// Run `host doctor --read-only --json`, returning the captured
     /// process exit code and the parsed JSON envelope.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn run_doctor_json(&self) -> (i32, Value) {
         let out = self
             .doctor_command()
@@ -225,6 +228,7 @@ fn listen_seqpacket(path: &std::path::Path) -> OwnedFd {
 // --- 1. usage gate: missing --read-only must exit 78 ----------------
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn host_doctor_without_read_only_exits_78_usage_envelope() {
     let sandbox = Sandbox::new();
     let out = sandbox
@@ -557,6 +561,7 @@ fn host_doctor_metrics_endpoint_unreachable_passes_as_optional() {
 // --- 8. human renderer surfaces summary line + per-check markers ----
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn host_doctor_human_renderer_emits_summary_and_markers() {
     let sandbox = Sandbox::new();
     // Guarantee at least one [PASS] marker by seeding passing probes.
@@ -607,6 +612,7 @@ fn host_doctor_live_sockets_report_broker_and_daemon_ready() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn host_doctor_private_broker_socket_denial_is_pass() {
     let sandbox = Sandbox::new();
     let _broker = listen_seqpacket(&sandbox.broker_socket);
@@ -637,6 +643,7 @@ fn host_doctor_private_broker_socket_denial_is_pass() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn host_doctor_inaccessible_broker_parent_is_fail() {
     let mut sandbox = Sandbox::new();
     let broker_dir = sandbox._tmp.path().join("private-broker-dir");
