@@ -805,16 +805,19 @@ mod tests {
             })
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn call_order(&self) -> Vec<&'static str> {
             self.calls.lock().expect("calls").clone()
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn set_evidence(&self, evidence: serde_json::Value) {
             *self.evidence.lock().expect("evidence") = Some(evidence);
         }
     }
 
     impl super::ProviderDriverEffects for RecordingEffects {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn controller_session_evidence(
             &self,
             process_ref: &d2b_contracts_resource::v3::ResourceRef,
@@ -848,10 +851,12 @@ mod tests {
             })
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn call_order(&self) -> Vec<String> {
             self.calls.lock().expect("calls").clone()
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn add_owned(&self, row: StoredDesiredResource, view: ResourceView) {
             self.views
                 .lock()
@@ -860,6 +865,7 @@ mod tests {
             self.rows.lock().expect("rows").push(row);
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn add_view(&self, view: ResourceView) {
             self.views
                 .lock()
@@ -867,6 +873,7 @@ mod tests {
                 .push((view.key.clone(), view));
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop_row(&self, key: &ResourceKey) {
             self.rows
                 .lock()
@@ -878,6 +885,7 @@ mod tests {
                 .retain(|(view_key, _)| view_key != key);
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn view_of(&self, key: &ResourceKey) -> Option<ResourceView> {
             self.views
                 .lock()
@@ -909,6 +917,7 @@ mod tests {
             Ok(None)
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
             self.calls
                 .lock()
@@ -920,6 +929,7 @@ mod tests {
             Ok(self.view_of(key))
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.calls.lock().expect("calls").push("delete".to_owned());
             self.rows
@@ -933,6 +943,7 @@ mod tests {
             Ok(())
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn list_owned(
             &self,
             owner_uid: [u8; 16],
@@ -1140,6 +1151,7 @@ mod tests {
 
     // -- validate / recover / delete -----------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_refuses_a_spec_that_is_not_an_object() {
         let manager = RecordingManager::new();
@@ -1161,6 +1173,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_without_effects() {
         let manager = RecordingManager::new();
@@ -1183,6 +1196,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_converges_without_effects() {
         let manager = RecordingManager::new();
@@ -1197,6 +1211,7 @@ mod tests {
 
     // -- provider observation ------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn provider_reconcile_publishes_the_observed_status() {
         let (mut ctx, effects, manager, mut driver) = provider_fixture().await;
@@ -1234,6 +1249,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn provider_reconcile_pends_without_session_evidence() {
         let (mut ctx, _effects, _manager, mut driver) = provider_fixture().await;
@@ -1263,6 +1279,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn provider_reconcile_fails_a_declared_volume_that_disappeared() {
         let (mut ctx, effects, manager, mut driver) = provider_fixture().await;
@@ -1286,6 +1303,7 @@ mod tests {
         assert!(!status.observation.required_dependencies_ready);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn provider_reconcile_reports_manager_failures_as_retryable() {
         let (mut ctx, _effects, manager, mut driver) = provider_fixture().await;
@@ -1302,6 +1320,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn system_core_provider_phase_follows_the_zone_projection() {
         // The system-core exception: its readiness is the Zone row's
@@ -1341,6 +1360,7 @@ mod tests {
 
     // -- finalize (drain) ----------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_converges_once_the_owned_children_are_gone() {
         let (mut ctx, _effects, manager, mut driver) = provider_fixture().await;
@@ -1353,6 +1373,7 @@ mod tests {
             .expect("no owned child and no provider drain gate remains");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn provider_drain_gate_tracks_the_controller_process_child() {
         // The per-type drain behind the child pass, exercised directly on the
