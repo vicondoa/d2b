@@ -279,6 +279,7 @@ fn generate_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
 /// target parents are never treated as contexts, and an emptied parent is left
 /// in place. Each removal is reported on stderr; the returned written paths
 /// stay exactly the files the run emitted.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn prune_unexpected_contexts(root: &Path, expected: &BTreeSet<String>) -> Result<(), String> {
     for (key, path) in existing_context_directories(root)? {
         if expected.contains(&key) {
@@ -315,6 +316,7 @@ fn existing_context_directories(root: &Path) -> Result<Vec<(String, PathBuf)>, S
     Ok(found)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn sorted_child_directories(directory: &Path) -> Result<Vec<PathBuf>, String> {
     let mut children = Vec::new();
     for entry in fs::read_dir(directory)
@@ -834,6 +836,7 @@ fn package_record(
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn parse_lock_packages(path: PathBuf) -> Result<Vec<LockPackage>, String> {
     let text = fs::read_to_string(&path)
         .map_err(|error| format!("read guest lock {}: {error}", path.display()))?;
@@ -942,6 +945,7 @@ fn stable_id(package: &Value) -> String {
     format!("{name}@{version}#{source}")
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn lock_packages(root: &Path, relative_lock: &str) -> Result<LockChecksumIndex, String> {
     let text = fs::read_to_string(root.join(relative_lock))
         .map_err(|error| format!("read {relative_lock}: {error}"))?;
@@ -1010,6 +1014,7 @@ fn metadata_projection(
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_context(
     root: &Path,
     computed: &ComputedContext,
@@ -1105,6 +1110,7 @@ fn write_advisory_skeleton(
     write_json(&root.join(ADVISORY_POLICY_PATH), &value, written)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_advisory_policy(
     root: &Path,
     require_approved: bool,
@@ -1140,6 +1146,7 @@ fn read_advisory_policy(
         .collect()
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn validate_advisory_policy(
     root: &Path,
     value: &Value,
@@ -1318,6 +1325,7 @@ fn cargo_metadata(
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn cargo_metadata_attempt(
     root: &Path,
     target: &str,
@@ -1463,6 +1471,7 @@ fn split_cfg_args(input: &str) -> Vec<&str> {
     result
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn filtered_lock(root: &Path, lock_path: &str, closure: &Closure) -> Result<String, String> {
     let lock = fs::read_to_string(root.join(lock_path))
         .map_err(|error| format!("read Cargo.lock for audit projection: {error}"))?;
@@ -1592,6 +1601,7 @@ fn expand_audit_block_dependencies(blocks: &[Vec<String>], selected_indices: &mu
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_audit_lock(path: &Path, closure: &Closure) -> Result<(), String> {
     let text = fs::read_to_string(path)
         .map_err(|error| format!("read audit-only lock {}: {error}", path.display()))?;
@@ -1631,6 +1641,7 @@ fn reject_extra_files(directory: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn collect_relative_files(
     root: &Path,
     directory: &Path,
@@ -1655,6 +1666,7 @@ fn collect_relative_files(
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn compare_file(path: &Path, expected: &str) -> Result<(), String> {
     let actual = fs::read_to_string(path)
         .map_err(|error| format!("read generated policy input {}: {error}", path.display()))?;
@@ -1678,6 +1690,7 @@ fn write_json<T: Serialize>(
     write_text(path, &text, written)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_text(path: &Path, text: &str, written: &mut Vec<PathBuf>) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -1688,6 +1701,7 @@ fn write_text(path: &Path, text: &str, written: &mut Vec<PathBuf>) -> Result<(),
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn sha256_file(path: &Path) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
     let mut digest = Sha256::new();
@@ -1816,6 +1830,7 @@ mod tests {
     /// deterministic order; expected contexts survive, the emptied parents
     /// stay, and a loose file at the parent level is never a context.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retired_context_directories_are_pruned_and_expected_ones_survive() {
         let root = std::env::temp_dir().join(format!(
             "d2b-policy-input-prune-{}",

@@ -18,6 +18,7 @@ use schemars::schema_for;
 use serde_json::Value;
 
 /// Generate primitive ResourceType schemas and Nix option modules.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn generate(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let schema_dir = repo_root.join("docs/reference/schemas/v3");
     let nix_dir = repo_root.join("nixos-modules/resource-schemas");

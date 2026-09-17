@@ -84,6 +84,7 @@ fn run_command(program: &str, args: &[&str], root: &Path, label: &str) -> bool {
     run_command_handle(command, label)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn run_command_handle(mut command: Command, label: &str) -> bool {
     let output = match command.output() {
         Ok(output) => output,

@@ -203,6 +203,7 @@ fn render_error(message: impl Into<String>) -> Box<dyn std::error::Error> {
     message.into().into()
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn parse(repo_root: &Path) -> Result<Catalog, Box<dyn std::error::Error>> {
     let text = fs::read_to_string(repo_root.join(POLICY_PATH))
         .map_err(|error| render_error(format!("read {POLICY_PATH}: {error}")))?;
@@ -453,6 +454,7 @@ fn parse_text(text: &str) -> Result<Catalog, Box<dyn std::error::Error>> {
     Ok(catalog)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write(
     repo_root: &Path,
     relative: &str,
@@ -859,12 +861,14 @@ mod tests {
     use super::*;
 
     /// The committed catalog document, read once for the validation tests.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn committed_catalog_text() -> String {
         let root = crate::repo_root().expect("repository root");
         fs::read_to_string(root.join(POLICY_PATH)).expect("committed row catalog")
     }
 
     /// The committed triage view, read for the drift comparison.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn committed_triage() -> String {
         let root = crate::repo_root().expect("repository root");
         fs::read_to_string(root.join(TRIAGE_OUT)).expect("committed triage view")

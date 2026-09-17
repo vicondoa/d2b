@@ -649,6 +649,7 @@ impl FrozenClosure {
     }
 
     /// Validate the pinned path, protected GC root, and path digest.
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     pub fn validate(&self) -> RecoveryResult<()> {
         if !self.store_path.is_dir() || !self.gc_root.exists() {
             return Err(RecoveryError::ClosureUnavailable);
@@ -1709,6 +1710,7 @@ fn sampled_unix_seconds() -> RecoveryResult<u64> {
     RecoveryUnixSeconds::new(now.as_secs()).map(|value| value.as_u64())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_attestation(path: &Path) -> RecoveryResult<Vec<u8>> {
     let mut file = fs::File::open(path).map_err(|_| RecoveryError::Json)?;
     let mut bytes = Vec::new();
@@ -2311,6 +2313,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn locator_and_closure_inputs_are_digest_only_and_closure_is_pinned() {
         let locator = "https://operator.example/recovery/secret";
         let digest = digest_recovery_locator(locator);

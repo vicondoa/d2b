@@ -543,6 +543,7 @@ fn fingerprints(values: Vec<String>) -> Result<Vec<FingerprintInput>> {
 }
 
 /// Git working-tree root containing `path`.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn toplevel(path: &Path) -> Result<PathBuf> {
     let root = PathBuf::from(git_text(path, &["rev-parse", "--show-toplevel"])?);
     if !root.is_absolute() {
@@ -609,6 +610,7 @@ fn object_digest(root: &Path, head: &str, path: &str) -> Result<String> {
     Ok(sha256_bytes(&bytes))
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
     let output = Command::new("git")
         .arg("-C")
@@ -823,6 +825,7 @@ fn git_text(root: &Path, args: &[&str]) -> Result<String> {
 }
 
 /// Bounded read of a delivery artifact addressed by an explicit path.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -856,6 +859,7 @@ pub(crate) mod tests {
     }
 
     impl GitFixture {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub(crate) fn new(label: &str) -> Self {
             let fixture = Self {
                 scratch: Scratch::new(label),
@@ -890,6 +894,7 @@ pub(crate) mod tests {
             &self.scratch
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub(crate) fn write(&self, relative: &str, contents: &str) {
             let path = self.repo().join(relative);
             if let Some(parent) = path.parent() {
@@ -903,6 +908,7 @@ pub(crate) mod tests {
             self.git(&["commit", "--quiet", "--message", message]);
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub(crate) fn git(&self, args: &[&str]) {
             let status = Command::new("git")
                 .arg("-C")
@@ -922,6 +928,7 @@ pub(crate) mod tests {
             );
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub(crate) fn head(&self) -> String {
             let output = Command::new("git")
                 .arg("-C")
@@ -1176,6 +1183,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_history_only_rebase_keeps_the_candidate_address() {
         let fixture = GitFixture::new("snapshot-rebase");
         let baseline = take(&fixture);
@@ -1539,6 +1547,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_bounded_read_refuses_an_oversized_artifact() {
         let fixture = GitFixture::new("snapshot-bounded");
         let path = fixture.scratch().join("big.json");

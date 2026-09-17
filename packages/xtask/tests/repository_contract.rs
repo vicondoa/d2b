@@ -2,6 +2,7 @@
 
 use std::{env, fs, path::PathBuf};
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn repo_file(relative: &str) -> String {
     let mut candidates = Vec::new();
     if let Some(base) = env::var_os("TEST_SRCDIR").map(PathBuf::from) {

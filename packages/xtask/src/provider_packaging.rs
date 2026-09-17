@@ -342,6 +342,7 @@ fn generated_catalog_shape_module() -> String {
 /// Returns the paths written. An empty success is deliberately not a possible
 /// return: a caller comparing a generator's output against the committed tree
 /// must not be able to read "wrote nothing" as "everything is current".
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn gen_provider_packaging(
     repo_root: &Path,
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
@@ -599,6 +600,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_catalog_shape_and_the_provider_contract_describe_the_same_fields() {
         let contract_path = crate::repo_root()
             .expect("repository root")
@@ -682,6 +684,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_generator_never_reports_an_empty_success() {
         // The contract the stub established and this implementation keeps: a
         // successful return names at least one written path, so a drift gate

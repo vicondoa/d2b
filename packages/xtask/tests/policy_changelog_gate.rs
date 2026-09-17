@@ -58,6 +58,7 @@ struct FixtureRepo {
 }
 
 impl FixtureRepo {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn new(tag: &str) -> Self {
         let base = scratch_root().join("changelog-gate");
         std::fs::create_dir_all(&base).expect("create scratch base");
@@ -77,6 +78,7 @@ impl FixtureRepo {
         repo
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn git(&self, args: &[&str]) {
         let output = Command::new("git")
             .args(args)
@@ -94,6 +96,7 @@ impl FixtureRepo {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write(&self, rel: &str, body: &str) {
         let path = self.root.join(rel);
         if let Some(parent) = path.parent() {
@@ -102,10 +105,12 @@ impl FixtureRepo {
         std::fs::write(path, body).expect("write file");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_bytes(&self, rel: &str, bytes: &[u8]) {
         std::fs::write(self.root.join(rel), bytes).expect("write bytes");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn remove(&self, rel: &str) {
         std::fs::remove_file(self.root.join(rel)).expect("remove file");
     }
@@ -128,6 +133,7 @@ impl FixtureRepo {
         self.commit("seed");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     /// Run the real gate against this fixture. Returns (passed, combined output).
     fn run_gate(&self) -> (bool, String) {
         let script = repo_root().join("scripts/changelog-check.sh");
@@ -147,6 +153,7 @@ impl FixtureRepo {
 }
 
 impl Drop for FixtureRepo {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
     }
@@ -162,6 +169,7 @@ fn assert_gate(passed: bool, output: &str, expect_pass: bool, context: &str) {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn path_is_symlink_capable() -> bool {
     // The fixtures rely on POSIX symlinks; skip cleanly where they cannot exist.
     let probe = scratch_root().join("symlink-probe");

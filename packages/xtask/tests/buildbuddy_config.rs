@@ -52,6 +52,7 @@ fn repo_root() -> &'static Path {
         .as_path()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn read_text(relative: &str) -> String {
     std::fs::read_to_string(repo_root().join(relative))
         .unwrap_or_else(|error| panic!("read {relative}: {error}"))
@@ -62,6 +63,7 @@ fn read_json(relative: &str) -> Value {
         .unwrap_or_else(|error| panic!("parse {relative}: {error}"))
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn write_executable(path: &Path, contents: &str) {
     std::fs::write(path, contents)
         .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
@@ -107,6 +109,7 @@ fn write_fake_nix(path: &Path) {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn only_evidence_run(root: &Path) -> PathBuf {
     let runs = std::fs::read_dir(root)
         .unwrap_or_else(|error| panic!("read evidence root {}: {error}", root.display()))
@@ -531,6 +534,7 @@ fn developer_defaults_and_local_opt_out_are_explicit() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn source_hygiene_fails_when_declared_shellcheck_is_missing() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -603,6 +607,7 @@ fn committed_profiles_deny_first_party_rust_warnings_and_guard_facade_logs() {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn redaction_failure_never_emits_captured_evidence() {
     let scratch = repo_root()
@@ -648,6 +653,7 @@ fn redaction_failure_never_emits_captured_evidence() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn failed_bootstrap_removes_protected_raw_log() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -693,6 +699,7 @@ fn failed_bootstrap_removes_protected_raw_log() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn warning_after_successful_bootstrap_fails_without_leaking_credentials() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -748,6 +755,7 @@ fn warning_after_successful_bootstrap_fails_without_leaking_credentials() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn warning_after_cache_hit_fails_a_successful_local_run() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -829,6 +837,7 @@ fn warning_guard_captures_all_test_output_in_the_main_log() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn warning_guard_survives_redaction_of_the_warning_prefix() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -872,6 +881,7 @@ fn warning_guard_survives_redaction_of_the_warning_prefix() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn warning_guard_fails_closed_when_the_log_disappears() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -914,6 +924,7 @@ fn warning_guard_fails_closed_when_the_log_disappears() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn concurrent_facades_isolate_warning_evidence() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -1009,6 +1020,7 @@ fn concurrent_facades_isolate_warning_evidence() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn uppercase_bazel_diagnostic_does_not_trigger_the_rust_warning_guard() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -1051,6 +1063,7 @@ fn uppercase_bazel_diagnostic_does_not_trigger_the_rust_warning_guard() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn warning_fails_an_otherwise_successful_trusted_seed_run() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -1111,6 +1124,7 @@ fn warning_fails_an_otherwise_successful_trusted_seed_run() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn warning_after_successful_remote_run_fails() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -1158,6 +1172,7 @@ fn warning_after_successful_remote_run_fails() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn warning_blocks_typed_remote_retry() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -1217,6 +1232,7 @@ fn warning_blocks_typed_remote_retry() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn uppercase_bazel_warning_allows_typed_remote_retry() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -1269,6 +1285,7 @@ fn uppercase_bazel_warning_allows_typed_remote_retry() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn warning_in_local_fallback_fails_after_typed_retry() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -1322,6 +1339,7 @@ fn warning_in_local_fallback_fails_after_typed_retry() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn dispatch_evidence_survives_log_redaction_before_classification() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -1371,6 +1389,7 @@ fn dispatch_evidence_survives_log_redaction_before_classification() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn successful_bazel_requires_a_test_result_event() {
     let scratch = repo_root().join(".scratch").join(format!(
@@ -1413,6 +1432,7 @@ fn successful_bazel_requires_a_test_result_event() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn bazel_check_rejects_an_incomplete_project_shell_contract() {
     let scratch = repo_root()
@@ -1447,6 +1467,7 @@ fn bazel_check_rejects_an_incomplete_project_shell_contract() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn bazel_check_rejects_an_unset_or_non_executable_bazel_bin_without_invocation() {
     let scratch = repo_root()
@@ -1506,6 +1527,7 @@ fn bazel_check_rejects_an_unset_or_non_executable_bazel_bin_without_invocation()
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
     let scratch = repo_root()
@@ -1645,6 +1667,7 @@ fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn make_dry_run_does_not_enter_nix() {
     let scratch = repo_root()
@@ -1688,6 +1711,7 @@ fn make_dry_run_does_not_enter_nix() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn make_dispatch_requires_nix_outside_the_d2b_shell() {
     let make = [
@@ -1730,6 +1754,7 @@ fn make_dispatch_requires_nix_outside_the_d2b_shell() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn make_reentry_rejects_an_incomplete_d2b_shell_contract() {
     let output = Command::new("make")
@@ -1763,6 +1788,7 @@ fn make_reentry_rejects_an_incomplete_d2b_shell_contract() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn make_reentry_does_not_retry_a_failed_nix_shell() {
     let scratch = repo_root()
@@ -2262,6 +2288,7 @@ fn policy_preserves_remote_profiles_and_trust_partition() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn developer_profiles_publish_the_tested_checkout_metadata() {
     let scratch = repo_root()
@@ -2402,6 +2429,7 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn invalid_checkout_metadata_is_omitted_explicitly() {
     let scratch = repo_root().join(".scratch").join(format!(

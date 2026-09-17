@@ -288,6 +288,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_missing_validator_lane_is_refused() {
         let scratch = Scratch::new("seal-missing-lane");
         let (candidate, snapshot) = sealable(&scratch);
@@ -374,6 +375,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_stray_file_in_the_evidence_directory_is_refused() {
         let scratch = Scratch::new("seal-stray-evidence");
         let (candidate, snapshot) = sealable(&scratch);

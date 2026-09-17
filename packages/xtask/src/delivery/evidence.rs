@@ -505,6 +505,7 @@ impl ImportRequest {
 
     /// Git working-tree roots of every declared checkout, used both to keep
     /// delivery state outside them and to rederive the candidate.
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn checkout_roots(&self) -> Result<BTreeMap<String, PathBuf>> {
         self.checkouts
             .iter()
@@ -543,6 +544,7 @@ impl ImportRequest {
 /// This is the whole of the module's contact with validator output: the bytes
 /// are read a chunk at a time into a reused buffer, hashed, and dropped. No
 /// caller can obtain them, so no artifact can carry them.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn digest_without_retaining(path: &Path) -> Result<OutputDigest> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -611,6 +613,7 @@ mod tests {
     /// Sentinel that must never appear in any file the import writes.
     const SECRET_OUTPUT: &str = "RAW-VALIDATOR-OUTPUT-SENTINEL";
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn log_path(fixture: &GitFixture) -> PathBuf {
         let path = fixture.scratch().join("validator.log");
         std::fs::write(
@@ -647,6 +650,7 @@ mod tests {
         run_with_root(&request, &root)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn files_under(path: &Path, found: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(path) else {
             return;
@@ -696,6 +700,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn raw_command_output_never_reaches_a_written_file() {
         let fixture = GitFixture::new("evidence-no-raw-output");
         let snapshot = take(&fixture);
@@ -839,6 +844,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_tampered_snapshot_is_rejected_before_anything_is_written() {
         let fixture = GitFixture::new("evidence-tampered-snapshot");
         let snapshot = take(&fixture);
@@ -975,6 +981,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_log_digest_covers_the_whole_file() {
         let fixture = GitFixture::new("evidence-log-digest");
         let path = fixture.scratch().join("big.log");
@@ -990,6 +997,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_non_regular_validator_log_does_not_leak_its_absolute_path() {
         // A directory (not a regular file) exercises the rejection branch. The
         // diagnostic names the artifact role, never the absolute log path.

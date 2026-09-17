@@ -39,6 +39,7 @@ fn repo_root() -> PathBuf {
     panic!("repository root is not discoverable")
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_xtask(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args(args)
@@ -47,6 +48,7 @@ fn run_xtask(args: &[&str]) -> Output {
         .expect("run xtask")
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn scratch(name: &str) -> PathBuf {
     let base = std::env::var_os("TEST_UNDECLARED_OUTPUTS_DIR")
         .map(PathBuf::from)
@@ -57,6 +59,7 @@ fn scratch(name: &str) -> PathBuf {
     path
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn only_pre_dispatch_infrastructure_failures_allow_one_local_retry() {
     let directory = scratch("classification");
@@ -96,6 +99,7 @@ fn only_pre_dispatch_infrastructure_failures_allow_one_local_retry() {
     assert_eq!(value["retryLocally"], false);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn ambiguous_worker_and_transport_failures_fail_closed() {
     let directory = scratch("ambiguous-infrastructure");
@@ -118,6 +122,7 @@ fn ambiguous_worker_and_transport_failures_fail_closed() {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn explicit_pre_dispatch_worker_and_transport_failures_allow_one_retry() {
     let directory = scratch("explicit-pre-dispatch-infrastructure");
@@ -149,6 +154,7 @@ fn explicit_pre_dispatch_worker_and_transport_failures_allow_one_retry() {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn remote_deadline_allows_one_local_retry() {
     let directory = scratch("post-dispatch-deadline");
@@ -172,6 +178,7 @@ fn remote_deadline_allows_one_local_retry() {
     assert_eq!(value["maxLocalRetries"], 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn redaction_removes_plain_encoded_and_split_sentinels_from_evidence() {
     let directory = scratch("redaction");

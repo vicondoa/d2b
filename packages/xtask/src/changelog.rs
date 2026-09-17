@@ -413,7 +413,8 @@ impl FoldTree {
     /// not a regular file, and a fragment directory that resolves into another
     /// tree, are refused with no fragment reserved, so a fold never consumes
     /// entries it cannot fold.
-    fn resolve(repo_root: &Path) -> Result<Self, FoldError> {
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+        fn resolve(repo_root: &Path) -> Result<Self,FoldError> {
         let changelog = fs::canonicalize(repo_root.join(CHANGELOG_FILE))
             .map_err(|err| FoldError::single(format!("{CHANGELOG_FILE}: cannot resolve: {err}")))?;
         let metadata = fs::metadata(&changelog)
@@ -480,6 +481,7 @@ impl FoldTree {
 }
 
 /// Load every fragment in `dir`, in file-name order.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_fragments(dir: &Path) -> Result<Vec<Fragment>, FoldError> {
     if !dir.exists() {
         return Ok(Vec::new());
@@ -555,6 +557,7 @@ fn load_fragments(dir: &Path) -> Result<Vec<Fragment>, FoldError> {
 ///
 /// With no fragments present nothing is read, written, or deleted, so a second
 /// run is a no-op.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn fold_repo(repo_root: &Path, mode: Mode) -> Result<Outcome, FoldError> {
     // A prior fold may have been interrupted mid-transaction, leaving a durable
     // journal. Resolve it before reading fragments so a rolled-back transaction
@@ -669,12 +672,14 @@ enum HookOutcome {
 }
 
 /// fsync a directory at `path` so a rename/create/unlink inside it is durable.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn sync_dir(path: &Path) -> std::io::Result<()> {
     fs::File::open(path)?.sync_all()
 }
 
 /// Remove a file at `path`, treating an already-absent file as success so a
 /// re-run of cleanup after an interruption is idempotent.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -685,6 +690,7 @@ fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
 
 /// Remove a directory tree at `path`, treating an already-absent tree as
 /// success so a re-run of cleanup after an interruption is idempotent.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn remove_dir_all_if_exists(path: &Path) -> std::io::Result<()> {
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
@@ -694,6 +700,7 @@ fn remove_dir_all_if_exists(path: &Path) -> std::io::Result<()> {
 }
 
 /// Write `data` to `path`, truncating, and fsync it before returning.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_sync(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let mut file = fs::File::create(path)?;
     file.write_all(data)?;
@@ -716,6 +723,7 @@ fn write_journal(txn: &Path, state: &str) -> std::io::Result<()> {
 }
 
 /// Read the journal from `txn`, if present and well-formed.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_journal(txn: &Path) -> Option<Journal> {
     let text = fs::read_to_string(txn.join(TXN_JOURNAL)).ok()?;
     let state = text
@@ -869,6 +877,7 @@ fn finish_forward(
 /// remove the transaction directory. Restorative steps run before the backup is
 /// consumed so a crash mid-rollback stays recoverable on the next pass. Errors
 /// are surfaced, never swallowed.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn roll_back(
     tree: &FoldTree,
     #[cfg(test)] hook: &mut dyn FnMut(RecoverStage) -> HookOutcome,
@@ -996,6 +1005,7 @@ fn apply_fold(
     )
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn apply_fold_hooked(
     tree: &FoldTree,
     original: &str,
@@ -1453,6 +1463,7 @@ mod tests {
     }
 
     impl TempRepo {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn new(tag: &str) -> Self {
             let base = std::env::var_os("TEST_TMPDIR")
                 .map(PathBuf::from)
@@ -1476,18 +1487,22 @@ mod tests {
             TempRepo { root }
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_changelog(&self, body: &str) {
             fs::write(self.root.join(CHANGELOG_FILE), body).expect("write changelog");
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_fragment(&self, name: &str, body: &str) {
             fs::write(self.root.join(FRAGMENT_DIR).join(name), body).expect("write fragment");
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn changelog(&self) -> String {
             fs::read_to_string(self.root.join(CHANGELOG_FILE)).expect("read changelog")
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn fragment_names(&self) -> Vec<String> {
             let mut names: Vec<String> = fs::read_dir(self.root.join(FRAGMENT_DIR))
                 .expect("read changelog.d")
@@ -1505,6 +1520,7 @@ mod tests {
     }
 
     impl Drop for TempRepo {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             let _ = fs::set_permissions(&self.root, fs::Permissions::from_mode(0o755));
             let _ = fs::set_permissions(
@@ -1550,6 +1566,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn load_fragments_rejects_invalid_utf8() {
         let repo = TempRepo::new("utf8");
         fs::write(
@@ -1602,6 +1619,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fold_repo_rolls_back_when_a_fragment_cannot_be_reserved() {
         let repo = TempRepo::new("reserve-fail");
         repo.write_changelog(CHANGELOG);
@@ -1636,6 +1654,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fold_repo_leaves_tree_unchanged_when_transaction_cannot_be_created() {
         let repo = TempRepo::new("stage-fail");
         repo.write_changelog(CHANGELOG);
@@ -1669,6 +1688,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fold_repo_writes_through_a_symlinked_changelog() {
         // `bazel run` reaches the checkout through a symlink forest: the
         // execroot's `CHANGELOG.md` is a link into the real workspace, so a
@@ -1727,6 +1747,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fold_repo_consumes_fragments_through_a_symlinked_fragment_directory() {
         // The execroot reaches `changelog.d/` through a link too: the fold must
         // reserve the real fragments and leave the link in place.
@@ -1765,6 +1786,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fold_repo_refuses_a_changelog_that_resolves_outside_the_fragment_tree() {
         // The changelog link escapes into a directory of its own, so the
         // fragments and the changelog no longer describe one repository tree.
@@ -1839,6 +1861,7 @@ mod tests {
 
     /// Compute the fold inputs for `repo` exactly as `fold_repo` would, so a
     /// test can drive `apply_fold_hooked` directly with a crash hook.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn compute_fold(repo: &TempRepo) -> (String, String, Vec<String>) {
         let fragments = load_fragments(&repo.root.join(FRAGMENT_DIR)).expect("load fragments");
         let original = fs::read_to_string(repo.root.join(CHANGELOG_FILE)).expect("read changelog");

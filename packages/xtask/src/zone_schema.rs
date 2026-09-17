@@ -1272,6 +1272,7 @@ pub(crate) fn core_schema_artifact_name(resource_type: &str) -> String {
 
 /// `gen-zone-schemas`: emit the committed JSON Schema for every Zone-control
 /// ResourceType this model owns.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn gen_zone_schemas(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("docs/reference/schemas/v3");
     fs::create_dir_all(&out_dir)?;
@@ -1559,6 +1560,7 @@ fn generated_resource_types_module() -> String {
 }
 
 /// `gen-zone-nix-options`: emit the committed generated Nix modules.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn gen_zone_nix_options(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("nixos-modules/generated");
     fs::create_dir_all(&out_dir)?;
@@ -1724,6 +1726,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn committed_artifacts_match_the_generator() {
         let root = repo_root();
         for (name, schema) in standard_resource_schemas() {

@@ -6,8 +6,22 @@ publish = false
 default-run = "xtask"
 license.workspace = true
 
-[lints]
-workspace = true
+# U33/U15: this crate carries its own lint posture (a crate-local `[lints]`
+# cannot coexist with `workspace = true`), mirroring the workspace levels:
+# `unsafe_code = "forbid"` (the workspace root's) and the three clippy levels.
+# The blocking-API census reached zero at U15 (every remaining site in src/
+# and tests/ carries a policy-tracked "CLI-only path" / "cfg(test) helper"
+# allow), so `disallowed_methods` flips to deny ahead of the workspace-wide
+# flip; `await_holding_lock` and `await_holding_refcell_ref` are live denials.
+# xtask uses none of the opt-in cfg flags, so no `unexpected_cfgs` entry is
+# needed here.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
 
 [dependencies]
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }

@@ -325,6 +325,7 @@ fn run_inventory(output_path: Option<PathBuf>) -> std::process::ExitCode {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn gen_resource_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let proto_dir = repo_root.join("packages/d2b-contracts-resource/proto");
@@ -348,6 +349,7 @@ fn gen_resource_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     Ok(vec![out_file])
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn gen_resource_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let proto_dir = repo_root.join("packages/d2b-contracts-resource/proto");
@@ -376,6 +378,7 @@ fn gen_resource_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     Ok(vec![out_file])
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_contract_generated_mod(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     fs::write(
         out_dir.join("mod.rs"),
@@ -415,6 +418,7 @@ fn message_only_proto(
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut generated = fs::read_to_string(path)?;
     generated = generated.replace("#![allow(unsafe_code)]\n", "");
@@ -433,6 +437,7 @@ fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn redact_generated_protobuf_formatting(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     const DERIVE: &str = "#[derive(PartialEq,Clone,Default,Debug)]";
     let mut generated = fs::read_to_string(path)?;
@@ -600,6 +605,7 @@ fn schema_documents() -> Vec<(&'static str, RootSchema)> {
     ]
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let out_dir = repo_root
@@ -614,6 +620,7 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     Ok(written)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_recovery_schema(out_dir: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let mut schema = serde_json::to_value(schemars::schema_for!(
         delivery::recovery::RecoveryAttestation
@@ -715,6 +722,7 @@ fn write_recovery_schema(out_dir: &Path) -> Result<PathBuf, Box<dyn std::error::
     Ok(path)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn gen_zone_storage_schema() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root()?.join("docs/reference/schemas/v3");
     fs::create_dir_all(&out_dir)?;
@@ -727,6 +735,7 @@ fn gen_zone_storage_schema() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     )
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let out_dir = repo_root.join("docs/reference/cli-output");
@@ -753,6 +762,7 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     write_schemas(&out_dir, &schemas)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn gen_error_codes() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let out_path = repo_root.join("docs/reference/error-codes.md");
@@ -788,6 +798,7 @@ fn markdown_cell(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', "<br>")
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let man_dir = repo_root.join("docs/manpages");
@@ -897,6 +908,7 @@ fn write_clipboard_arm_manpage(man_dir: &Path) -> Result<PathBuf, Box<dyn std::e
     Ok(man_path)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
     let rendered = String::from_utf8(rendered)?;
     let mut normalized = rendered
@@ -910,6 +922,7 @@ fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_schemas(
     out_dir: &Path,
     schemas: &[(&str, RootSchema)],
@@ -931,6 +944,7 @@ fn render_schema(schema: &RootSchema) -> Result<String, serde_json::Error> {
     Ok(data)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn gen_daemon_api() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let doc_path = repo_root.join(DAEMON_API_DOC);
@@ -947,6 +961,7 @@ fn gen_daemon_api() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(doc_path)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn parse_ipc_items(repo_root: &Path) -> Result<Vec<RustItem>, Box<dyn std::error::Error>> {
     let ipc_dirs = [
         repo_root.join("packages/d2b-contracts/src"),
@@ -980,6 +995,7 @@ fn parse_ipc_items(repo_root: &Path) -> Result<Vec<RustItem>, Box<dyn std::error
     Ok(items)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn parse_rust_items(
     repo_root: &Path,
     path: &Path,
@@ -1456,6 +1472,7 @@ fn render_item_table(title: &str, items: &[&RustItem]) -> String {
 ///
 /// Output: writes CHANGELOG.md in place; returns the path so the
 /// caller can announce the artifact.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn gen_release_notes(version: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
     use std::io::Write;
 
@@ -1553,6 +1570,7 @@ mod schema_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn committed_schemas_match_the_generator() {
         let root = repo_root().expect("repository root");
         for (name, schema) in schema_documents() {

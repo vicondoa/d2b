@@ -1,6 +1,7 @@
 use d2b_core::manifest_v04::ManifestV04;
 use std::{env, fs, process::ExitCode};
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
     let Some(input) = args.next() else {

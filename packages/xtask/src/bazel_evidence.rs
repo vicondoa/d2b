@@ -49,6 +49,7 @@ pub fn run_cli(args: &[String]) -> ExitCode {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn run(args: &[String]) -> Result<Value> {
     match args.first().map(String::as_str) {
         Some("check-security") => {
@@ -153,6 +154,7 @@ fn resolve_path(root: &Path, path: &Path) -> PathBuf {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_json(path: &Path) -> Result<Value> {
     let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
     serde_json::from_slice(&bytes).map_err(|error| format!("parse {}: {error}", path.display()))
@@ -164,6 +166,7 @@ fn object<'a>(value: &'a Value, context: &str) -> Result<&'a Map<String, Value>>
         .ok_or_else(|| format!("{context} must be an object"))
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn security_digest(policy_path: &Path) -> Result<Value> {
     let root = repo_root();
     let policy = read_json(&resolve_path(&root, policy_path))?;

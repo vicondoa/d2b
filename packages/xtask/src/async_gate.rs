@@ -481,6 +481,7 @@ fn char_literal_starts(bytes: &[u8]) -> bool {
 }
 
 /// Load the deny list - the single source of truth for blocking functions.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_entries(repo_root: &Path) -> Result<Vec<DeniedApi>, String> {
     let clippy_toml = fs::read_to_string(repo_root.join("clippy.toml"))
         .map_err(|_| "async-gate: clippy.toml unreadable".to_owned())?;
@@ -492,6 +493,7 @@ fn load_entries(repo_root: &Path) -> Result<Vec<DeniedApi>, String> {
 }
 
 /// Resolve [`DEFAULT_CRATE_ROOTS`] plus every provider crate under `packages`.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn default_scan_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut paths = Vec::new();
     for root in DEFAULT_CRATE_ROOTS {
@@ -515,6 +517,7 @@ fn default_scan_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 /// Scan every `.rs` file under the given paths (files or directories).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn scan_paths(
     repo_root: &Path,
     paths: &[PathBuf],
@@ -542,6 +545,7 @@ fn scan_paths(
     Ok((violations, files.len()))
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn walk_rs(dir: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = fs::read_dir(dir)
         .map_err(|error| format!("async-gate: read dir {}: {error}", dir.display()))?;

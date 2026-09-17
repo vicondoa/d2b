@@ -231,6 +231,7 @@ fn artifact_name(schema_id: &str) -> String {
     format!("{}.schema.json", schema_id.replace('/', "_"))
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write(out_dir: &Path, name: &str, value: &Value) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = out_dir.join(name);
     let mut data = serde_json::to_string_pretty(value)?;
@@ -297,6 +298,7 @@ fn semantic_resource_types_module() -> String {
 
 /// Generate the committed schema artifacts for the semantic Service and
 /// Binding bases.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn gen_semantic_service_schemas(
     repo_root: &Path,
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
@@ -453,6 +455,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn committed_qualified_envelopes_match_the_generator() {
         let root = crate::repo_root().expect("repository root");
         for pair in catalog() {

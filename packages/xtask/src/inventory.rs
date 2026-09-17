@@ -88,6 +88,7 @@ struct ClassifiedPath {
     kind: &'static str,
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn emit_adr0035_inventory(
     output_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -113,6 +114,7 @@ pub(crate) fn emit_adr0035_inventory(
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn git_tracked_files(repo_root: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let output = Command::new("git")
         .arg("-C")
@@ -311,6 +313,7 @@ fn is_crate_manifest(path: &str) -> bool {
     path != "Cargo.toml" && path.starts_with("packages/") && path.ends_with("/Cargo.toml")
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn file_metric(repo_root: &Path, path: &str) -> Result<FileMetric, Box<dyn std::error::Error>> {
     let absolute = repo_root.join(path);
     let bytes = fs::metadata(&absolute)?.len();
@@ -333,6 +336,7 @@ fn sort_metrics(metrics: &mut [FileMetric]) {
     });
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn workspace_info(repo_root: &Path) -> Result<WorkspaceInfo, Box<dyn std::error::Error>> {
     let root_manifest = "Cargo.toml";
     let root_toml = fs::read_to_string(repo_root.join(root_manifest))?;
@@ -343,6 +347,7 @@ fn workspace_info(repo_root: &Path) -> Result<WorkspaceInfo, Box<dyn std::error:
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn crate_info(
     repo_root: &Path,
     manifest_paths: &[String],
@@ -444,6 +449,7 @@ fn should_scan_markers(path: &str) -> bool {
     path != "packages/xtask/src/inventory.rs"
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn scan_markers(
     repo_root: &Path,
     path: &str,

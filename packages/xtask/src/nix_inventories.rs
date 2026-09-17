@@ -257,6 +257,7 @@ fn qualified_schema_parts(
 }
 
 /// The committed schema directory's file names.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn committed_schema_files(repo_root: &Path) -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
     let dir = repo_root.join(SCHEMA_DIR);
     let mut files = BTreeSet::new();
@@ -342,6 +343,7 @@ fn provider_farm_pointers(
 }
 
 /// Parse the committed principal allocation document.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn principal_allocation(
     repo_root: &Path,
 ) -> Result<BTreeMap<String, PrincipalId>, Box<dyn std::error::Error>> {
@@ -409,6 +411,7 @@ fn valid_principal_name(name: &str) -> bool {
         })
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write(
     repo_root: &Path,
     relative: &str,

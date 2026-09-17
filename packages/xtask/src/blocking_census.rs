@@ -667,6 +667,7 @@ struct CensusFile {
 
 /// The workspace member paths the root manifest declares, e.g.
 /// `packages/d2b-broker`.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn workspace_member_paths(repo_root: &Path) -> Result<BTreeSet<String>, String> {
     let manifest = fs::read_to_string(repo_root.join("Cargo.toml"))
         .map_err(|error| format!("blocking-census: read root Cargo.toml: {error}"))?;
@@ -700,6 +701,7 @@ fn workspace_member_paths(repo_root: &Path) -> Result<BTreeSet<String>, String> 
 /// Non-member directories under `packages/` (e.g. `d2b-realm-core`) are not
 /// censused: they are not workspace crates, so the workspace-wide clippy run
 /// cannot measure their instance-method classes.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn resolve_crate_dirs(repo_root: &Path, crate_args: &[String]) -> Result<Vec<PathBuf>, String> {
     if crate_args.is_empty() {
         let members = workspace_member_paths(repo_root)?;
@@ -737,6 +739,7 @@ fn resolve_crate_dirs(repo_root: &Path, crate_args: &[String]) -> Result<Vec<Pat
 }
 
 /// The package name a crate directory's manifest declares.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn package_name(crate_dir: &Path) -> Result<String, String> {
     let manifest = fs::read_to_string(crate_dir.join("Cargo.toml"))
         .map_err(|error| format!("blocking-census: read {}: {error}", crate_dir.display()))?;
@@ -754,6 +757,7 @@ fn package_name(crate_dir: &Path) -> Result<String, String> {
 /// `-D warnings` rustflags cannot turn unrelated warnings into failures, and
 /// `-W` (not `--force-warn`) is used so `#[allow]` attributes keep
 /// suppressing - the same predicate the lint enforces under deny.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn run_clippy(repo_root: &Path, packages: &[String]) -> Result<String, String> {
     let mut command = Command::new("cargo");
     command
@@ -795,6 +799,7 @@ pub fn walk_rs(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(found)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn walk(dir: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = fs::read_dir(dir)
         .map_err(|error| format!("blocking-census: read dir {}: {error}", dir.display()))?;
@@ -815,6 +820,7 @@ fn walk(dir: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
 
 /// Collect one crate's census inputs: every `.rs` file with its prod/test
 /// split and suppression inventory.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn collect_crate_files(
     repo_root: &Path,
     crate_dir: &Path,
@@ -862,6 +868,7 @@ fn hit_is_test(files: &[CensusFile], file: &str, line: usize) -> bool {
 /// per-crate tables and the totals; with `json_out` writes the authoritative
 /// per-crate counts (the baseline shape); with `baseline` fails when any
 /// covered crate's count exceeds its committed baseline (plan R15).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn run(
     repo_root: &Path,
     crate_args: &[String],

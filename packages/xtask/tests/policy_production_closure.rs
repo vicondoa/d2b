@@ -51,10 +51,12 @@ const PROTECTED_CODEOWNERS_RULES: &[&str] = &[
 ];
 const CONTEXT_ROOT: &str = "packages/policy-inputs";
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn read_repo_file(rel: &str) -> String {
     std::fs::read_to_string(repo_root().join(rel)).expect("read repo file")
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn closure_paths() -> Vec<PathBuf> {
     let root = repo_root().join(CONTEXT_ROOT);
     let mut paths = Vec::new();
@@ -81,6 +83,7 @@ fn closure_paths() -> Vec<PathBuf> {
     paths
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn read_json(path: &Path) -> Value {
     serde_json::from_str(
         &fs::read_to_string(path)
@@ -506,6 +509,7 @@ fn approval_policy_requires_exact_protected_ownership_metadata() {
     assert!(validate_policy(&policy).is_err());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn root_lock_digest_is_the_recomputed_authority() {
     let mut digest = Sha256::new();

@@ -248,6 +248,7 @@ struct BrokerOperations {
 /// label - and a row cannot be admitted as one without a wire variant. The
 /// rows are the authority `gen-broker-operations` projects every broker view
 /// from, so the domain moves with them or fails the drift target.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn broker_operation_values(repo_root: &Path) -> Result<Vec<String>, String> {
     let text = fs::read_to_string(repo_root.join(BROKER_OPERATIONS_PATH))
         .map_err(|error| format!("read {BROKER_OPERATIONS_PATH}: {error}"))?;
@@ -579,6 +580,7 @@ fn artifacts(repo_root: &Path) -> Result<Vec<(PathBuf, String)>, String> {
 /// byte-for-byte against the generator output and fails on the first
 /// difference, and either way the returned paths name what was written or
 /// checked, so a caller cannot read silence as currency.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn run_cli(repo_root: &std::path::Path, args: &[String]) -> Result<Vec<PathBuf>, String> {
     let check = match args {
         [] => false,
@@ -691,6 +693,7 @@ mod tests {
     /// that gains, retires, or renames a wire variant moves the domain, and the
     /// drift target then refuses the stale generated copy.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn broker_operation_domain_projects_the_committed_rows() {
         let root = crate::repo_root().expect("repository root");
         let values = broker_operation_values(root).expect("committed broker rows");

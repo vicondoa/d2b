@@ -117,6 +117,7 @@ pub(crate) fn ensure_artifact_kind(found: &str, expected: &str, label: &str) -> 
 }
 
 /// Reads a bounded JSON artifact from an operator-supplied path.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn read_json_file<T: DeserializeOwned>(path: &Path, label: &str) -> Result<T> {
     let bytes = fs::read(path)
         .map_err(|error| DeliveryError::environment(format!("cannot read {label}: {error}")))?;

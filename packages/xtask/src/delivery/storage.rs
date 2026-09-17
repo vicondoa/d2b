@@ -115,6 +115,7 @@ impl StateRoot {
     /// rejected when it is at or under any of them, when it sits inside a Git
     /// working tree, when any component is a symlink, or when it already
     /// exists with a mode other than `0700`.
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     pub fn prepare(repository_roots: &[PathBuf], requested_root: Option<&Path>) -> Result<Self> {
         #[cfg(test)]
         if let Some(path) = test_root_override::current() {
@@ -188,6 +189,7 @@ impl StateRoot {
         self.anchor(wave, candidate_id, path)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn anchor(
         &self,
         wave: &str,
@@ -284,6 +286,7 @@ impl StateRoot {
     /// Anchors a root without the external-path check, for hermetic tests that
     /// keep their scratch state inside the ignored build directory.
     #[cfg(test)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub(crate) fn for_tests(path: &Path) -> Result<Self> {
         create_private_dir(path)?;
         Ok(Self {
@@ -582,6 +585,7 @@ fn default_state_root_from(
 
 /// Rejects any path that would place delivery evidence inside a reviewed
 /// checkout or a Git working tree.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn ensure_external_path(path: &Path, repository_roots: &[PathBuf]) -> Result<()> {
     let absolute = absolute_path(path)?;
     for root in repository_roots {
@@ -653,6 +657,7 @@ pub fn absolute_path(path: &Path) -> Result<PathBuf> {
 }
 
 /// Rejects a path whose existing prefix traverses a symlink.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn reject_symlink_components(path: &Path) -> Result<()> {
     let absolute = absolute_path(path)?;
     let mut current = PathBuf::new();
@@ -691,6 +696,7 @@ fn create_private_dir(path: &Path) -> Result<()> {
     create_anchored_private_dir(path).map(|_fd| ())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn verify_private_directory(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -1070,6 +1076,7 @@ mod create_race_hook {
 
     /// Installs (or clears with `None`) the pre-`mkdirat` hook and resets the
     /// `EEXIST` counter.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub(super) fn install(hook: Option<Hook>) {
         EEXIST_HITS.store(0, Ordering::SeqCst);
         *cell().lock().expect("create-race hook mutex") = hook;
@@ -1079,6 +1086,7 @@ mod create_race_hook {
     /// lock before being called so two racing writers can both run it
     /// concurrently (a barrier inside it must not be held behind the mutex).
     /// Only opted-in threads run it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub(super) fn before_mkdirat() {
         if !is_participant() {
             return;
@@ -1178,6 +1186,7 @@ fn write_leaf_once(
     write_leaf_with_mode(parent, leaf, relative_key, bytes, true)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_leaf_with_mode(
     parent: BorrowedFd<'_>,
     leaf: &str,
@@ -1307,6 +1316,7 @@ impl Drop for TempFile<'_> {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_limited(path: &Path, limit: usize, label: &str) -> Result<Vec<u8>> {
     reject_symlink_components(path)?;
     let file = File::options()
@@ -1335,6 +1345,7 @@ fn read_limited(path: &Path, limit: usize, label: &str) -> Result<Vec<u8>> {
 /// it and verifies the leaf is a regular file, so a symlink or directory
 /// swapped into any component after the pin is rejected rather than followed
 /// and the read observes exactly the tree the writer produced.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_limited_anchored(
     anchor: BorrowedFd<'_>,
     relative: &Path,
@@ -1559,6 +1570,7 @@ pub(crate) mod tests {
     }
 
     impl Scratch {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub(crate) fn new(label: &str) -> Self {
             let ordinal = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
             let base = std::env::var_os("TEST_TMPDIR")
@@ -1574,6 +1586,7 @@ pub(crate) mod tests {
     }
 
     impl Drop for Scratch {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
@@ -1584,6 +1597,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_once_does_not_replace_a_durable_record() {
         let scratch = Scratch::new("write-once");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
@@ -1735,6 +1749,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn candidate_directories_are_addressed_by_candidate_id() {
         let scratch = Scratch::new("addressing");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
@@ -1755,6 +1770,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn artifacts_round_trip_through_the_candidate_directory() {
         let scratch = Scratch::new("round-trip");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
@@ -1821,6 +1837,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn open_candidate_artifact_derives_the_address_from_the_reference() {
         let scratch = Scratch::new("open-artifact");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
@@ -1913,6 +1930,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_symlinked_artifact_leaf_is_refused_and_its_target_is_untouched() {
         use std::os::unix::fs::symlink;
         let scratch = Scratch::new("symlink-leaf");
@@ -1950,6 +1968,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_symlinked_intermediate_directory_is_refused_for_read_write_and_list() {
         use std::os::unix::fs::symlink;
         let scratch = Scratch::new("symlink-dir");
@@ -2098,6 +2117,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_ancestor_swapped_after_the_pin_cannot_redirect_operations() {
         use std::os::unix::fs::{PermissionsExt, symlink};
         let scratch = Scratch::new("pinned-candidate-swap");
@@ -2290,6 +2310,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_root_verification_failure_diagnostic_carries_no_absolute_path() {
         // Root-verification class: a wave directory with a too-permissive mode
         // is refused by the descriptor `fstat` check, and the diagnostic names

@@ -500,6 +500,7 @@ fn check_banned_api_allows(repo_root: &Path) -> Result<(), String> {
 
 /// The same check with the ratchet passed as a parameter, so the tests can
 /// exercise both directions on fixtures.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_banned_api_allows_with(
     repo_root: &Path,
     exemptions: &[BlanketAllowExemption],
@@ -565,6 +566,7 @@ fn check_banned_api_allows_with(
 /// pin the generated views to their committed producers, pin the broker
 /// binary's provider-free manifest, and fail on unsanctioned
 /// `#[allow]`/`#[expect]` suppressions of banned-API lints.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn check(repo_root: &Path) -> Result<(), String> {
     let repo_root = repo_root
         .canonicalize()
@@ -580,6 +582,7 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
     check_dangling_citations(&repo_root)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_closed_matrix(repo_root: &Path, members: &[WorkspaceMember]) -> Result<(), String> {
     let expected: BTreeSet<&str> = PROVIDER_MATRIX.iter().map(|row| row.crate_name).collect();
     let actual: BTreeSet<&str> = members
@@ -4843,6 +4846,7 @@ fn driver_declarations(text: &str) -> Vec<(usize, String)> {
     declarations
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn collect_shared_drivers(
     repo_root: &Path,
     directory: &Path,
@@ -4893,6 +4897,7 @@ fn declared_shared_drivers(repo_root: &Path) -> Result<BTreeSet<String>, String>
 
 /// Fail when a resource driver is declared outside a provider crate, and fail
 /// on an exemption the tree no longer needs.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_shared_driver_placements(repo_root: &Path) -> Result<(), String> {
     let declared = declared_shared_drivers(repo_root)?;
     let exempt: BTreeSet<String> = SHARED_DRIVER_EXEMPTIONS
@@ -5307,6 +5312,7 @@ fn identifier_spans(line: &str, literal_spans: &[(usize, usize, String)]) -> Vec
 
 /// The family-knowledge signals one module carries, ignoring test-only code
 /// and the generated views (whose provenance check sits elsewhere).
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn module_family_signals(
     repo_root: &Path,
     module: &str,
@@ -5438,6 +5444,7 @@ fn collect_family_signals(repo_root: &Path) -> Result<Vec<FamilyKnowledgeSignal>
     Ok(signals)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn collect_module_family_signals(
     repo_root: &Path,
     directory: &Path,
@@ -5640,6 +5647,7 @@ fn check_generated_provenance(repo_root: &Path) -> Result<(), String> {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn collect_generated_provenance(
     repo_root: &Path,
     directory: &Path,
@@ -5693,6 +5701,7 @@ fn collect_generated_provenance(
 /// provider crate, so a `d2b-provider-*` dependency in its manifest is the
 /// broker shipping family knowledge through Cargo, which the composition rule
 /// reserves for d2bd.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_broker_manifest(repo_root: &Path) -> Result<(), String> {
     let manifest_path = repo_root.join("packages/d2b-broker/Cargo.toml");
     if !manifest_path.is_file() {
@@ -5794,6 +5803,7 @@ fn check_dangling_citations(repo_root: &Path) -> Result<(), String> {
 /// and it refuses a citation woven into a sentence, so the human fix states
 /// the behavior instead of citing the missing file. Check mode verifies every
 /// rewrite afterwards, and a second run over a fixed tree changes nothing.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn fix(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     let repo_root = repo_root
         .canonicalize()
@@ -5937,6 +5947,7 @@ fn dangling_citations(repo_root: &Path) -> Result<Vec<DanglingCitation>, String>
     Ok(citations)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn collect_dangling_citations(
     repo_root: &Path,
     directory: &Path,
@@ -6238,6 +6249,7 @@ fn own_crate_of(module: &str) -> Option<String> {
 
 /// The workspace crates whose underscore names can qualify a comment
 /// citation.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn workspace_crates(repo_root: &Path) -> Result<BTreeMap<String, String>, String> {
     let entries = fs::read_dir(repo_root.join("packages"))
         .map_err(|_| "provider-crate-layout-packages-unreadable".to_owned())?;
@@ -6256,6 +6268,7 @@ fn workspace_crates(repo_root: &Path) -> Result<BTreeMap<String, String>, String
 /// The crate-root source text: `lib.rs`, `main.rs`, and the files they
 /// `include!`, which is where a root-level module, item, or re-export binding
 /// can appear.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn crate_root_text(repo_root: &Path, crate_dir: &str) -> Result<String, String> {
     let src = repo_root.join("packages").join(crate_dir).join("src");
     let mut text = String::new();
@@ -6602,6 +6615,7 @@ fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), 
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn cargo_workspace_members(repo_root: &Path) -> Result<Vec<WorkspaceMember>, String> {
     let metadata = cargo_metadata(repo_root)?;
     let packages_by_id: BTreeMap<&str, &CargoPackage> = metadata
@@ -6638,6 +6652,7 @@ fn cargo_workspace_members(repo_root: &Path) -> Result<Vec<WorkspaceMember>, Str
     Ok(members)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn cargo_metadata(repo_root: &Path) -> Result<CargoMetadata, String> {
     let cargo = std::env::var_os("CARGO")
         .map(PathBuf::from)
@@ -6677,6 +6692,7 @@ fn cargo_metadata(repo_root: &Path) -> Result<CargoMetadata, String> {
         .map_err(|_| "provider-crate-layout-metadata-malformed".to_owned())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn on_disk_providers(repo_root: &Path) -> Result<Vec<OnDiskProvider>, String> {
     let packages_dir = repo_root.join("packages");
     let entries = fs::read_dir(&packages_dir)
@@ -6819,6 +6835,7 @@ fn diagnostic_name(name: &str) -> String {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn is_provider_directory(repo_root: &Path, crate_dir: &Path, package_name: &str) -> bool {
     let Some(packages_dir) = repo_root.join("packages").canonicalize().ok() else {
         return false;
@@ -6830,6 +6847,7 @@ fn is_provider_directory(repo_root: &Path, crate_dir: &Path, package_name: &str)
             .is_some_and(|name| name == package_name)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn inspect_crate(member: &WorkspaceMember) -> Result<Vec<Diagnostic>, String> {
     let crate_name = &member.package_name;
     let mut violations = Vec::new();
@@ -6903,6 +6921,7 @@ fn heading_text(line: &str) -> Option<String> {
     Some(stripped.trim_start_matches('#').trim().to_lowercase())
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn contains_rust_file(root: &Path) -> Result<bool, String> {
     let entries =
         fs::read_dir(root).map_err(|_| "provider-crate-layout-source-unreadable".to_owned())?;
@@ -6926,6 +6945,7 @@ fn contains_rust_file(root: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn integration_has_rust_scenario(integration: &Path) -> Result<bool, String> {
     let entries = fs::read_dir(integration)
         .map_err(|_| "provider-crate-layout-integration-unreadable".to_owned())?;
@@ -6961,6 +6981,7 @@ mod tests {
     }
 
     impl Fixture {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn new(label: &str) -> Self {
             let serial = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
             let root = std::env::temp_dir().join(format!(
@@ -7011,6 +7032,7 @@ mod tests {
             self.root.join("packages").join(name)
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn set_members(&self, members: &[&str]) {
             let mut manifest = String::from("[workspace]\nmembers = [\n");
             for member in members {
@@ -7021,6 +7043,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn manifest_workspace_members(root: &Path) -> Result<Vec<WorkspaceMember>, String> {
         let workspace = fs::read_to_string(root.join("Cargo.toml"))
             .map_err(|_| "provider-crate-layout-metadata-unavailable".to_owned())?;
@@ -7062,17 +7085,20 @@ mod tests {
         Ok(members)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn check_fixture(root: &Path) -> Result<(), String> {
         let root = root.canonicalize().unwrap();
         check_members(&root, manifest_workspace_members(&root)?)
     }
 
     impl Drop for Fixture {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_package(root: &Path, name: &str) {
         let package = root.join("packages").join(name);
         fs::create_dir_all(package.join("src")).unwrap();
@@ -7086,6 +7112,7 @@ mod tests {
 
     /// Give one fixture package the declared dependency that makes it a
     /// per-type driver crate.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn declare_resource_types_dependency(crate_dir: &Path) {
         let manifest = crate_dir.join("Cargo.toml");
         let text = fs::read_to_string(&manifest).expect("read fixture manifest");
@@ -7100,6 +7127,7 @@ mod tests {
 
     /// Classify one crate the way the check does: from its name and the
     /// dependency its manifest declares.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn classified_kind(root: &Path, name: &str) -> ProviderNameKind {
         let manifest = fs::read_to_string(root.join("packages").join(name).join("Cargo.toml"))
             .expect("read crate manifest");
@@ -7176,6 +7204,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn every_provider_prefixed_name_has_one_explicit_classification() {
         let root = repo_root().expect("resolve repository root");
         let members = manifest_workspace_members(root).expect("read workspace manifest");
@@ -7402,6 +7431,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn integration_readme_and_rust_scenario_are_both_required() {
         let fixture = Fixture::new("integration");
         fs::remove_file(fixture.provider_dir().join("integration/README.md")).unwrap();
@@ -7416,6 +7446,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_on_disk_provider_omitted_from_workspace_is_rejected() {
         let fixture = Fixture::new("non-member");
         let omitted = fixture.add_package("d2b-provider-fixture-omitted");
@@ -7461,6 +7492,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn caller_supplied_workspace_paths_are_never_rendered() {
         let fixture = Fixture::new("redaction");
         let marker = format!("caller-secret-{}", std::process::id());
@@ -7477,6 +7509,7 @@ mod tests {
     /// exemption list is what keeps the still-un-migrated families passing,
     /// and nothing else may declare a driver outside a provider crate.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_driver_declared_in_a_shared_crate_is_refused() {
         let fixture = Fixture::new("shared-driver");
         let broker = fixture.root.join("packages/d2b-broker/src");
@@ -7568,6 +7601,7 @@ mod tests {
     /// allowed case under the framework roots; a per-resource driver parked
     /// beside it still fails.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_framework_metadata_driver_is_allowed_but_others_are_not() {
         let fixture = Fixture::new("framework-driver");
         let runtime = fixture.root.join("packages/d2b-resource-runtime/src");
@@ -7596,6 +7630,7 @@ mod tests {
     /// An allowance that names a declaration the tree no longer has fails, so
     /// the framework list cannot rot into an unmonitored hole.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_missing_framework_driver_declaration_is_a_stale_allowance() {
         let fixture = Fixture::new("framework-stale");
         fs::create_dir_all(fixture.root.join("packages/d2b-resource-runtime/src")).unwrap();
@@ -7610,6 +7645,7 @@ mod tests {
     /// A comment that cites a module the tree no longer has fails with the
     /// citation and the sentence, inside a monitored root.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_comment_citing_a_deleted_module_is_refused_with_its_sentence() {
         let fixture = Fixture::new("dangling-citation");
         fixture.add_package("d2bd");
@@ -7630,6 +7666,7 @@ mod tests {
     /// The mechanical shapes are removed, the rewrite rechecks clean, code is
     /// untouched, and a second fix run changes nothing.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn mechanical_citations_are_removed_and_recheck_clean() {
         let fixture = Fixture::new("mechanical-fix");
         fixture.add_package("d2bd");
@@ -7658,6 +7695,7 @@ mod tests {
     /// A citation woven into a sentence, and a line whose predecessor
     /// continues into it, are reported and left for a human.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn embedded_and_wrapped_citations_are_reported_not_rewritten() {
         let fixture = Fixture::new("embedded-citation");
         fixture.add_package("d2bd");
@@ -7702,6 +7740,7 @@ mod tests {
     /// A family string literal introduced into a shared crate fails the check
     /// with a named violation: the module, the family, and the literal.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_family_literal_in_a_shared_crate_is_refused() {
         let fixture = Fixture::new("family-literal");
         let broker = fixture.root.join("packages/d2b-broker/src");
@@ -7725,6 +7764,7 @@ mod tests {
     /// `concat!`/`format!` argument, another in its sibling - is caught by
     /// the assembled-name probe even though no literal spells the full name.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_runtime_concatenated_family_name_is_caught() {
         let fixture = Fixture::new("family-assembled");
         let broker = fixture.root.join("packages/d2b-broker/src");
@@ -7751,6 +7791,7 @@ mod tests {
     /// A family-named dispatch arm in the broker runtime is refused: the
     /// identifier probe reads the same word sequence `UsbipBind` writes.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_family_named_dispatch_arm_in_the_broker_runtime_is_refused() {
         let fixture = Fixture::new("family-dispatch");
         let broker = fixture.root.join("packages/d2b-broker/src");
@@ -7780,6 +7821,7 @@ mod tests {
     /// module and count: drivers read state through the driver context, never
     /// through daemon state handles (R13).
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_server_state_reference_in_d2bd_is_refused() {
         let fixture = Fixture::new("server-state");
         let d2bd = fixture.root.join("packages/d2bd/src");
@@ -7800,6 +7842,7 @@ mod tests {
     /// a row without its signal fails (stale), and only the pair of removals
     /// - the row deleted in the same change that deletes the signal - passes.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_family_knowledge_ratchet_only_shrinks_with_its_signals() {
         let fixture = Fixture::new("ratchet");
         let broker = fixture.root.join("packages/d2b-broker/src");
@@ -7845,6 +7888,7 @@ mod tests {
     /// `@generated` marker the protobuf/ttrpc compilers emit. A hand-written
     /// file that claims the annotation fails on its face.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn generated_views_require_a_recognized_producer() {
         let fixture = Fixture::new("generated-provenance");
         let broker = fixture.root.join("packages/d2b-broker/src/generated");
@@ -7882,6 +7926,7 @@ mod tests {
     /// The d2b-broker manifest is pinned provider-free: the broker links no
     /// provider crate, and the composition rule reserves that link for d2bd.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_broker_manifest_is_pinned_provider_free() {
         let fixture = Fixture::new("broker-manifest");
         let broker = fixture.root.join("packages/d2b-broker");
@@ -8040,6 +8085,7 @@ mod tests {
     /// A module-level blanket allow of a banned-API lint is reported as a
     /// blanket allow and fails the policy check (plan R11).
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_blanket_allow_of_a_banned_api_lint_fails_policy() {
         let fixture = Fixture::new("blanket-allow");
         fs::write(
@@ -8056,6 +8102,7 @@ mod tests {
     /// A per-site inline allow whose reason is not on the named list fails
     /// the policy check; a reasonless allow fails the same way.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_per_site_allow_with_an_unknown_reason_fails_policy() {
         let fixture = Fixture::new("unknown-reason");
         fs::write(
@@ -8081,6 +8128,7 @@ mod tests {
     /// A per-site allow carrying a sanctioned reason passes the policy
     /// check, and an `#[expect]` is gated the same way.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_per_site_allow_with_a_sanctioned_reason_passes_policy() {
         let fixture = Fixture::new("sanctioned-reason");
         fs::write(
@@ -8094,6 +8142,7 @@ mod tests {
     /// A blanket allow with a ratchet entry passes, and an entry whose file
     /// no longer carries a blanket allow is a stale allowance.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_blanket_allow_ratchet_only_shrinks_with_its_blanket_allows() {
         let fixture = Fixture::new("blanket-ratchet");
         let lib = fixture.root.join("packages/d2b-core/src/lib.rs");

@@ -15,6 +15,7 @@ const REQUIRED_AGGREGATE_JOBS: &[&str] = &[
     "census",
 ];
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn workflow() -> String {
     let relative = ".github/workflows/pr-l1-static-fast.yml";
     let mut candidates = Vec::new();

@@ -64,6 +64,7 @@ pub(crate) fn redact_path(path: &Path) -> String {
     redactor.redact(path)
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn add_sensitive_root(
     roots: &mut Vec<SensitiveRoot>,
     supplied: &Path,
@@ -261,6 +262,7 @@ fn tail_lines(input: &str, count: usize) -> String {
     tail
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_diagnostic_tail(mut input: impl Read) -> Result<(Vec<u8>, u64), RedactionError> {
     let mut tail = VecDeque::with_capacity(MAX_DIAGNOSTIC_BYTES);
     let mut buffer = [0u8; 8192];
@@ -346,6 +348,7 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, Option<PathBuf>, usize), Reda
     Ok((repo_root, home, tail))
 }
 
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn filter(
     args: &[String],
     mut input: impl Read,
@@ -392,6 +395,7 @@ mod tests {
     struct Scratch(PathBuf);
 
     impl Scratch {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn new(label: &str) -> Self {
             let target = env::var_os("TEST_TMPDIR")
                 .or_else(|| env::var_os("CARGO_TARGET_DIR"))
@@ -412,12 +416,14 @@ mod tests {
     }
 
     impl Drop for Scratch {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_longer_sibling_is_not_partially_rewritten() {
         let scratch = Scratch::new("sibling-prefix");
         let home = scratch.0.join("paydro");
@@ -430,6 +436,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn metacharacters_are_matched_literally() {
         let scratch = Scratch::new("literal-metacharacters");
         let home = scratch.0.join("home#[literal]");
@@ -441,6 +448,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn canonical_paths_from_a_symlinked_checkout_are_redacted() {
         let scratch = Scratch::new("symlink-checkout");
         let real = scratch.0.join("real/repo");
@@ -466,6 +474,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn paths_delimited_by_backticks_are_redacted() {
         let scratch = Scratch::new("backtick-boundary");
         let repo = scratch.0.join("repo");
@@ -479,6 +488,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn ansi_color_sequences_are_normalized_before_path_matching() {
         let scratch = Scratch::new("ansi-boundary");
         let repo = scratch.0.join("repo");
@@ -508,6 +518,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn oversized_input_emits_a_redacted_tail_and_truncation_notice() {
         let scratch = Scratch::new("oversized");
         let repo = scratch.0.join("repo");
@@ -541,6 +552,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn truncation_inside_a_multibyte_character_still_emits_a_redacted_tail() {
         let scratch = Scratch::new("multibyte-boundary");
         let repo = scratch.0.join("repo");
@@ -574,6 +586,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn malformed_bytes_in_the_retained_tail_do_not_suppress_redacted_output() {
         let scratch = Scratch::new("malformed-retained-tail");
         let repo = scratch.0.join("repo");
