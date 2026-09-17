@@ -1,13 +1,8 @@
 //! Provider-neutral readiness predicates and one-shot process waiting.
 
-use std::fs;
-use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::ToSocketAddrs;
 use std::os::unix::fs::FileTypeExt;
-use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::process::Command;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use d2b_core::processes::{ProcessNode, ReadinessPredicate};
@@ -24,7 +19,14 @@ pub fn readiness_predicate_ready(predicate: &ReadinessPredicate) -> Result<bool,
         ReadinessPredicate::UnixSocketExists(path) => Ok(unix_socket_exists(path)),
         ReadinessPredicate::UnixSocketListening(path) => Ok(unix_socket_listening(path)),
         ReadinessPredicate::TcpPort { host, port } => Ok(tcp_port_ready(host, *port)),
-        ReadinessPredicate::Command(command) => command_ready(command),
+        // A subprocess probe has no non-blocking synchronous form: only the
+        // async seat (tokio::process) evaluates Command predicates. No caller
+        // in the workspace constructs `Command` predicates today, so a
+        // reachable sync seat fails LOUD rather than silently never-ready
+        // (mirroring the ComponentSessionHealth arm).
+        ReadinessPredicate::Command(_) => {
+            Err("command-readiness-needs-async-seat".to_owned())
+        }
         ReadinessPredicate::ComponentSpecific(_) => Ok(true),
         // The authenticated Guest ComponentSession readiness probe is evaluated through a
         // daemon-state-aware path (it needs the per-VM vsock socket, peer
@@ -40,23 +42,29 @@ pub fn readiness_predicate_ready(predicate: &ReadinessPredicate) -> Result<bool,
     }
 }
 
+/// Sync seat retained for d2bd's sync caller (`api_socket_info_ready` at
+/// composition.rs:10564, driven from a dedicated worker thread); the async
+/// form replaces it when d2bd converts at U10.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn api_socket_info_ready(path: &str) -> bool {
     if !unix_socket_exists(path) {
         return false;
     }
-    let Ok(mut socket) = UnixStream::connect(path) else {
+    let Ok(mut socket) = std::os::unix::net::UnixStream::connect(path) else {
         return false;
     };
     let _ = socket.set_read_timeout(Some(Duration::from_millis(250)));
     let _ = socket.set_write_timeout(Some(Duration::from_millis(250)));
-    if socket
-        .write_all(b"GET /api/v1/vm.info HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .is_err()
+    if std::io::Write::write_all(
+        &mut socket,
+        b"GET /api/v1/vm.info HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .is_err()
     {
         return false;
     }
     let mut buffer = [0_u8; 4096];
-    let Ok(read) = socket.read(&mut buffer) else {
+    let Ok(read) = std::io::Read::read(&mut socket, &mut buffer) else {
         return false;
     };
     if read == 0 {
@@ -66,15 +74,17 @@ pub fn api_socket_info_ready(path: &str) -> bool {
     response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200")
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn unix_socket_exists(path: &str) -> bool {
-    fs::metadata(path)
+    std::fs::metadata(path)
         .map(|metadata| metadata.file_type().is_socket())
         .unwrap_or(false)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn unix_socket_listening(path: &str) -> bool {
     const SO_ACCEPTCON: u64 = 0x0001_0000;
-    let Ok(contents) = fs::read_to_string("/proc/net/unix") else {
+    let Ok(contents) = std::fs::read_to_string("/proc/net/unix") else {
         return false;
     };
     contents.lines().skip(1).any(|line| {
@@ -89,16 +99,17 @@ pub fn unix_socket_listening(path: &str) -> bool {
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn tcp_port_ready(host: &str, port: u16) -> bool {
     let Ok(addrs) = format!("{host}:{port}").to_socket_addrs() else {
         return false;
     };
-    addrs
-        .into_iter()
-        .any(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok())
+    addrs.into_iter().any(|addr| {
+        std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
+    })
 }
 
-pub fn wait_for_tcp_port(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
+pub async fn wait_for_tcp_port(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     loop {
         if tcp_port_ready(host, port) {
@@ -107,28 +118,53 @@ pub fn wait_for_tcp_port(host: &str, port: u16, timeout: Duration) -> Result<(),
         if Instant::now() >= deadline {
             return Err(format!("tcp-readiness-timeout:{host}:{port}"));
         }
-        std::thread::sleep(Duration::from_millis(100));
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
-pub fn command_ready(command: &[String]) -> Result<bool, String> {
+pub async fn command_ready(command: &[String]) -> Result<bool, String> {
     let Some(program) = command.first() else {
         return Err("command-readiness-empty".to_owned());
     };
-    Command::new(program)
+    tokio::process::Command::new(program)
         .args(&command[1..])
         .env_remove("NOTIFY_SOCKET")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
+        .await
         .map(|status| status.success())
         .map_err(|_| "command-readiness-exec-failed".to_owned())
+}
+
+/// Async twin of [`readiness_predicate_ready`]: the Command arm drives the
+/// probe through `tokio::process`, the rest evaluate through the shared
+/// synchronous predicates (which have no async form and keep their sync
+/// seats for d2bd's callers; U10 converts them as the daemon goes async).
+pub async fn readiness_predicate_ready_async(
+    predicate: &ReadinessPredicate,
+) -> Result<bool, String> {
+    match predicate {
+        ReadinessPredicate::ApiSocketInfo(path) => Ok(api_socket_info_ready(path)),
+        ReadinessPredicate::VsockNotify(value) => Ok(Path::new(value).exists()),
+        ReadinessPredicate::UnixSocketExists(path) => Ok(unix_socket_exists(path)),
+        ReadinessPredicate::UnixSocketListening(path) => Ok(unix_socket_listening(path)),
+        ReadinessPredicate::TcpPort { host, port } => Ok(tcp_port_ready(host, *port)),
+        ReadinessPredicate::Command(command) => command_ready(command).await,
+        ReadinessPredicate::ComponentSpecific(_) => Ok(true),
+        ReadinessPredicate::ComponentSessionHealth { .. } => {
+            Err("guest-component-session-needs-state-aware-path".to_owned())
+        }
+    }
 }
 
 /// Interval between readiness polls (both seats).
 const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Sync seat retained for d2bd's `#[test]` harness (composition.rs calls it
+/// synchronously); the daemon's production path is `wait_for_readiness_async`.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn wait_for_readiness(
     node: &ProcessNode,
     readiness: &[ReadinessPredicate],
@@ -200,10 +236,11 @@ fn terminal_liveness(node: &ProcessNode, liveness: RunnerLiveness) -> Option<Str
 ///   synchronous seat drives a runtime from inside the caller's, which is
 ///   both work per poll and a panic on a single-threaded runtime).
 ///
-/// The predicates themselves stay synchronous - a filesystem read, a socket
-/// connect, a subprocess each - so they run on the blocking pool, which
-/// bounds how many such polls a process can hold instead of parking the
-/// caller's worker on a subprocess.
+/// The non-Command predicates have no async form (they are the same sync
+/// probes `wait_for_readiness` uses), so they evaluate inline; each is a
+/// bounded probe (a 250 ms socket/stat timeout at most), and the Command
+/// probe runs through `tokio::process`. U10 converts the sync probes to
+/// async forms once d2bd's sync callers convert.
 pub async fn wait_for_readiness_async(
     node: &ProcessNode,
     readiness: &[ReadinessPredicate],
@@ -214,22 +251,17 @@ pub async fn wait_for_readiness_async(
         return Ok(());
     }
     let deadline = Instant::now() + timeout;
-    let predicates: Arc<[ReadinessPredicate]> = Arc::from(readiness.to_vec());
     loop {
         if let Some(error) = terminal_liveness_error_async(node, liveness).await {
             return Err(error);
         }
-        let probes = Arc::clone(&predicates);
-        let all_ready = tokio::task::spawn_blocking(move || -> Result<bool, String> {
-            for predicate in probes.iter() {
-                if !readiness_predicate_ready(predicate)? {
-                    return Ok(false);
-                }
+        let mut all_ready = true;
+        for predicate in readiness {
+            if !readiness_predicate_ready_async(predicate).await? {
+                all_ready = false;
+                break;
             }
-            Ok(true)
-        })
-        .await
-        .map_err(|_| format!("readiness-probe-join-failed:{}", node.id.0))??;
+        }
         if all_ready {
             if let Some(error) = terminal_liveness_error_async(node, liveness).await {
                 return Err(error);
@@ -267,7 +299,7 @@ enum ProcState {
     ParseFailed,
 }
 
-pub fn wait_for_one_shot_exit(
+pub async fn wait_for_one_shot_exit(
     pid: i32,
     start_time_ticks: u64,
     timeout: Duration,
@@ -284,7 +316,7 @@ pub fn wait_for_one_shot_exit(
                 // starttime. Treat process-state 'Z' (zombie) or 'X' (dead)
                 // as terminated so OneShot DAG nodes don't spin until the
                 // polling timeout.
-                match read_proc_state(pid) {
+                match read_proc_state(pid).await {
                     Ok(ProcState::Alive('Z')) | Ok(ProcState::Alive('X')) => {
                         return Ok(());
                     }
@@ -306,7 +338,7 @@ pub fn wait_for_one_shot_exit(
                 if Instant::now() >= deadline {
                     return Err(format!("oneshot-timeout:{pid}"));
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
             Ok(Some(_)) => return Err(format!("oneshot-starttime-drift:{pid}")),
             Ok(None) => return Ok(()),
@@ -325,9 +357,9 @@ pub fn wait_for_one_shot_exit(
 /// - `Ok(ProcState::Gone)` when `/proc/<pid>/stat` is missing (ENOENT)
 /// - `Ok(ProcState::ParseFailed)` when stat is readable but malformed
 /// - `Err(io::Error)` for any other I/O error (permission, etc.)
-fn read_proc_state(pid: i32) -> Result<ProcState, std::io::Error> {
+async fn read_proc_state(pid: i32) -> Result<ProcState, std::io::Error> {
     let path = format!("/proc/{pid}/stat");
-    let data = match fs::read_to_string(&path) {
+    let data = match tokio::fs::read_to_string(&path).await {
         Ok(d) => d,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ProcState::Gone),
         Err(e) => return Err(e),
@@ -368,16 +400,19 @@ mod proc_state_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn simple_zombie() {
         assert_eq!(parse("1234 (sh) Z 1 1234 ..."), ProcState::Alive('Z'));
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn simple_running() {
         assert_eq!(parse("99 (bash) R 1 99 99 ..."), ProcState::Alive('R'));
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn comm_with_paren() {
         // Process comm contains ')' - rfind correctly picks the
         // OUTER closing paren that ends the comm field.
@@ -385,28 +420,33 @@ mod proc_state_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn comm_with_spaces_and_paren() {
         assert_eq!(parse("7 (cmd (in jail)) S 1 7 ..."), ProcState::Alive('S'));
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn truncated_stat() {
         // Comm present but no state field after - ParseFailed.
         assert_eq!(parse("1234 (sh)"), ProcState::ParseFailed);
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn no_paren_at_all() {
         // Garbage input without comm parens - ParseFailed.
         assert_eq!(parse("not a stat line at all"), ProcState::ParseFailed);
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn empty_input() {
         assert_eq!(parse(""), ProcState::ParseFailed);
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn dead_process() {
         assert_eq!(parse("88 (init) X 1 88 ..."), ProcState::Alive('X'));
     }
@@ -419,6 +459,7 @@ mod unix_socket_readiness_tests {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn socket_path(name: &str) -> std::path::PathBuf {
         let directory = std::path::Path::new(".scratch");
         std::fs::create_dir_all(directory).expect("create scratch directory");
@@ -426,6 +467,7 @@ mod unix_socket_readiness_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn unix_socket_listening_detects_listening_stream_socket_without_connecting() {
         let path = std::env::temp_dir().join(format!("d2b-usl-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
@@ -441,6 +483,7 @@ mod unix_socket_readiness_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn api_socket_info_requires_a_live_http_api() {
         let path = socket_path("api-readiness");
         let _ = std::fs::remove_file(&path);
@@ -461,6 +504,7 @@ mod unix_socket_readiness_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn api_socket_info_rejects_a_spawned_task_without_a_live_api() {
         let path = socket_path("api-readiness-empty");
         let _ = std::fs::remove_file(&path);
@@ -488,6 +532,7 @@ mod wait_for_one_shot_exit_tests {
     /// Read the `starttime` field (column 22) for `pid` from
     /// `/proc/<pid>/stat`.  Panics if the file is missing or
     /// unparseable - this is a test-only helper.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn read_start_time_ticks(pid: u32) -> u64 {
         let path = format!("/proc/{pid}/stat");
         let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
@@ -497,6 +542,7 @@ mod wait_for_one_shot_exit_tests {
 
     /// Spawn `sleep 0` - the child exits in < 1 ms, leaving a zombie
     /// behind because Rust's `Child::drop` does not call `waitpid`.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn spawn_zombie_child() -> Child {
         Command::new("sleep")
             .arg("0")
@@ -505,6 +551,7 @@ mod wait_for_one_shot_exit_tests {
     }
 
     /// Spawn `sleep 30` - alive for the duration of the test.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn spawn_sleeping_child() -> Child {
         Command::new("sleep")
             .arg("30")
@@ -515,8 +562,9 @@ mod wait_for_one_shot_exit_tests {
     // v1.2 asserts the zombie shortcut path: `wait_for_one_shot_exit`
     // must return `Ok(())` immediately (≤100 ms) when the target is in
     // state 'Z', without waiting for the full polling timeout.
-    #[test]
-    fn wait_for_one_shot_exit_returns_ok_on_zombie_child() {
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn wait_for_one_shot_exit_returns_ok_on_zombie_child() {
         let mut child = spawn_zombie_child();
         let pid = child.id();
 
@@ -528,7 +576,8 @@ mod wait_for_one_shot_exit_tests {
         let start_ticks = read_start_time_ticks(pid);
 
         let t0 = Instant::now();
-        let result = wait_for_one_shot_exit(pid as i32, start_ticks, Duration::from_millis(500));
+        let result =
+            wait_for_one_shot_exit(pid as i32, start_ticks, Duration::from_millis(500)).await;
         let elapsed = t0.elapsed();
 
         // Reap the zombie before asserting so it isn't left around on
@@ -545,8 +594,9 @@ mod wait_for_one_shot_exit_tests {
     // v1.2 asserts the timeout path - `wait_for_one_shot_exit` must
     // return `Err("oneshot-timeout:<pid>")` when the target stays alive
     // through the full polling window.
-    #[test]
-    fn wait_for_one_shot_exit_times_out_on_alive_process() {
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn wait_for_one_shot_exit_times_out_on_alive_process() {
         let mut child = spawn_sleeping_child();
         let pid = child.id();
 
@@ -556,7 +606,8 @@ mod wait_for_one_shot_exit_tests {
         let start_ticks = read_start_time_ticks(pid);
 
         let t0 = Instant::now();
-        let result = wait_for_one_shot_exit(pid as i32, start_ticks, Duration::from_millis(100));
+        let result =
+            wait_for_one_shot_exit(pid as i32, start_ticks, Duration::from_millis(100)).await;
         let elapsed = t0.elapsed();
 
         // Kill and reap the child before asserting.
@@ -592,6 +643,7 @@ mod async_readiness_tests {
     struct SeatProbe;
 
     #[async_trait::async_trait]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl LivenessProbe for SeatProbe {
         fn probe(&self) -> RunnerLiveness {
             RunnerLiveness::Exited(None)
@@ -620,6 +672,7 @@ mod async_readiness_tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn ready_socket(name: &str) -> (std::path::PathBuf, UnixListener) {
         let path = std::env::temp_dir().join(format!("d2b-{name}-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
@@ -632,6 +685,7 @@ mod async_readiness_tests {
     /// `runner-exited` error, so an `Ok` here means the wait awaited the
     /// probe's async seat.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn the_async_wait_awaits_the_async_probe_seat() {
         let (path, _listener) = ready_socket("async-ready-seat");
         let predicates = [ReadinessPredicate::UnixSocketExists(
@@ -650,6 +704,7 @@ mod async_readiness_tests {
     /// A wait that never converges reports the readiness timeout, naming the
     /// node - not the probe's or the blocking pool's failure.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn the_async_wait_times_out_named() {
         let path = std::env::temp_dir().join(format!("d2b-absent-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);

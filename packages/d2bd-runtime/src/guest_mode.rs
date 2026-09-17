@@ -8,9 +8,11 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock, Weak},
+    sync::{Arc, OnceLock, Weak},
     time::Instant,
 };
+
+use tokio::sync::Mutex;
 
 use d2b_contracts_resource::v3::{
     ResourceName, ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId,
@@ -91,6 +93,11 @@ impl BootIdentity {
         Ok(Self(digest.finalize().into()))
     }
 
+    /// Synchronous seat retained for d2bd's sync caller
+    /// (`serve_guest` in composition.rs, which resolves the kernel boot id
+    /// before any session state exists); the async form replaces it when the
+    /// daemon's guest entrypoint converts at U10.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn read(path: impl AsRef<Path>) -> Result<Self, GuestModeError> {
         let value =
             fs::read_to_string(path).map_err(|_| GuestModeError::BootIdentityUnavailable)?;
@@ -385,7 +392,7 @@ struct GuestRuntimeInner {
     deployment: ProviderDeployment,
     admission: AdmissionBudget,
     broker: ModeBoundBrokerAdapter,
-    active_generation: Arc<Mutex<Option<u64>>>,
+    active_generation: Arc<tokio::sync::Mutex<Option<u64>>>,
     last_generation: Mutex<u64>,
     active_session_permit: Mutex<Option<crate::target_runtime::AdmissionPermit>>,
 }
@@ -451,7 +458,7 @@ impl GuestRuntime {
     fn next_generation(&self) -> Result<u64, GuestModeError> {
         self.inner
             .last_generation
-            .lock()
+            .try_lock()
             .map_err(|_| GuestModeError::StateUnavailable)?
             .checked_add(1)
             .ok_or(GuestModeError::GenerationZero)
@@ -495,7 +502,7 @@ impl GuestRuntime {
         let active = self
             .inner
             .active_generation
-            .lock()
+            .try_lock()
             .map_err(|_| GuestModeError::StateUnavailable)?;
         let reconnect_permit = if active.is_some() {
             Some(
@@ -549,7 +556,7 @@ impl GuestRuntime {
         let mut last_generation = self
             .inner
             .last_generation
-            .lock()
+            .try_lock()
             .map_err(|_| GuestModeError::StateUnavailable)?;
         if generation <= *last_generation {
             return Err(GuestModeError::StaleSession);
@@ -557,7 +564,7 @@ impl GuestRuntime {
         let mut active = self
             .inner
             .active_generation
-            .lock()
+            .try_lock()
             .map_err(|_| GuestModeError::StateUnavailable)?;
         if let Some(previous) = *active {
             if generation <= previous {
@@ -574,7 +581,7 @@ impl GuestRuntime {
             let mut active_permit = self
                 .inner
                 .active_session_permit
-                .lock()
+                .try_lock()
                 .map_err(|_| GuestModeError::StateUnavailable)?;
             if let Some(permit) = active_permit.take() {
                 permit.release();
@@ -603,7 +610,7 @@ impl GuestRuntime {
         let active = self
             .inner
             .active_generation
-            .lock()
+            .try_lock()
             .map_err(|_| GuestModeError::StateUnavailable)?;
         if *active != Some(key.session_generation) {
             return Err(GuestModeError::StaleSession);
@@ -705,7 +712,7 @@ impl GuestRuntimeInner {
     fn close_generation(&self, generation: u64) -> Result<(), GuestModeError> {
         let mut active = self
             .active_generation
-            .lock()
+            .try_lock()
             .map_err(|_| GuestModeError::StateUnavailable)?;
         if *active == Some(generation) {
             self.deployment
@@ -713,7 +720,7 @@ impl GuestRuntimeInner {
                 .map_err(GuestModeError::Deployment)?;
             if let Some(permit) = self
                 .active_session_permit
-                .lock()
+                .try_lock()
                 .ok()
                 .and_then(|mut p| p.take())
             {
@@ -965,6 +972,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn guest_runtime_exposes_no_host_authority_surfaces() {
         let identity = identity(1);
         let runtime = GuestRuntime::new(

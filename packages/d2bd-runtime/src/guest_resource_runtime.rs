@@ -62,7 +62,7 @@ pub struct GuestResourceRuntime {
     store: Arc<GuestResourceStore>,
     authorizer: Arc<NativeAuthorizer>,
     authorization_state: AuthorizationState,
-    active_generation: Arc<Mutex<Option<u64>>>,
+    active_generation: Arc<tokio::sync::Mutex<Option<u64>>>,
 }
 
 impl core::fmt::Debug for GuestResourceRuntime {
@@ -183,7 +183,7 @@ impl GuestResourceRuntime {
             identity.guest_ref().clone(),
             acceptor,
         ));
-        let active_generation = Arc::new(Mutex::new(None));
+        let active_generation = Arc::new(tokio::sync::Mutex::new(None));
         Ok(Self {
             identity,
             store: backend,
@@ -198,7 +198,7 @@ impl GuestResourceRuntime {
         true
     }
 
-    pub(crate) fn active_generation(&self) -> Arc<Mutex<Option<u64>>> {
+    pub(crate) fn active_generation(&self) -> Arc<tokio::sync::Mutex<Option<u64>>> {
         Arc::clone(&self.active_generation)
     }
 
@@ -1283,16 +1283,20 @@ fn parse_uid_free_envelope(canonical: &[u8]) -> Result<ResourceEnvelope, ()> {
 
 pub struct SessionBoundStore {
     store: Arc<GuestResourceStore>,
-    active_generation: Arc<Mutex<Option<u64>>>,
+    active_generation: Arc<tokio::sync::Mutex<Option<u64>>>,
     generation: u64,
 }
 
 impl SessionBoundStore {
     fn ensure_current(&self) -> Result<(), StoreError> {
+        // Non-blocking try_lock (plan U17): sync seats (store fences) and
+        // async seats (GuestRuntime) share this guard; blocking_lock would
+        // panic inside a runtime, so a sub-microsecond collision fails
+        // closed exactly like the poisoned state it replaces.
         let active = self
             .active_generation
-            .lock()
-            .map_err(|_| GuestResourceStore::unavailable("guest-target-session-state-poisoned"))?;
+            .try_lock()
+            .map_err(|_| GuestResourceStore::unavailable("guest-target-session-state-busy"))?;
         if *active != Some(self.generation) {
             return Err(GuestResourceStore::unavailable(
                 "guest-target-session-stale",
@@ -1347,8 +1351,8 @@ impl ResourceStoreBackend for SessionBoundStore {
         let active_generation = Arc::clone(&self.active_generation);
         let generation = self.generation;
         let commit_fence: CommitFence = Arc::new(move || {
-            let active = active_generation.lock().map_err(|_| {
-                GuestResourceStore::unavailable("guest-target-session-state-poisoned")
+            let active = active_generation.try_lock().map_err(|_| {
+                GuestResourceStore::unavailable("guest-target-session-state-busy")
             })?;
             if *active == Some(generation) {
                 Ok(())
@@ -1381,7 +1385,7 @@ mod tests {
         let (_, acceptor) = d2b_contracts_resource::v3::operations::seal::mutation_seal_pair(store_identity);
         let target = ResourceRef::parse("Guest/work").expect("guest ref");
         let store = Arc::new(GuestResourceStore::new(zone, target, acceptor));
-        let active_generation = Arc::new(Mutex::new(Some(2)));
+        let active_generation = Arc::new(tokio::sync::Mutex::new(Some(2)));
         let bound = SessionBoundStore {
             store,
             active_generation,

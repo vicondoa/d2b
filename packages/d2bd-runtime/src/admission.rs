@@ -46,10 +46,16 @@ pub struct PeerOverride {
 
 #[cfg(any(test, feature = "test-support"))]
 // Compiled out unless test-support is enabled by d2bd's test targets; release
-// binaries contain no peer-identity override path.
+// binaries contain no peer-identity override path. The std mutex shape is
+// fixed: d2bd's test harness mutates these synchronously through the
+// `std::sync::Mutex` API (composition.rs test-support paths), so the type
+// cannot change without breaking the consumer's build; this is test-support
+// only code, so the sanctioned `cfg(test) helper` allow applies.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub static TEST_PEER_OVERRIDE: std::sync::Mutex<Option<PeerOverride>> = std::sync::Mutex::new(None);
 
 #[cfg(any(test, feature = "test-support"))]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub static TEST_PEER_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub fn authorize_peer(
@@ -86,6 +92,7 @@ pub fn authorize_peer(
 }
 
 #[cfg(any(test, feature = "test-support"))]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn peer_override_injected() -> Option<PeerOverride> {
     TEST_PEER_OVERRIDE
         .lock()

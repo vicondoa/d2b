@@ -16,7 +16,6 @@
 //! the two stay in lock-step.
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
 use std::time::Instant;
 
 /// Maximum number of distinct metric series retained by the daemon.
@@ -223,20 +222,23 @@ struct RegistryInner {
 
 /// In-process metrics registry. One per daemon process.
 ///
-/// The registry is intentionally synchronous + mutex-guarded: the
-/// metric volume is low (one increment per broker request, one
-/// observation per VM start) and the lock is never held across
-/// `await` points.
+/// The registry is intentionally synchronous: the metric volume is low
+/// (one increment per broker request, one observation per VM start) and
+/// the lock is never held across `await` points. The guard is a
+/// `tokio::sync::Mutex` (async purity, plan U17) reached through its
+/// blocking seat because every caller is a dedicated worker thread or a
+/// plain `#[test]` - never an executor worker; the blocking seat parks
+/// the calling worker thread exactly like the std mutex it replaces.
 #[derive(Debug)]
 pub struct Registry {
-    inner: Mutex<RegistryInner>,
+    inner: tokio::sync::Mutex<RegistryInner>,
     started_at: Instant,
 }
 
 impl Registry {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(RegistryInner::default()),
+            inner: tokio::sync::Mutex::new(RegistryInner::default()),
             started_at: Instant::now(),
         }
     }
@@ -291,7 +293,7 @@ impl Registry {
     pub fn counter_inc(&self, name: &'static str, labels: &[(&str, &str)]) {
         let owned = Self::sanitize_labels(name, labels);
         Self::validate(name, MetricKind::Counter, &owned);
-        let mut g = self.inner.lock().expect("metrics registry poisoned");
+        let mut g = self.inner.blocking_lock();
         if !Self::admit_series(&g, name, &owned) {
             return;
         }
@@ -305,7 +307,7 @@ impl Registry {
         if !value.is_finite() {
             return;
         }
-        let mut g = self.inner.lock().expect("metrics registry poisoned");
+        let mut g = self.inner.blocking_lock();
         if !Self::admit_series(&g, name, &owned) {
             return;
         }
@@ -325,7 +327,7 @@ impl Registry {
                 (labels, *value)
             })
             .collect::<Vec<_>>();
-        let mut registry = self.inner.lock().expect("metrics registry poisoned");
+        let mut registry = self.inner.blocking_lock();
         for ((metric_name, _), sample) in &mut registry.gauges {
             if *metric_name == name {
                 sample.value = 0.0;
@@ -351,7 +353,7 @@ impl Registry {
         if !value_seconds.is_finite() {
             return;
         }
-        let mut g = self.inner.lock().expect("metrics registry poisoned");
+        let mut g = self.inner.blocking_lock();
         if !Self::admit_series(&g, name, &owned) {
             return;
         }
@@ -376,7 +378,7 @@ impl Registry {
     pub fn render(&self) -> String {
         let uptime = self.started_at.elapsed().as_secs_f64();
         let mut out = String::new();
-        let g = self.inner.lock().expect("metrics registry poisoned");
+        let g = self.inner.blocking_lock();
 
         for d in METRIC_INVENTORY {
             out.push_str(&format!("# HELP {} {}\n", d.name, help_text(d.name)));
@@ -1050,7 +1052,7 @@ mod tests {
     fn total_series_cap_drops_new_series_after_bound() {
         let registry = Registry::new();
         {
-            let mut inner = registry.inner.lock().unwrap();
+            let mut inner = registry.inner.blocking_lock();
             for index in 0..MAX_METRIC_SERIES {
                 inner.counters.insert(
                     (
@@ -1066,7 +1068,7 @@ mod tests {
             &[("op", "OpenPidfd"), ("outcome", "ok")],
         );
         assert_eq!(
-            registry.inner.lock().unwrap().counters.len(),
+            registry.inner.blocking_lock().counters.len(),
             MAX_METRIC_SERIES
         );
     }

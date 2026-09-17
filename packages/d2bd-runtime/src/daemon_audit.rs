@@ -535,28 +535,16 @@ struct AuditAppend {
     ts_ms: u128,
     event: DaemonEvent,
     authority: DaemonAuditAuthority,
-    reply: AuditReply,
+    reply: oneshot::Sender<io::Result<()>>,
 }
 
-/// Where the appender reports one append's outcome.
-enum AuditReply {
-    /// A synchronous caller waits on this channel.
-    Blocking(SyncSender<io::Result<()>>),
-    /// An async caller awaits this oneshot.
-    Async(oneshot::Sender<io::Result<()>>),
-}
-
-impl AuditReply {
-    fn complete(self, result: io::Result<()>) {
-        match self {
-            Self::Blocking(reply) => {
-                let _ = reply.send(result);
-            }
-            Self::Async(reply) => {
-                let _ = reply.send(result);
-            }
-        }
-    }
+/// Where the appender reports one append's outcome. Every reply is a
+/// `tokio::sync::oneshot` (plan U17): the async seat awaits it, and the
+/// synchronous seat blocks on its dedicated thread through
+/// `Receiver::blocking_recv` - the sanctioned reply shape of the R4
+/// bounded-worker boundary.
+fn complete_reply(reply: oneshot::Sender<io::Result<()>>, result: io::Result<()>) {
+    let _ = reply.send(result);
 }
 
 /// The single appender: the only seat that reads the chain tail, computes a
@@ -572,6 +560,12 @@ struct AuditAppender {
 
 impl AuditAppender {
     /// Append every queued record until the log drops the queue, then exit.
+    ///
+    /// The blocking recv is the sanctioned R4 bounded-worker channel
+    /// boundary: it parks only this dedicated appender thread (never an
+    /// executor worker), and every reply travels back over a
+    /// `tokio::sync::oneshot`, exactly the loader_worker / spec_store shape.
+    #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
     fn run(mut self, queue: Receiver<AuditAppend>) {
         while let Ok(request) = queue.recv() {
             let AuditAppend {
@@ -581,7 +575,7 @@ impl AuditAppender {
                 reply,
             } = request;
             let result = self.append(ts_ms, &event, authority);
-            reply.complete(result);
+            complete_reply(reply, result);
         }
     }
 
@@ -666,10 +660,12 @@ impl AuditAppender {
 
         #[cfg(any(test, feature = "test-support"))]
         {
-            self.captured
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            let mut captured = self
+                .captured
                 .lock()
-                .map_err(|_| io::Error::other("DaemonAuditLog capture mutex poisoned"))?
-                .push(line.trim_end_matches('\n').to_owned());
+                .map_err(|_| io::Error::other("DaemonAuditLog capture mutex poisoned"))?;
+            captured.push(line.trim_end_matches('\n').to_owned());
         }
         Ok(())
     }
@@ -945,10 +941,14 @@ impl DaemonAuditLog {
         event: &DaemonEvent,
         authority: DaemonAuditAuthority,
     ) -> io::Result<()> {
-        let (reply, outcome) = std::sync::mpsc::sync_channel(1);
-        self.enqueue(event, authority, AuditReply::Blocking(reply))?;
+        let (reply, outcome) = oneshot::channel();
+        self.enqueue(event, authority, reply)?;
+        // The caller is a dedicated handler thread (never an executor
+        // worker), and the reply is the R4-sanctioned tokio::sync::oneshot
+        // seat; blocking_recv parks the calling thread until the appender
+        // answers, exactly like the sync_channel recv it replaces.
         outcome
-            .recv()
+            .blocking_recv()
             .unwrap_or_else(|_| Err(io::Error::other("daemon audit unavailable")))
     }
 
@@ -969,7 +969,7 @@ impl DaemonAuditLog {
         authority: DaemonAuditAuthority,
     ) -> io::Result<()> {
         let (reply, outcome) = oneshot::channel();
-        self.enqueue(event, authority, AuditReply::Async(reply))?;
+        self.enqueue(event, authority, reply)?;
         outcome
             .await
             .unwrap_or_else(|_| Err(io::Error::other("daemon audit unavailable")))
@@ -984,7 +984,7 @@ impl DaemonAuditLog {
         &self,
         event: &DaemonEvent,
         authority: DaemonAuditAuthority,
-        reply: AuditReply,
+        reply: oneshot::Sender<io::Result<()>>,
     ) -> io::Result<()> {
         let Some(sink) = self.sink.as_ref() else {
             return Err(io::Error::other("daemon audit unavailable"));
@@ -1044,6 +1044,11 @@ impl DaemonAuditLog {
     }
 }
 
+// Drop is synchronous by construction and has no async form: the appender
+// must drain its admitted queue before the log is gone, so the join parks
+// only the caller (dedicated worker / test thread) until the dedicated
+// appender thread finishes - the spec_store Drop shape.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 impl Drop for DaemonAuditLog {
     fn drop(&mut self) {
         // Close the queue first so the appender drains what is already
@@ -1148,6 +1153,11 @@ fn is_closed_semantic_token(value: &str) -> bool {
 }
 
 /// Probe daemon audit sink health without writing an audit record.
+///
+/// Synchronous path retained for d2bd's health/doctor callers (dedicated
+/// worker threads); the probe is bounded and has no async form on those
+/// threads.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn daemon_audit_sink_health_report(
     state_dir: &Path,
     configured_retention_days: i64,
@@ -1463,6 +1473,7 @@ fn initialize_chain_from_disk(state_dir: &Path, writer: &mut AuditWriterState) -
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn last_daemon_record_hash_in_file(path: &Path) -> Option<String> {
     let mut file = fs::File::open(path).ok()?;
     let mut position = file.seek(SeekFrom::End(0)).ok()?;
@@ -1527,6 +1538,9 @@ fn record_hash_from_reversed_line(reversed_line: &[u8]) -> Option<String> {
     is_sha256_hex(hash).then(|| hash.to_owned())
 }
 
+/// Runs on the dedicated audit appender thread (or the sync chain-verification
+/// seats); the fs work is the plan's worker-owned append shape.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn checkpoint_anchor(state_dir: &Path) -> io::Result<String> {
     let path = state_dir.join(DAEMON_AUDIT_CHECKPOINT_FILE);
     match fs::read(path) {
@@ -1545,6 +1559,7 @@ fn checkpoint_anchor(state_dir: &Path) -> io::Result<String> {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn write_checkpoint(state_dir: &Path, anchor: &str, pending: bool) -> io::Result<()> {
     let path = state_dir.join(DAEMON_AUDIT_CHECKPOINT_FILE);
     let next = state_dir.join(format!("{DAEMON_AUDIT_CHECKPOINT_FILE}.next"));
@@ -1566,6 +1581,7 @@ fn write_checkpoint(state_dir: &Path, anchor: &str, pending: bool) -> io::Result
 
 type DaemonAuditFileTails = Vec<(PathBuf, Option<String>)>;
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn verify_daemon_audit_files(state_dir: &Path) -> io::Result<(String, DaemonAuditFileTails)> {
     let files = discover_daemon_daily_files(state_dir)?;
     let mut expected = checkpoint_anchor(state_dir)?;
@@ -1618,6 +1634,7 @@ fn read_bounded_daemon_line<R: BufRead>(reader: &mut R) -> io::Result<Option<Str
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn discover_daemon_daily_files(state_dir: &Path) -> io::Result<Vec<PathBuf>> {
     let entries = match fs::read_dir(state_dir) {
         Ok(it) => it,
@@ -1800,6 +1817,9 @@ fn daemon_audit_path(state_dir: &Path, today: &str) -> PathBuf {
     state_dir.join(format!("daemon-events-{today}.jsonl"))
 }
 
+/// Runs only on the dedicated audit appender thread: the serialized FIFO
+/// append step (plan U6's worker-owned append transaction shape).
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn write_jsod2b_line_for_date(state_dir: &Path, today: &str, line: &str) -> io::Result<u64> {
     let path = daemon_audit_path(state_dir, today);
     if let Some(parent) = path.parent() {
@@ -1820,6 +1840,7 @@ fn write_jsod2b_line_for_date(state_dir: &Path, today: &str, line: &str) -> io::
     Ok(offset)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn rollback_daemon_audit_line(path: &Path, offset: u64, state_dir: &Path) -> io::Result<()> {
     let file = fs::OpenOptions::new().read(true).write(true).open(path)?;
     file.set_len(offset)?;
@@ -1827,12 +1848,14 @@ fn rollback_daemon_audit_line(path: &Path, offset: u64, state_dir: &Path) -> io:
     sync_daemon_audit_dir(state_dir)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn sync_daemon_audit_path(state_dir: &Path, today: &str) -> io::Result<()> {
     let path = daemon_audit_path(state_dir, today);
     fs::OpenOptions::new().read(true).open(&path)?.sync_all()?;
     sync_daemon_audit_dir(state_dir)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn sync_daemon_audit_dir(state_dir: &Path) -> io::Result<()> {
     fs::OpenOptions::new()
         .read(true)
@@ -1844,6 +1867,9 @@ fn sync_daemon_audit_dir(state_dir: &Path) -> io::Result<()> {
 /// Delete owned daily files older than `retention_days` before today (UTC).
 /// The checkpoint is advanced before removal so the remaining chain still
 /// verifies from the retained anchor after a restart.
+/// Runs on the open-time caller's dedicated thread and on the appender
+/// thread at day boundaries; both are dedicated-worker seats.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn prune_old_audit_logs(state_dir: &Path, retention_days: i64) -> io::Result<()> {
     if retention_days < 0 {
         return Err(io::Error::new(
@@ -1964,6 +1990,9 @@ fn ymd_from_unix(unix: i64) -> (i32, u32, u32) {
 ///
 /// Best-effort: a write failure is logged via `tracing::warn!` but MUST
 /// NOT abort the surrounding vm-start response.
+/// Synchronous path retained for d2bd's vm-start dispatch (dedicated worker
+/// thread); the async form lands with U10's daemon conversion.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn write_vm_api_ready_state(
     daemon_state_dir: &Path,
     vm: &str,
@@ -1990,6 +2019,7 @@ pub fn write_vm_api_ready_state(
 mod tests {
     use super::*;
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn two_chained_records() -> Vec<String> {
         let log = DaemonAuditLog::no_op();
         log.write_event(&DaemonEvent::ApiReadyTimeout {
@@ -2013,6 +2043,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn api_ready_timeout_event_writes_jsod2b_and_captures() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let log = DaemonAuditLog::new(dir.path());
@@ -2117,6 +2148,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_audit_records_are_hash_chained_and_verifiable() {
         let records = two_chained_records();
         assert_eq!(records.len(), 2);
@@ -2142,6 +2174,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_audit_verify_fails_on_altered_event() {
         let mut records = two_chained_records();
         let mut second: Value = serde_json::from_str(&records[1]).expect("parse second");
@@ -2157,6 +2190,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_audit_verify_fails_on_missing_link() {
         let records = two_chained_records();
         let report = verify_daemon_audit_lines([(None, records[1].as_str())]);
@@ -2168,6 +2202,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_audit_verify_fails_on_altered_previous_hash() {
         let mut records = two_chained_records();
         let mut second: Value = serde_json::from_str(&records[1]).expect("parse second");
@@ -2187,6 +2222,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_audit_verify_fails_on_malformed_hash_fields() {
         let mut records = two_chained_records();
         let mut first: Value = serde_json::from_str(&records[0]).expect("parse first");
@@ -2202,6 +2238,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_audit_verify_fails_on_missing_chain_field() {
         let mut records = two_chained_records();
         let mut first: Value = serde_json::from_str(&records[0]).expect("parse first");
@@ -2217,6 +2254,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn exec_lifecycle_events_are_leak_safe() {
         // The exec establish + terminate audit events carry ONLY
         // leak-safe fields (vm, peer_uid, tty). A planted sentinel standing in
@@ -2291,6 +2329,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn shell_lifecycle_events_are_leak_safe() {
         const SENTINEL: &str = "SECRET-shell-name-session-terminal-/nix/store/path-like-token";
         let log = DaemonAuditLog::no_op();
@@ -2350,6 +2389,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn detached_exec_audit_events_are_leak_safe() {
         const SENTINEL: &str = "SECRET-argv-env-cwd-/nix/store/log-bytes-2d7b";
         let log = DaemonAuditLog::no_op();
@@ -2445,6 +2485,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_audit_health_ok_when_writable_and_retention_floor_met() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let report = daemon_audit_sink_health_report(
@@ -2458,6 +2499,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_audit_health_degraded_when_retention_below_floor() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let report = daemon_audit_sink_health_report(dir.path(), 3, 7);
@@ -2473,6 +2515,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_audit_health_reports_unavailable_without_leaking_state_path() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let secret_component = "SECRET-argv-env-cwd";
@@ -2512,6 +2555,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_audit_health_probe_uses_unique_scratch_paths() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let first = unique_health_probe_path(dir.path());
@@ -2540,6 +2584,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_audit_write_event_returns_error_for_unwritable_destination() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let blocker = dir.path().join("not-a-directory");
@@ -2559,6 +2604,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn no_op_sink_health_reports_unavailable() {
         let log = DaemonAuditLog::no_op();
         let report = log.sink_health_report();
@@ -2573,6 +2619,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn last_record_hash_reads_tail_without_loading_entire_file() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let path = dir.path().join("daemon-events-2026-06-20.jsonl");
@@ -2592,6 +2639,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn no_op_does_not_write_file() {
         let dir = tempfile::tempdir().expect("create temp dir");
         // Create a no-op log - but give it the temp dir to make sure the
@@ -2616,6 +2664,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn test_capture_authoritative_events_are_not_silently_dropped() {
         let log = DaemonAuditLog::no_op();
         let result = log.write_event_with_authority(
@@ -2631,6 +2680,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_vm_api_ready_state_roundtrip() {
         let dir = tempfile::tempdir().expect("create temp dir");
         write_vm_api_ready_state(
@@ -2651,6 +2701,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn concurrent_writes_produce_valid_jsonl() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let log = std::sync::Arc::new(DaemonAuditLog::new(dir.path()));
@@ -2702,6 +2753,7 @@ mod tests {
     /// that were only queued would show up here as a missing record or a
     /// broken chain.
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn async_seat_appends_before_it_returns() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let log = DaemonAuditLog::new(dir.path());
@@ -2744,6 +2796,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retention_prunes_stale_logs_on_open() {
         let dir = tempfile::tempdir().expect("create temp dir");
 
@@ -2767,6 +2820,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn parse_ymd_rejects_malformed_dates() {
         assert_eq!(parse_ymd("2024-03-09"), Some((2024, 3, 9)));
         assert_eq!(parse_ymd("2024-13-01"), None);
@@ -2776,6 +2830,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn workload_launch_event_contains_boundary_only() {
         let event = DaemonEvent::WorkloadLauncher {
             target: "browser.host.d2b".to_owned(),
@@ -2805,6 +2860,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn local_vm_workload_launch_provider_serializes_canonically() {
         let event = DaemonEvent::WorkloadLauncher {
             target: "browser.work.d2b".to_owned(),
@@ -2826,6 +2882,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_audit_write_redacts_identity_and_attacker_text() {
         let log = DaemonAuditLog::no_op();
         let event = DaemonEvent::WorkloadLauncher {

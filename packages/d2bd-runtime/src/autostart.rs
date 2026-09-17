@@ -40,7 +40,6 @@ use std::sync::Arc;
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::runtime::RuntimeKind;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 /// Default `N` for the concurrency cap. Three is a balance between
@@ -194,11 +193,12 @@ impl AutostartReport {
 /// Seam between [`execute_autostart`] and the per-VM start
 /// machinery. Implementations MUST be cheap to clone (or wrapped in
 /// `Arc`) - `execute_autostart` clones the trait object into each
-/// `spawn_blocking` task it dispatches.
+/// dedicated autostart worker thread it dispatches.
 ///
-/// Both methods are sync and called from inside
-/// `tokio::task::spawn_blocking`; implementations are free to do
-/// synchronous broker round-trips.
+/// Both methods are sync and called from dedicated worker threads
+/// (plan R4: `start` drives the full synchronous vm-start DAG, so the calls
+/// belong on bounded dedicated threads, never executor workers);
+/// implementations are free to do synchronous broker round-trips.
 pub trait VmStarter: Send + Sync + 'static {
     /// Is this VM already supervised by the daemon? Used for the
     /// idempotency short-circuit.
@@ -293,14 +293,13 @@ pub async fn execute_autostart_with_pre_degraded<S: VmStarter>(
     pre_degraded: &std::collections::BTreeSet<String>,
 ) -> AutostartReport {
     let parallelism = config.parallelism.max(1);
-    let semaphore = Arc::new(Semaphore::new(parallelism));
     let pre_degraded_arc: Arc<std::collections::BTreeSet<String>> = Arc::new(pre_degraded.clone());
 
     // Net VM pass.
     let net_outcomes = run_phase(
         plan.net_vms().cloned().collect::<Vec<_>>(),
         Arc::clone(&starter),
-        Arc::clone(&semaphore),
+        parallelism,
         Arc::clone(&pre_degraded_arc),
         |_env| None, // no upstream gate for net VMs
     )
@@ -319,7 +318,7 @@ pub async fn execute_autostart_with_pre_degraded<S: VmStarter>(
     let workload_outcomes = run_phase(
         plan.workload_vms().cloned().collect::<Vec<_>>(),
         Arc::clone(&starter),
-        Arc::clone(&semaphore),
+        parallelism,
         Arc::clone(&pre_degraded_arc),
         move |env: &Option<String>| -> Option<String> {
             let env_name = env.as_ref()?;
@@ -344,10 +343,24 @@ pub async fn execute_autostart_with_pre_degraded<S: VmStarter>(
     AutostartReport { outcomes }
 }
 
+/// One synchronous `VmStarter` call handed to a dedicated autostart worker.
+struct StartRequest {
+    vm: String,
+    reply: tokio::sync::oneshot::Sender<Outcome>,
+}
+
+/// Run the starts of one phase through `parallelism` dedicated worker
+/// threads (plan R4 / KD2: `spawn_blocking` is banned, and the `VmStarter`
+/// seam is genuinely synchronous - `start` drives the full vm-start DAG - so
+/// it runs on bounded dedicated threads, never executor workers). Each
+/// worker owns one bounded queue; a task picks its worker round-robin and
+/// awaits a `oneshot` reply, so in-flight starts are bounded by the worker
+/// count - exactly the old `Semaphore(parallelism)` cap. Dropping the phase's
+/// senders closes the queues and the workers exit.
 async fn run_phase<S, GateFn>(
     entries: Vec<VmAutostartEntry>,
     starter: Arc<S>,
-    semaphore: Arc<Semaphore>,
+    parallelism: usize,
     pre_degraded: Arc<std::collections::BTreeSet<String>>,
     gate: GateFn,
 ) -> Vec<AutostartOutcome>
@@ -356,21 +369,46 @@ where
     GateFn: Fn(&Option<String>) -> Option<String> + Send + Sync + 'static,
 {
     let gate = Arc::new(gate);
+    let worker_count = parallelism.max(1);
+    let mut worker_handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(worker_count);
+    let request_txs: Arc<[tokio::sync::mpsc::Sender<StartRequest>]> = Arc::from(
+        (0..worker_count)
+            .map(|slot| {
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<StartRequest>(worker_count);
+                let starter = Arc::clone(&starter);
+                worker_handles.push(
+                    std::thread::Builder::new()
+                        .name(format!("d2b-autostart-{slot}"))
+                        .spawn(move || {
+                            while let Some(StartRequest { vm, reply }) = rx.blocking_recv() {
+                                let outcome = if starter.is_running(&vm) {
+                                    Outcome::AlreadyRunning
+                                } else {
+                                    match starter.start(&vm) {
+                                        Ok(()) => Outcome::Started,
+                                        Err(reason) => Outcome::Failed { reason },
+                                    }
+                                };
+                                // A panicking worker drops the reply sender, so
+                                // the awaiting task sees a join-shaped failure.
+                                let _ = reply.send(outcome);
+                            }
+                        })
+                        .expect("spawn autostart worker thread"),
+                );
+                tx
+            })
+            .collect::<Vec<_>>(),
+    );
+
     let mut join_set: JoinSet<(usize, AutostartOutcome)> = JoinSet::new();
     for (index, entry) in entries.into_iter().enumerate() {
-        let starter = Arc::clone(&starter);
-        let semaphore = Arc::clone(&semaphore);
         let gate = Arc::clone(&gate);
         let pre_degraded = Arc::clone(&pre_degraded);
+        let request_txs = Arc::clone(&request_txs);
         join_set.spawn(async move {
-            let _permit = semaphore
-                .acquire_owned()
-                .await
-                .expect("autostart semaphore must not close before phase end");
-
             // Pre-degraded VMs (e.g. flagged by the kernel-module-check
-            // pass) short-circuit before
-            // anything else.
+            // pass) short-circuit before anything else.
             if pre_degraded.contains(&entry.vm) {
                 return (
                     index,
@@ -412,26 +450,36 @@ where
                     },
                 );
             }
-            let starter_for_blocking = Arc::clone(&starter);
-            let vm_for_blocking = entry.vm.clone();
-            let outcome = tokio::task::spawn_blocking(move || {
-                if starter_for_blocking.is_running(&vm_for_blocking) {
-                    return Outcome::AlreadyRunning;
-                }
-                match starter_for_blocking.start(&vm_for_blocking) {
-                    Ok(()) => Outcome::Started,
-                    Err(reason) => Outcome::Failed { reason },
-                }
-            })
-            .await
-            .unwrap_or_else(|join_err| Outcome::Failed {
-                reason: format!("autostart task panicked: {join_err}"),
+            let (reply, outcome) = tokio::sync::oneshot::channel();
+            let slot = index % request_txs.len();
+            if request_txs[slot]
+                .send(StartRequest {
+                    vm: entry.vm.clone(),
+                    reply,
+                })
+                .await
+                .is_err()
+            {
+                return (
+                    index,
+                    AutostartOutcome {
+                        vm: entry.vm.clone(),
+                        env: entry.env.clone(),
+                        is_net_vm: entry.is_net_vm,
+                        outcome: Outcome::Failed {
+                            reason: "autostart worker unavailable".to_owned(),
+                        },
+                    },
+                );
+            }
+            let outcome = outcome.await.unwrap_or_else(|_| Outcome::Failed {
+                reason: "autostart task panicked".to_owned(),
             });
             (
                 index,
                 AutostartOutcome {
-                    vm: entry.vm.clone(),
-                    env: entry.env.clone(),
+                    vm: entry.vm,
+                    env: entry.env,
                     is_net_vm: entry.is_net_vm,
                     outcome,
                 },
@@ -444,15 +492,17 @@ where
         match joined {
             Ok(pair) => indexed.push(pair),
             Err(join_err) => {
-                // Should not occur - the inner task already
-                // catches its own panic via the
-                // spawn_blocking().await match arm. We surface a
-                // typed-error-shaped Failed entry to keep the
-                // report shape stable.
+                // Should not occur - the inner task catches its own
+                // worker reply failure via the oneshot match arm.
                 tracing::warn!(error = ?join_err, "autostart join task failed");
             }
         }
     }
+    // Close the workers' queues once every task has resolved: dropping the
+    // phase's sender handles makes each worker's `blocking_recv` return
+    // `None` and exit. The detached worker threads terminate on their own.
+    drop(request_txs);
+    drop(worker_handles);
     indexed.sort_by_key(|(idx, _)| *idx);
     indexed.into_iter().map(|(_, outcome)| outcome).collect()
 }
@@ -488,6 +538,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl VmStarter for FakeStarter {
         fn is_running(&self, vm: &str) -> bool {
             self.running.lock().unwrap().contains(vm)
@@ -560,6 +611,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn qemu_media_runtime_is_manual_only_for_autostart() {
         let qemu_vm =
             manifest_vm_with_runtime(d2b_core::runtime::RuntimeMetadata::local_qemu_media());
@@ -570,6 +622,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn explicit_manifest_autostart_controls_eligibility() {
         let mut vm = manifest_vm_with_runtime(d2b_core::runtime::RuntimeMetadata::local_nixos());
 
@@ -581,6 +634,7 @@ mod tests {
     /// build_autostart_plan: when an env has a sys-net VM plus
     /// workloads, the sys-net VM comes first in the plan.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn build_plan_orders_net_vm_before_workloads() {
         // We test the bundle-free path via a synthesised plan that
         // mirrors what build_autostart_plan emits for a typical
@@ -625,6 +679,7 @@ mod tests {
     /// each sleep, max_in_flight observed during the run must be
     /// <= 3.
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn parallelism_cap_is_honored() {
         let mut starter = FakeStarter::new();
         starter.start_delay = std::time::Duration::from_millis(30);
@@ -652,6 +707,7 @@ mod tests {
     /// land as Degraded (not Failed - Failed is reserved for the
     /// direct start error).
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn vm_failure_marks_degraded_without_blocking_siblings() {
         let mut starter = FakeStarter::new();
         starter.fail_for.insert("sys-work-net".to_owned());
@@ -717,6 +773,7 @@ mod tests {
     /// the latter by checking `started_order` length stays at the
     /// first-pass count.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn rerun_is_idempotent_skips_running_vms() {
         let starter = Arc::new(FakeStarter::new());
         let plan = plan_from(vec![
@@ -744,6 +801,7 @@ mod tests {
     /// workloads - opting a net VM out of autostart is an explicit
     /// operator choice, not a failure.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn non_autostart_net_vm_does_not_degrade_workloads() {
         let starter = Arc::new(FakeStarter::new());
         let plan = plan_from(vec![
@@ -768,6 +826,7 @@ mod tests {
 
     /// Outcome predicates: is_up vs is_degraded coverage.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn outcome_predicates_cover_every_variant() {
         assert!(Outcome::Started.is_up());
         assert!(Outcome::AlreadyRunning.is_up());
@@ -784,6 +843,7 @@ mod tests {
 
     /// Parallelism clamp: configuring 0 must NOT deadlock.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn parallelism_zero_is_clamped_to_one() {
         let starter = Arc::new(FakeStarter::new());
         let plan = plan_from(vec![entry("sys-work-net", Some("work"), true, true)]);

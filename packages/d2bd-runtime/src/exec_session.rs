@@ -21,7 +21,7 @@
 //! caller.
 
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::AtomicU64,
     atomic::{AtomicBool, Ordering},
 };
@@ -303,11 +303,11 @@ struct ComponentSessionExecClientInner<D> {
     stream: StreamId,
     closed: AtomicBool,
     next_request_id: AtomicU64,
-    waiters: Mutex<BTreeMap<u64, oneshot::Sender<Result<NamedProcessStreamResponse, ExecOpError>>>>,
-    late_responses: Mutex<BTreeMap<u64, NamedProcessStreamResponse>>,
-    pending_credit: Mutex<u32>,
+    waiters: tokio::sync::Mutex<BTreeMap<u64, oneshot::Sender<Result<NamedProcessStreamResponse, ExecOpError>>>>,
+    late_responses: tokio::sync::Mutex<BTreeMap<u64, NamedProcessStreamResponse>>,
+    pending_credit: tokio::sync::Mutex<u32>,
     send_lock: tokio::sync::Mutex<()>,
-    demux_abort: Mutex<Option<tokio::task::AbortHandle>>,
+    demux_abort: tokio::sync::Mutex<Option<tokio::task::AbortHandle>>,
     reset_sent: AtomicBool,
 }
 
@@ -342,18 +342,17 @@ where
             stream,
             closed: AtomicBool::new(false),
             next_request_id: AtomicU64::new(1),
-            waiters: Mutex::new(BTreeMap::new()),
-            late_responses: Mutex::new(BTreeMap::new()),
-            pending_credit: Mutex::new(0),
+            waiters: tokio::sync::Mutex::new(BTreeMap::new()),
+            late_responses: tokio::sync::Mutex::new(BTreeMap::new()),
+            pending_credit: tokio::sync::Mutex::new(0),
             send_lock: tokio::sync::Mutex::new(()),
-            demux_abort: Mutex::new(None),
+            demux_abort: tokio::sync::Mutex::new(None),
             reset_sent: AtomicBool::new(false),
         });
         let task = tokio::spawn(named_stream_demux(Arc::downgrade(&inner)));
         *inner
             .demux_abort
-            .lock()
-            .map_err(|_| ExecOpError::Protocol)? = Some(task.abort_handle());
+            .lock().await = Some(task.abort_handle());
         Ok(Self { inner })
     }
 
@@ -362,16 +361,8 @@ where
         self.inner.closed.store(true, Ordering::Release);
         self.inner.stop_demux();
         self.inner.fail_waiters(ExecOpError::Transport);
-        self.inner
-            .late_responses
-            .lock()
-            .map_err(|_| ExecOpError::Protocol)?
-            .clear();
-        *self
-            .inner
-            .pending_credit
-            .lock()
-            .map_err(|_| ExecOpError::Protocol)? = 0;
+        self.inner.late_responses.lock().await.clear();
+        *self.inner.pending_credit.lock().await = 0;
         if self.inner.reset_sent.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
@@ -401,11 +392,7 @@ where
             .close_named_stream(self.inner.stream)
             .await
             .map_err(|_| ExecOpError::Transport)?;
-        self.inner
-            .late_responses
-            .lock()
-            .map_err(|_| ExecOpError::Protocol)?
-            .clear();
+        self.inner.late_responses.lock().await.clear();
         Ok(())
     }
 
@@ -430,21 +417,11 @@ where
             return Err(ExecOpError::Protocol);
         }
         let (reply, receive) = oneshot::channel();
-        if let Some(response) = self
-            .inner
-            .late_responses
-            .lock()
-            .map_err(|_| ExecOpError::Protocol)?
-            .remove(&request_id)
-        {
+        if let Some(response) = self.inner.late_responses.lock().await.remove(&request_id) {
             return Ok(response);
         }
         {
-            let mut waiters = self
-                .inner
-                .waiters
-                .lock()
-                .map_err(|_| ExecOpError::Protocol)?;
+            let mut waiters = self.inner.waiters.lock().await;
             if waiters.len() >= MAX_PENDING_NAMED_RESPONSES {
                 return Err(ExecOpError::Guest(ProcessOpError::StdinBackpressure));
             }
@@ -458,22 +435,14 @@ where
                 .await
         };
         if send_result.is_err() {
-            self.inner
-                .waiters
-                .lock()
-                .map_err(|_| ExecOpError::Protocol)?
-                .remove(&request_id);
+            self.inner.waiters.lock().await.remove(&request_id);
             return Err(ExecOpError::Transport);
         }
         match tokio::time::timeout(timeout, receive).await {
             Ok(Ok(response)) => response,
             Ok(Err(_)) => Err(ExecOpError::Transport),
             Err(_) => {
-                self.inner
-                    .waiters
-                    .lock()
-                    .map_err(|_| ExecOpError::Protocol)?
-                    .remove(&request_id);
+                self.inner.waiters.lock().await.remove(&request_id);
                 Err(ExecOpError::Timeout)
             }
         }
@@ -481,11 +450,7 @@ where
 
     async fn flush_pending_credit(&self) -> Result<(), ExecOpError> {
         let credit = {
-            let mut pending = self
-                .inner
-                .pending_credit
-                .lock()
-                .map_err(|_| ExecOpError::Protocol)?;
+            let mut pending = self.inner.pending_credit.lock().await;
             std::mem::take(&mut *pending)
         };
         if credit == 0 {
@@ -542,7 +507,7 @@ impl<D> Drop for ComponentSessionExecClient<D> {
 
 impl<D> ComponentSessionExecClientInner<D> {
     fn stop_demux(&self) {
-        if let Ok(mut abort) = self.demux_abort.lock()
+        if let Ok(mut abort) = self.demux_abort.try_lock()
             && let Some(abort) = abort.take()
         {
             abort.abort();
@@ -550,7 +515,7 @@ impl<D> ComponentSessionExecClientInner<D> {
     }
 
     fn fail_waiters(&self, error: ExecOpError) {
-        if let Ok(mut waiters) = self.waiters.lock() {
+        if let Ok(mut waiters) = self.waiters.try_lock() {
             for (_, waiter) in std::mem::take(&mut *waiters) {
                 let _ = waiter.send(Err(error));
             }
@@ -592,7 +557,7 @@ where
                         return;
                     }
                 };
-                let credit_result = match inner.pending_credit.lock() {
+                let credit_result = match inner.pending_credit.try_lock() {
                     Ok(mut pending) => match pending.checked_add(credit) {
                         Some(next) => {
                             *pending = next;
@@ -611,14 +576,14 @@ where
                 }
                 let waiter = inner
                     .waiters
-                    .lock()
+                    .try_lock()
                     .ok()
                     .and_then(|mut waiters| waiters.remove(&frame.request_id));
                 if let Some(waiter) = waiter {
                     let _ = waiter.send(Ok(frame.response));
                     continue;
                 }
-                let mut late = match inner.late_responses.lock() {
+                let mut late = match inner.late_responses.try_lock() {
                     Ok(late) => late,
                     Err(_) => {
                         inner.fail_closed(ExecOpError::Protocol);
@@ -891,7 +856,10 @@ pub const EXEC_TERMINAL_CLEANUP_TTL: Duration = Duration::from_secs(10);
 pub struct TerminalReaper {
     clock: Arc<dyn Clock>,
     ttl: Duration,
-    terminal_at: Mutex<Option<Instant>>,
+    // Non-blocking try_lock everywhere: the reaper is consulted from the
+    // exec worker's own runtime (blocking_lock would panic there) and from
+    // plain test threads; the critical sections are single-field reads.
+    terminal_at: tokio::sync::Mutex<Option<Instant>>,
 }
 
 impl TerminalReaper {
@@ -899,7 +867,7 @@ impl TerminalReaper {
         Self {
             clock,
             ttl,
-            terminal_at: Mutex::new(None),
+            terminal_at: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -907,7 +875,9 @@ impl TerminalReaper {
     /// the original instant so the TTL is always measured from when the command
     /// FIRST went terminal. Returns `true` only on the transition.
     pub fn mark_terminal(&self) -> bool {
-        let mut at = self.terminal_at.lock().expect("terminal reaper poisoned");
+        let Ok(mut at) = self.terminal_at.try_lock() else {
+            return false;
+        };
         if at.is_none() {
             *at = Some(self.clock.now());
             true
@@ -918,17 +888,14 @@ impl TerminalReaper {
 
     /// Whether the command has been observed terminal at least once.
     pub fn is_terminal(&self) -> bool {
-        self.terminal_at
-            .lock()
-            .expect("terminal reaper poisoned")
-            .is_some()
+        self.terminal_at.try_lock().is_ok_and(|at| at.is_some())
     }
 
     /// True once the command is terminal AND the TTL has elapsed since.
     pub fn due(&self) -> bool {
-        match *self.terminal_at.lock().expect("terminal reaper poisoned") {
-            Some(at) => self.clock.now().saturating_duration_since(at) >= self.ttl,
-            None => false,
+        match self.terminal_at.try_lock().ok().map(|at| *at) {
+            Some(Some(at)) => self.clock.now().saturating_duration_since(at) >= self.ttl,
+            _ => false,
         }
     }
 
@@ -981,6 +948,11 @@ pub fn spawn_session_worker(spawn: WorkerSpawn) -> JoinHandle<()> {
                     return;
                 }
             };
+            // The worker is a dedicated OS thread (R4 class) that OWNS this
+            // current-thread runtime; driving its own runtime from its own
+            // thread is the process-entry-point shape, not a mid-call-graph
+            // bridge.
+            #[allow(clippy::disallowed_methods, reason = "synchronous path")]
             runtime.block_on(worker_main(
                 connector,
                 spec,
@@ -1415,7 +1387,10 @@ struct TableInner {
 pub struct SessionTable {
     caps: ExecSessionCaps,
     clock: Arc<dyn Clock>,
-    inner: Mutex<TableInner>,
+    // `tokio::sync::Mutex` reached through its blocking seat: every caller
+    // is a dedicated dispatch worker thread or a plain `#[test]` - never an
+    // executor worker (plan U17).
+    inner: tokio::sync::Mutex<TableInner>,
 }
 
 impl std::fmt::Debug for SessionTable {
@@ -1438,7 +1413,7 @@ impl SessionTable {
         Self {
             caps,
             clock,
-            inner: Mutex::new(TableInner {
+            inner: tokio::sync::Mutex::new(TableInner {
                 sessions: HashMap::new(),
                 starts: HashMap::new(),
             }),
@@ -1468,7 +1443,7 @@ impl SessionTable {
         vm: &str,
         mut r#gen: impl FnMut() -> Option<[u8; 16]>,
     ) -> Result<SessionSlot, SessionReserveError> {
-        let mut inner = self.inner.lock().expect("exec session table poisoned");
+        let mut inner = self.inner.blocking_lock();
         self.enforce_start_rate(&mut inner, uid)?;
         if inner.sessions.len() >= self.caps.global {
             return Err(SessionReserveError::GlobalCap);
@@ -1532,7 +1507,7 @@ impl SessionTable {
 
     /// True iff `handle` is live AND bound to `uid` (peer-uid binding check).
     pub fn owned_by(&self, handle: &str, uid: u32) -> bool {
-        let inner = self.inner.lock().expect("exec session table poisoned");
+        let inner = self.inner.blocking_lock();
         inner
             .sessions
             .get(handle)
@@ -1542,11 +1517,7 @@ impl SessionTable {
 
     /// Live session count (test/observability helper).
     pub fn len(&self) -> usize {
-        self.inner
-            .lock()
-            .expect("exec session table poisoned")
-            .sessions
-            .len()
+        self.inner.blocking_lock().sessions.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1554,7 +1525,7 @@ impl SessionTable {
     }
 
     fn release(&self, handle: &str) {
-        let mut inner = self.inner.lock().expect("exec session table poisoned");
+        let mut inner = self.inner.blocking_lock();
         inner.sessions.remove(handle);
     }
 }
@@ -1654,6 +1625,7 @@ mod tests {
         TransportPacket, TransportReader, TransportWriter,
     };
     use std::collections::VecDeque;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
 
@@ -1672,6 +1644,7 @@ mod tests {
         state: Arc<NamedDriverState>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl NamedDriver {
         fn push_event(&self, event: d2b_session::Result<StreamEvent>) {
             self.state.events.lock().unwrap().push_back(event);
@@ -1680,6 +1653,7 @@ mod tests {
     }
 
     #[async_trait]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl ComponentSessionDriver for NamedDriver {
         fn generation(&self) -> u64 {
             1
@@ -1850,6 +1824,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn component_session_exec_client_uses_one_authenticated_named_stream() {
         let stream = StreamId::new(0x100).unwrap();
         let driver = NamedDriver::default();
@@ -1884,6 +1859,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn component_session_exec_client_releases_credit_after_output_consumption() {
         let stream = StreamId::new(0x101).unwrap();
         let driver = NamedDriver::default();
@@ -1917,6 +1893,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn component_session_exec_client_cancel_resets_the_named_stream_once() {
         let driver = NamedDriver::default();
         let client = ComponentSessionExecClient::open(driver.clone(), 0x105, 1024, 1024)
@@ -1928,6 +1905,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn component_session_exec_client_correlates_out_of_order_responses() {
         let stream = StreamId::new(0x102).unwrap();
         let driver = NamedDriver::default();
@@ -2084,6 +2062,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn component_session_exec_client_demuxes_concurrent_controls_on_real_driver_handle() {
         let (initiator_transport, responder_transport) = driver_test_transport_pair();
         let policy = driver_test_policy();
@@ -2192,6 +2171,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn component_session_exec_client_rejects_unallowlisted_controls() {
         let driver = NamedDriver::default();
         let client = ComponentSessionExecClient::open(driver.clone(), 0x103, 1024, 1024)
@@ -2220,6 +2200,7 @@ mod tests {
     };
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn exec_start_spec_debug_redacts_argv_env_cwd() {
         // A stray `{:?}` on the resolved establishment spec must never
         // leak argv, env keys/values, or cwd; only the VM name, shape, and
@@ -2263,6 +2244,7 @@ mod tests {
         now: Mutex<Instant>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl FakeClock {
         fn new() -> Arc<Self> {
             Arc::new(Self {
@@ -2275,6 +2257,8 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl Clock for FakeClock {
         fn now(&self) -> Instant {
             *self.now.lock().unwrap()
@@ -2307,6 +2291,7 @@ mod tests {
         read_gate: Option<Arc<tokio::sync::Notify>>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl Drop for FakeClient {
         fn drop(&mut self) {
             self.alive.fetch_sub(1, Ordering::SeqCst);
@@ -2314,6 +2299,7 @@ mod tests {
     }
 
     #[async_trait]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl TerminalBackend for FakeClient {
         type Error = ExecOpError;
 
@@ -2460,6 +2446,7 @@ mod tests {
     }
 
     #[async_trait]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl ExecGuestConnector for FakeConnector {
         async fn establish(
             &self,
@@ -2550,6 +2537,7 @@ mod tests {
     // ---- (a) disconnect lifecycle / teardown ----------------------------------
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn dropping_owner_channel_drops_the_authenticated_client() {
         let alive = Arc::new(AtomicUsize::new(0));
         let alive_for_builder = Arc::clone(&alive);
@@ -2596,6 +2584,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn dropping_channel_mid_long_poll_aborts_and_drops_client() {
         let alive = Arc::new(AtomicUsize::new(0));
         let alive_for_builder = Arc::clone(&alive);
@@ -2658,6 +2647,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn establish_failure_reports_error_and_joins_clean() {
         let connector = FakeConnector::failing(ExecEstablishError::OldGeneration);
         let (control_tx, worker, reply) = start_worker(connector);
@@ -2669,6 +2659,7 @@ mod tests {
     // ---- (i) no head-of-line: fast op serviced while a long-poll is parked -----
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fast_control_op_completes_while_long_poll_is_parked() {
         let shared = Arc::new(FakeShared::default());
         let shared_for_builder = Arc::clone(&shared);
@@ -2819,6 +2810,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn signal_without_signals_cap_fails_closed() {
         let (tx, worker, shared) = gated_worker(NegotiatedCaps {
             tty: false,
@@ -2846,6 +2838,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn resize_on_non_tty_session_fails_closed() {
         let (tx, worker, shared) = gated_worker(NegotiatedCaps {
             tty: false,
@@ -2870,6 +2863,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn resize_without_tty_resize_cap_fails_closed() {
         let (tx, worker, shared) = gated_worker(NegotiatedCaps {
             tty: true,
@@ -2894,6 +2888,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn read_output_without_output_cap_fails_closed() {
         let (tx, worker, shared) = gated_worker(NegotiatedCaps {
             tty: false,
@@ -2924,6 +2919,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn partial_write_reports_accepted_len_and_advances_offset() {
         let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
             accepted_len: 3,
@@ -2960,6 +2956,7 @@ mod tests {
     /// `timeout` is the real output of the deadline-selection seam
     /// (`handle_inline`/`run_long_poll`), not a separate test-only value.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn each_proxied_op_draws_a_fresh_per_op_deadline_not_a_shared_session_budget() {
         // Deliberately tiny control deadline so the inter-op aging sleep is
         // comfortably LONGER than a single op deadline: an absolute-deadline
@@ -3048,6 +3045,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn duplicate_write_at_same_offset_is_idempotent_without_reissuing() {
         let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
             accepted_len: 3,
@@ -3070,6 +3068,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_at_wrong_offset_is_rejected_as_offset_mismatch() {
         let (tx, worker, _shared) = backpressure_worker(WriteStdinOutcome {
             accepted_len: 3,
@@ -3084,6 +3083,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn zero_accepted_write_surfaces_backpressure() {
         let (tx, worker, _shared) = backpressure_worker(WriteStdinOutcome {
             accepted_len: 0,
@@ -3104,6 +3104,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn zero_progress_write_is_not_replay_cached() {
         // A zero-accepted (backpressured) write must NOT be replay-cached: its
         // offset never advances, so a retry at the same offset must re-issue to
@@ -3127,6 +3128,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn control_op_retry_with_same_op_id_replays_cached_ack() {
         // A Signal retried with the SAME client opId must replay the original
         // ack WITHOUT re-delivering the signal to the guest (idempotency).
@@ -3155,6 +3157,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn control_op_without_op_id_is_never_deduped() {
         // opId == 0 means "no dedup": two Signals with op_id 0 both deliver.
         let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
@@ -3180,6 +3183,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn resize_retry_with_same_op_id_replays_cached_ack() {
         let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
             accepted_len: 0,
@@ -3205,6 +3209,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn oversized_chunk_is_rejected_before_the_transport() {
         let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
             accepted_len: 0,
@@ -3225,6 +3230,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn close_is_idempotent_and_issued_once() {
         let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
             accepted_len: 0,
@@ -3249,6 +3255,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stdout_and_stderr_reads_are_separated_with_flags_passed_through() {
         let shared = Arc::new(FakeShared::default());
         let shared_for_builder = Arc::clone(&shared);
@@ -3334,6 +3341,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn resize_is_serviced_inline() {
         let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
             accepted_len: 0,
@@ -3358,6 +3366,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn wait_timeout_then_terminal_keeps_polling() {
         let shared = Arc::new(FakeShared::default());
         let shared_for_builder = Arc::clone(&shared);
@@ -3428,6 +3437,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn per_vm_cap_is_enforced_and_released_on_drop() {
         let table = Arc::new(SessionTable::new(caps(8, 8, 1)));
         let slot = table.reserve(1, "work").expect("first slot");
@@ -3441,6 +3451,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn per_uid_and_global_caps_are_enforced() {
         // per-uid cap (global high enough not to mask it).
         let uid_table = Arc::new(SessionTable::new(caps(8, 2, 8)));
@@ -3461,6 +3472,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn handle_collision_and_exhaustion_fail_closed_without_leaking_a_slot() {
         let table = Arc::new(SessionTable::new(caps(8, 8, 8)));
         // A generator that always returns the SAME bytes: the first reserve
@@ -3483,6 +3495,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn owned_by_binds_handle_to_reserving_uid() {
         let table = Arc::new(SessionTable::new(caps(8, 8, 8)));
         let slot = table.reserve(7, "work").expect("slot");
@@ -3498,6 +3511,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn session_slot_debug_redacts_the_handle() {
         // A stray `{:?}` on the reserved-slot guard must never leak the
         // unguessable session handle; only uid / vm / released are observable.
@@ -3514,6 +3528,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn read_output_outcome_debug_redacts_output_bytes() {
         // A stray `{:?}` on a `ReadOutput` outcome must never render
         // the guest output bytes; only the length + framing flags are shown.
@@ -3537,6 +3552,7 @@ mod tests {
     // ---- (j) fake-clock rate limit --------------------------------------------
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn start_rate_limit_uses_the_clock_window() {
         let clock = FakeClock::new();
         let table = Arc::new(SessionTable::with_clock(
@@ -3563,6 +3579,7 @@ mod tests {
     // ---- (f) terminal-cleanup reaper --------------------------------
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn terminal_reaper_is_not_due_before_a_terminal_observation() {
         let clock = FakeClock::new();
         let reaper = TerminalReaper::new(
@@ -3576,6 +3593,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn terminal_reaper_becomes_due_only_after_the_ttl_elapses() {
         let clock = FakeClock::new();
         let reaper = TerminalReaper::new(
@@ -3605,6 +3623,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn worker_reaps_a_stalled_owner_after_the_command_goes_terminal() {
         let reaped = Arc::new(AtomicUsize::new(0));
         let shared = Arc::new(FakeShared::default());

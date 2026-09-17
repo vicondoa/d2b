@@ -23,7 +23,7 @@
 use std::sync::OnceLock;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 
@@ -89,7 +89,7 @@ impl Default for ConsoleRing {
 #[derive(Debug)]
 pub struct ConsoleSession {
     pub provider_kind: ConsoleProviderKind,
-    pub ring: Arc<Mutex<ConsoleRing>>,
+    pub ring: Arc<tokio::sync::Mutex<ConsoleRing>>,
     /// Handle for the drainer task; Some while the drainer is running.
     pub drainer: Option<tokio::task::JoinHandle<()>>,
     /// Optional stdin fd/sink for writing to the console (None for
@@ -100,7 +100,7 @@ pub struct ConsoleSession {
 impl ConsoleSession {
     pub fn new(
         provider_kind: ConsoleProviderKind,
-        ring: Arc<Mutex<ConsoleRing>>,
+        ring: Arc<tokio::sync::Mutex<ConsoleRing>>,
         drainer: Option<tokio::task::JoinHandle<()>>,
         stdin_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
     ) -> Self {
@@ -228,7 +228,13 @@ impl ConsoleSessionTable {
             return Ok(None);
         };
         let start_offset = {
-            let guard = session.ring.lock().unwrap();
+            // Non-blocking try_lock (plan U17): the drainer holds the ring
+            // only for sub-microsecond push/read critical sections, so a
+            // collision is a fail-closed `None` (U4's sync-consumer pattern),
+            // never a parked caller.
+            let Ok(guard) = session.ring.try_lock() else {
+                return Ok(None);
+            };
             guard.ring.base_offset()
         };
         let handle = ConsoleClientHandle::new()?;
@@ -262,7 +268,9 @@ impl ConsoleSessionTable {
             .get(&ConsoleClientHandle(session_handle.to_owned()))?;
         let session = self.sessions.get(vm)?;
         let (result, notify) = {
-            let guard = session.ring.lock().unwrap();
+            let Ok(guard) = session.ring.try_lock() else {
+                return None;
+            };
             let snap = guard.ring.read_at(offset, max_len);
             let notify = Arc::clone(&guard.notify);
             (snap, notify)
@@ -310,7 +318,9 @@ impl ConsoleSessionTable {
             .clients
             .get(&ConsoleClientHandle(session_handle.to_owned()))?;
         let session = self.sessions.get(vm)?;
-        let guard = session.ring.lock().unwrap();
+        let Ok(guard) = session.ring.try_lock() else {
+            return None;
+        };
         Some(Arc::clone(&guard.notify))
     }
 }
@@ -331,7 +341,7 @@ pub struct ConsoleReadOutput {
 pub fn spawn_ch_serial_drainer(
     _vm: String,
     socket_path: String,
-    ring: Arc<Mutex<ConsoleRing>>,
+    ring: Arc<tokio::sync::Mutex<ConsoleRing>>,
 ) -> tokio::task::JoinHandle<()> {
     console_drainer_runtime().spawn(async move {
         const RECONNECT_DELAY: Duration = Duration::from_millis(500);
@@ -349,7 +359,7 @@ pub fn spawn_ch_serial_drainer(
                             Ok(0) | Err(_) => break,
                             Ok(n) => {
                                 let notify = {
-                                    let mut guard = ring.lock().unwrap();
+                                    let mut guard = ring.lock().await;
                                     guard.ring.push_bytes(&buf[..n]);
                                     Arc::clone(&guard.notify)
                                 };
@@ -374,7 +384,7 @@ pub fn spawn_ch_serial_drainer(
 pub fn spawn_fd_drainer(
     vm: String,
     stream: tokio::net::UnixStream,
-    ring: Arc<Mutex<ConsoleRing>>,
+    ring: Arc<tokio::sync::Mutex<ConsoleRing>>,
 ) -> tokio::task::JoinHandle<()> {
     console_drainer_runtime().spawn(async move {
         use tokio::io::AsyncReadExt;
@@ -384,7 +394,7 @@ pub fn spawn_fd_drainer(
             match stream.read(&mut buf).await {
                 Ok(0) | Err(_) => {
                     let notify = {
-                        let mut guard = ring.lock().unwrap();
+                        let mut guard = ring.lock().await;
                         guard.ring.is_eof = true;
                         Arc::clone(&guard.notify)
                     };
@@ -394,7 +404,7 @@ pub fn spawn_fd_drainer(
                 }
                 Ok(n) => {
                     let notify = {
-                        let mut guard = ring.lock().unwrap();
+                        let mut guard = ring.lock().await;
                         guard.ring.push_bytes(&buf[..n]);
                         Arc::clone(&guard.notify)
                     };
@@ -408,7 +418,7 @@ pub fn spawn_fd_drainer(
 /// Create a new [`ConsoleSession`] for a Cloud Hypervisor VM using its serial
 /// socket path.
 pub fn create_ch_session(socket_path: String) -> ConsoleSession {
-    let ring = Arc::new(Mutex::new(ConsoleRing::new()));
+    let ring = Arc::new(tokio::sync::Mutex::new(ConsoleRing::new()));
     let drainer = spawn_ch_serial_drainer("ch-console".to_owned(), socket_path, Arc::clone(&ring));
     ConsoleSession::new(
         ConsoleProviderKind::LocalHypervisor,
@@ -426,7 +436,7 @@ pub fn create_ch_session(socket_path: String) -> ConsoleSession {
 /// and passes the `UnixStream` value here).
 pub fn create_qemu_session(std_stream: std::os::unix::net::UnixStream) -> ConsoleSession {
     std_stream.set_nonblocking(true).ok();
-    let ring = Arc::new(Mutex::new(ConsoleRing::new()));
+    let ring = Arc::new(tokio::sync::Mutex::new(ConsoleRing::new()));
     let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
     let ring_clone = Arc::clone(&ring);
 
@@ -438,7 +448,7 @@ pub fn create_qemu_session(std_stream: std::os::unix::net::UnixStream) -> Consol
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("qemu console: failed to convert fd to tokio stream: {e}");
-                let mut g = ring_clone.lock().unwrap();
+                let mut g = ring_clone.lock().await;
                 g.ring.is_eof = true;
                 g.notify.notify_waiters();
                 return;
@@ -459,7 +469,7 @@ pub fn create_qemu_session(std_stream: std::os::unix::net::UnixStream) -> Consol
             match reader.read(&mut buf).await {
                 Ok(0) | Err(_) => {
                     let notify = {
-                        let mut g = ring_write.lock().unwrap();
+                        let mut g = ring_write.lock().await;
                         g.ring.is_eof = true;
                         Arc::clone(&g.notify)
                     };
@@ -468,7 +478,7 @@ pub fn create_qemu_session(std_stream: std::os::unix::net::UnixStream) -> Consol
                 }
                 Ok(n) => {
                     let notify = {
-                        let mut g = ring_write.lock().unwrap();
+                        let mut g = ring_write.lock().await;
                         g.ring.push_bytes(&buf[..n]);
                         Arc::clone(&g.notify)
                     };
@@ -523,7 +533,7 @@ mod tests {
     use d2b_contracts_control::public_wire::ConsoleProviderKind;
 
     fn make_session(provider: ConsoleProviderKind) -> ConsoleSession {
-        let ring = Arc::new(Mutex::new(ConsoleRing::new()));
+        let ring = Arc::new(tokio::sync::Mutex::new(ConsoleRing::new()));
         ConsoleSession::new(provider, ring, None, None)
     }
 
@@ -574,9 +584,9 @@ mod tests {
     #[test]
     fn read_output_after_bytes_pushed() {
         let mut table = ConsoleSessionTable::new();
-        let ring = Arc::new(Mutex::new(ConsoleRing::new()));
+        let ring = Arc::new(tokio::sync::Mutex::new(ConsoleRing::new()));
         {
-            let mut g = ring.lock().unwrap();
+            let mut g = ring.blocking_lock();
             g.ring.push_bytes(b"hello console");
         }
         let session = ConsoleSession::new(
@@ -617,7 +627,7 @@ mod tests {
     #[test]
     fn slow_client_detects_dropped_bytes() {
         let mut table = ConsoleSessionTable::new();
-        let ring = Arc::new(Mutex::new(ConsoleRing::new()));
+        let ring = Arc::new(tokio::sync::Mutex::new(ConsoleRing::new()));
         let session = ConsoleSession::new(
             ConsoleProviderKind::LocalHypervisor,
             Arc::clone(&ring),
@@ -629,7 +639,7 @@ mod tests {
 
         // Fill well past ring capacity to force drops.
         {
-            let mut g = ring.lock().unwrap();
+            let mut g = ring.blocking_lock();
             for _ in 0..300 {
                 g.ring.push_bytes(&[b'X'; 1024]);
             }
@@ -672,10 +682,10 @@ mod console_dispatch_ownership_tests {
     use super::{ConsoleRing, ConsoleSession, ConsoleSessionTable};
     use crate::typed_error::TypedError;
     use d2b_contracts_control::public_wire::ConsoleProviderKind;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     fn make_session() -> ConsoleSession {
-        let ring = Arc::new(Mutex::new(ConsoleRing::new()));
+        let ring = Arc::new(tokio::sync::Mutex::new(ConsoleRing::new()));
         ConsoleSession::new(ConsoleProviderKind::LocalHypervisor, ring, None, None)
     }
 

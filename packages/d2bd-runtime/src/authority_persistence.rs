@@ -17,10 +17,12 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
 };
+
+use tokio::sync::Mutex;
 
 use sha2::{Digest, Sha256};
 
@@ -92,6 +94,24 @@ impl core::fmt::Debug for ZoneAuthorityLedger {
     }
 }
 
+
+/// The one helper every synchronous ledger seat uses to reach a
+/// `tokio::sync::Mutex` without ever depending on an ambient runtime.
+///
+/// The ledger is called from BOTH plain worker threads and tokio runtime
+/// contexts (d2bd's async resource-plane fns and `#[tokio::test]`s), so the
+/// blocking seat (`blocking_lock`) is unusable - it panics inside a runtime.
+/// `try_lock` never panics, and every protected critical section here is a
+/// sub-microsecond map/pointer operation, so a bounded spin retry preserves
+/// the old blocking-wait semantics without parking an executor worker.
+fn lock_sync<T>(mutex: &Mutex<T>) -> tokio::sync::MutexGuard<'_, T> {
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return guard,
+            Err(_) => std::hint::spin_loop(),
+        }
+    }
+}
 impl ZoneAuthorityLedger {
     /// Bind one ledger to its Zone's admission barrier.
     pub fn new(zone: &ZoneId) -> Self {
@@ -117,17 +137,14 @@ impl ZoneAuthorityLedger {
     /// installed every claim is refused: a claim that cannot be re-proven is
     /// refused rather than assumed.
     pub fn install_owner_provenance(&self, provenance: Arc<dyn AuthorityOwnerProvenance>) {
-        let mut slot = self.owner_provenance.lock().expect("authority ledger lock");
+        let mut slot = lock_sync(&self.owner_provenance);
         *slot = Some(provenance);
     }
 
     /// Install the trusted live external-NIC inventory. Until one is
     /// installed every `ExternalNic` claim is refused.
     pub fn install_external_inventory(&self, inventory: Arc<dyn ExternalNicRecoveryInventory>) {
-        let mut slot = self
-            .external_inventory
-            .lock()
-            .expect("authority ledger lock");
+        let mut slot = lock_sync(&self.external_inventory);
         *slot = Some(inventory);
     }
 
@@ -145,7 +162,7 @@ impl ZoneAuthorityLedger {
 
     /// Every operation the ledger currently holds, ordered by operation id.
     pub fn authority_operations(&self) -> Vec<LedgerRow> {
-        let rows = self.rows.lock().expect("authority ledger lock");
+        let rows = lock_sync(&self.rows);
         rows.values()
             .map(|row| LedgerRow {
                 operation_id: row.operation_id.clone(),
@@ -167,10 +184,7 @@ impl ZoneAuthorityLedger {
         claim_digest: &str,
     ) -> Result<ZoneAuthorityCapability, AuthorityPersistenceError> {
         let store_binding_digest = self.authority_binding_digest(claim_digest);
-        let mut rows = self
-            .rows
-            .lock()
-            .map_err(|_| AuthorityPersistenceError::StateInvalid)?;
+        let mut rows = lock_sync(&self.rows);
         match rows.get(&operation_id) {
             Some(row) if row.claim_digest != claim_digest => {
                 return Err(AuthorityPersistenceError::RowInvalid);
@@ -202,10 +216,7 @@ impl ZoneAuthorityLedger {
         operation_id: String,
         binding_digest: &str,
     ) -> Result<ZoneAuthorityCapability, AuthorityPersistenceError> {
-        let rows = self
-            .rows
-            .lock()
-            .map_err(|_| AuthorityPersistenceError::StateInvalid)?;
+        let rows = lock_sync(&self.rows);
         let row = rows
             .get(&operation_id)
             .ok_or(AuthorityPersistenceError::RowInvalid)?;
@@ -235,8 +246,7 @@ impl ZoneAuthorityLedger {
         };
         let provenance = self
             .owner_provenance
-            .lock()
-            .map_err(|_| AuthorityPersistenceError::StateInvalid)?
+            .lock().await
             .clone()
             .ok_or(AuthorityPersistenceError::RowInvalid)?;
         match provenance.owner_identity(owner_ref).await? {
@@ -248,8 +258,7 @@ impl ZoneAuthorityLedger {
         if let AuthorityStorageClaim::ExternalNic(claim) = claim {
             let inventory = self
                 .external_inventory
-                .lock()
-                .map_err(|_| AuthorityPersistenceError::StateInvalid)?
+                .lock().await
                 .clone()
                 .ok_or(AuthorityPersistenceError::RowInvalid)?;
             if !inventory.contains_identity(claim.host_uid(), claim.identity_digest()) {
@@ -259,15 +268,12 @@ impl ZoneAuthorityLedger {
         Ok(())
     }
 
-    fn record(
+    async fn record(
         &self,
         capability: &AuthorityOperationCapability,
         state: AuthorityOperationState,
     ) -> Result<(), AuthorityPersistenceError> {
-        let mut rows = self
-            .rows
-            .lock()
-            .map_err(|_| AuthorityPersistenceError::StateInvalid)?;
+        let mut rows = self.rows.lock().await;
         let row = rows
             .get_mut(capability.operation_id())
             .ok_or(AuthorityPersistenceError::RowInvalid)?;
@@ -277,7 +283,7 @@ impl ZoneAuthorityLedger {
         apply_transition(row, state)
     }
 
-    fn record_effect(
+    async fn record_effect(
         &self,
         capability: &AuthorityOperationCapability,
         state: AuthorityOperationState,
@@ -285,7 +291,7 @@ impl ZoneAuthorityLedger {
         if is_terminal(state) {
             return Err(AuthorityPersistenceError::StateInvalid);
         }
-        self.record(capability, state)
+        self.record(capability, state).await
     }
 }
 
@@ -361,22 +367,19 @@ impl ZoneAuthorityCapability {
         if is_terminal(state) {
             return Err(AuthorityPersistenceError::StateInvalid);
         }
-        self.record(state)
+        self.record(state).await
     }
 
     pub async fn record_close(&self) -> Result<(), AuthorityPersistenceError> {
-        self.record(AuthorityOperationState::Closed)
+        self.record(AuthorityOperationState::Closed).await
     }
 
     pub async fn release(&self) -> Result<(), AuthorityPersistenceError> {
-        self.record(AuthorityOperationState::Released)
+        self.record(AuthorityOperationState::Released).await
     }
 
-    fn record(&self, state: AuthorityOperationState) -> Result<(), AuthorityPersistenceError> {
-        let mut rows = self
-            .rows
-            .lock()
-            .map_err(|_| AuthorityPersistenceError::StateInvalid)?;
+    async fn record(&self, state: AuthorityOperationState) -> Result<(), AuthorityPersistenceError> {
+        let mut rows = self.rows.lock().await;
         let row = rows
             .get_mut(&self.operation_id)
             .ok_or(AuthorityPersistenceError::RowInvalid)?;
@@ -423,21 +426,21 @@ impl AuthorityPersistence for ZoneAuthorityLedger {
         capability: &'a AuthorityOperationCapability,
         state: AuthorityOperationState,
     ) -> AuthorityFuture<'a, ()> {
-        Box::pin(async move { self.record_effect(capability, state) })
+        Box::pin(async move { self.record_effect(capability, state).await })
     }
 
     fn record_close<'a>(
         &'a self,
         capability: &'a AuthorityOperationCapability,
     ) -> AuthorityFuture<'a, ()> {
-        Box::pin(async move { self.record(capability, AuthorityOperationState::Closed) })
+        Box::pin(async move { self.record(capability, AuthorityOperationState::Closed).await })
     }
 
     fn release<'a>(
         &'a self,
         capability: &'a AuthorityOperationCapability,
     ) -> AuthorityFuture<'a, ()> {
-        Box::pin(async move { self.record(capability, AuthorityOperationState::Released) })
+        Box::pin(async move { self.record(capability, AuthorityOperationState::Released).await })
     }
 
     fn recover<'a>(&'a self) -> AuthorityFuture<'a, AuthorityRecoveryData> {
@@ -570,6 +573,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn prepare_refuses_a_claim_without_a_trusted_owner_source() {
         let claim = generic_claim(OWNER_REF, OWNER_UID, 1);
         let bare = ZoneAuthorityLedger::new(&zone());
@@ -581,6 +585,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn prepare_refuses_a_claim_the_authoritative_rows_do_not_hold() {
         let claim = generic_claim(OWNER_REF, OWNER_UID, 2);
         // No authoritative row holds the owner ref.
@@ -605,6 +610,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn prepare_admits_a_claim_the_authoritative_rows_hold() {
         let ledger = ledger_with(OWNER_REF, OWNER_UID, 2);
         let claim = generic_claim(OWNER_REF, OWNER_UID, 2);
@@ -617,6 +623,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn every_prepared_operation_carries_its_own_nonce() {
         let ledger = ledger_with(OWNER_REF, OWNER_UID, 2);
         let claim = generic_claim(OWNER_REF, OWNER_UID, 2);
@@ -638,6 +645,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn prepare_refuses_a_second_claim_for_a_live_operation() {
         let ledger = ledger_with(OWNER_REF, OWNER_UID, 2);
         let first = generic_claim(OWNER_REF, OWNER_UID, 2);
@@ -658,6 +666,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn concurrent_prepares_of_one_operation_admit_exactly_one_claim() {
         let ledger = Arc::new(ledger_with(OWNER_REF, OWNER_UID, 2));
         let persistence = Arc::clone(&ledger) as Arc<dyn AuthorityPersistence>;
@@ -675,6 +684,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn external_nic_claims_require_the_live_inventory_identity() {
         let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let claim = external_nic_claim(1, digest);
@@ -704,6 +714,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_retained_capability_cannot_reopen_a_terminal_row() {
         let ledger = ledger_with(OWNER_REF, OWNER_UID, 2);
         let capability = ledger
@@ -752,6 +763,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn the_core_reservation_lifecycle_retires_the_ledger_row() {
         let ledger = Arc::new(ledger_with(OWNER_REF, OWNER_UID, 2));
         let index = Arc::new(tokio::sync::Mutex::new(

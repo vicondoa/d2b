@@ -39,9 +39,9 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 socket2 = "0.5"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "process", "fs", "io-util"] }
 tracing = "0.1"
-ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
+ttrpc = { version = "0.9.0", default-features = false, features = ["async"] }
 uzers = "0.12"
 
 [dev-dependencies]

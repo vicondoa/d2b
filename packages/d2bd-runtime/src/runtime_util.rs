@@ -52,6 +52,7 @@ static FALLBACK_RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
 /// This is the seat a synchronous caller takes when it holds the daemon's
 /// runtime: the future is driven on that runtime from the calling thread, so
 /// no runtime is built and no worker is parked behind an unrelated one.
+#[allow(clippy::disallowed_methods, reason = "deleted at U15")]
 pub fn block_on_future_with<T>(runtime: &Handle, future: impl Future<Output = T>) -> T {
     runtime.block_on(future)
 }
@@ -68,6 +69,7 @@ pub fn block_on_future_with<T>(runtime: &Handle, future: impl Future<Output = T>
 ///   error; the caller is the one that has to become async);
 /// - with no ambient runtime, the future runs on the process-wide
 ///   `FALLBACK_RUNTIME`, not on a runtime built for this call.
+#[allow(clippy::disallowed_methods, reason = "deleted at U15")]
 pub fn block_on_future<T>(future: impl Future<Output = T>) -> T {
     match Handle::try_current() {
         Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
@@ -93,6 +95,7 @@ mod tests {
     /// from a synchronous seat never reaches its own completion; the
     /// process-wide fallback keeps running and does.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "deleted at U15")]
     fn a_synchronous_seat_without_a_runtime_reuses_one_fallback_runtime() {
         let (done, completed) = std::sync::mpsc::channel();
         block_on_future(async move {
@@ -107,6 +110,7 @@ mod tests {
 
     /// A seat that holds a runtime drives its future on that one.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "deleted at U15")]
     fn a_seat_that_names_a_runtime_uses_it() {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

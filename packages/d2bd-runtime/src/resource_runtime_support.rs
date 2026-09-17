@@ -232,6 +232,10 @@ impl NewPlaneReadinessState {
     }
 }
 
+/// Sync seat retained for d2bd's sync callers (system_core_effects.rs reads
+/// `/proc`/os-release through it); the async form replaces it at U10 when the
+/// daemon's probes convert.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn read_bounded(path: impl AsRef<Path>, limit: usize) -> io::Result<String> {
     let mut file = File::open(path)?;
     let mut bytes = Vec::with_capacity(limit.min(4096));
@@ -248,6 +252,9 @@ pub fn read_bounded(path: impl AsRef<Path>, limit: usize) -> io::Result<String> 
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "host probe was not utf-8"))
 }
 
+/// Sync seat retained for d2bd's sync callers (system_core_effects probes the
+/// pipewire/wayland runtime sockets through it); converts at U10.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn is_socket(path: &Path) -> bool {
     fs::metadata(path)
         .map(|metadata| metadata.file_type().is_socket())
@@ -2336,6 +2343,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn committed_policy_loader_uses_the_closed_local_subject_resource_set() {
         assert_eq!(
             ROLE_BINDING_SUBJECT_RESOURCE_TYPES,
@@ -2357,6 +2365,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn system_core_policy_authorizes_credential_commit_batch_materialization() {
         let zone = ZoneId::parse("work").unwrap();
         let (policy, state) = compile_committed_policy(
@@ -2430,6 +2439,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn public_peer_uid_resolves_to_one_ready_zone_local_user() {
         let zone = ZoneId::parse("work").unwrap();
         let user = user_resource(
@@ -2452,6 +2462,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn public_peer_uid_rejects_duplicate_or_stale_user_matches() {
         let zone = ZoneId::parse("work").unwrap();
         let first = user_resource(
@@ -2511,6 +2522,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn committed_roles_and_bindings_compile_into_distinct_user_grants() {
         let zone = ZoneId::parse("work").unwrap();
         let users = [
@@ -2639,6 +2651,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn committed_policy_compiles_all_closed_role_binding_subject_types() {
         let zone = ZoneId::parse("work").unwrap();
         let role = policy_resource(
@@ -2715,6 +2728,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn missing_subject_does_not_invalidate_other_grants_or_authorize_missing_subject() {
         let zone = ZoneId::parse("work").unwrap();
         let role = policy_resource(
@@ -2786,6 +2800,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn only_tombstoned_subject_rows_lose_their_grant() {
         for (phase, observed_generation, expect_grant) in
             [("Deleted", 1, false), ("Pending", 1, true), ("Ready", 0, true)]
@@ -2853,6 +2868,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn missing_subjects_do_not_fingerprint_but_unready_ones_do() {
         let role = policy_resource(
             "Role",
@@ -2898,6 +2914,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn recreated_subject_uid_is_fenced_until_binding_changes() {
         let binding = policy_resource(
             "RoleBinding",
@@ -2955,6 +2972,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn unknown_or_cross_zone_role_binding_subjects_are_refused() {
         let zone = ZoneId::parse("work").unwrap();
         let role = policy_resource(
@@ -3000,6 +3018,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn subject_store_evidence_must_match_uid_generation_and_revision() {
         let zone = ZoneId::parse("work").unwrap();
         let role = policy_resource(
@@ -3050,6 +3069,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn role_binding_fingerprint_changes_for_same_name_user_recreation() {
         let binding = policy_resource(
             "RoleBinding",
@@ -3110,6 +3130,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn multi_revision_subject_refresh_retains_fences_and_requires_rebinding() {
         let zone = ZoneId::parse("work").unwrap();
         let role = policy_resource(
@@ -3372,6 +3393,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stable_identity_is_repeatable_and_uuid_v4_shaped() {
         let first = stable_uid("store", "sha256:aaa");
         assert_eq!(first, stable_uid("store", "sha256:aaa"));
@@ -3379,6 +3401,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn bundle_mutation_identity_requires_zone_uid() {
         let bundle = ResourceBundle::new(
             ZoneId::parse("work").unwrap(),
@@ -3413,6 +3436,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn core_progression_reaches_handler_gate_before_readiness_check() {
         let mut core = CoreProcess::new();
         let authority = HostGlobalAuthorityIndex::new_for_tests_ready();
@@ -3441,6 +3465,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn system_core_requires_a_host_but_accepts_multiple_host_resources() {
         assert_eq!(
             host_phase_for_resource_count(0),
@@ -3452,6 +3477,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cleanup_pending_counts_only_deleted_prior_configuration_generations() {
         let mut resource = StoredResource {
             resource_ref: ResourceRef::parse("Host/host-system").unwrap(),
@@ -3474,6 +3500,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn completed_watch_handles_are_cleared_for_bounded_restart() {
         let completed = tokio::spawn(async {});
         while !completed.is_finished() {
@@ -3492,6 +3519,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn explicit_system_core_subject_preserves_component_registration() {
         let catalog = ApiCatalog::standard();
         let native = NativeAuthorizer::new(catalog, None).unwrap();
@@ -3529,6 +3557,7 @@ mod tests {
     /// builds its evidence from the policy the acceptor admits, so the lane
     /// admits its own binding and refuses another endpoint class's.
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn system_core_evidence_comes_from_the_system_core_policy() {
         use d2b_contracts_zone_session::v3::component_session::{
             AuthorizationLease, SessionErrorCode,
@@ -3642,6 +3671,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn list_preserves_typed_pagination_and_filters() {
         let request = json!({
             "resourceType": "Guest",
@@ -3661,6 +3691,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn list_refuses_query_fields_without_a_store_semantic() {
         let request = json!({
             "resourceType": "Guest",
@@ -3673,6 +3704,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn list_rejects_conflicting_legacy_and_typed_pagination_aliases() {
         let request = json!({
             "resourceType": "Guest",
@@ -3688,6 +3720,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn malformed_resource_results_fail_closed() {
         assert_eq!(
             decode_resource_result(br#"{"unterminated":"value""#)
@@ -3704,6 +3737,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn list_result_retains_the_store_cursor() {
         let result = encode_list_result(StoreListResult {
             resources: Vec::new(),
@@ -3719,6 +3753,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn resource_error_envelope_retains_kind_and_retry_metadata() {
         let error = ResourceError::new(
             ResourceErrorKind::ResourceConflict,
@@ -3736,6 +3771,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn public_api_error_preserves_not_found_and_plane_kinds() {
         let mut not_found = wire::ResourceError::new();
         not_found.kind = protobuf::EnumOrUnknown::new(
@@ -3760,6 +3796,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn public_operation_identity_includes_the_exact_target() {
         let first = public_operation_id(
             &json!({

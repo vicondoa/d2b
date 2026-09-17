@@ -28,9 +28,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use parking_lot::{
-    ArcMutexGuard, ArcRwLockReadGuard, ArcRwLockWriteGuard, Mutex, RawMutex, RawRwLock, RwLock,
-};
+use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 pub const DEFAULT_MAX_INFLIGHT_CONNECTIONS: usize = 64;
 
@@ -128,6 +126,13 @@ pub enum OpLockClass {
 
 /// Per-VM + global in-process op locks. Cheaply [`Clone`]able (all state
 /// behind `Arc`) so it can live inside the `Clone` `ServerState`.
+///
+/// The locks are `tokio::sync` primitives (async purity, plan U17). The
+/// daemon's dispatch threads are dedicated worker threads - never executor
+/// workers - so `acquire` takes the blocking owned-lock seats, which park
+/// the calling worker thread exactly like the parking_lot seats they replace
+/// (and which panic if ever called from inside a runtime; the daemon's
+/// dispatch boundary is a plain thread by construction).
 #[derive(Debug, Clone, Default)]
 pub struct OpLockManager {
     /// A global op takes the write side (exclusive with every per-VM op);
@@ -136,19 +141,21 @@ pub struct OpLockManager {
     per_vm: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
-/// RAII guard for a held op lock. Holds the owned parking_lot guards so
-/// the lock is released when the guard drops at the end of the op.
+/// RAII guard for a held op lock. Holds the tokio guards so the lock is
+/// released when the guard drops at the end of the op. The global guard
+/// borrows the manager (tokio's `RwLock` has no owned blocking seat); the
+/// per-VM guard is owned.
 #[allow(dead_code)]
-pub enum OpLockGuard {
+pub enum OpLockGuard<'a> {
     /// Read-only verb: nothing is held.
     None,
     /// Per-VM verb: shared-global guard + the per-VM exclusive guard.
     PerVm {
-        global: ArcRwLockReadGuard<RawRwLock, ()>,
-        vm: ArcMutexGuard<RawMutex, ()>,
+        global: tokio::sync::RwLockReadGuard<'a, ()>,
+        vm: OwnedMutexGuard<()>,
     },
     /// Global verb: exclusive-global guard.
-    Global(ArcRwLockWriteGuard<RawRwLock, ()>),
+    Global(tokio::sync::RwLockWriteGuard<'a, ()>),
 }
 
 impl OpLockManager {
@@ -158,25 +165,25 @@ impl OpLockManager {
 
     /// Acquire the lock appropriate to `class`, blocking the CALLING
     /// (worker) thread - never the accept loop - until it is available.
-    pub fn acquire(&self, class: &OpLockClass) -> OpLockGuard {
+    pub fn acquire(&self, class: &OpLockClass) -> OpLockGuard<'_> {
         match class {
             OpLockClass::ReadOnly => OpLockGuard::None,
             OpLockClass::PerVm(vm) => {
                 // Lock ordering: global(read) THEN per-VM. A global op
                 // takes global(write), so it cannot interleave with an
                 // in-flight per-VM op, and the single ordering is acyclic.
-                let global = self.global.read_arc();
+                let global = self.global.blocking_read();
                 let vm_lock = {
-                    let mut map = self.per_vm.lock();
+                    let mut map = self.per_vm.blocking_lock();
                     Arc::clone(
                         map.entry(vm.clone())
                             .or_insert_with(|| Arc::new(Mutex::new(()))),
                     )
                 };
-                let vm = vm_lock.lock_arc();
+                let vm = vm_lock.blocking_lock_owned();
                 OpLockGuard::PerVm { global, vm }
             }
-            OpLockClass::Global => OpLockGuard::Global(self.global.write_arc()),
+            OpLockClass::Global => OpLockGuard::Global(self.global.blocking_write()),
         }
     }
 }
@@ -184,9 +191,9 @@ impl OpLockManager {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::Barrier;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::thread;
-    use std::time::Duration;
+    use std::sync::mpsc::sync_channel;
 
     use super::*;
 
@@ -219,15 +226,26 @@ mod tests {
     fn semaphore_permit_released_on_handler_thread_exit() {
         let sem = ConnSemaphore::new(1);
         let permit = sem.try_acquire().expect("permit");
-        let handle = thread::spawn(move || {
-            // The permit is owned by (and dropped at the end of) the
-            // handler thread, mirroring the accept-loop move.
-            let _moved = permit;
-            thread::sleep(Duration::from_millis(20));
+        // Two-barrier handshake: the handler signals (gate) only after the
+        // permit is moved in, then HOLDS it until the main thread releases
+        // it (release) after asserting - no timing window.
+        let gate = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let handler_gate = Arc::clone(&gate);
+        let handler_release = Arc::clone(&release);
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                // The permit is owned by (and dropped at the end of) the
+                // handler thread, mirroring the accept-loop move.
+                let _moved = permit;
+                handler_gate.wait();
+                handler_release.wait();
+            });
+            gate.wait();
+            // While the handler holds the permit the slot is unavailable.
+            assert!(sem.try_acquire().is_none());
+            release.wait();
         });
-        // While the handler holds the permit the slot is unavailable.
-        assert!(sem.try_acquire().is_none());
-        handle.join().expect("join handler");
         assert!(
             sem.try_acquire().is_some(),
             "slot freed once the handler thread exits"
@@ -245,31 +263,37 @@ mod tests {
     #[test]
     fn same_vm_ops_serialize() {
         let mgr = OpLockManager::new();
-        let order = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let (order_tx, order_rx) = sync_channel::<u8>(4);
         let entered = Arc::new(AtomicUsize::new(0));
 
         let guard = mgr.acquire(&OpLockClass::PerVm("work".to_owned()));
-        order.lock().push(1);
+        let _ = order_tx.try_send(1);
 
         let mgr2 = mgr.clone();
-        let order2 = Arc::clone(&order);
+        let order_tx2 = order_tx.clone();
         let entered2 = Arc::clone(&entered);
-        let handle = thread::spawn(move || {
-            let _g = mgr2.acquire(&OpLockClass::PerVm("work".to_owned()));
-            entered2.fetch_add(1, Ordering::SeqCst);
-            order2.lock().push(2);
+        // The main thread still holds the per-VM guard, so the second op
+        // CANNOT have entered (its acquire blocks) - the assertion is
+        // timing-free. Dropping the guard releases it and the scope join
+        // waits for the op to finish.
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let _g = mgr2.acquire(&OpLockClass::PerVm("work".to_owned()));
+                entered2.fetch_add(1, Ordering::SeqCst);
+                let _ = order_tx2.try_send(2);
+            });
+            assert_eq!(
+                entered.load(Ordering::SeqCst),
+                0,
+                "second same-VM op must block until the first releases"
+            );
+            drop(guard);
         });
-
-        // Give the second thread time to (try to) acquire; it must block.
-        thread::sleep(Duration::from_millis(30));
-        assert_eq!(
-            entered.load(Ordering::SeqCst),
-            0,
-            "second same-VM op must block until the first releases"
-        );
-        drop(guard);
-        handle.join().expect("join second op");
-        assert_eq!(*order.lock(), vec![1, 2], "ops ran in serialized order");
+        let mut order = Vec::new();
+        while let Ok(value) = order_rx.try_recv() {
+            order.push(value);
+        }
+        assert_eq!(order, vec![1, 2], "ops ran in serialized order");
     }
 
     #[test]
@@ -280,11 +304,12 @@ mod tests {
         let entered = Arc::new(AtomicUsize::new(0));
         let mgr2 = mgr.clone();
         let entered2 = Arc::clone(&entered);
-        let handle = thread::spawn(move || {
-            let _b = mgr2.acquire(&OpLockClass::PerVm("beta".to_owned()));
-            entered2.fetch_add(1, Ordering::SeqCst);
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let _b = mgr2.acquire(&OpLockClass::PerVm("beta".to_owned()));
+                entered2.fetch_add(1, Ordering::SeqCst);
+            });
         });
-        handle.join().expect("join beta op");
         assert_eq!(
             entered.load(Ordering::SeqCst),
             1,
@@ -299,18 +324,20 @@ mod tests {
         let entered = Arc::new(AtomicUsize::new(0));
         let mgr2 = mgr.clone();
         let entered2 = Arc::clone(&entered);
-        let handle = thread::spawn(move || {
-            let _g = mgr2.acquire(&OpLockClass::PerVm("work".to_owned()));
-            entered2.fetch_add(1, Ordering::SeqCst);
+        // The global guard is held by the main thread, so the per-VM op
+        // CANNOT have entered (its acquire blocks) - timing-free.
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let _g = mgr2.acquire(&OpLockClass::PerVm("work".to_owned()));
+                entered2.fetch_add(1, Ordering::SeqCst);
+            });
+            assert_eq!(
+                entered.load(Ordering::SeqCst),
+                0,
+                "per-VM op must wait for the global op to finish"
+            );
+            drop(global);
         });
-        thread::sleep(Duration::from_millis(30));
-        assert_eq!(
-            entered.load(Ordering::SeqCst),
-            0,
-            "per-VM op must wait for the global op to finish"
-        );
-        drop(global);
-        handle.join().expect("join per-VM op");
         assert_eq!(entered.load(Ordering::SeqCst), 1);
     }
 
@@ -321,31 +348,36 @@ mod tests {
         // per-VM guard (no re-acquire). Must terminate, not deadlock.
         let mgr = OpLockManager::new();
 
-        let restart = {
-            let mgr = mgr.clone();
-            thread::spawn(move || {
-                let _g = mgr.acquire(&OpLockClass::PerVm("work".to_owned()));
-                // Inner stop+start are plain calls under the SAME guard:
-                // they must NOT re-acquire the per-VM lock.
-                thread::sleep(Duration::from_millis(10));
-            })
-        };
-        let host_prepare = {
-            let mgr = mgr.clone();
-            thread::spawn(move || {
-                let _g = mgr.acquire(&OpLockClass::Global);
-                thread::sleep(Duration::from_millis(10));
-            })
-        };
-        let start = {
-            let mgr = mgr.clone();
-            thread::spawn(move || {
-                let _g = mgr.acquire(&OpLockClass::PerVm("work".to_owned()));
-            })
-        };
+        // Models hostPrepare (global) vs. start (per-VM) vs. a restart
+        // that internally does stop+start under the SAME already-held
+        // per-VM guard (no re-acquire). Must terminate, not deadlock.
+        std::thread::scope(|scope| {
+            let restart = {
+                let mgr = mgr.clone();
+                scope.spawn(move || {
+                    let _g = mgr.acquire(&OpLockClass::PerVm("work".to_owned()));
+                    // Inner stop+start are plain calls under the SAME guard:
+                    // they must NOT re-acquire the per-VM lock.
+                })
+            };
+            let host_prepare = {
+                let mgr = mgr.clone();
+                scope.spawn(move || {
+                    let _g = mgr.acquire(&OpLockClass::Global);
+                })
+            };
+            let start = {
+                let mgr = mgr.clone();
+                scope.spawn(move || {
+                    let _g = mgr.acquire(&OpLockClass::PerVm("work".to_owned()));
+                })
+            };
 
-        restart.join().expect("restart op terminates");
-        host_prepare.join().expect("host prepare op terminates");
-        start.join().expect("start op terminates");
+            // The scope join is the pass condition: every op terminates
+            // (no deadlock) before the scope returns.
+            restart.join().expect("restart op terminates");
+            host_prepare.join().expect("host prepare op terminates");
+            start.join().expect("start op terminates");
+        });
     }
 }
