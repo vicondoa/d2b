@@ -52,7 +52,7 @@ fn repeated_reconcile_reuses_the_declared_children() {
     block_on(controller.reconcile(&effects)).unwrap();
 
     assert_eq!(
-        effects.events.lock().unwrap().as_slice(),
+        effects.events.try_lock().unwrap().as_slice(),
         ["volume", "flush", "process", "endpoint", "endpoint"]
     );
 }
@@ -197,7 +197,7 @@ fn flush_failure_stops_the_long_lived_process_and_retains_state() {
         ))
     );
     assert_eq!(
-        effects.events.lock().unwrap().as_slice(),
+        effects.events.try_lock().unwrap().as_slice(),
         ["volume", "flush"]
     );
     assert_eq!(effects.stop_calls.load(Ordering::SeqCst), 0);
@@ -216,7 +216,7 @@ fn controller_flushes_before_starting_swtpm_and_waits_for_endpoint() {
         TpmResourceOutcome::Ready
     );
     assert_eq!(
-        effects.events.lock().unwrap().as_slice(),
+        effects.events.try_lock().unwrap().as_slice(),
         ["volume", "flush", "process", "endpoint"]
     );
 }
@@ -256,7 +256,7 @@ impl TpmResourceEffectPort for ScriptedEffects {
         _: &ResourceRef,
     ) -> Result<ResourceRef, TpmResourceEffectError> {
         assert_eq!(device_ref.to_canonical_string(), "Device/work-tpm");
-        self.events.lock().unwrap().push("volume");
+        self.events.try_lock().unwrap().push("volume");
         Ok(ResourceRef::parse("Volume/device-state").unwrap())
     }
 
@@ -266,7 +266,7 @@ impl TpmResourceEffectPort for ScriptedEffects {
         _: &ResourceRef,
         _: &ResourceRef,
     ) -> Result<ResourceRef, TpmResourceEffectError> {
-        self.events.lock().unwrap().push("process");
+        self.events.try_lock().unwrap().push("process");
         Ok(ResourceRef::parse("Process/device-swtpm").unwrap())
     }
 
@@ -275,7 +275,7 @@ impl TpmResourceEffectPort for ScriptedEffects {
         _: &ResourceUid,
         _: &ResourceRef,
     ) -> Result<ResourceRef, TpmResourceEffectError> {
-        self.events.lock().unwrap().push("flush");
+        self.events.try_lock().unwrap().push("flush");
         if self.flush_fails {
             Err(TpmResourceEffectError::Transient)
         } else {
@@ -327,7 +327,7 @@ impl TpmResourceEffectPort for ScriptedEffects {
         _: &ResourceRef,
     ) -> impl std::future::Future<Output = Result<ResourceRef, TpmResourceEffectError>> + Send {
         let fails = self.endpoint_fails;
-        self.events.lock().unwrap().push("endpoint");
+        self.events.try_lock().unwrap().push("endpoint");
         async move {
             if fails {
                 Err(TpmResourceEffectError::Transient)
