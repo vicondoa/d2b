@@ -1,7 +1,9 @@
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
+
+use tokio::sync::Mutex;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
@@ -240,7 +242,7 @@ impl CloudHypervisorResourceApi for FakeApi {
         &self,
         _: &ResourceRef,
     ) -> Result<GuestSnapshot, CloudHypervisorResourceApiError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().await;
         state.get_calls += 1;
         state
             .guest
@@ -253,7 +255,7 @@ impl CloudHypervisorResourceApi for FakeApi {
         _: &GuestSnapshot,
         _: &[ResourceRef],
     ) -> Result<Vec<OwnedChildSnapshot>, CloudHypervisorResourceApiError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().await;
         state.relist_calls += 1;
         Ok(state.children.clone())
     }
@@ -265,7 +267,7 @@ impl CloudHypervisorResourceApi for FakeApi {
     ) -> Result<GuestDependencySnapshot, CloudHypervisorResourceApiError> {
         self.state
             .lock()
-            .unwrap()
+            .await
             .dependencies
             .clone()
             .ok_or(CloudHypervisorResourceApiError::NotFound)
@@ -275,7 +277,7 @@ impl CloudHypervisorResourceApi for FakeApi {
         &self,
         batch: GuestChildCreateBatch,
     ) -> Result<GuestChildCommitResponse, CloudHypervisorResourceApiError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().await;
         let response = state
             .commit_responses
             .pop_front()
@@ -288,7 +290,7 @@ impl CloudHypervisorResourceApi for FakeApi {
         &self,
         update: ChildSpecUpdate,
     ) -> Result<CommittedChild, CloudHypervisorResourceApiError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().await;
         let result = state.update_results.pop_front();
         state.updates.push(update.clone());
         result.unwrap_or_else(|| {
@@ -308,7 +310,7 @@ impl CloudHypervisorResourceApi for FakeApi {
         _: &GuestSnapshot,
         status: GuestStatusProjection,
     ) -> Result<(), CloudHypervisorResourceApiError> {
-        self.state.lock().unwrap().statuses.push(status);
+        self.state.lock().await.statuses.push(status);
         Ok(())
     }
 
@@ -320,7 +322,7 @@ impl CloudHypervisorResourceApi for FakeApi {
         Ok(self
             .state
             .lock()
-            .unwrap()
+            .await
             .process_observation
             .unwrap_or(ProcessAdoptionStatus::Current))
     }
@@ -330,7 +332,7 @@ impl CloudHypervisorResourceApi for FakeApi {
         _: &GuestSnapshot,
         _: &[OwnedChildSnapshot],
     ) -> Result<Option<UpgradeReason>, CloudHypervisorResourceApiError> {
-        Ok(self.state.lock().unwrap().upgrade_reason)
+        Ok(self.state.lock().await.upgrade_reason)
     }
 
     async fn observe_finalization(
@@ -340,7 +342,7 @@ impl CloudHypervisorResourceApi for FakeApi {
     ) -> Result<GuestFinalizationInput, CloudHypervisorResourceApiError> {
         self.state
             .lock()
-            .unwrap()
+            .await
             .finalization
             .clone()
             .ok_or(CloudHypervisorResourceApiError::InvalidResponse)
@@ -352,7 +354,7 @@ impl CloudHypervisorResourceApi for FakeApi {
     ) -> Result<(), CloudHypervisorResourceApiError> {
         self.state
             .lock()
-            .unwrap()
+            .await
             .lifecycle_events
             .push("drain-guest-local".to_owned());
         Ok(())
@@ -364,7 +366,7 @@ impl CloudHypervisorResourceApi for FakeApi {
     ) -> Result<(), CloudHypervisorResourceApiError> {
         self.state
             .lock()
-            .unwrap()
+            .await
             .lifecycle_events
             .push("close-session".to_owned());
         Ok(())
@@ -377,7 +379,7 @@ impl CloudHypervisorResourceApi for FakeApi {
     ) -> Result<(), CloudHypervisorResourceApiError> {
         self.state
             .lock()
-            .unwrap()
+            .await
             .lifecycle_events
             .push(format!("delete-{}", child.role().suffix()));
         Ok(())
@@ -389,7 +391,7 @@ impl CloudHypervisorResourceApi for FakeApi {
     ) -> Result<(), CloudHypervisorResourceApiError> {
         self.state
             .lock()
-            .unwrap()
+            .await
             .lifecycle_events
             .push("clear-finalizer".to_owned());
         Ok(())
@@ -402,7 +404,7 @@ impl CloudHypervisorResourceApi for FakeApi {
     ) -> Result<(), CloudHypervisorResourceApiError> {
         self.state
             .lock()
-            .unwrap()
+            .await
             .lifecycle_events
             .push(format!("invalidate-session-{minimum_generation}"));
         Ok(())
@@ -419,6 +421,7 @@ fn make_controller(api: FakeApi) -> CloudHypervisorController<FakeApi> {
     .unwrap()
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn dependency_gate_keeps_process_stopped_until_every_dependency_is_ready() {
     let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
@@ -430,7 +433,7 @@ async fn dependency_gate_keeps_process_stopped_until_every_dependency_is_ready()
     let outcome = controller.reconcile(guest.resource_ref()).await.unwrap();
     assert!(outcome.is_pending());
 
-    let state = state.lock().unwrap();
+    let state = state.lock().await;
     assert_eq!(state.commits.len(), 1);
     assert!(state.updates.is_empty());
     let process = state.commits[0]
@@ -446,6 +449,7 @@ async fn dependency_gate_keeps_process_stopped_until_every_dependency_is_ready()
     assert!(state.statuses.is_empty());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn non_ready_binding_keeps_the_gate_closed_and_reports_the_binding_condition() {
     let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
@@ -457,8 +461,8 @@ async fn non_ready_binding_keeps_the_gate_closed_and_reports_the_binding_conditi
     // First reconcile mints the deterministic children; the VMM is created
     // stopped because the binding is not current.
     controller.reconcile(guest.resource_ref()).await.unwrap();
-    let batch = state.lock().unwrap().commits[0].clone();
-    state.lock().unwrap().children = matching_children(&guest, &batch);
+    let batch = state.lock().await.commits[0].clone();
+    state.lock().await.children = matching_children(&guest, &batch);
 
     // Second reconcile with every child present but the binding not Ready
     // under a current fence: the VMM is driven back to stopped and the
@@ -468,7 +472,7 @@ async fn non_ready_binding_keeps_the_gate_closed_and_reports_the_binding_conditi
         d2b_provider_guest_cloud_hypervisor::GuestCondition::BindingDependencyNotReady
     ));
 
-    let state = state.lock().unwrap();
+    let state = state.lock().await;
     assert_eq!(state.commits.len(), 1);
     let process_target = batch
         .mutations()
@@ -484,6 +488,7 @@ async fn non_ready_binding_keeps_the_gate_closed_and_reports_the_binding_conditi
     assert_eq!(stop.desired_lifecycle(), Some(DesiredLifecycle::Stopped));
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn current_binding_readiness_leaves_the_vmm_running() {
     let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
@@ -493,8 +498,8 @@ async fn current_binding_readiness_leaves_the_vmm_running() {
     controller.register().await.unwrap();
 
     controller.reconcile(guest.resource_ref()).await.unwrap();
-    let batch = state.lock().unwrap().commits[0].clone();
-    state.lock().unwrap().children = matching_children(&guest, &batch);
+    let batch = state.lock().await.commits[0].clone();
+    state.lock().await.children = matching_children(&guest, &batch);
 
     // With the binding Ready under its current fence the VMM stays running
     // and no binding condition is reported.
@@ -505,9 +510,10 @@ async fn current_binding_readiness_leaves_the_vmm_running() {
     assert!(!outcome
         .status()
         .has_condition(d2b_provider_guest_cloud_hypervisor::GuestCondition::ProcessStopped));
-    assert!(state.lock().unwrap().updates.is_empty());
+    assert!(state.lock().await.updates.is_empty());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn uncertain_batch_relist_does_not_create_a_duplicate_incarnation() {
     let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
@@ -515,7 +521,7 @@ async fn uncertain_batch_relist_does_not_create_a_duplicate_incarnation() {
     {
         api.state
             .lock()
-            .unwrap()
+            .await
             .commit_responses
             .push_back(GuestChildCommitResponse::Uncertain);
     }
@@ -530,24 +536,25 @@ async fn uncertain_batch_relist_does_not_create_a_duplicate_incarnation() {
             .is_pending()
     );
 
-    let batch = state.lock().unwrap().commits[0].clone();
-    state.lock().unwrap().children = matching_children(&guest, &batch);
+    let batch = state.lock().await.commits[0].clone();
+    state.lock().await.children = matching_children(&guest, &batch);
     let mut restarted = make_controller(api);
     restarted.register().await.unwrap();
     restarted.reconcile(guest.resource_ref()).await.unwrap();
 
-    let state = state.lock().unwrap();
+    let state = state.lock().await;
     assert_eq!(state.commits.len(), 1);
     assert!(state.relist_calls >= 2);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn truncated_batch_response_stays_pending_without_update_spec() {
     let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
     let api = FakeApi::new(guest.clone(), dependencies(true, true, true, true, true));
     api.state
         .lock()
-        .unwrap()
+        .await
         .commit_responses
         .push_back(GuestChildCommitResponse::Truncated);
     let state = Arc::clone(&api.state);
@@ -561,18 +568,19 @@ async fn truncated_batch_response_stays_pending_without_update_spec() {
             .unwrap()
             .is_pending()
     );
-    let batch = state.lock().unwrap().commits[0].clone();
-    state.lock().unwrap().children = matching_children(&guest, &batch);
+    let batch = state.lock().await.commits[0].clone();
+    state.lock().await.children = matching_children(&guest, &batch);
     let mut restarted = make_controller(api);
     restarted.register().await.unwrap();
     restarted.reconcile(guest.resource_ref()).await.unwrap();
 
-    let state = state.lock().unwrap();
+    let state = state.lock().await;
     assert_eq!(state.commits.len(), 1);
     assert!(state.updates.is_empty());
     assert!(state.relist_calls >= 2);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn child_uid_or_revision_conflict_is_retryable_and_relists_before_replacement_update() {
     let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
@@ -626,7 +634,7 @@ async fn child_uid_or_revision_conflict_is_retryable_and_relists_before_replacem
             .position(|child| child.resource_ref() == process.target())
             .unwrap();
         children[process_index] = process_child;
-        let mut state = api.state.lock().unwrap();
+        let mut state = api.state.lock().await;
         state.children = children;
         state
             .update_results
@@ -652,16 +660,17 @@ async fn child_uid_or_revision_conflict_is_retryable_and_relists_before_replacem
             .map(|mutation| mutation.target().clone()),
     )
     .unwrap();
-    state.lock().unwrap().children = matching_children(&guest, &create_batch);
+    state.lock().await.children = matching_children(&guest, &create_batch);
     let mut replacement = make_controller(api);
     replacement.register().await.unwrap();
     replacement.reconcile(guest.resource_ref()).await.unwrap();
 
-    let state = state.lock().unwrap();
+    let state = state.lock().await;
     assert_eq!(state.relist_calls, 2);
     assert_eq!(state.updates.len(), 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn restart_converges_from_resource_state_without_direct_effects() {
     let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
@@ -670,14 +679,14 @@ async fn restart_converges_from_resource_state_without_direct_effects() {
     let mut first = make_controller(api.clone());
     first.register().await.unwrap();
     first.reconcile(guest.resource_ref()).await.unwrap();
-    let batch = state.lock().unwrap().commits[0].clone();
-    state.lock().unwrap().children = matching_children(&guest, &batch);
+    let batch = state.lock().await.commits[0].clone();
+    state.lock().await.children = matching_children(&guest, &batch);
 
     let mut restarted = make_controller(api);
     restarted.register().await.unwrap();
     let outcome = restarted.reconcile(guest.resource_ref()).await.unwrap();
 
-    let state = state.lock().unwrap();
+    let state = state.lock().await;
     assert_eq!(state.commits.len(), 1);
     assert!(state.updates.is_empty());
     assert!(outcome.is_pending(), "unexpected restart outcome: {outcome:?}");
@@ -688,11 +697,12 @@ async fn restart_converges_from_resource_state_without_direct_effects() {
     assert!(state.relist_calls >= 2);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn foreign_child_owner_fails_closed_before_any_mutation() {
     let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
     let api = FakeApi::new(guest.clone(), dependencies(true, true, true, true, true));
-    api.state.lock().unwrap().children = vec![
+    api.state.lock().await.children = vec![
         OwnedChildSnapshot::new(
             ResourceRef::parse("Process/gateway-vmm").unwrap(),
             guest.zone().clone(),
@@ -718,12 +728,13 @@ async fn foreign_child_owner_fails_closed_before_any_mutation() {
             .unwrap_err(),
         CloudHypervisorError::ChildConflict
     );
-    let state = state.lock().unwrap();
+    let state = state.lock().await;
     assert!(state.commits.is_empty());
     assert!(state.updates.is_empty());
     assert!(state.statuses.is_empty());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn restart_adopts_only_the_exact_process_identity() {
     let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
@@ -747,7 +758,7 @@ async fn restart_adopts_only_the_exact_process_identity() {
         .unwrap()
     };
     {
-        let mut state = api.state.lock().unwrap();
+        let mut state = api.state.lock().await;
         state.children = matching_children(&guest, &batch)
             .into_iter()
             .map(|child| {
@@ -782,11 +793,12 @@ async fn restart_adopts_only_the_exact_process_identity() {
             d2b_provider_guest_cloud_hypervisor::GuestCondition::AdoptionAmbiguous
         )
     );
-    let state = state.lock().unwrap();
+    let state = state.lock().await;
     assert!(state.commits.is_empty());
     assert!(state.updates.is_empty());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn matching_process_resource_avoids_direct_adoption_effects() {
     for observation in [
@@ -815,7 +827,7 @@ async fn matching_process_resource_avoids_direct_adoption_effects() {
         };
         let state = Arc::clone(&api.state);
         {
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock().await;
             state.children = matching_children(&guest, &batch);
             state.process_observation = Some(observation);
         }
@@ -829,10 +841,11 @@ async fn matching_process_resource_avoids_direct_adoption_effects() {
         assert!(!outcome.status().has_condition(
             d2b_provider_guest_cloud_hypervisor::GuestCondition::AdoptionAmbiguous
         ));
-        assert!(state.lock().unwrap().updates.is_empty());
+        assert!(state.lock().await.updates.is_empty());
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn vmm_exit_is_bounded_degraded_and_retries_through_process_resource() {
     let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
@@ -878,7 +891,7 @@ async fn vmm_exit_is_bounded_degraded_and_retries_through_process_resource() {
     .unwrap()
     .with_owner_uid(guest.uid().clone());
     {
-        let mut state = api.state.lock().unwrap();
+        let mut state = api.state.lock().await;
         state.children = children;
         state.process_observation = Some(ProcessAdoptionStatus::Absent);
     }
@@ -896,7 +909,7 @@ async fn vmm_exit_is_bounded_degraded_and_retries_through_process_resource() {
             .status()
             .has_condition(d2b_provider_guest_cloud_hypervisor::GuestCondition::VmmProcessExited)
     );
-    let state = state.lock().unwrap();
+    let state = state.lock().await;
     assert_eq!(state.updates.len(), 1);
     assert_eq!(
         state.updates[0].desired_lifecycle(),
@@ -904,6 +917,7 @@ async fn vmm_exit_is_bounded_degraded_and_retries_through_process_resource() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence() {
     let guest = deleting_guest("gateway", "work", GUEST_UID, ZONE_UID);
@@ -925,7 +939,7 @@ async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence
     )
     .unwrap();
     {
-        let mut state = api.state.lock().unwrap();
+        let mut state = api.state.lock().await;
         state.children = matching_children(&guest, &batch);
         state.finalization = Some(finalization_input(
             &guest,
@@ -942,12 +956,12 @@ async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence
     controller.register().await.unwrap();
     controller.reconcile(guest.resource_ref()).await.unwrap();
     {
-        let state = state.lock().unwrap();
+        let state = state.lock().await;
         assert_eq!(state.lifecycle_events, vec!["drain-guest-local"]);
     }
 
     {
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock().await;
         state.finalization = Some(finalization_input(
             &guest,
             &state.children,
@@ -960,7 +974,7 @@ async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence
     }
     controller.reconcile(guest.resource_ref()).await.unwrap();
     {
-        let state = state.lock().unwrap();
+        let state = state.lock().await;
         assert_eq!(
             state.lifecycle_events,
             vec!["drain-guest-local", "close-session"]
@@ -968,7 +982,7 @@ async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence
     }
 
     {
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock().await;
         state.finalization = Some(finalization_input(
             &guest,
             &state.children,
@@ -981,7 +995,7 @@ async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence
     }
     controller.reconcile(guest.resource_ref()).await.unwrap();
     {
-        let state = state.lock().unwrap();
+        let state = state.lock().await;
         assert_eq!(
             state.updates[0].desired_lifecycle(),
             Some(DesiredLifecycle::Stopped)
@@ -996,7 +1010,7 @@ async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence
         ChildRole::SystemVolume,
     ] {
         {
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock().await;
             state.finalization = Some(finalization_input(
                 &guest,
                 &state.children,
@@ -1007,7 +1021,7 @@ async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence
         }
         controller.reconcile(guest.resource_ref()).await.unwrap();
         {
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock().await;
             let event = format!("delete-{}", expected_role.suffix());
             assert_eq!(
                 state.lifecycle_events.last().map(String::as_str),
@@ -1020,7 +1034,7 @@ async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence
         }
     }
 
-    state.lock().unwrap().finalization = Some(finalization_input(
+    state.lock().await.finalization = Some(finalization_input(
         &guest,
         &[],
         SessionState::Closed,
@@ -1031,7 +1045,7 @@ async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence
     assert_eq!(
         state
             .lock()
-            .unwrap()
+            .await
             .lifecycle_events
             .last()
             .map(String::as_str),
@@ -1039,6 +1053,7 @@ async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn interrupted_upgrade_preserves_volume_and_fences_old_transient_uids() {
     let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
@@ -1066,7 +1081,7 @@ async fn interrupted_upgrade_preserves_volume_and_fences_old_transient_uids() {
         .map(|child| (child.resource_ref().clone(), child))
         .collect::<std::collections::BTreeMap<_, _>>();
     let state = Arc::clone(&api.state);
-    state.lock().unwrap().children = observed.clone();
+    state.lock().await.children = observed.clone();
     let mut controller = make_controller(api.clone());
     controller.register().await.unwrap();
     let upgrade = controller
@@ -1079,7 +1094,7 @@ async fn interrupted_upgrade_preserves_volume_and_fences_old_transient_uids() {
     let durable_uid = upgrade.durable_volumes()[0].uid().clone();
     assert_eq!(upgrade.next_session_generation(), 1);
     {
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock().await;
         state.finalization = Some(finalization_input(
             &guest,
             &state.children,
@@ -1096,7 +1111,7 @@ async fn interrupted_upgrade_preserves_volume_and_fences_old_transient_uids() {
         .unwrap();
 
     {
-        let state = state.lock().unwrap();
+        let state = state.lock().await;
         assert_eq!(upgrade.durable_volumes()[0].uid(), &durable_uid);
         assert!(
             state
@@ -1119,7 +1134,7 @@ async fn interrupted_upgrade_preserves_volume_and_fences_old_transient_uids() {
     }
 
     {
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock().await;
         state.finalization = Some(finalization_input(
             &guest,
             &state.children,
@@ -1134,7 +1149,7 @@ async fn interrupted_upgrade_preserves_volume_and_fences_old_transient_uids() {
         ChildRole::VmmProcess,
     ] {
         {
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock().await;
             state.finalization = Some(finalization_input(
                 &guest,
                 &state.children,
@@ -1148,7 +1163,7 @@ async fn interrupted_upgrade_preserves_volume_and_fences_old_transient_uids() {
             .await
             .unwrap();
         {
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock().await;
             let event = format!("delete-{}", expected_role.suffix());
             assert_eq!(
                 state.lifecycle_events.last().map(String::as_str),
@@ -1171,7 +1186,7 @@ async fn interrupted_upgrade_preserves_volume_and_fences_old_transient_uids() {
             .await
             .unwrap();
     }
-    state.lock().unwrap().finalization = Some(finalization_input(
+    state.lock().await.finalization = Some(finalization_input(
         &guest,
         &[],
         SessionState::Closed,
@@ -1183,7 +1198,7 @@ async fn interrupted_upgrade_preserves_volume_and_fences_old_transient_uids() {
         .await
         .unwrap();
 
-    state.lock().unwrap().children = observed.clone();
+    state.lock().await.children = observed.clone();
     let old_result = controller.reconcile(guest.resource_ref()).await;
     assert_eq!(old_result, Err(CloudHypervisorError::ChildConflict));
 
@@ -1216,10 +1231,11 @@ async fn interrupted_upgrade_preserves_volume_and_fences_old_transient_uids() {
             .with_owner_uid(guest.uid().clone())
         })
         .collect::<Vec<_>>();
-    state.lock().unwrap().children = replacement_children;
+    state.lock().await.children = replacement_children;
     assert!(controller.reconcile(guest.resource_ref()).await.is_ok());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn disruptive_update_reports_upgrade_required_without_in_place_repair() {
     let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
@@ -1242,7 +1258,7 @@ async fn disruptive_update_reports_upgrade_required_without_in_place_repair() {
     .unwrap();
     let state = Arc::clone(&api.state);
     {
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock().await;
         state.children = matching_children(&guest, &batch);
         state.upgrade_reason = Some(UpgradeReason::ImageOrSystemGenerationChanged);
     }
@@ -1258,5 +1274,5 @@ async fn disruptive_update_reports_upgrade_required_without_in_place_repair() {
             .status()
             .has_condition(d2b_provider_guest_cloud_hypervisor::GuestCondition::UpgradeRequired)
     );
-    assert!(state.lock().unwrap().updates.is_empty());
+    assert!(state.lock().await.updates.is_empty());
 }

@@ -51,6 +51,11 @@ impl std::fmt::Display for ControllerSessionError {
 
 impl std::error::Error for ControllerSessionError {}
 
+// Controller-process entry point: reachable only from the controller bin's
+// `fn main` (via `controller_binary_entrypoint`). No executor worker exists at
+// process entry, so driving the runtime synchronously is the CLI-only
+// boundary; the child controller session itself then runs fully async.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn run_from_fd10() -> i32 {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -319,6 +324,7 @@ mod tests {
         Ok((socket, credentials))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn controller_sends_bootstrap_endpoint_before_establishing_resource_session() {
         let (controller_fd, daemon_fd) = prearmed_seqpacket_pair().unwrap();
@@ -420,6 +426,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn controller_receives_idempotent_assignment_over_authenticated_session() {
         let (controller_fd, daemon_fd) = prearmed_seqpacket_pair().unwrap();

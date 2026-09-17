@@ -1,6 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::sync::Mutex;
 use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
 };
@@ -53,7 +54,7 @@ impl AuthenticatedResourceSession for RecordingSession {
         &self,
         request: CloudHypervisorResourceRequest,
     ) -> Result<CloudHypervisorResourceResponse, CloudHypervisorResourceApiError> {
-        self.requests.lock().unwrap().push(request.clone());
+        self.requests.lock().await.push(request.clone());
         match request {
             CloudHypervisorResourceRequest::Register { .. } => {
                 Ok(CloudHypervisorResourceResponse::Registered)
@@ -103,6 +104,7 @@ impl AuthenticatedResourceSession for RecordingSession {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn registration_uses_verified_descriptor_and_authenticated_resource_calls() {
     let session = Arc::new(RecordingSession::default());
@@ -146,7 +148,7 @@ async fn registration_uses_verified_descriptor_and_authenticated_resource_calls(
         .unwrap();
     assert!(outcome.is_pending());
 
-    let requests = session.requests.lock().unwrap();
+    let requests = session.requests.lock().await;
     assert!(matches!(
         requests.first(),
         Some(CloudHypervisorResourceRequest::Register { .. })
@@ -157,6 +159,7 @@ async fn registration_uses_verified_descriptor_and_authenticated_resource_calls(
     )));
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn one_uid_free_batch_contains_the_complete_guest_owned_child_graph() {
     let session = Arc::new(RecordingSession::default());
@@ -174,7 +177,7 @@ async fn one_uid_free_batch_contains_the_complete_guest_owned_child_graph() {
         .await
         .unwrap();
 
-    let requests = session.requests.lock().unwrap();
+    let requests = session.requests.lock().await;
     let Some(CloudHypervisorResourceRequest::CommitBatch { batch }) = requests
         .iter()
         .find(|request| matches!(request, CloudHypervisorResourceRequest::CommitBatch { .. }))
@@ -267,5 +270,7 @@ fn invalid_descriptor_is_rejected_before_registration() {
         error,
         d2b_provider_guest_cloud_hypervisor::CloudHypervisorError::Descriptor(_)
     ));
-    assert!(session.requests.lock().unwrap().is_empty());
+    // No runtime on this plain #[test] path: the tokio mutex is uncontended
+    // here, so the U4 try_lock() fail-closed form reads it synchronously.
+    assert!(session.requests.try_lock().unwrap().is_empty());
 }
