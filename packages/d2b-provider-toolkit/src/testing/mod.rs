@@ -45,6 +45,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
+use tokio::sync::Mutex as AsyncMutex;
+
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::resource_schema::{CanonicalJsonObject, CanonicalJsonValue};
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
@@ -145,7 +147,7 @@ pub struct AdmittedRow {
     resource_type: WellKnownType,
     name: String,
     spec: CanonicalJsonObject,
-    status: Mutex<RowStatus>,
+    status: AsyncMutex<RowStatus>,
 }
 
 impl std::fmt::Debug for AdmittedRow {
@@ -192,7 +194,7 @@ impl AdmittedRow {
     /// Snapshot the published status.
     pub fn status(&self) -> RowStatus {
         self.status
-            .lock()
+            .try_lock()
             .map(|status| status.clone())
             .unwrap_or(RowStatus {
                 phase: RowPhase::Pending,
@@ -203,7 +205,7 @@ impl AdmittedRow {
     }
 
     fn publish(&self, cause: &ReconcileCause, outcome: &ReconcileOutcome) {
-        if let Ok(mut status) = self.status.lock() {
+        if let Ok(mut status) = self.status.try_lock() {
             status.phase = match outcome {
                 ReconcileOutcome::Ready => RowPhase::Ready,
                 ReconcileOutcome::NotYet { .. } => RowPhase::NotYet,
@@ -278,7 +280,7 @@ pub enum PlaneCall {
 /// The recording zone-plane port a harness attaches through.
 #[derive(Debug, Default)]
 pub struct RecordingPlanePort {
-    calls: Mutex<Vec<PlaneCall>>,
+    calls: AsyncMutex<Vec<PlaneCall>>,
     refuse: AtomicBool,
 }
 
@@ -286,7 +288,7 @@ impl RecordingPlanePort {
     /// Every call this port accepted, in order.
     pub fn calls(&self) -> Vec<PlaneCall> {
         self.calls
-            .lock()
+            .try_lock()
             .map(|calls| calls.clone())
             .unwrap_or_default()
     }
@@ -301,7 +303,7 @@ impl RecordingPlanePort {
             return Err(PlaneError::Refused);
         }
         self.calls
-            .lock()
+            .try_lock()
             .map(|mut calls| calls.push(call))
             .map_err(|_| PlaneError::Refused)
     }
@@ -337,14 +339,14 @@ impl ZonePlanePort for RecordingPlanePort {
 /// A cloneable handle onto one harness fault plan.
 #[derive(Clone, Default)]
 pub struct FaultInjector {
-    plan: Arc<Mutex<FaultPlan>>,
+    plan: Arc<AsyncMutex<FaultPlan>>,
 }
 
 impl FaultInjector {
     /// Take the next scheduled outcome for one effect-port call.
     pub fn check(&self) -> Result<(), FakePortError> {
         self.plan
-            .lock()
+            .try_lock()
             .map(|mut plan| plan.take_next())
             .unwrap_or(Ok(()))
     }
@@ -400,9 +402,9 @@ pub struct TestHarness<P: ProviderBase> {
     creations: CreationTable,
     owned_types: Vec<WellKnownType>,
     declared_startup: Option<&'static [(WellKnownType, &'static [StartupStep])]>,
-    rows: Mutex<BTreeMap<String, Arc<AdmittedRow>>>,
-    children: Mutex<Vec<Arc<AdmittedRow>>>,
-    cause_log: Mutex<Vec<(String, ReconcileCause)>>,
+    rows: AsyncMutex<BTreeMap<String, Arc<AdmittedRow>>>,
+    children: AsyncMutex<Vec<Arc<AdmittedRow>>>,
+    cause_log: AsyncMutex<Vec<(String, ReconcileCause)>>,
     audit: Arc<Mutex<ProviderAgentAuditLog>>,
     envelope: OperationEnvelope,
     faults: FaultInjector,
@@ -496,9 +498,9 @@ impl<P: ProviderBase> TestHarness<P> {
             creations,
             owned_types,
             declared_startup: declarations.map(|declarations| declarations.startup),
-            rows: Mutex::new(BTreeMap::new()),
-            children: Mutex::new(Vec::new()),
-            cause_log: Mutex::new(Vec::new()),
+            rows: AsyncMutex::new(BTreeMap::new()),
+            children: AsyncMutex::new(Vec::new()),
+            cause_log: AsyncMutex::new(Vec::new()),
             audit,
             envelope,
             faults: FaultInjector::default(),
@@ -537,7 +539,7 @@ impl<P: ProviderBase> TestHarness<P> {
     /// Snapshot the audit ring.
     pub fn audit_events(&self) -> Vec<crate::audit::ProviderAgentAuditEvent> {
         self.audit
-            .lock()
+            .try_lock()
             .map(|audit| audit.events().cloned().collect())
             .unwrap_or_default()
     }
@@ -550,7 +552,7 @@ impl<P: ProviderBase> TestHarness<P> {
     /// Every cause the harness ran, in order.
     pub fn causes(&self) -> Vec<(String, ReconcileCause)> {
         self.cause_log
-            .lock()
+            .try_lock()
             .map(|log| log.clone())
             .unwrap_or_default()
     }
@@ -558,7 +560,7 @@ impl<P: ProviderBase> TestHarness<P> {
     /// Every child the fence let through, in creation order.
     pub fn created_children(&self) -> Vec<Arc<AdmittedRow>> {
         self.children
-            .lock()
+            .try_lock()
             .map(|children| children.clone())
             .unwrap_or_default()
     }
@@ -613,7 +615,7 @@ impl<P: ProviderBase> TestHarness<P> {
             resource_type,
             name: name.to_owned(),
             spec,
-            status: Mutex::new(RowStatus {
+            status: AsyncMutex::new(RowStatus {
                 phase: RowPhase::Pending,
                 reason: None,
                 requeue_after_ms: None,
@@ -622,7 +624,7 @@ impl<P: ProviderBase> TestHarness<P> {
         });
         let mut rows = self
             .rows
-            .lock()
+            .try_lock()
             .map_err(|_| AdmissionRefusal::DuplicateRow {
                 reference: reference.clone(),
             })?;
@@ -653,8 +655,8 @@ impl<P: ProviderBase> TestHarness<P> {
         let known = self
             .rows
             .lock()
-            .map(|rows| rows.contains_key(&row.reference_key()))
-            .unwrap_or(false);
+            .await
+            .contains_key(&row.reference_key());
         if !known {
             return Err(ReconcileRefusal::UnadmittedRow(resource));
         }
@@ -685,9 +687,7 @@ impl<P: ProviderBase> TestHarness<P> {
         };
         let outcome = target.reconcile(ctx, &cause).await;
         row.publish(&cause, &outcome);
-        if let Ok(mut log) = self.cause_log.lock() {
-            log.push((resource_key, cause));
-        }
+        self.cause_log.lock().await.push((resource_key, cause));
         Ok(outcome)
     }
 
@@ -695,7 +695,7 @@ impl<P: ProviderBase> TestHarness<P> {
     pub fn targeted_by(&self, reference: &ResourceRef) -> Vec<ResourceRef> {
         let wanted = reference_key(reference);
         self.rows
-            .lock()
+            .try_lock()
             .map(|rows| {
                 rows.values()
                     .filter(|row| {
@@ -711,7 +711,7 @@ impl<P: ProviderBase> TestHarness<P> {
 
     fn holds(&self, reference: &ResourceRef) -> bool {
         self.rows
-            .lock()
+            .try_lock()
             .map(|rows| rows.contains_key(&reference_key(reference)))
             .unwrap_or(false)
     }
@@ -739,7 +739,7 @@ impl<P: ProviderBase> TestHarness<P> {
         let child = self
             .commit(declaration.child, name, spec)
             .map_err(|refusal| ChildCreationFailure::Spec(refusal.code()))?;
-        if let Ok(mut children) = self.children.lock() {
+        if let Ok(mut children) = self.children.try_lock() {
             children.push(Arc::clone(&child));
         }
         Ok(child)
@@ -785,7 +785,7 @@ impl<P: ProviderBase> TestHarness<P> {
 
     /// Script the faults the provider's effect ports will see.
     pub fn script_faults(&self, plan: FaultPlan) {
-        if let Ok(mut scripted) = self.faults.plan.lock() {
+        if let Ok(mut scripted) = self.faults.plan.try_lock() {
             *scripted = plan;
         }
     }
@@ -1015,6 +1015,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn attaching_claims_only_declared_roots() {
         let harness = TestHarness::new(EmptyProvider);

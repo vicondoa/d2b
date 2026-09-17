@@ -4,7 +4,10 @@ use std::{
     collections::{HashMap, VecDeque},
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -750,7 +753,7 @@ struct GuestCredentialBackendBinding {
 pub struct GuestCredentialBackendResponderLease {
     route: tokio::sync::watch::Sender<Option<GuestCredentialBackendBinding>>,
     cancel: tokio::sync::watch::Sender<bool>,
-    bound: std::sync::Mutex<bool>,
+    bound: AtomicBool,
     initial_peer: d2b_session_unix::PeerCredentials,
 }
 
@@ -795,14 +798,11 @@ impl GuestCredentialBackendResponderLease {
         {
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
-        let mut bound = self
-            .bound
-            .lock()
-            .map_err(|_| ProviderRuntimeError::SessionLoopFailed)?;
-        if *bound {
+        // The responder binds exactly once; the flag is an atomic compare-swap
+        // so the sync bind path never takes a lock.
+        if self.bound.swap(true, Ordering::AcqRel) {
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
-        *bound = true;
         self.route
             .send(Some(GuestCredentialBackendBinding {
                 route,
@@ -1271,7 +1271,7 @@ pub fn spawn_guest_credential_backend_responder(
     Ok(Arc::new(GuestCredentialBackendResponderLease {
         route: route_tx,
         cancel: cancel_tx,
-        bound: std::sync::Mutex::new(false),
+        bound: AtomicBool::new(false),
         initial_peer,
     }))
 }
@@ -1497,6 +1497,11 @@ fn valid_guest_backend_operation(operation: &str) -> bool {
 }
 
 /// Run one Provider's real supervised fd10 lifecycle.
+///
+/// This is the process entry point a Credential Provider binary's `main`
+/// calls: it builds the process runtime and drives the async lifecycle to
+/// completion on the calling thread, never on an executor worker.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn run_from_fd10<P, A, F>(spec: ProviderFd10Spec, factory: F) -> i32
 where
     P: CredentialProvider + 'static,

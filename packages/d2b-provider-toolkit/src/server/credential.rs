@@ -511,6 +511,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn credential_service_dispatches_a_valid_typed_revoke() {
         let service = credential_service(
@@ -530,6 +531,7 @@ mod tests {
         assert_eq!(metadata.metadata.outcome, CredentialOutcomeCode::Revoked);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn credential_service_refuses_a_stale_authenticated_route() {
         let service = credential_service(

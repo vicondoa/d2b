@@ -1,9 +1,6 @@
-use std::{
-    io::{BufRead, BufReader, Read},
-    process::{Command, Stdio},
-    sync::mpsc,
-    time::Duration,
-};
+use std::{process::Stdio, time::Duration};
+
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint,
@@ -88,29 +85,23 @@ fn route_with_execution(
     .expect("route")
 }
 
-#[test]
-fn guest_backend_rejects_a_host_execution_route() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
-    runtime.block_on(async {
-        let (client_fd, _server_fd) = prearmed_seqpacket_pair().expect("backend pair");
-        let client_socket =
-            SeqpacketSocket::from_parent_prearmed(client_fd).expect("backend socket");
-        assert!(
-            GuestCredentialBackend::from_socket_for_test_with_route(
-                client_socket,
-                route_with_execution(
-                    "Provider/credential-managed-identity",
-                    "Host/test",
-                ),
-                CredentialDeliveryKeyMaterial::new([1; 32], [2; 32])
-                    .expect("test key material"),
-            )
-            .is_err()
-        );
-    });
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread")]
+async fn guest_backend_rejects_a_host_execution_route() {
+    let (client_fd, _server_fd) = prearmed_seqpacket_pair().expect("backend pair");
+    let client_socket = SeqpacketSocket::from_parent_prearmed(client_fd).expect("backend socket");
+    assert!(
+        GuestCredentialBackend::from_socket_for_test_with_route(
+            client_socket,
+            route_with_execution(
+                "Provider/credential-managed-identity",
+                "Host/test",
+            ),
+            CredentialDeliveryKeyMaterial::new([1; 32], [2; 32])
+                .expect("test key material"),
+        )
+        .is_err()
+    );
 }
 
 async fn receive_bootstrap(
@@ -184,14 +175,14 @@ fn delivery_transport(
     .expect("delivery transport")
 }
 
-fn run_supervised_binary(path: &str, provider: &str) {
+async fn run_supervised_binary(path: &str, provider: &str) {
     let (bootstrap_fd, child_fd) = prearmed_seqpacket_pair().expect("bootstrap pair");
     let inherited = duplicate_to_inherited_fd(&child_fd, 200).expect("inherited fd");
     let (backend_peer, backend_child) = prearmed_seqpacket_pair().expect("backend pair");
     let backend_inherited =
         duplicate_to_inherited_fd(&backend_child, 201).expect("backend inherited fd");
     drop(backend_child);
-    let mut child = Command::new("sh")
+    let mut child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(format!(
             "exec 10<&200; exec {}<&201; exec \"$1\"",
@@ -207,11 +198,7 @@ fn run_supervised_binary(path: &str, provider: &str) {
     drop(inherited);
     drop(backend_inherited);
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
-    let driver = runtime.block_on(async {
+    let driver = {
         let bootstrap = SeqpacketSocket::from_parent_prearmed(bootstrap_fd).expect("bootstrap");
         let (resource_socket, credentials) = tokio::time::timeout(
             Duration::from_secs(3),
@@ -334,31 +321,33 @@ fn run_supervised_binary(path: &str, provider: &str) {
         }
         tokio::task::yield_now().await;
         driver
-    });
+    };
 
-    let stderr = child.stderr.take().expect("provider stderr");
     let stdout = child.stdout.take().expect("provider stdout");
-    let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut line = String::new();
-        let result = BufReader::new(stdout).read_line(&mut line);
-        let _ = sender.send((result, line));
-    });
-    let (read, line) = receiver
-        .recv_timeout(Duration::from_secs(5))
-        .expect("provider readiness");
-    let read = read.expect("readiness read");
+    let mut reader = tokio::io::BufReader::new(stdout);
+    let mut line = String::new();
+    let read = tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+        .await
+        .expect("provider readiness timeout")
+        .expect("readiness read");
     if read == 0 {
-        let mut error = String::new();
-        BufReader::new(stderr)
-            .read_to_string(&mut error)
+        let mut error = Vec::new();
+        child
+            .stderr
+            .take()
+            .expect("provider stderr")
+            .read_to_end(&mut error)
+            .await
             .expect("provider stderr");
-        let status = child.wait().expect("reap failed provider");
-        panic!("provider exited before readiness ({status}): {error}");
+        let status = child.wait().await.expect("reap failed provider");
+        panic!(
+            "provider exited before readiness ({status}): {}",
+            String::from_utf8_lossy(&error)
+        );
     }
     assert!(line.starts_with("D2B_PROVIDER_READY "));
-    child.kill().expect("stop provider");
-    child.wait().expect("reap provider");
+    child.kill().await.expect("stop provider");
+    child.wait().await.expect("reap provider");
     drop(driver);
 }
 
@@ -507,8 +496,9 @@ async fn exercise_secret_service(
     );
 }
 
-#[test]
-fn provider_binaries_complete_the_supervised_fd10_session_lifecycle() {
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread")]
+async fn provider_binaries_complete_the_supervised_fd10_session_lifecycle() {
     let binaries = [
         (
             option_env!("CARGO_BIN_EXE_d2b-provider-credential-secret-service"),
@@ -530,19 +520,15 @@ fn provider_binaries_complete_the_supervised_fd10_session_lifecycle() {
     for (path, provider) in binaries {
         let path = path.expect("binary path supplied by Bazel");
         eprintln!("starting {provider}");
-        run_supervised_binary(path, provider);
+        run_supervised_binary(path, provider).await;
         eprintln!("finished {provider}");
     }
 }
 
-#[test]
-fn guest_backend_round_trip_keeps_response_bytes_zeroizing() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
-    runtime.block_on(async {
-        let (client_fd, server_fd) = prearmed_seqpacket_pair().expect("backend pair");
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread")]
+async fn guest_backend_round_trip_keeps_response_bytes_zeroizing() {
+    let (client_fd, server_fd) = prearmed_seqpacket_pair().expect("backend pair");
         let client_socket =
             SeqpacketSocket::from_parent_prearmed(client_fd).expect("backend client socket");
         let server_socket =
@@ -627,17 +613,12 @@ fn guest_backend_round_trip_keeps_response_bytes_zeroizing() {
         assert_eq!(response.outcome(), Some("revoked"));
         assert!(response.into_bytes().is_none());
         responder.cancel();
-    });
 }
 
-#[test]
-fn guest_backend_rejects_an_unenrolled_peer_key() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
-    runtime.block_on(async {
-        let (client_fd, server_fd) = prearmed_seqpacket_pair().expect("backend pair");
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread")]
+async fn guest_backend_rejects_an_unenrolled_peer_key() {
+    let (client_fd, server_fd) = prearmed_seqpacket_pair().expect("backend pair");
         let client_socket =
             SeqpacketSocket::from_parent_prearmed(client_fd).expect("backend client socket");
         let server_socket =
@@ -684,7 +665,6 @@ fn guest_backend_rejects_an_unenrolled_peer_key() {
         assert!(result.is_err());
         responder.abort();
         let _ = responder.await;
-    });
 }
 
 #[test]

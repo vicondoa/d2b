@@ -39,6 +39,12 @@ fn run() -> Result<(), String> {
     }
 }
 
+/// Read one manifest from stdin and write its canonical form to `--out`.
+///
+/// This is a command-line entry point reachable only from `main`; it never
+/// runs on an executor worker, so the blocking stdin/filesystem calls stay
+/// synchronous.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn emit_command(args: &mut impl Iterator<Item = std::ffi::OsString>) -> Result<(), String> {
     let Some(flag) = args.next() else {
         return Err(usage());
@@ -65,6 +71,12 @@ fn emit_command(args: &mut impl Iterator<Item = std::ffi::OsString>) -> Result<(
     write_output(Path::new(&output), &bytes)
 }
 
+/// Verify one manifest file's canonical form.
+///
+/// This is a command-line entry point reachable only from `main`; it never
+/// runs on an executor worker, so the blocking filesystem read stays
+/// synchronous.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn verify_command(args: &mut impl Iterator<Item = std::ffi::OsString>) -> Result<(), String> {
     let Some(path) = args.next() else {
         return Err(usage());
@@ -92,6 +104,12 @@ fn verify_command(args: &mut impl Iterator<Item = std::ffi::OsString>) -> Result
     }
 }
 
+/// Write one canonical manifest file at mode 0644.
+///
+/// This is a command-line entry point reachable only from `main`; it never
+/// runs on an executor worker, so the blocking filesystem calls stay
+/// synchronous.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_output(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut file = OpenOptions::new()
         .create(true)

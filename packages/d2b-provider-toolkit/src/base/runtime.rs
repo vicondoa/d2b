@@ -8,8 +8,8 @@ use std::{
     fmt,
     io::{self, Write},
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicU8, Ordering},
+        Arc,
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -25,7 +25,7 @@ use d2b_provider::{
     OperationLedger, OperationLedgerAdmission, OperationLedgerError, OperationLedgerRow,
 };
 use d2b_session::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
-use tokio::sync::Notify;
+use tokio::sync::{Mutex, Notify};
 use tracing::{debug, error, warn};
 
 const STARTING: u8 = 0;
@@ -90,9 +90,18 @@ impl fmt::Display for ProviderRuntimeError {
 
 impl std::error::Error for ProviderRuntimeError {}
 
+/// The entrypoint's shared registration and readiness state.
+///
+/// `admitted` is an atomic so the registration release side - the
+/// admission's `Drop`, which may run on an executor worker or on the main
+/// thread after the runtime ended - never takes a lock. `ready_route` is a
+/// tokio mutex because the drain wait and the route getters touch it from
+/// both async and sync paths; the sync consumers use `try_lock` and fail
+/// closed, the U4 pattern for sync consumers of tokio locks.
 struct RuntimeState {
-    admitted: usize,
-    ready_route: Option<AuthenticatedSessionRouteBinding>,
+    admitted: AtomicUsize,
+    ready_route: Mutex<Option<AuthenticatedSessionRouteBinding>>,
+    idle: Notify,
 }
 
 /// A non-cloneable process lifecycle owner.
@@ -110,7 +119,7 @@ pub struct ProviderEntrypoint {
     controller_generation: Option<ControllerGeneration>,
     service: Option<&'static str>,
     lifecycle: AtomicU8,
-    state: Arc<(Mutex<RuntimeState>, Notify)>,
+    state: Arc<RuntimeState>,
 }
 
 /// A non-authorizing admission proof derived from one authenticated
@@ -251,13 +260,11 @@ impl ProviderEntrypoint {
             controller_generation: None,
             service: None,
             lifecycle: AtomicU8::new(STARTING),
-            state: Arc::new((
-                Mutex::new(RuntimeState {
-                    admitted: 0,
-                    ready_route: None,
-                }),
-                Notify::new(),
-            )),
+            state: Arc::new(RuntimeState {
+                admitted: AtomicUsize::new(0),
+                ready_route: Mutex::new(None),
+                idle: Notify::new(),
+            }),
         })
     }
 
@@ -375,19 +382,20 @@ impl ProviderEntrypoint {
 
     /// Admit one local service registration.
     pub fn admit(&self) -> Result<ProviderAdmission, ProviderRuntimeError> {
-        let (lock, _) = &*self.state;
-        let mut state = lock.lock().map_err(|_| {
-            warn!(name = self.name, provider = ?self.provider_ref, "registration admission refused: runtime state lock poisoned");
-            ProviderRuntimeError::NotAccepting
-        })?;
-        // Drain takes the lifecycle transition before it waits on this lock.
-        // Checking only before locking would let a registration slip into a
-        // draining process after the supervisor had fenced new work.
+        // The count is incremented before the lifecycle check and rolled
+        // back on refusal so a registration can never slip past the drain
+        // wait's final count check: an admit whose increment lands after
+        // that check necessarily observes the post-swap DRAINING lifecycle
+        // and refuses itself. The rollback notifies the drain waiter so a
+        // wait that observed the transient count cannot hang.
+        self.state.admitted.fetch_add(1, Ordering::AcqRel);
         if self.lifecycle() != ProviderLifecycle::Starting {
             warn!(name = self.name, provider = ?self.provider_ref, "registration admission refused: runtime not in Starting lifecycle");
+            if self.state.admitted.fetch_sub(1, Ordering::AcqRel) == 1 {
+                self.state.idle.notify_waiters();
+            }
             return Err(ProviderRuntimeError::NotAccepting);
         }
-        state.admitted = state.admitted.saturating_add(1);
         Ok(ProviderAdmission {
             state: Arc::clone(&self.state),
         })
@@ -490,12 +498,14 @@ impl ProviderEntrypoint {
         drop(session);
         let mut stdout = io::stdout().lock();
         self.publish_ready_to(&mut stdout)?;
-        let (lock, _) = &*self.state;
-        let mut state = lock.lock().map_err(|_| {
-            warn!(name = self.name, provider = ?self.provider_ref, "readiness publication failed: runtime state lock poisoned");
+        // The route slot is a tokio mutex; this sync path fails closed on
+        // contention (the U4 pattern), which cannot happen in the real flow:
+        // readiness publication runs once, before any route reader exists.
+        let mut state = self.state.ready_route.try_lock().map_err(|_| {
+            warn!(name = self.name, provider = ?self.provider_ref, "readiness publication failed: runtime route state contended");
             ProviderRuntimeError::NotAccepting
         })?;
-        state.ready_route = Some(route);
+        *state = Some(route);
         Ok(())
     }
 
@@ -504,12 +514,11 @@ impl ProviderEntrypoint {
         self.lifecycle() == ProviderLifecycle::Ready
             && self
                 .state
-                .0
-                .lock()
+                .ready_route
+                .try_lock()
                 .ok()
-                .is_some_and(|state| {
-                    state
-                        .ready_route
+                .is_some_and(|route| {
+                    route
                         .as_ref()
                         .is_some_and(|route| route.liveness().is_live())
                 })
@@ -521,10 +530,10 @@ impl ProviderEntrypoint {
             return false;
         }
         self.state
-            .0
-            .lock()
+            .ready_route
+            .try_lock()
             .ok()
-            .and_then(|state| state.ready_route.clone())
+            .and_then(|ready| ready.clone())
             .is_some_and(|ready| ready.liveness().is_live() && ready == *route)
     }
 
@@ -534,10 +543,10 @@ impl ProviderEntrypoint {
             return None;
         }
         self.state
-            .0
-            .lock()
+            .ready_route
+            .try_lock()
             .ok()
-            .and_then(|state| state.ready_route.clone())
+            .and_then(|ready| ready.clone())
     }
 
     /// Replace the retained route after Core has revoked the prior
@@ -552,12 +561,11 @@ impl ProviderEntrypoint {
             warn!(name = self.name, provider = ?self.provider_ref, "route rebind refused: runtime not Ready or route does not match expected identity");
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
-        let (lock, _) = &*self.state;
-        let mut state = lock.lock().map_err(|_| {
-            warn!(name = self.name, provider = ?self.provider_ref, "route rebind failed: runtime state lock poisoned");
+        let mut state = self.state.ready_route.try_lock().map_err(|_| {
+            warn!(name = self.name, provider = ?self.provider_ref, "route rebind failed: runtime route state contended");
             ProviderRuntimeError::NotAccepting
         })?;
-        let Some(previous) = state.ready_route.as_ref() else {
+        let Some(previous) = state.as_ref() else {
             warn!(name = self.name, provider = ?self.provider_ref, "route rebind refused: no retained ready route");
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         };
@@ -568,17 +576,14 @@ impl ProviderEntrypoint {
             warn!(name = self.name, provider = ?self.provider_ref, "route rebind refused: route not live, identity mismatch, or stale reconnect generation");
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
-        state.ready_route = Some(admission.route);
+        *state = Some(admission.route);
         Ok(())
     }
 
     fn publish_ready_to<W: Write>(&self, writer: &mut W) -> Result<(), ProviderRuntimeError> {
-        let (lock, _) = &*self.state;
-        let state = lock.lock().map_err(|_| {
-            warn!(name = self.name, provider = ?self.provider_ref, "readiness publication failed: runtime state lock poisoned");
-            ProviderRuntimeError::NotAccepting
-        })?;
-        if state.admitted == 0 || self.lifecycle() != ProviderLifecycle::Starting {
+        if self.state.admitted.load(Ordering::Acquire) == 0
+            || self.lifecycle() != ProviderLifecycle::Starting
+        {
             warn!(name = self.name, provider = ?self.provider_ref, "readiness publication refused: no registration admitted or runtime not in Starting lifecycle");
             return Err(ProviderRuntimeError::NotAccepting);
         }
@@ -597,13 +602,8 @@ impl ProviderEntrypoint {
         session: &ProviderSessionAdmission,
         live_route: &AuthenticatedSessionRouteBinding,
     ) -> Result<(), ProviderRuntimeError> {
-        let (lock, _) = &*self.state;
-        let state = lock.lock().map_err(|_| {
-            warn!(name = self.name, provider = ?self.provider_ref, "readiness validation failed: runtime state lock poisoned");
-            ProviderRuntimeError::NotAccepting
-        })?;
         if !Arc::ptr_eq(&registration.state, &self.state)
-            || state.admitted == 0
+            || self.state.admitted.load(Ordering::Acquire) == 0
             || self.lifecycle() != ProviderLifecycle::Starting
             || !live_route.liveness().is_live()
             || !session.route.liveness().is_live()
@@ -682,16 +682,11 @@ impl ProviderEntrypoint {
         }
         let drained = tokio::time::timeout(timeout, async {
             loop {
-                let notified = self.state.1.notified();
+                let notified = self.state.idle.notified();
                 tokio::pin!(notified);
                 notified.as_mut().enable();
-                match self.state.0.lock() {
-                    Ok(state) if state.admitted == 0 => return true,
-                    Ok(_) => {}
-                    Err(_) => {
-                        warn!(name = self.name, provider = ?self.provider_ref, "drain failed: runtime state lock poisoned during wait");
-                        return false;
-                    }
+                if self.state.admitted.load(Ordering::Acquire) == 0 {
+                    return true;
                 }
                 notified.as_mut().await;
             }
@@ -706,9 +701,7 @@ impl ProviderEntrypoint {
         };
         if drained {
             self.lifecycle.store(STOPPED, Ordering::Release);
-            if let Ok(mut state) = self.state.0.lock() {
-                state.ready_route = None;
-            }
+            *self.state.ready_route.lock().await = None;
         }
         drained
     }
@@ -743,7 +736,7 @@ fn is_zero_digest(value: &str) -> bool {
 
 /// One local registration held until its service is fully drained.
 pub struct ProviderAdmission {
-    state: Arc<(Mutex<RuntimeState>, Notify)>,
+    state: Arc<RuntimeState>,
 }
 
 impl fmt::Debug for ProviderAdmission {
@@ -754,12 +747,12 @@ impl fmt::Debug for ProviderAdmission {
 
 impl Drop for ProviderAdmission {
     fn drop(&mut self) {
-        let (lock, idle) = &*self.state;
-        if let Ok(mut state) = lock.lock() {
-            state.admitted = state.admitted.saturating_sub(1);
-            if state.admitted == 0 {
-                idle.notify_waiters();
-            }
+        // The admitted count is atomic precisely so releasing a registration
+        // never takes a lock: the drop may run on an executor worker while
+        // the drain task waits, or on the main thread after the runtime
+        // ended, and parking either would stall the drain it must complete.
+        if self.state.admitted.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.state.idle.notify_waiters();
         }
     }
 }
@@ -814,6 +807,7 @@ mod tests {
         .unwrap()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn readiness_is_not_published_before_registration() {
         let runtime = ProviderEntrypoint::new("Provider/test").unwrap();
@@ -851,6 +845,7 @@ mod tests {
         assert_eq!(runtime.lifecycle(), ProviderLifecycle::Starting);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn draining_refuses_new_registration() {
         let runtime = ProviderEntrypoint::new("Provider/test").unwrap();
@@ -865,6 +860,7 @@ mod tests {
         assert!(runtime.drain(Duration::from_millis(10)).await);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn drain_completes_when_the_last_registration_is_released_on_the_polling_runtime() {
         // Several providers run single-threaded. The registration is released
@@ -1002,7 +998,7 @@ mod tests {
             Some(1),
         );
         runtime.transition_ready().unwrap();
-        runtime.state.0.lock().unwrap().ready_route = Some(first.clone());
+        *runtime.state.ready_route.try_lock().unwrap() = Some(first.clone());
 
         let next = AuthenticatedSessionRouteBinding::for_test(
             Some(ResourceRef::parse("Provider/test").unwrap()),

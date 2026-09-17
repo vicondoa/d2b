@@ -115,6 +115,13 @@ pub fn dispatch_blocking<P: CredentialProvider + ?Sized>(
 /// construction time and would panic outside one even when it is ready
 /// immediately. The runtime is built once per thread and reused, so a
 /// caller that dispatches repeatedly pays for it once.
+///
+/// This path is genuinely synchronous by construction: the frozen
+/// `CredentialProvider` trait contract serves a synchronous dispatch half,
+/// and the realizer crates call it from callers that hold no runtime. The
+/// service loop itself never takes this path - it awaits the async half
+/// directly.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn block_on<F: Future>(future: F) -> F::Output {
     thread_local! {
         static RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_current_thread()

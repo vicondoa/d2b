@@ -384,6 +384,11 @@ fn now_unix_ms() -> u64 {
 ///
 /// The process runs the lifecycle above and exits with the agent's status
 /// code: `0` once the enrolled session and its drain completed, `1` otherwise.
+///
+/// This is the process entry point a Guest agent binary's `main` calls: it
+/// builds the process runtime and drives the async lifecycle to completion
+/// on the calling thread, never on an executor worker.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn run_guest<A: GuestAgent>(
     agent: A,
     link: Box<dyn GuestLink>,

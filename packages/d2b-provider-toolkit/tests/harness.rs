@@ -100,7 +100,8 @@ static OPERATIONS: LazyLock<[OperationDef; 1]> = LazyLock::new(|| {
 });
 
 /// The invocation identifiers the handler saw, in order.
-static SEEN_INVOCATIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static SEEN_INVOCATIONS: LazyLock<tokio::sync::Mutex<Vec<String>>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(Vec::new()));
 
 struct MintHandler;
 
@@ -111,9 +112,7 @@ impl OperationHandler for MintHandler {
         ctx: OperationCtx<'_>,
         payload: ValidatedPayload,
     ) -> Result<OperationResult, OperationFailure> {
-        if let Ok(mut seen) = SEEN_INVOCATIONS.lock() {
-            seen.push(ctx.invocation_id.to_owned());
-        }
+        SEEN_INVOCATIONS.lock().await.push(ctx.invocation_id.to_owned());
         if payload.object().get("refuse").is_some() {
             return Err(OperationFailure::new("mint-refused"));
         }
@@ -125,7 +124,8 @@ impl OperationHandler for MintHandler {
 
 /// The resolve test's own handler and invocation log: envelope tests run
 /// concurrently, so the U7 resolve path observes a log only it writes.
-static SEEN_VERIFY_INVOCATIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static SEEN_VERIFY_INVOCATIONS: LazyLock<tokio::sync::Mutex<Vec<String>>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(Vec::new()));
 
 struct VerifyHandler;
 
@@ -138,7 +138,7 @@ impl OperationHandler for VerifyHandler {
     ) -> Result<OperationResult, OperationFailure> {
         SEEN_VERIFY_INVOCATIONS
             .lock()
-            .expect("invocation log")
+            .await
             .push(ctx.invocation_id.to_owned());
         Ok(OperationResult::new(
             CanonicalJsonObject::parse(br#"{"verified":true}"#).expect("canonical result"),
@@ -299,14 +299,12 @@ impl ReconcileTarget for ReconcileFake {
 }
 
 /// A startup-step executor that records the order it ran in.
-struct RecordingStartup(Mutex<Vec<&'static str>>);
+struct RecordingStartup(tokio::sync::Mutex<Vec<&'static str>>);
 
 #[async_trait]
 impl StartupStepExecutor for RecordingStartup {
     async fn execute(&self, step: &'static StartupStep) -> Result<(), StartupStepError> {
-        if let Ok(mut executed) = self.0.lock() {
-            executed.push(step.id);
-        }
+        self.0.lock().await.push(step.id);
         Ok(())
     }
 }
@@ -332,6 +330,8 @@ fn harness() -> TestHarness<FakePortProvider> {
         .expect("the provider identity commits");
     harness
 }
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn a_reconcile_pass_carries_its_cause_and_realizes_a_declared_child() {
@@ -393,10 +393,12 @@ async fn a_reconcile_pass_carries_its_cause_and_realizes_a_declared_child() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn a_granted_operation_runs_through_the_envelope_and_is_audited() {
     let harness = harness();
-    SEEN_INVOCATIONS.lock().expect("invocation log").clear();
+    SEEN_INVOCATIONS.lock().await.clear();
     harness.grant(&caller(), &operation_ref());
 
     let result = harness
@@ -408,7 +410,7 @@ async fn a_granted_operation_runs_through_the_envelope_and_is_audited() {
         .await
         .expect("a granted caller reaches the declared handler");
     assert!(result.object().get("minted").is_some());
-    let seen = SEEN_INVOCATIONS.lock().expect("invocation log");
+    let seen = SEEN_INVOCATIONS.lock().await;
     assert_eq!(seen.len(), 1);
     assert!(
         seen[0].starts_with("invocation-"),
@@ -421,6 +423,8 @@ async fn a_granted_operation_runs_through_the_envelope_and_is_audited() {
     assert_eq!(events[0].outcome(), ProviderAgentAuditOutcome::Accepted);
     assert_eq!(events[0].method().as_str(), "harness-mint");
 }
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[tokio::test]
 async fn an_ungranted_and_an_uncommitted_invocation_are_refused_and_audited() {
@@ -469,12 +473,13 @@ async fn an_ungranted_and_an_uncommitted_invocation_are_refused_and_audited() {
 /// declared method, the resolution carries the method's contract facets
 /// (the row schema reference among them), and dispatch reaches the
 /// declaring driver's handler - which stays the execution source.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn a_declared_method_resolves_validates_against_its_row_and_dispatches() {
     let harness = verify_harness();
     SEEN_VERIFY_INVOCATIONS
-        .lock()
-        .expect("invocation log")
+        .lock().await
         .clear();
 
     let (service, method) = harness
@@ -504,7 +509,7 @@ async fn a_declared_method_resolves_validates_against_its_row_and_dispatches() {
         .expect("the resolved method dispatches to the declaring handler");
     assert!(result.object().get("verified").is_some());
 
-    let seen = SEEN_VERIFY_INVOCATIONS.lock().expect("invocation log");
+    let seen = SEEN_VERIFY_INVOCATIONS.lock().await;
     assert_eq!(seen.as_slice(), &["invocation-broker-7"]);
     drop(seen);
 
@@ -578,6 +583,8 @@ fn an_ambiguous_method_resolution_fails_the_envelope_build() {
 /// service methods keeps operation-keyed dispatch, with no service link -
 /// the forward path's shape, which must not break when the declaration
 /// surface has no methods yet.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn an_operation_without_a_declared_method_dispatches_without_a_service_link() {
     let zone = ZoneId::parse("dev").expect("a zone label");
@@ -826,6 +833,8 @@ fn an_undeclared_foreign_child_is_refused() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn scripted_faults_are_consumed_in_order_and_bounded_by_the_clock() {
     let harness = harness();
@@ -855,6 +864,8 @@ async fn scripted_faults_are_consumed_in_order_and_bounded_by_the_clock() {
         .expect("drain under a fresh deadline succeeds");
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[tokio::test]
 async fn the_derived_startup_order_and_plane_attach_run_through_the_base() {
     let harness = harness();
@@ -863,13 +874,13 @@ async fn the_derived_startup_order_and_plane_attach_run_through_the_base() {
         vec!["commit-binding", "publish-listener"],
         "a step runs only after every input a predecessor commits"
     );
-    let executor = RecordingStartup(Mutex::new(Vec::new()));
+    let executor = RecordingStartup(tokio::sync::Mutex::new(Vec::new()));
     harness
         .run_startup(Some(&executor))
         .await
         .expect("the declared steps execute");
     assert_eq!(
-        executor.0.lock().expect("executed steps").as_slice(),
+        executor.0.lock().await.as_slice(),
         ["commit-binding", "publish-listener"]
     );
     assert_eq!(
@@ -903,8 +914,8 @@ fn the_harness_uses_a_deterministic_clock() {
 /// It serves one frame by answering it and raises one event of its own, then
 /// ends its event stream so the session closes cleanly.
 struct FakeGuestAgent {
-    served: Arc<Mutex<Vec<Vec<u8>>>>,
-    events: Mutex<std::collections::VecDeque<Vec<u8>>>,
+    served: Arc<tokio::sync::Mutex<Vec<Vec<u8>>>>,
+    events: tokio::sync::Mutex<std::collections::VecDeque<Vec<u8>>>,
 }
 
 #[async_trait]
@@ -920,7 +931,7 @@ impl GuestAgent for FakeGuestAgent {
     async fn serve(&self, frame: GuestFrame) -> Result<Vec<GuestFrame>, GuestError> {
         self.served
             .lock()
-            .expect("served frames")
+            .await
             .push(frame.as_bytes().to_vec());
         // The agent raises its own event only after serving the session's
         // frame, so the allocator observes the deterministic wire order
@@ -929,7 +940,7 @@ impl GuestAgent for FakeGuestAgent {
         // `serve_enrolled` select branch and reorder the frames.
         self.events
             .lock()
-            .expect("events")
+            .await
             .push_back(b"uhid-report".to_vec());
         Ok(vec![
             GuestFrame::new(b"served".to_vec()).expect("bounded frame"),
@@ -937,7 +948,7 @@ impl GuestAgent for FakeGuestAgent {
     }
 
     async fn next_event(&self) -> Option<GuestFrame> {
-        let next = self.events.lock().expect("events").pop_front();
+        let next = self.events.lock().await.pop_front();
         match next {
             Some(payload) => Some(GuestFrame::new(payload).expect("bounded frame")),
             None => std::future::pending().await,
@@ -956,20 +967,22 @@ impl GuestAgent for FakeGuestAgent {
 /// duplex-backed `FramedVsockTransport`, and the allocator side of the test
 /// holds the other end.
 struct FakeVsockLink {
-    client: Mutex<Option<tokio::io::DuplexStream>>,
+    client: tokio::sync::Mutex<Option<tokio::io::DuplexStream>>,
 }
 
 impl FakeVsockLink {
     fn new(client: tokio::io::DuplexStream) -> Self {
         Self {
-            client: Mutex::new(Some(client)),
+            client: tokio::sync::Mutex::new(Some(client)),
         }
     }
 }
 
 impl GuestLink for FakeVsockLink {
     fn connect(&self) -> GuestLinkFuture {
-        let client = self.client.lock().expect("link").take();
+        // `connect` is the link trait's synchronous seam; the mutex is never
+        // held by another thread at this point in the test lifecycle.
+        let client = self.client.try_lock().expect("link").take();
         Box::pin(async move {
             let stream = client.ok_or(GuestError::LinkUnavailable)?;
             let transport: Box<dyn d2b_session::OwnedTransport> =
@@ -1071,6 +1084,8 @@ async fn scripted_allocator(stream: tokio::io::DuplexStream) {
     assert_eq!(event.as_bytes(), b"uhid-report");
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
 #[test]
 fn a_guest_agent_enrolls_serves_and_drains_over_a_faked_vsock_transport() {
     let (client, server) = tokio::io::duplex(64 * 1024);
@@ -1082,10 +1097,10 @@ fn a_guest_agent_enrolls_serves_and_drains_over_a_faked_vsock_transport() {
         runtime.block_on(scripted_allocator(server));
     });
 
-    let served = Arc::new(Mutex::new(Vec::new()));
+    let served = Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let agent = FakeGuestAgent {
         served: Arc::clone(&served),
-        events: Mutex::new(std::collections::VecDeque::new()),
+        events: tokio::sync::Mutex::new(std::collections::VecDeque::new()),
     };
     let code = run_guest(
         agent,
@@ -1095,11 +1110,13 @@ fn a_guest_agent_enrolls_serves_and_drains_over_a_faked_vsock_transport() {
     assert_eq!(code, 0, "the guest lifecycle completes");
     allocator.join().expect("the allocator task completes");
     assert_eq!(
-        served.lock().expect("served frames").as_slice(),
+        served.try_lock().expect("served frames").as_slice(),
         &[b"relay".to_vec()],
         "the agent served exactly the frame the enrolled session carried"
     );
 }
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
 #[test]
 fn a_refused_enrollment_ends_the_guest_lifecycle_without_serving() {
@@ -1129,8 +1146,8 @@ fn a_refused_enrollment_ends_the_guest_lifecycle_without_serving() {
     });
 
     let agent = FakeGuestAgent {
-        served: Arc::new(Mutex::new(Vec::new())),
-        events: Mutex::new(std::collections::VecDeque::new()),
+        served: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        events: tokio::sync::Mutex::new(std::collections::VecDeque::new()),
     };
     let code = run_guest(
         agent,

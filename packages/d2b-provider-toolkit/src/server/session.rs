@@ -165,6 +165,7 @@ where
             })?;
         let response_payload = adapter
             .dispatch(zone.clone(), provider_ref.clone(), method.clone(), payload)
+            .await
             .inspect_err(|e| {
                 warn!(zone = ?zone, provider = %provider_ref, method = ?method, reason = %e, "provider dispatch failed; closing provider session");
             })?;

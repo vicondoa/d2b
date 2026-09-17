@@ -1109,7 +1109,7 @@ mod tests {
     };
 
     /// Ordered log every fake writes to, so ordering is one assertion.
-    type Log = Arc<parking_lot::Mutex<Vec<String>>>;
+    type Log = Arc<tokio::sync::Mutex<Vec<String>>>;
 
     /// The fixture's closed component vocabulary.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1150,29 +1150,31 @@ mod tests {
 
     struct RecordingManager {
         log: Log,
-        owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
-        ensure_outcomes: parking_lot::Mutex<std::collections::VecDeque<EnsureOutcome>>,
+        owned: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
+        ensure_outcomes: tokio::sync::Mutex<std::collections::VecDeque<EnsureOutcome>>,
     }
 
     impl RecordingManager {
         fn new(log: Log) -> Arc<Self> {
             Arc::new(Self {
                 log,
-                owned: parking_lot::Mutex::new(Vec::new()),
-                ensure_outcomes: parking_lot::Mutex::new(std::collections::VecDeque::new()),
+                owned: tokio::sync::Mutex::new(Vec::new()),
+                ensure_outcomes: tokio::sync::Mutex::new(std::collections::VecDeque::new()),
             })
         }
 
         fn with_owned(log: Log, owned: Vec<StoredDesiredResource>) -> Arc<Self> {
             Arc::new(Self {
                 log,
-                owned: parking_lot::Mutex::new(owned),
-                ensure_outcomes: parking_lot::Mutex::new(std::collections::VecDeque::new()),
+                owned: tokio::sync::Mutex::new(owned),
+                ensure_outcomes: tokio::sync::Mutex::new(std::collections::VecDeque::new()),
             })
         }
 
         fn script_ensure_outcomes(&self, outcomes: Vec<EnsureOutcome>) {
-            self.ensure_outcomes.lock().extend(outcomes);
+            if let Ok(mut scripted) = self.ensure_outcomes.try_lock() {
+                scripted.extend(outcomes);
+            }
         }
     }
 
@@ -1185,8 +1187,9 @@ mod tests {
         ) -> Result<EnsureOutcome, ResourceError> {
             self.log
                 .lock()
+                .await
                 .push(format!("ensure:{}/{}", child.type_name.as_str(), child.name));
-            if let Some(outcome) = self.ensure_outcomes.lock().pop_front() {
+            if let Some(outcome) = self.ensure_outcomes.lock().await.pop_front() {
                 return Ok(outcome);
             }
             Ok(EnsureOutcome::Created(test_row(
@@ -1203,6 +1206,7 @@ mod tests {
             Ok(self
                 .owned
                 .lock()
+                .await
                 .iter()
                 .find(|row| row.key == *key)
                 .cloned())
@@ -1220,8 +1224,9 @@ mod tests {
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.log
                 .lock()
+                .await
                 .push(format!("delete:{}/{}", key.type_name, key.name));
-            self.owned.lock().retain(|row| row.key != *key);
+            self.owned.lock().await.retain(|row| row.key != *key);
             Ok(())
         }
 
@@ -1229,7 +1234,7 @@ mod tests {
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Ok(self.owned.lock().clone())
+            Ok(self.owned.lock().await.clone())
         }
 
         async fn register_watch(
@@ -1247,12 +1252,15 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingRequeue {
-        scheduled: parking_lot::Mutex<Vec<RequeueId>>,
+        scheduled: tokio::sync::Mutex<Vec<RequeueId>>,
     }
 
     impl RequeueScheduler for RecordingRequeue {
         fn schedule(&self, _key: ResourceKey, _after: Duration) -> RequeueId {
-            let mut scheduled = self.scheduled.lock();
+            // The scheduler trait is synchronous; the recording side fails
+            // closed on the brief write race, which cannot happen in the
+            // single-threaded tests this double serves.
+            let mut scheduled = self.scheduled.try_lock().expect("scheduler lock");
             let id = RequeueId(scheduled.len() as u64 + 1);
             scheduled.push(id);
             id
@@ -1263,9 +1271,9 @@ mod tests {
 
     struct RecordingFamily {
         log: Log,
-        phase: parking_lot::Mutex<SharedProviderEffectPhase>,
-        finalize: parking_lot::Mutex<SharedProviderFinalize>,
-        refreshes: Arc<parking_lot::Mutex<usize>>,
+        phase: tokio::sync::Mutex<SharedProviderEffectPhase>,
+        finalize: tokio::sync::Mutex<SharedProviderFinalize>,
+        refreshes: Arc<tokio::sync::Mutex<usize>>,
         declares_children: bool,
     }
 
@@ -1278,24 +1286,24 @@ mod tests {
         ) -> Arc<Self> {
             Arc::new(Self {
                 log,
-                phase: parking_lot::Mutex::new(phase),
-                finalize: parking_lot::Mutex::new(finalize),
-                refreshes: Arc::new(parking_lot::Mutex::new(0)),
+                phase: tokio::sync::Mutex::new(phase),
+                finalize: tokio::sync::Mutex::new(finalize),
+                refreshes: Arc::new(tokio::sync::Mutex::new(0)),
                 declares_children,
             })
         }
 
         fn refreshes(&self) -> usize {
-            *self.refreshes.lock()
+            *self.refreshes.try_lock().expect("refresh counter lock")
         }
     }
 
-    struct RefreshAdapter(Arc<parking_lot::Mutex<usize>>);
+    struct RefreshAdapter(Arc<tokio::sync::Mutex<usize>>);
 
     #[async_trait]
     impl VolumeAnchorRefresh for RefreshAdapter {
         async fn refresh_volume_anchors(&self) {
-            *self.0.lock() += 1;
+            *self.0.lock().await += 1;
         }
     }
 
@@ -1342,8 +1350,9 @@ mod tests {
         ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
             self.log
                 .lock()
+                .await
                 .push(format!("effect:{}", component.effect_id()));
-            Ok(SharedProviderEffectOutcome::phase(*self.phase.lock()))
+            Ok(SharedProviderEffectOutcome::phase(*self.phase.lock().await))
         }
 
         async fn finalize(
@@ -1354,8 +1363,9 @@ mod tests {
         ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
             self.log
                 .lock()
+                .await
                 .push(format!("finalize:{}", component.effect_id()));
-            Ok(*self.finalize.lock())
+            Ok(*self.finalize.lock().await)
         }
 
         fn volume_anchor_refresh(&self) -> Option<Arc<dyn VolumeAnchorRefresh>> {
@@ -1448,7 +1458,7 @@ mod tests {
             zone: "dev".to_owned(),
             controller_generation: ControllerGeneration::new(1).expect("generation"),
             family: RecordingFamily::new(
-                Arc::new(parking_lot::Mutex::new(Vec::new())),
+                Arc::new(tokio::sync::Mutex::new(Vec::new())),
                 SharedProviderEffectPhase::Pending,
                 SharedProviderFinalize::Complete,
                 false,
@@ -1465,9 +1475,11 @@ mod tests {
     /// A row naming a Provider outside the family is terminal: the stored
     /// spec can never be served by this factory (old `from_registration`
     /// refusal).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn validate_rejects_a_provider_outside_the_family() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let mut fixture = fixture(
             "FixtureOne",
             "row-a",
@@ -1494,9 +1506,11 @@ mod tests {
 
     /// The declared child set is committed before the typed effect runs, and
     /// a not-converged reconcile self-requeues with the row's cadence.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn reconcile_commits_the_child_set_then_runs_the_effect() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let mut fixture = fixture(
             "FixtureOne",
             "row-a",
@@ -1515,7 +1529,7 @@ mod tests {
             .await
             .expect("reconcile");
 
-        let entries = fixture.log.lock().clone();
+        let entries = fixture.log.lock().await.clone();
         let child_at = entries
             .iter()
             .position(|entry| entry == "ensure:Volume/fixture-child")
@@ -1526,7 +1540,7 @@ mod tests {
             .expect("effect ran");
         assert!(child_at < effect_at, "{entries:?}");
         assert_eq!(
-            fixture.requeue.scheduled.lock().len(),
+            fixture.requeue.scheduled.lock().await.len(),
             1,
             "pending reconcile self-resyncs"
         );
@@ -1539,9 +1553,11 @@ mod tests {
 
     /// A component that declares no child set is not diffed: the declared
     /// rows other layers own must survive a reconcile pass.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn reconcile_leaves_rows_of_a_child_less_component_alone() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let manager = RecordingManager::with_owned(
             Arc::clone(&log),
             vec![owned_row("dev", "Process", "declared-worker")],
@@ -1562,7 +1578,7 @@ mod tests {
             .reconcile(&mut fixture.ctx)
             .await
             .expect("reconcile");
-        let entries = log.lock().clone();
+        let entries = log.lock().await.clone();
         assert!(
             !entries.iter().any(|entry| entry.starts_with("delete:")),
             "the declared rows are not this driver's to retire: {entries:?}"
@@ -1578,9 +1594,11 @@ mod tests {
 
     /// Delete runs the Provider teardown stage first, then retires the owned
     /// children endpoint-first.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn delete_runs_provider_teardown_then_retires_children() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let manager = RecordingManager::with_owned(
             Arc::clone(&log),
             vec![
@@ -1601,7 +1619,7 @@ mod tests {
         );
         let mut driver = driver(&fixture).await;
         driver.delete(&mut fixture.ctx).await.expect("teardown");
-        let entries = log.lock().clone();
+        let entries = log.lock().await.clone();
         let finalize_at = entries
             .iter()
             .position(|entry| entry == "finalize:one")
@@ -1622,9 +1640,11 @@ mod tests {
 
     /// A Provider teardown stage that is still progressing is retryable: the
     /// actor re-enters delete (R10) instead of reporting completion.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn delete_is_retryable_while_the_provider_stage_is_pending() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let mut fixture = fixture(
             "FixtureTwo",
             "row-b",
@@ -1652,9 +1672,11 @@ mod tests {
     /// A component that realizes nothing through resource rows adopts
     /// immediately (F2); a child-bearing component adopts only when its
     /// complete declared set is committed.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn recover_adopts_the_committed_child_set() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let manager = RecordingManager::new(Arc::clone(&log));
         let mut fixture = fixture(
             "FixtureOne",
@@ -1676,13 +1698,14 @@ mod tests {
         manager
             .owned
             .lock()
+            .await
             .push(owned_row("dev", "Volume", "fixture-child"));
         assert_eq!(
             driver.recover(&mut fixture.ctx).await.expect("recover"),
             RecoveryOutcome::Adopted
         );
         assert!(
-            !log.lock().iter().any(|entry| entry.starts_with("effect:")),
+            !log.lock().await.iter().any(|entry| entry.starts_with("effect:")),
             "recovery adoption runs no provider effect"
         );
     }
@@ -1692,9 +1715,11 @@ mod tests {
     /// through a reload, and an `Updated` child is a new root exactly as a
     /// `Created` one is. Other child types and an `Unchanged` ensure change
     /// nothing, so they never reload.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
     #[tokio::test]
     async fn volume_anchor_refresh_covers_created_and_updated_volume_children() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let manager = RecordingManager::new(Arc::clone(&log));
         let mut fixture = fixture(
             "FixtureOne",

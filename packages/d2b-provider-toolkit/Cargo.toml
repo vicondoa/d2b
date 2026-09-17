@@ -9,8 +9,13 @@ license.workspace = true
 default = ["unix-transport"]
 unix-transport = ["dep:d2b-session-unix", "d2b-session-unix/host-socket"]
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
 
 [dependencies]
 async-trait = "0.1"
@@ -29,7 +34,7 @@ sha2.workspace = true
 thiserror = "2"
 ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
 tracing = "0.1"
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "process", "io-util"] }
 zeroize = "1"
 
 [dev-dependencies]

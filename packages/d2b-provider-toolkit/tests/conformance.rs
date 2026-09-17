@@ -37,6 +37,7 @@ const MANIFEST_DIGEST: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000001";
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn fake_provider_round_trip_uses_the_exact_placement_binding() {
     let first = Fixture::new(ProviderClass::Runtime, 0).expect("first fixture");
@@ -106,6 +107,7 @@ fn fake_provider_conformance_keeps_health_inspection_and_observability_closed() 
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn generated_server_shutdown_refuses_new_work_after_drain() {
     let fixture = Fixture::new(ProviderClass::Runtime, 0).expect("fixture");
@@ -129,6 +131,7 @@ fn canonical_manifest_round_trip_is_byte_identical() {
     assert_eq!(emitted, manifest::emit_canonical(&parsed));
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn canonical_manifest_cli_output_has_no_newline_or_bom() {
     let input = manifest::emit_canonical(&test_manifest());
@@ -184,6 +187,7 @@ fn canonical_manifest_is_independent_of_input_key_order() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn verify_reports_the_same_offset_as_compiler_canonicality_check() {
     let canonical = manifest::emit_canonical(&test_manifest());
@@ -357,6 +361,11 @@ fn unique_temp_path(label: &str) -> PathBuf {
     ))
 }
 
+/// Drive the emitted manifest through the toolkit CLI binary.
+///
+/// A plain sync test helper that must spawn and wait on the CLI process
+/// synchronously; no runtime is involved.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_emit(input: &[u8], path: &Path) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_d2b-provider-toolkit"))
         .args(["manifest", "emit", "--out"])
@@ -375,6 +384,11 @@ fn run_emit(input: &[u8], path: &Path) -> Output {
     child.wait_with_output().expect("wait for toolkit CLI")
 }
 
+/// Verify one manifest file through the toolkit CLI binary.
+///
+/// A plain sync test helper that must spawn and wait on the CLI process
+/// synchronously; no runtime is involved.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn run_verify(path: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_d2b-provider-toolkit"))
         .args(["manifest", "verify"])
@@ -393,6 +407,7 @@ fn reported_offset(output: &Output) -> u64 {
         .expect("numeric offset")
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn remove_temp_path(path: &Path) {
     fs::remove_file(path).expect("remove temporary manifest");
 }

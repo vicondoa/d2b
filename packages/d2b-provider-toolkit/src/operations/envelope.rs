@@ -34,7 +34,9 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
+
+use tokio::sync::RwLock;
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
@@ -225,7 +227,10 @@ impl OperationEnvelope {
 
     /// The number of committed grants.
     pub fn grant_count(&self) -> usize {
-        self.grants.read().map(|grants| grants.len()).unwrap_or(0)
+        self.grants
+            .try_read()
+            .map(|grants| grants.len())
+            .unwrap_or(0)
     }
 
     /// Every operation a declared handler serves.
@@ -260,16 +265,14 @@ impl OperationEnvelope {
     }
 
     /// Whether a committed grant covers this invocation.
-    pub fn is_granted(&self, caller: &ResourceRef, operation: &ResourceRef) -> bool {
+    pub async fn is_granted(&self, caller: &ResourceRef, operation: &ResourceRef) -> bool {
         self.grants
             .read()
-            .map(|grants| {
-                grants.contains(&GrantEntry {
-                    caller: caller.clone(),
-                    operation: operation.clone(),
-                })
+            .await
+            .contains(&GrantEntry {
+                caller: caller.clone(),
+                operation: operation.clone(),
             })
-            .unwrap_or(false)
     }
 
     /// Commit one grant: this caller may invoke this operation.
@@ -278,7 +281,10 @@ impl OperationEnvelope {
     /// with no committed grant is refused even when the operation is
     /// declared.
     pub fn commit_grant(&self, caller: &ResourceRef, operation: &ResourceRef) {
-        if let Ok(mut grants) = self.grants.write() {
+        // Grants are committed once at setup, never per invocation; a sync
+        // caller that loses the brief write race fails closed (U4) and the
+        // grant simply stays uncommitted, exactly like the old poison skip.
+        if let Ok(mut grants) = self.grants.try_write() {
             grants.insert(GrantEntry {
                 caller: caller.clone(),
                 operation: operation.clone(),
@@ -289,7 +295,7 @@ impl OperationEnvelope {
     /// Revoke one committed grant.
     pub fn revoke_grant(&self, caller: &ResourceRef, operation: &ResourceRef) -> bool {
         self.grants
-            .write()
+            .try_write()
             .map(|mut grants| {
                 grants.remove(&GrantEntry {
                     caller: caller.clone(),
@@ -450,7 +456,7 @@ impl OperationEnvelope {
         kernel: Option<&d2b_resource_types::KernelCaller>,
     ) -> Result<OperationResult, OperationFailure> {
         let operation = &entry.operation;
-        if !self.is_granted(caller, operation) {
+        if !self.is_granted(caller, operation).await {
             self.audit(operation, ProviderAgentAuditOutcome::Denied);
             return Err(OperationFailure::new(UNGRANTED_CALLER));
         }
@@ -490,7 +496,11 @@ impl OperationEnvelope {
         let Ok(method) = BoundedToken::parse(operation) else {
             return;
         };
-        if let Ok(mut audit) = self.audit.lock() {
+        // The audit ring is shared with the adapter through a `std` mutex
+        // (the constructor surface is a frozen contract), so the record is
+        // best-effort by design: a contended or poisoned ring drops the
+        // event instead of parking the dispatch worker.
+        if let Ok(mut audit) = self.audit.try_lock() {
             audit.record(ProviderAgentAuditEvent::new(
                 self.zone_path.clone(),
                 self.provider_ref.clone(),

@@ -8,10 +8,12 @@
 use std::{
     future::ready,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
 };
+
+use tokio::sync::Mutex;
 
 use d2b_contracts_provider::v3::SpecifiedProviderMethod;
 use d2b_contracts_resource::v3::identity::{
@@ -286,7 +288,7 @@ impl FakeProvider {
     /// Return the number of accepted calls.
     pub fn call_count(&self) -> usize {
         self.calls
-            .lock()
+            .try_lock()
             .map(|calls| calls.len())
             .unwrap_or_default()
     }
@@ -294,14 +296,14 @@ impl FakeProvider {
     /// Return the accepted method sequence without exposing payloads.
     pub fn calls(&self) -> Vec<ProviderMethodName> {
         self.calls
-            .lock()
+            .try_lock()
             .map(|calls| calls.clone())
             .unwrap_or_default()
     }
 
     /// Clear the accepted method sequence.
     pub fn reset_calls(&self) {
-        if let Ok(mut calls) = self.calls.lock() {
+        if let Ok(mut calls) = self.calls.try_lock() {
             calls.clear();
         }
     }
@@ -347,7 +349,7 @@ impl FakeProvider {
         {
             return Err(ProviderToolkitError::WireInvalid);
         }
-        if let Ok(mut calls) = self.calls.lock() {
+        if let Ok(mut calls) = self.calls.try_lock() {
             if calls.len() >= crate::testing::fakes::MAX_RECORDED_CALLS {
                 return Err(ProviderToolkitError::CapacityOutOfRange);
             }

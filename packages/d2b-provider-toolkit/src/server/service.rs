@@ -250,7 +250,7 @@ where
     S: ProviderService,
 {
     /// Dispatch one generated-service request under server admission.
-    pub fn dispatch(
+    pub async fn dispatch(
         &self,
         zone: ZonePath,
         provider_ref: ResourceRef,
@@ -260,6 +260,7 @@ where
         let _permit = self.admit_request()?;
         self.adapter
             .dispatch(zone, provider_ref, method, payload)
+            .await
             .map_err(ServerError::Dispatch)
     }
 
@@ -304,6 +305,7 @@ mod tests {
     use crate::{FakeProvider, Fixture};
     use d2b_provider::ProviderClass;
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn shutdown_drains_an_admitted_request_before_reporting_idle() {
         let fixture = Fixture::new(ProviderClass::Runtime, 0).expect("fixture");
@@ -323,8 +325,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn generated_server_admits_and_dispatches_one_closed_method() {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn generated_server_admits_and_dispatches_one_closed_method() {
         let fixture = Fixture::new(ProviderClass::Runtime, 0).expect("fixture");
         let provider_ref = fixture.descriptor.provider_ref().clone();
         let server = GeneratedProviderServiceServer::new(FakeProvider::new(fixture));
@@ -335,6 +338,7 @@ mod tests {
                 BoundedToken::parse("health").expect("method"),
                 CanonicalJsonObject::empty(),
             )
+            .await
             .expect("dispatch");
         assert!(response.get("state").is_some());
         assert_eq!(server.generated_services().len(), 1);

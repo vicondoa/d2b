@@ -6,7 +6,9 @@
 //! fixed 64-call admission ceiling and the 1024-entry diagnostic audit ring.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceRef, execution_policy::BoundedToken,
@@ -149,7 +151,7 @@ impl<S> ProviderAgentAdapter<S> {
     /// Snapshot retained audit events.
     pub fn audit_len(&self) -> usize {
         self.audit
-            .lock()
+            .try_lock()
             .map(|audit| audit.len())
             .unwrap_or_default()
     }
@@ -171,8 +173,8 @@ impl<S> ProviderAgentAdapter<S> {
             warn!(provider = ?route.provider_ref(), "authenticated route bind refused: route is missing provider, generation, or reconnect identity");
             return Err(ProviderToolkitError::SessionUnauthenticated);
         }
-        let mut bound = self.authenticated_route.lock().map_err(|_| {
-            warn!(provider = ?route.provider_ref(), "authenticated route bind failed: adapter route state lock poisoned");
+        let mut bound = self.authenticated_route.try_lock().map_err(|_| {
+            warn!(provider = ?route.provider_ref(), "authenticated route bind failed: adapter route state contended");
             ProviderToolkitError::SessionUnauthenticated
         })?;
         match bound.as_ref() {
@@ -198,7 +200,7 @@ impl<S> ProviderAgentAdapter<S> {
     /// Whether an authenticated controller route has been bound.
     pub fn has_authenticated_route(&self) -> bool {
         self.authenticated_route
-            .lock()
+            .try_lock()
             .ok()
             .is_some_and(|route| route.is_some())
     }
@@ -209,24 +211,22 @@ where
     S: ProviderService,
 {
     /// Dispatch one request under bounded admission and record its outcome.
-    pub fn dispatch(
+    pub async fn dispatch(
         &self,
         zone: ZonePath,
         provider_ref: ResourceRef,
         method: BoundedToken,
         payload: CanonicalJsonObject,
     ) -> Result<CanonicalJsonObject, ProviderToolkitError> {
-        let bound = self.authenticated_route.lock().map_err(|_| {
-            warn!(zone = ?zone, provider = %provider_ref, method = ?method, "dispatch refused: adapter route state lock poisoned");
-            ProviderToolkitError::SessionUnauthenticated
-        })?;
+        let bound = self.authenticated_route.lock().await;
         if let Some(route) = bound.as_ref() {
             Self::validate_bound_request(route, &zone, &provider_ref)?;
         }
-        self.dispatch_inner(zone, provider_ref, method, payload)
+        drop(bound);
+        self.dispatch_inner(zone, provider_ref, method, payload).await
     }
 
-    fn dispatch_for_route(
+    async fn dispatch_for_route(
         &self,
         route: &AuthenticatedSessionRouteBinding,
         zone: ZonePath,
@@ -234,10 +234,7 @@ where
         method: BoundedToken,
         payload: CanonicalJsonObject,
     ) -> Result<CanonicalJsonObject, ProviderToolkitError> {
-        let bound = self.authenticated_route.lock().map_err(|_| {
-            warn!(zone = ?zone, provider = %provider_ref, method = ?method, "dispatch refused: adapter route state lock poisoned");
-            ProviderToolkitError::SessionUnauthenticated
-        })?;
+        let bound = self.authenticated_route.lock().await;
         let current_route = bound.as_ref().ok_or_else(|| {
             warn!(zone = ?zone, provider = %provider_ref, method = ?method, "dispatch refused: no controller route is bound to the adapter");
             ProviderToolkitError::SessionUnauthenticated
@@ -247,10 +244,11 @@ where
             return Err(ProviderToolkitError::SessionUnauthenticated);
         }
         Self::validate_bound_request(route, &zone, &provider_ref)?;
-        self.dispatch_inner(zone, provider_ref, method, payload)
+        drop(bound);
+        self.dispatch_inner(zone, provider_ref, method, payload).await
     }
 
-    fn dispatch_inner(
+    async fn dispatch_inner(
         &self,
         zone: ZonePath,
         provider_ref: ResourceRef,
@@ -269,14 +267,15 @@ where
         } else {
             ProviderAgentAuditOutcome::Failed
         };
-        if let Ok(mut audit) = self.audit.lock() {
-            audit.record(ProviderAgentAuditEvent::new(
+        self.audit
+            .lock()
+            .await
+            .record(ProviderAgentAuditEvent::new(
                 zone,
                 provider_ref,
                 method,
                 outcome,
             ));
-        }
         result
     }
 
@@ -302,10 +301,7 @@ where
         let route = self
             .authenticated_route
             .lock()
-            .map_err(|_| {
-                warn!("provider session refused: adapter route state lock poisoned");
-                ProviderToolkitError::SessionUnauthenticated
-            })?
+            .await
             .clone()
             .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
         loop {
@@ -315,10 +311,7 @@ where
             let current_route = self
                 .authenticated_route
                 .lock()
-                .map_err(|_| {
-                    warn!("provider session loop aborted: adapter route state lock poisoned");
-                    ProviderToolkitError::SessionUnauthenticated
-                })?
+                .await
                 .clone()
                 .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
             if current_route != route {
@@ -332,13 +325,15 @@ where
             let request = codec.decode_request(&frame).inspect_err(|e| {
                 warn!(zone = ?route.zone(), reason = %e, "provider frame decode failed; closing session");
             })?;
-            let response = self.dispatch_for_route(
-                &route,
-                request.zone().clone(),
-                request.provider_ref().clone(),
-                request.method().clone(),
-                request.payload().clone(),
-            )?;
+            let response = self
+                .dispatch_for_route(
+                    &route,
+                    request.zone().clone(),
+                    request.provider_ref().clone(),
+                    request.method().clone(),
+                    request.payload().clone(),
+                )
+                .await?;
             let encoded = codec
                 .encode_response(request.request_id(), &response)
                 .inspect_err(|e| {

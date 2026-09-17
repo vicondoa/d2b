@@ -388,6 +388,11 @@ pub fn run<P: SupervisedProvider>(provider: P) -> i32 {
 
 /// Run one supervised provider process with an executor for its declared
 /// startup steps.
+///
+/// This is the process entry point a Provider binary's `main` calls: it
+/// builds the process runtime and drives the async lifecycle to completion
+/// on the calling thread, never on an executor worker.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn run_with_startup<P: SupervisedProvider>(
     provider: P,
     startup: Option<Arc<dyn StartupStepExecutor>>,
