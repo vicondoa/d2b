@@ -3,11 +3,11 @@ use std::process::Command;
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn no_bootstrap_descriptor_fails_closed() {
-    let binary = std::env::args()
-        .nth(1)
-        .or_else(|| std::env::var("CARGO_BIN_EXE_d2b-provider-test-controller").ok())
-        .or_else(|| std::env::var("CARGO_BIN_EXE_d2b_provider_test_controller").ok())
-        .expect("controller fixture binary path");
+    // Cargo guarantees CARGO_BIN_EXE_<bin> as a compile-time constant when
+    // the integration test is compiled against the package's bin target
+    // (the pattern the d2b CLI tests use); the runtime env-var fallback is
+    // unreliable under `cargo test --workspace` invocation modes.
+    let binary = env!("CARGO_BIN_EXE_d2b-provider-test-controller");
     let output = Command::new(binary)
         .output()
         .expect("spawn controller fixture");
