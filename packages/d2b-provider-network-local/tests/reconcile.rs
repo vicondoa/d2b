@@ -1,6 +1,7 @@
+use parking_lot::Mutex;
 use std::{
     future::Future,
-    sync::{Arc, Mutex},
+    sync::Arc,
     task::{Context, Poll, Waker},
 };
 
@@ -38,8 +39,8 @@ struct FakePortState {
 
 impl FakePorts {
     fn push(&self, event: &'static str) -> Result<(), NetworkEffectError> {
-        self.inner.events.lock().unwrap().push(event);
-        let mut configured = self.inner.effect_error.lock().unwrap();
+        self.inner.events.lock().push(event);
+        let mut configured = self.inner.effect_error.lock();
         if configured.is_some_and(|error| {
             matches!(
                 (event, error),
@@ -56,7 +57,7 @@ impl FakePorts {
     }
 
     fn events(&self) -> Vec<&'static str> {
-        self.inner.events.lock().unwrap().clone()
+        self.inner.events.lock().clone()
     }
 }
 
@@ -96,7 +97,6 @@ impl NetworkEffectPort for FakePorts {
         self.inner
             .firewall_generations
             .lock()
-            .unwrap()
             .push(intent.expected_generation_id().as_str().to_owned());
         self.push("firewall-apply")?;
         Ok(FirewallDigest::new([1; 32]))
@@ -176,7 +176,7 @@ impl NetworkResourcePort for FakePorts {
     }
 
     async fn reconcile_mdns(&self, enabled: bool) -> Result<(), NetworkEffectError> {
-        self.inner.mdns_values.lock().unwrap().push(enabled);
+        self.inner.mdns_values.lock().push(enabled);
         self.push("mdns")
     }
 
@@ -312,7 +312,7 @@ fn reconcile_enforces_effect_and_child_readiness_order() {
         ]
     );
     assert_eq!(
-        *effects.inner.firewall_generations.lock().unwrap(),
+        *effects.inner.firewall_generations.lock(),
         [generation().as_str()]
     );
     assert_eq!(
@@ -367,7 +367,7 @@ fn guest_and_agent_are_barriered_by_volume_and_attachment_readiness() {
 #[test]
 fn stale_configuration_generation_requeues_without_following_effects() {
     let effects = FakePorts::default();
-    *effects.inner.effect_error.lock().unwrap() =
+    *effects.inner.effect_error.lock() =
         Some(NetworkEffectError::StaleConfigurationGeneration);
     let resources = FakePorts::default();
     let controller = NetworkReconciler::new(effects.clone(), resources.clone());
@@ -478,7 +478,7 @@ fn user_readiness_and_mdns_toggle_are_explicit() {
         block_on(controller.reconcile(&enabled)).unwrap(),
         ReconcileProgress::Ready
     );
-    assert_eq!(*resources.inner.mdns_values.lock().unwrap(), [true]);
+    assert_eq!(*resources.inner.mdns_values.lock(), [true]);
 }
 
 #[test]
@@ -498,7 +498,7 @@ fn east_west_requires_the_site_opt_in_before_any_effect() {
 #[test]
 fn transient_tap_delete_retains_finalizer_stage_for_retry() {
     let effects = FakePorts::default();
-    *effects.inner.effect_error.lock().unwrap() = Some(NetworkEffectError::Transient);
+    *effects.inner.effect_error.lock() = Some(NetworkEffectError::Transient);
     let resources = FakePorts::default();
     let controller = NetworkReconciler::new(effects.clone(), resources);
     assert_eq!(

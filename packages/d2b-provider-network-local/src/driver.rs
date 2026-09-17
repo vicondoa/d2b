@@ -438,18 +438,18 @@ mod tests {
     use crate::test_support::RecordingEffects;
 
     /// Ordered log the fixture writes, so ordering is one assertion.
-    type Log = Arc<parking_lot::Mutex<Vec<String>>>;
+    type Log = Arc<tokio::sync::Mutex<Vec<String>>>;
 
     struct RecordingManager {
         log: Log,
-        owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
+        owned: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
     }
 
     impl RecordingManager {
         fn new(log: Log) -> Arc<Self> {
             Arc::new(Self {
                 log,
-                owned: parking_lot::Mutex::new(Vec::new()),
+                owned: tokio::sync::Mutex::new(Vec::new()),
             })
         }
     }
@@ -463,6 +463,7 @@ mod tests {
         ) -> Result<EnsureOutcome, ResourceError> {
             self.log
                 .lock()
+                .await
                 .push(format!("ensure:{}/{}", child.type_name.as_str(), child.name));
             Ok(EnsureOutcome::Created(test_row(
                 child.type_name.as_str(),
@@ -477,6 +478,7 @@ mod tests {
             Ok(self
                 .owned
                 .lock()
+                .await
                 .iter()
                 .find(|row| row.key == *key)
                 .cloned())
@@ -492,6 +494,7 @@ mod tests {
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.log
                 .lock()
+                .await
                 .push(format!("delete:{}/{}", key.type_name, key.name));
             Ok(())
         }
@@ -500,7 +503,7 @@ mod tests {
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Ok(self.owned.lock().clone())
+            Ok(self.owned.lock().await.clone())
         }
 
         async fn register_watch(
@@ -521,7 +524,7 @@ mod tests {
         scheduled: parking_lot::Mutex<Vec<RequeueId>>,
     }
 
-    impl RequeueScheduler for RecordingRequeue {
+impl RequeueScheduler for RecordingRequeue {
         fn schedule(&self, _key: ResourceKey, _after: Duration) -> RequeueId {
             let mut scheduled = self.scheduled.lock();
             let id = RequeueId(scheduled.len() as u64 + 1);
@@ -620,9 +623,10 @@ mod tests {
 
     /// A reconcile pass commits the declared child set before the typed
     /// effect runs, and the whole set is derived from the row's own identity.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_commits_the_declared_children_before_the_effect() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let effects = Arc::new(RecordingEffects::default());
         let descriptor = descriptor(Arc::clone(&effects));
         let manager = RecordingManager::new(Arc::clone(&log));
@@ -641,7 +645,7 @@ mod tests {
         let uid = d2b_provider_toolkit::resource_uid(&[0x42; 16]).expect("uid");
         let vm = crate::ifname::derive_network_child_name(&uid, "vm");
         let agent = crate::ifname::derive_network_child_name(&uid, "agent");
-        let entries = log.lock().clone();
+        let entries = log.lock().await.clone();
         assert_eq!(
             entries
                 .iter()
@@ -703,10 +707,11 @@ mod tests {
     }
 
     /// A row naming a Provider outside the family is terminal.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_rejects_a_foreign_provider() {
         let descriptor = descriptor(Arc::new(RecordingEffects::default()));
-        let manager = RecordingManager::new(Arc::new(parking_lot::Mutex::new(Vec::new())));
+        let manager = RecordingManager::new(Arc::new(tokio::sync::Mutex::new(Vec::new())));
         let mut ctx = context(
             &descriptor,
             network_spec_value("Provider/network-other"),
@@ -740,11 +745,12 @@ mod tests {
     /// The shared recording double appends every effect call in order, so the
     /// plane can assert reconcile-then-finalize ordering through `call_order()`
     /// while the per-verb counters keep counting.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recording_effects_records_ordered_calls() {
         let effects = Arc::new(RecordingEffects::default());
         let descriptor = descriptor(Arc::clone(&effects));
-        let manager = RecordingManager::new(Arc::new(parking_lot::Mutex::new(Vec::new())));
+        let manager = RecordingManager::new(Arc::new(tokio::sync::Mutex::new(Vec::new())));
         let mut ctx = context(
             &descriptor,
             network_spec_value(NETWORK_PROVIDER_REF),

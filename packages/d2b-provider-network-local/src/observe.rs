@@ -472,6 +472,7 @@ mod tests {
         assert_eq!(occupancy.routes()[0].table(), "main");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn a_host_observation_command_that_hangs_fails_closed_within_its_budget() {
         // The child spins on shell builtins and does not answer inside the

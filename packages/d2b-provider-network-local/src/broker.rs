@@ -825,7 +825,7 @@ fn map_broker_error(error: NetworkBrokerError) -> NetworkEffectError {
 mod tests {
     use std::{
         future::Future,
-        sync::{Arc, Mutex},
+        sync::Arc,
         task::{Context, Poll, Waker},
     };
 
@@ -846,16 +846,17 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct RecordingBroker {
-        events: Arc<Mutex<Vec<&'static str>>>,
+        events: Arc<parking_lot::Mutex<Vec<&'static str>>>,
     }
 
     impl RecordingBroker {
+
         fn record(&self, event: &'static str) {
-            self.events.lock().unwrap().push(event);
+            self.events.lock().push(event);
         }
 
         fn events(&self) -> Vec<&'static str> {
-            self.events.lock().unwrap().clone()
+            self.events.lock().clone()
         }
     }
 

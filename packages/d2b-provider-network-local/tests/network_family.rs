@@ -14,7 +14,8 @@ use std::collections::BTreeMap;
 use std::io::IoSlice;
 use std::os::fd::AsFd;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -107,9 +108,6 @@ struct KernelServer {
 
 impl KernelServer {
     fn spawn(root: &tempfile::TempDir) -> Self {
-        use std::io::Read;
-        use std::io::Write;
-
         let socket_path = root.path().join("kernel.sock");
         let listener = socket2::Socket::new(
             socket2::Domain::UNIX,
@@ -127,36 +125,8 @@ impl KernelServer {
         let captured_leg = Arc::clone(&captured);
         let reply_leg = Arc::clone(&reply);
         let reply_fds_leg = Arc::clone(&reply_fds);
-        let handle = std::thread::spawn(move || {
-            let (mut connection, _) = listener.accept().expect("accept kernel call");
-            let mut buf = vec![0_u8; d2b_contracts::MAX_FRAME_SIZE + 4];
-            let read = connection.read(&mut buf).expect("read kernel frame");
-            let envelope: BrokerRequestEnvelope =
-                d2b_contracts::decode_frame("BrokerRequestEnvelope", &buf[..read])
-                    .expect("decode kernel frame");
-            *captured_leg.lock().expect("capture") = Some(envelope);
-            let response = loop {
-                if let Some(response) = reply_leg.lock().expect("reply").take() {
-                    break response;
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            };
-            let frame = d2b_contracts::encode_frame(&response).expect("encode kernel reply");
-            let fds = std::mem::take(&mut *reply_fds_leg.lock().expect("reply fds"));
-            if fds.is_empty() {
-                connection.write_all(&frame).expect("write kernel reply");
-            } else {
-                let descriptors = fds.iter().map(AsFd::as_fd).collect::<Vec<_>>();
-                let mut control_bytes = vec![0_u8; rustix::cmsg_space!(ScmRights(256))];
-                let mut control = rustix::net::SendAncillaryBuffer::new(&mut control_bytes);
-                assert!(
-                    control.push(rustix::net::SendAncillaryMessage::ScmRights(&descriptors)),
-                    "fd control data accepted"
-                );
-                let iov = [IoSlice::new(&frame)];
-                rustix::net::sendmsg(&connection, &iov, &mut control, rustix::net::SendFlags::empty())
-                    .expect("write kernel reply with fds");
-            }
+let handle = std::thread::spawn(move || {
+            serve_kernel_call(listener, captured_leg, reply_leg, reply_fds_leg);
         });
         Self {
             socket_path,
@@ -177,14 +147,18 @@ impl KernelServer {
     }
 
     fn answer(&self, response: BrokerResponse) {
-        *self.reply.lock().expect("reply") = Some(response);
+        *self.reply.lock() = Some(response);
     }
 
     fn answer_with_fds(&self, response: BrokerResponse, fds: Vec<std::os::fd::OwnedFd>) {
-        *self.reply.lock().expect("reply") = Some(response);
-        *self.reply_fds.lock().expect("reply fds") = fds;
+        *self.reply.lock() = Some(response);
+        *self.reply_fds.lock() = fds;
     }
 
+    // Joining the fake kernel server's thread is the sync test harness's own
+    // blocking wait;the server leg itself runs on a plain test thread.
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn captured(&mut self) -> BrokerRequestEnvelope {
         self.handle
             .take()
@@ -193,14 +167,60 @@ impl KernelServer {
             .expect("kernel server completes");
         self.captured
             .lock()
-            .expect("captured")
             .clone()
             .expect("the kernel server captured one frame")
     }
 }
 
+/// Serve one accepted kernel call:capture the EnvelopeInvoke frame and
+/// sendthe canned reply over the same SEQPACKET connection, exactly as
+/// the broker's origination socket would. Runs on the test's own blocking
+/// thread;the poll-and-sleep wait for the caller's canned answer is part
+/// of this sync test harness, so the leg carries the test-helper sanction.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn serve_kernel_call(
+    listener: socket2::Socket,
+    captured: Arc<Mutex<Option<BrokerRequestEnvelope>>>,
+    reply: Arc<Mutex<Option<BrokerResponse>>>,
+    reply_fds: Arc<Mutex<Vec<std::os::fd::OwnedFd>>>,
+) {
+    use std::io::Read;
+    use std::io::Write;
+
+    let (mut connection, _) = listener.accept().expect("accept kernel call");
+    let mut buf = vec![0_u8; d2b_contracts::MAX_FRAME_SIZE + 4];
+    let read = connection.read(&mut buf).expect("read kernel frame");
+    let envelope: BrokerRequestEnvelope =
+        d2b_contracts::decode_frame("BrokerRequestEnvelope", &buf[..read])
+            .expect("decode kernel frame");
+    *captured.lock() = Some(envelope);
+    let response = loop {
+        if let Some(response) = reply.lock().take() {
+            break response;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let frame = d2b_contracts::encode_frame(&response).expect("encode kernel reply");
+    let fds = std::mem::take(&mut *reply_fds.lock());
+    if fds.is_empty() {
+        connection.write_all(&frame).expect("write kernel reply");
+    } else {
+        let descriptors = fds.iter().map(AsFd::as_fd).collect::<Vec<_>>();
+        let mut control_bytes = vec![0_u8; rustix::cmsg_space!(ScmRights(256))];
+        let mut control = rustix::net::SendAncillaryBuffer::new(&mut control_bytes);
+        assert!(
+            control.push(rustix::net::SendAncillaryMessage::ScmRights(&descriptors)),
+            "fd control data accepted"
+        );
+        let iov = [IoSlice::new(&frame)];
+        rustix::net::sendmsg(&connection, &iov, &mut control, rustix::net::SendFlags::empty())
+            .expect("write kernel reply with fds");
+    }
+}
+
 /// Invoke one family handler with a canonical payload under a fixed
 /// evidence chain.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn invoke(
     handler: &'static dyn OperationHandler,
     kernel: Option<KernelCaller>,
