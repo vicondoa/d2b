@@ -992,6 +992,7 @@ mod tests {
 
     // -- factory -------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn factory_registers_only_the_volume_resource_type() {
         let factory = VolumeDriverFactory::new(VolumeDriverArgs {
@@ -1004,6 +1005,7 @@ mod tests {
 
     // -- ensure: layout effect, then children ---------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn ensure_creates_binding_children_after_the_layout_effect() {
         let fake = FakeLayoutEffects::new();
@@ -1066,6 +1068,7 @@ mod tests {
     /// state - adopts a layout that already exists on the host without
     /// re-running the layout effect, and its reconcile re-attaches the
     /// deterministic binding child instead of re-creating anything.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_the_existing_layout_and_never_recreates_it() {
         let fake = FakeLayoutEffects::new();
@@ -1117,6 +1120,7 @@ mod tests {
     /// source resolution performs - at completion rate with no bound. The
     /// report is a retryable failure, so the actor's one backoff requeue owns
     /// the retry and the effect runs at most once per pass.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn degraded_layout_reports_one_retryable_failure_per_pass() {
         let fake = FakeLayoutEffects::degraded();
@@ -1166,6 +1170,7 @@ mod tests {
 
     // -- deterministic child identity -----------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn same_parent_and_attachment_derive_the_same_child_key() {
         let manager = RecordingManager::new();
@@ -1210,6 +1215,7 @@ mod tests {
 
     // -- parent spec change: retire obsolete, retain matching ------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn parent_spec_change_retires_obsolete_children_and_retains_matching() {
         let manager = RecordingManager::new();
@@ -1284,6 +1290,7 @@ mod tests {
 
     // -- finalize: owned children retire before the layout teardown (F3) -----
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_finalizes_owned_children_before_the_layout_teardown() {
         let manager = RecordingManager::new();
@@ -1320,6 +1327,7 @@ mod tests {
 
     // -- delete: the Volume's own layout effect -------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_removes_the_volume_layout_exactly() {
         let fake = FakeLayoutEffects::new();
@@ -1343,6 +1351,7 @@ mod tests {
 
     // -- spec guards -----------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn wrong_provider_is_rejected_at_validate() {
         let mut spec = volume_spec_json("/mnt/data", false);
@@ -1357,6 +1366,7 @@ mod tests {
         assert_eq!(failure.class(), FailureClass::Terminal, "provider mismatch is terminal");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn malformed_spec_decodes_to_a_terminal_failure() {
         let bytes = serde_json::json!({
