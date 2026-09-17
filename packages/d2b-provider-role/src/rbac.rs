@@ -140,6 +140,11 @@ impl PositiveDecisionCache {
         self.lock_entries().clear();
     }
 
+    // The cache is a synchronous in-memory boundary behind a sync public
+    // surface (`contains`/`insert_allow`/`invalidate_revisions`/`clear`):
+    // consumers consult it on their own threads, so a short blocking
+    // acquire has no async form to convert to.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn lock_entries(&self) -> MutexGuard<'_, BTreeMap<AuthorizationCacheKey, PositiveEntry>> {
         self.entries.lock().unwrap_or_else(|poisoned| {
             let mut entries = poisoned.into_inner();
