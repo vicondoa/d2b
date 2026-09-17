@@ -848,6 +848,7 @@ mod tests {
     }
 
     impl PoolTestGuard {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn new() -> Self {
             static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
             Self {
