@@ -14,6 +14,7 @@ pub mod driver;
 pub mod effects;
 pub mod execution;
 pub mod identity;
+pub mod kernel_worker;
 pub mod launch_identity;
 pub mod operations;
 pub mod worker_launch;

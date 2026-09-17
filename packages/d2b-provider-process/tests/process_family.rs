@@ -198,6 +198,7 @@ fn the_declared_decoder_decodes_the_family_rows() {
 
 /// The registry serves the family's factory per type, and a second
 /// registration for the same type is refused rather than clobbering the first.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn the_registry_serves_one_factory_per_member_type() {
     let descriptors = descriptors();

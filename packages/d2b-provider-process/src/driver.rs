@@ -2642,7 +2642,8 @@ mod tests {
     /// rows. An owned child of an unconverted owner therefore carries no
     /// owner key, and the launch ticket must still name its controller owner:
     /// the authored reference the row was ingested with is the fallback.
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn identity_falls_back_to_the_authored_owner_reference() {
         let mut row = test_row();
         row.metadata =
@@ -2694,7 +2695,8 @@ mod tests {
     /// ref, and without it the guest VMM intent is refused
     /// (`identity-rejection: resolved intent vm or legacy role mismatch`), so
     /// a controller-committed `Process/<guest>-vmm` could never launch.
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn guest_runtime_row_targets_its_owning_guest() {
         let mut f = fixture(guest_vmm_row());
         let identity = guest_vmm_identity(&mut f).await;
@@ -2720,7 +2722,8 @@ mod tests {
     /// launch VM stays the Host the signed serving template binds (KTD7
     /// host-exec/guest-target split). The driver resolves this through the
     /// one launch-identity resolver instead of a call-site rule.
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn binding_owned_worker_identity_targets_the_attachment_guest() {
         let binding_key = ResourceKey::new(
             "work",
@@ -2788,7 +2791,8 @@ mod tests {
     /// their `VmId` from. A Device with no Guest owner is the genuinely
     /// unresolvable case and refuses by name; absence and an unanswerable
     /// plane keep their own names instead of collapsing into it.
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn device_worker_vm_resolves_from_the_owning_devices_guest_owner() {
         use super::device_worker_vm;
 
@@ -2877,7 +2881,8 @@ mod tests {
     /// incomplete identity: it fails once, at construction, instead of
     /// reaching the fence without the attachment target the serving intent
     /// resolves under.
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn binding_owned_worker_without_its_binding_row_fails_construction() {
         let binding_key = ResourceKey::new(
             "work",
@@ -2934,7 +2939,8 @@ mod tests {
     /// owner identity cache second), and a non-Guest owner never reaches the
     /// Guest plane. Without a wired source the slot stays unbound, so the
     /// launch still refuses closed.
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn guest_owner_uid_resolution_keeps_the_old_composer_precedence() {
         struct FixedGuestOwners {
             uid: ResourceUid,
@@ -3041,7 +3047,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn factory_registers_both_process_family_resource_types() {
         let args = driver_args(Arc::new(FakeEffects::new(FakeEffectsConfig::default())));
         let factory = ProcessDriverFactory::new(args);
@@ -3086,7 +3093,8 @@ mod tests {
     /// spec's `startDeadline` as its budget, and the retained identity is
     /// adopted on the next pass - exactly the old
     /// `launch_ephemeral_resource`/`adopt_ephemeral_resource` pairing.
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn ephemeral_launch_uses_the_one_shot_effect_and_start_deadline() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
@@ -3149,7 +3157,8 @@ mod tests {
     /// The one-shot exit: the process this actor launched is gone, so the row
     /// reports `Succeeded` and waits out `successfulTtl` in runtime memory
     /// (R11); an elapsed TTL asks the manager to retire the row.
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn ephemeral_exit_is_terminal_succeeded_and_the_ttl_retires_the_row() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
@@ -3205,7 +3214,8 @@ mod tests {
     /// The bounded runtime: a one-shot that outlived `runtimeDeadline` stops
     /// through the preserved fixed escalation, reports `Failed`, and retains
     /// the row for `failedTtl`.
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn ephemeral_runtime_deadline_stops_and_reports_a_terminal_failure() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
@@ -3260,7 +3270,8 @@ mod tests {
 
     /// `incidentHold` blocks a failed one-shot's cleanup until an explicit
     /// release: no retention requeue, and no elapsed TTL ever retires it.
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn ephemeral_incident_hold_keeps_a_failed_row() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
@@ -3310,7 +3321,8 @@ mod tests {
     /// A refused one-shot launch is terminal: the type carries no restart
     /// policy, so no restart backoff is ever scheduled (old
     /// `handle_start_failure` ephemeral arm).
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn ephemeral_launch_refusal_is_terminal_and_never_restarts() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
@@ -3339,7 +3351,8 @@ mod tests {
 
     /// Recovery adopts a live one-shot without launching it, and the next pass
     /// observes the same identity without relaunching.
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn ephemeral_recover_adopts_a_live_process_without_launching() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
@@ -3373,7 +3386,8 @@ mod tests {
 
     /// Drifted/ambiguous evidence during a one-shot reconcile is terminal and
     /// never launches.
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn ephemeral_quarantined_classification_never_launches() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Quarantined(quarantined_report())]),
@@ -3394,7 +3408,8 @@ mod tests {
     /// One-shot deletion adopts first (old `deletion_adoption`), stops the
     /// exact live identity through the fixed escalation, and finalizes the
     /// provider's local authority.
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn ephemeral_delete_stops_the_exact_identity_and_finalizes() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
@@ -3417,7 +3432,8 @@ mod tests {
 
     /// Deletion converges without effects when no exact identity remains, and
     /// stops a uniquely identified stale candidate after a restart.
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn ephemeral_delete_converges_absent_and_stops_a_stale_candidate() {
         let absent = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
@@ -3442,7 +3458,8 @@ mod tests {
     }
 
     /// An ambiguous one-shot identity refuses destructive action.
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn ephemeral_delete_refuses_an_ambiguous_identity() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Quarantined(quarantined_report())]),
@@ -3467,7 +3484,8 @@ mod tests {
     /// retrying the ticket forever blocked its owner's teardown. Reconcile
     /// classifies the same refusal terminally, never as a retryable identity
     /// fault.
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn ephemeral_unmintable_ticket_converges_on_delete_and_is_terminal_on_reconcile() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adopt_error: Some("provider-ticket:guest-process-not-vmm".to_owned()),
@@ -3491,7 +3509,8 @@ mod tests {
 
     // -- launch happy path ---------------------------------------------------
 
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn launch_reaches_ready_with_expected_ticket_inputs() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
@@ -3546,7 +3565,8 @@ mod tests {
     /// A `never-adopt` row must not read the process it launched itself as an
     /// unexpected live identity: the reconcile arm used to stop and relaunch
     /// its own process on every effect completion (a stop/launch loop).
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn never_adopt_row_observes_the_identity_it_launched_instead_of_stopping_it() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
@@ -3588,7 +3608,8 @@ mod tests {
 
     // -- recover: adoption / quarantine / missing ----------------------------
 
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn recover_adopts_a_live_matching_process_without_launching() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
@@ -3607,7 +3628,8 @@ mod tests {
         assert_eq!(*status, ProcessDriverStatus::Ready { adopted: true });
     }
 
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn recover_classifies_drifted_and_ambiguous_processes_as_quarantined() {
         for adoption in [
             ProviderAdoption::Stale {
@@ -3632,7 +3654,8 @@ mod tests {
 
     // -- finalize: owned children retire before the process teardown (F3) ----
 
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn finalize_finalizes_owned_children_before_the_process_teardown() {
         let manager = OwnershipManager::with_owned(StoredDesiredResource {
             owner_uid: Some([0x42; 16]),
@@ -3665,7 +3688,8 @@ mod tests {
 
     // -- delete: term then kill ----------------------------------------------
 
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn delete_stops_term_then_kill_and_finalizes() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
@@ -3692,7 +3716,8 @@ mod tests {
         assert_eq!(fake.call_order(), ["adopt", "stop", "finalize"]);
     }
 
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn delete_without_a_live_process_is_a_noop() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
@@ -3706,7 +3731,8 @@ mod tests {
         assert_eq!(fake.finalize_calls(), 0);
     }
 
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn delete_stops_an_exact_stale_candidate_after_restart() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Stale {
@@ -3721,7 +3747,8 @@ mod tests {
         assert_eq!(fake.call_order(), ["adopt", "stop-stale"]);
     }
 
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn delete_refuses_an_ambiguous_identity() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Quarantined(quarantined_report())]),
@@ -3741,7 +3768,8 @@ mod tests {
     /// exists for the launch ticket, so a delete that depended on it
     /// converged without stopping anything - retiring the row while the
     /// process it launched kept running unowned.
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn delete_stops_a_device_worker_even_when_the_launch_parameters_refuse() {
         let mut row = test_row();
         row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"gpu-worker","drainTimeout":"250ms"}"#
@@ -3770,7 +3798,8 @@ mod tests {
 
     // -- retryable reconcile failure -> exactly one requeue with backoff -----
 
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn retryable_reconcile_failure_requeues_exactly_once_with_backoff() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
@@ -3822,7 +3851,8 @@ mod tests {
 
     // -- restart budget is runtime-only --------------------------------------
 
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn restart_budget_is_in_memory_only() {
         let policy = r#"{"backoffBase":"1s","backoffMax":"60s","backoffMultiplierMilli":2000,"maxRestarts":1,"resetAfter":"60s"}"#;
         let mut row = test_row();
@@ -3893,7 +3923,8 @@ mod tests {
     /// returned without requeueing, so nothing ever re-entered and the row
     /// reported `Ready` over a process that was gone), and an exit consumes
     /// one budgeted restart and requeues the relaunch at the policy backoff.
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn durable_exit_is_observed_and_restarts_under_the_policy() {
         let policy = r#"{"class":"on-failure","backoffBase":"1s","backoffMax":"60s","backoffMultiplierMilli":2000,"maxRestarts":2,"resetAfter":"300s"}"#;
         let mut row = test_row();
@@ -3980,7 +4011,8 @@ mod tests {
     /// satisfied pass publishes wire `Ready`, and a phase gate such as
     /// `DaemonGpuLifecyclePort::declared_worker` mints the worker identity
     /// from that phase over a process that no longer exists.
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn durable_exit_under_a_never_policy_is_terminal_and_never_relaunches() {
         let policy = r#"{"class":"never","backoffBase":"1s","backoffMax":"60s","backoffMultiplierMilli":2000,"resetAfter":"300s"}"#;
         let mut row = test_row();
@@ -4053,7 +4085,8 @@ mod tests {
     /// `Failed` and never `Ready`. Before this the arm returned `Satisfied`
     /// and the runtime mapped that to wire `Ready` over a process this daemon
     /// could not identify.
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn durable_liveness_ambiguity_refuses_terminally_and_never_reads_ready() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
@@ -4117,7 +4150,8 @@ mod tests {
     /// the row fails instead of relaunching (and warning) forever under the
     /// default policy with no bounded `maxRestarts`. Before this the driver
     /// classified from the budget alone, consumed a restart, and requeued.
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn durable_unresolvable_launch_ticket_refuses_terminally() {
         for (error, kind) in [
             (
@@ -4167,7 +4201,8 @@ mod tests {
     /// launch error: a genuine provider-effect refusal - the identity the
     /// ticket path could not bind yet is the case the seeding exists for -
     /// still drains the restart budget and retries at the policy backoff.
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn durable_provider_effect_launch_failure_still_retries_under_the_budget() {
         let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
@@ -4198,7 +4233,8 @@ mod tests {
 
     // -- validate ------------------------------------------------------------
 
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn validate_rejects_an_unsupported_provider() {
         let mut row = test_row();
         row.spec = br#"{"providerRef":"Provider/other","executionRef":"Host/host-system","processClass":"worker","template":"reaction"}"#
@@ -4212,7 +4248,8 @@ mod tests {
         assert_eq!(failure.op(), DriverOp::Validate);
     }
 
-    #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
     async fn validate_rejects_a_malformed_spec() {
         let mut row = test_row();
         row.spec = b"{not-json".to_vec();

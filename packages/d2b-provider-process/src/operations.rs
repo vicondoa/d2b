@@ -50,6 +50,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::driver::{PROCESS_FAMILY_EXECUTION_DOMAINS, PROCESS_FAMILY_READS, PROCESS_FAMILY_VERBS};
+use crate::kernel_worker;
 
 /// The operation the family declares first.
 ///
@@ -309,7 +310,7 @@ async fn invoke_kernel_nested(
     let invocation_id = ctx.invocation_id.to_owned();
     let mut chain_identities = ctx.chain_identities.to_vec();
     chain_identities.push(ctx.caller.to_canonical_string());
-    tokio::task::spawn_blocking(move || {
+    let reply = kernel_worker::run(move || {
         envelope_invoke_kernel(
             &socket_path,
             KERNEL_IO_TIMEOUT,
@@ -325,11 +326,15 @@ async fn invoke_kernel_nested(
         )
     })
     .await
-    .map_err(|error| {
-        OperationFailure::with_detail(
+    .map_err(|refusal| match refusal {
+        kernel_worker::KernelRefusal::Busy => OperationFailure::with_detail(
             KERNEL_REFUSED,
-            format!("{kernel_operation}: kernel task join failed: {error}"),
-        )
+            format!("{kernel_operation}: kernel invocation worker busy"),
+        ),
+        kernel_worker::KernelRefusal::Unavailable => OperationFailure::with_detail(
+            KERNEL_REFUSED,
+            format!("{kernel_operation}: kernel invocation worker unavailable"),
+        ),
     })?
     .map_err(|error| {
         // The kernel's own closed code is preserved: "errored" for a kernel
@@ -353,7 +358,8 @@ async fn invoke_kernel_nested(
                     .unwrap_or_default()
             ),
         )
-    })
+    })?;
+    Ok(reply)
 }
 
 /// The canonical result object of one kernel reply.
@@ -1381,7 +1387,7 @@ fn bind_cloud_hypervisor_guest_uid(
 /// Extend the audio runner's environment with the PipeWire props the daemon
 /// state names (the retired broker arm's `extend_audio_runner_pipewire_props`
 /// enrichment).
-fn extend_audio_runner_pipewire_props(
+async fn extend_audio_runner_pipewire_props(
     vm_id: &str,
     role_id: &str,
     role: RunnerRole,
@@ -1391,7 +1397,7 @@ fn extend_audio_runner_pipewire_props(
         return Ok(());
     }
     let state_path = PathBuf::from(format!("/var/lib/d2b/vms/{vm_id}/state/audio-state.json"));
-    let bytes = std::fs::read(&state_path).map_err(|error| {
+    let bytes = tokio::fs::read(&state_path).await.map_err(|error| {
         OperationFailure::with_detail(
             KERNEL_REFUSED,
             format!(
@@ -1474,11 +1480,11 @@ fn audio_state_value<'a>(
 }
 
 /// Whether one process's cgroup path matches the expected subtree.
-fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
+async fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
     if expected_subtree.is_empty() {
         return false;
     }
-    let Ok(content) = std::fs::read_to_string(format!("/proc/{pid}/cgroup")) else {
+    let Ok(content) = tokio::fs::read_to_string(format!("/proc/{pid}/cgroup")).await else {
         return false;
     };
     let expected = expected_subtree.trim_start_matches('/');
@@ -1492,14 +1498,14 @@ fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
 }
 
 /// Whether one observed executable path matches the trusted binary.
-fn executable_matches(actual: Option<&str>, expected: &Path) -> bool {
+async fn executable_matches(actual: Option<&str>, expected: &Path) -> bool {
     let Some(actual) = actual else {
         return false;
     };
-    let Ok(actual) = std::fs::canonicalize(actual) else {
+    let Ok(actual) = tokio::fs::canonicalize(actual).await else {
         return false;
     };
-    let Ok(expected) = std::fs::canonicalize(expected) else {
+    let Ok(expected) = tokio::fs::canonicalize(expected).await else {
         return false;
     };
     actual == expected
@@ -2060,10 +2066,12 @@ impl OperationHandler for ObserveRunnerHandler {
         // The registered binary is the spawn-time record of what the kernel
         // exec'd (the daemon's own resolved plan), so it is authoritative
         // for the executable binding; the readlink is a cross-check only.
-        let executable_verified = registered_binary
-            .map(|path| executable_matches(Some(path), &intent.binary_path))
-            .unwrap_or_else(|| executable_matches(executable, &intent.binary_path));
-        let cgroup_verified = proc_cgroup_matches(pid, &cgroup_placement.subtree);
+let executable_verified = if let Some(path) = registered_binary {
+            executable_matches(Some(path), &intent.binary_path).await
+        } else {
+            executable_matches(executable, &intent.binary_path).await
+        };
+        let cgroup_verified = proc_cgroup_matches(pid, &cgroup_placement.subtree).await;
         let response = ObserveRunnerResponse {
             vm_id: request.vm_id.clone(),
             role_id: request.role_id.clone(),
@@ -2648,7 +2656,8 @@ impl OperationHandler for SpawnRunnerHandler {
             request.role_id.as_str(),
             request.role,
             &mut env,
-        )?;
+        )
+        .await?;
         let launch_argv = match request.launch_args.as_ref() {
             Some(launch_args) => {
                 let mut argv = Vec::with_capacity(launch_args.as_slice().len() + 1);

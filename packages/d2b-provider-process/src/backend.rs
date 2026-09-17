@@ -354,6 +354,7 @@ mod tests {
     use super::*;
     use d2b_process_conformance::testing::fixtures;
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn launch_request_rejects_inherited_fd_count_mismatch() {
         let ticket = fixtures::ticket_builder().build().expect("ticket");
