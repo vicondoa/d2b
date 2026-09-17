@@ -21,7 +21,7 @@
 use std::fmt;
 
 use d2b_broker::catalog::BrokerOperationRow;
-use d2b_broker::envelope::{DirectInvocation, DispatchFailure, DispatchOutcome, HandlerTable};
+use d2b_broker::envelope::{DirectInvocation, HandlerFuture, HandlerTable};
 
 use crate::dependency_surface;
 use crate::routing::{RefusalClass, RoutingVerdict, route_row};
@@ -65,8 +65,9 @@ pub struct HandlerDeclaration<'a> {
     /// capability object. It reaches only what the capability object
     /// carries (declared context, validated payload, attested context,
     /// attached descriptors); broker internals are unnameable from handler
-    /// crate code.
-    pub handler: fn(&DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure>,
+    /// crate code. The handler returns the boxed future of its outcome;
+    /// the broker awaits it inside the abortable worker task.
+    pub handler: for<'inv> fn(&'inv DirectInvocation<'inv>) -> HandlerFuture<'inv>,
     /// The crate the handler ships in; must be the row's declaring
     /// provider, so one crate cannot register another crate's operation.
     pub source_crate: &'static str,
@@ -299,7 +300,9 @@ mod tests {
         BROKER_OPERATION_CATALOG, BrokerAuthzFacets, BrokerProfileId, CellDurability,
         DeadlineTier, OperationOwner, PayloadProvenance,
     };
-    use d2b_broker::envelope::{BrokerEnvelope, CallerAuthority, HANDLER_REFUSED};
+    use d2b_broker::envelope::{
+        BrokerEnvelope, CallerAuthority, DispatchFailure, DispatchOutcome, HANDLER_REFUSED,
+    };
     use serde_json::json;
 
     const FIXTURE_OPERATION: &str = "d2b.fixture.pure.echo";
@@ -350,8 +353,16 @@ mod tests {
     /// A handler that only answers when the capability object carries
     /// exactly its declared context: a handler reaching beyond its
     /// declaration refuses under its own code.
-    fn declared_context_only_handler(
-        invocation: &DirectInvocation<'_>,
+    fn declared_context_only_handler<'a>(
+        invocation: &'a DirectInvocation<'a>,
+    ) -> HandlerFuture<'a> {
+        Box::pin(declared_context_only(invocation))
+    }
+
+    /// The fixture's body, as an async fn so the handler's `return`
+    /// statements keep their original meaning.
+    async fn declared_context_only<'a>(
+        invocation: &'a DirectInvocation<'a>,
     ) -> Result<DispatchOutcome, DispatchFailure> {
         if invocation.ctx.operation != FIXTURE_OPERATION {
             return Err(DispatchFailure::with_detail(
@@ -382,8 +393,16 @@ mod tests {
     /// at the surface and the handler refuses under its own code - the
     /// envelope never decides this refusal (AE3's runtime half, and the
     /// U6 edge scenario).
-    fn undeclared_cell_handler(
-        invocation: &DirectInvocation<'_>,
+    fn undeclared_cell_handler<'a>(
+        invocation: &'a DirectInvocation<'a>,
+    ) -> HandlerFuture<'a> {
+        Box::pin(undeclared_cell(invocation))
+    }
+
+    /// The fixture's body, as an async fn so the handler's `return`
+    /// statement keeps its original meaning.
+    async fn undeclared_cell<'a>(
+        invocation: &'a DirectInvocation<'a>,
     ) -> Result<DispatchOutcome, DispatchFailure> {
         let Some(_handle) = state_cell(invocation, "lifecycle-leases") else {
             return Err(DispatchFailure::with_detail(

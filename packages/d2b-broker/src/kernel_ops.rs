@@ -101,86 +101,124 @@ pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
     HandlerTable::new()
         .with(OPEN_PIDFD, {
             let config = Arc::clone(&config);
-            move |invocation| open_pidfd(&config, invocation)
+            move |invocation| {
+                let config = Arc::clone(&config);
+                Box::pin(async move { open_pidfd(&config, invocation).await })
+            }
         })
         .with(OPEN_PEER_PIDFD_FROM_ACCEPTED_SOCKET, {
-            move |invocation| open_peer_pidfd_from_accepted_socket(invocation)
+            move |invocation| Box::pin(open_peer_pidfd_from_accepted_socket(invocation))
         })
         .with(POLL_CHILD_REAPED, {
-            move |invocation| poll_child_reaped(invocation)
+            move |invocation| Box::pin(poll_child_reaped(invocation))
         })
         .with(PREPARE_DIRECTORY, {
             let config = Arc::clone(&config);
-            move |invocation| prepare_directory(&config)(invocation)
+            move |invocation| {
+                let config = Arc::clone(&config);
+                Box::pin(async move { prepare_directory(&config)(invocation) })
+            }
         })
-        .with(KILL_CGROUP, kill_cgroup)
-        .with(SIGNAL_PIDFD, signal_pidfd)
+        .with(KILL_CGROUP, {
+            move |invocation| Box::pin(kill_cgroup(invocation))
+        })
+        .with(SIGNAL_PIDFD, {
+            move |invocation| Box::pin(signal_pidfd(invocation))
+        })
         .with(DEREGISTER_PIDFD, {
-            move |invocation| deregister_pidfd(invocation)
+            move |invocation| Box::pin(deregister_pidfd(invocation))
         })
         .with(SPAWN_PROCESS, {
             let config = Arc::clone(&config);
-            move |invocation| spawn_process(&config, invocation)
+            move |invocation| {
+                let config = Arc::clone(&config);
+                Box::pin(async move { spawn_process(&config, invocation).await })
+            }
         })
         .with(DELEGATE_CGROUP_V2, {
             let config = Arc::clone(&config);
-            move |invocation| delegate_cgroup_v2(&config, invocation)
+            move |invocation| {
+                let config = Arc::clone(&config);
+                Box::pin(async move { delegate_cgroup_v2(&config, invocation).await })
+            }
         })
         .with(OPEN_CGROUP_DIR, {
-            move |invocation| open_cgroup_dir(invocation)
+            move |invocation| Box::pin(open_cgroup_dir(invocation))
         })
         .with(OBSERVE_PROCESS, {
-            move |invocation| observe_process(invocation)
+            move |invocation| Box::pin(observe_process(invocation))
         })
         .with(TAKE_CONTROLLER_BOOTSTRAP, {
-            move |invocation| take_controller_bootstrap(invocation)
+            move |invocation| Box::pin(take_controller_bootstrap(invocation))
         })
-        .with(CONSUME_CELL, consume_cell)
+        .with(CONSUME_CELL, {
+            move |invocation| Box::pin(consume_cell(invocation))
+        })
         .with(COMPLETE_CELL, {
-            move |invocation| complete_cell(invocation)
+            move |invocation| Box::pin(complete_cell(invocation))
         })
         .with(APPLY_NFTABLES, {
             let config = Arc::clone(&config);
-            move |invocation| apply_nftables(&config, invocation)
+            move |invocation| {
+                let config = Arc::clone(&config);
+                Box::pin(async move { apply_nftables(&config, invocation).await })
+            }
         })
         .with(APPLY_NFTABLES_PROJECTION, {
-            move |invocation| apply_nftables_projection(invocation)
+            move |invocation| Box::pin(apply_nftables_projection(invocation))
         })
         .with(APPLY_NM_UNMANAGED, {
-            move |invocation| apply_nm_unmanaged(invocation)
+            move |invocation| Box::pin(apply_nm_unmanaged(invocation))
         })
         .with(APPLY_ROUTE, {
             let config = Arc::clone(&config);
-            move |invocation| apply_route(&config, invocation)
+            move |invocation| {
+                let config = Arc::clone(&config);
+                Box::pin(async move { apply_route(&config, invocation).await })
+            }
         })
-        .with(APPLY_SYSCTL, apply_sysctl)
+        .with(APPLY_SYSCTL, {
+            move |invocation| Box::pin(apply_sysctl(invocation))
+        })
         .with(CREATE_BRIDGE, {
-            move |invocation| create_bridge(invocation)
+            move |invocation| Box::pin(create_bridge(invocation))
         })
         .with(DELETE_BRIDGE, {
-            move |invocation| delete_bridge(invocation)
+            move |invocation| Box::pin(delete_bridge(invocation))
         })
         .with(CREATE_PERSISTENT_TAP, {
             let config = Arc::clone(&config);
-            move |invocation| create_persistent_tap(&config, invocation)
+            move |invocation| {
+                let config = Arc::clone(&config);
+                Box::pin(async move { create_persistent_tap(&config, invocation).await })
+            }
         })
         .with(DELETE_PERSISTENT_TAP, {
             let config = Arc::clone(&config);
-            move |invocation| delete_persistent_tap(&config, invocation)
+            move |invocation| {
+                let config = Arc::clone(&config);
+                Box::pin(async move { delete_persistent_tap(&config, invocation).await })
+            }
         })
         .with(CREATE_TAP_FD, {
             let config = Arc::clone(&config);
-            move |invocation| create_tap_fd(&config, invocation)
+            move |invocation| {
+                let config = Arc::clone(&config);
+                Box::pin(async move { create_tap_fd(&config, invocation).await })
+            }
         })
         .with(SET_BRIDGE_PORT_FLAGS, {
             let config = Arc::clone(&config);
-            move |invocation| set_bridge_port_flags(&config, invocation)
+            move |invocation| {
+                let config = Arc::clone(&config);
+                Box::pin(async move { set_bridge_port_flags(&config, invocation).await })
+            }
         })
         .with(UPDATE_HOSTS_FILE, {
-            move |invocation| update_hosts_file(invocation)
+            move |invocation| Box::pin(update_hosts_file(invocation))
         })
         .with(SEED_DNSMASQ_LEASE, {
-            move |invocation| seed_dnsmasq_lease(invocation)
+            move |invocation| Box::pin(seed_dnsmasq_lease(invocation))
         })
 }
 
@@ -188,7 +226,7 @@ pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
 /// verification that closes the pid-reuse race, exactly as the retired
 /// `OpenPidfd` arm's live handler ran it. The pidfd travels back over the
 /// fd leg.
-fn open_pidfd(
+async fn open_pidfd(
     _config: &KernelConfig,
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
@@ -208,7 +246,7 @@ fn open_pidfd(
 /// The peer-pidfd kernel: derive the accepted socket's peer pidfd via
 /// `SO_PEERPIDFD`, exactly as the retired `OpenPeerPidfdFromAcceptedSocket`
 /// arm's sys layer ran it. The pidfd travels back over the fd leg.
-fn open_peer_pidfd_from_accepted_socket(
+async fn open_peer_pidfd_from_accepted_socket(
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
     let socket = request_fd(invocation, 0)?;
@@ -222,7 +260,7 @@ fn open_peer_pidfd_from_accepted_socket(
 
 /// The signal kernel: `pidfd_send_signal` on the attached pidfd, exactly
 /// as the retired `SignalRunner` arm's sys layer ran it.
-fn signal_pidfd(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+async fn signal_pidfd(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let signal = field_i64(invocation.payload, "signal")? as nix::libc::c_int;
     let pidfd = request_fd(invocation, 0)?;
     crate::sys::pidfd_sys::pidfd_send_signal(pidfd.as_fd(), signal)
@@ -237,7 +275,7 @@ fn signal_pidfd(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, Di
 /// record (the pidfd cell remove path). The record is keyed by the
 /// invocation id the spawn-process kernel registered under, so the
 /// resource-agnostic kernel never learns a runner id.
-fn deregister_pidfd(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+async fn deregister_pidfd(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let removed = crate::runtime::runner_pidfds().remove(invocation.ctx.invocation_id);
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({ "removed": removed }))?,
@@ -251,7 +289,7 @@ fn deregister_pidfd(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome
 /// the notification under the invocation id, and returns the outcome; a
 /// child the SIGCHLD loop already reaped is answered from the recorded
 /// notification.
-fn poll_child_reaped(
+async fn poll_child_reaped(
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
     use d2b_contracts_broker::broker_wire::{
@@ -363,7 +401,7 @@ fn prepare_directory(config: &KernelConfig) -> impl Fn(&DirectInvocation<'_>) ->
 /// The cgroup-kill kernel: kill exactly the named leaf under the
 /// delegated slice, refusing any path outside it - the resource-agnostic
 /// core of the retired `CgroupKill` arm.
-fn kill_cgroup(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+async fn kill_cgroup(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let cgroup_path = PathBuf::from(field_str(invocation.payload, "cgroupPath")?);
     if !strictly_inside_delegated_slice(&cgroup_path) {
         return Err(refused(
@@ -386,7 +424,7 @@ fn kill_cgroup(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, Dis
 /// The cgroup-delegation kernel: enable the delegated slice's controllers
 /// and chown the subtree to the daemon principal, exactly as the retired
 /// `DelegateCgroupV2` arm's live helper ran it.
-fn delegate_cgroup_v2(
+async fn delegate_cgroup_v2(
     config: &KernelConfig,
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
@@ -417,7 +455,7 @@ fn delegate_cgroup_v2(
 /// delegated slice with the path-safe `O_PATH` open, returning the
 /// descriptor over the fd leg - the resource-agnostic core of the retired
 /// `OpenCgroupDir` arm.
-fn open_cgroup_dir(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+async fn open_cgroup_dir(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let path = PathBuf::from(field_str(invocation.payload, "path")?);
     if !path.starts_with(Path::new(
         crate::ops::cgroup::DEFAULT_DELEGATED_PARENT_SLICE,
@@ -438,7 +476,7 @@ fn open_cgroup_dir(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome,
 /// start time, executable) plus the registry-cell check that the
 /// invocation's registered pidfd names the observed pid. Expectation
 /// comparison stays on the family side.
-fn observe_process(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+async fn observe_process(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let pid = field_i64(invocation.payload, "pid")? as i32;
     // The kernel handler body is synchronous by construction (the envelope
     // `HandlerTable` API takes sync closures; the seam's async handler-task
@@ -515,7 +553,7 @@ fn observe_process(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome,
 /// the registry. An absent escrow is an absent result (the caller's
 /// adoption then classifies ControllerBootstrapMissing and replaces the
 /// runner), never a dispatch error.
-fn take_controller_bootstrap(
+async fn take_controller_bootstrap(
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
     let Some(identity) = optional_parse_identity_fields(invocation.payload) else {
@@ -630,7 +668,7 @@ fn optional_field_bytes32(payload: &CanonicalJsonObject, key: &str) -> Option<Op
 /// the commit and the completion leaves an `unknown` record the retried
 /// invocation reconciles under its id; a completed record refuses
 /// re-consume across broker restarts (AE2).
-fn consume_cell(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+async fn consume_cell(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let row = crate::catalog::BrokerOperationRow::find(CONSUME_CELL)
         .expect("consume-cell is a committed row");
     let cell = row
@@ -662,7 +700,7 @@ fn consume_cell(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, Di
 /// state cell under the same canonical identity and initiating principal
 /// the consume leg used. The durable completed marker is what refuses a
 /// replayed consume across broker restarts (AE2).
-fn complete_cell(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+async fn complete_cell(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let row = crate::catalog::BrokerOperationRow::find(COMPLETE_CELL)
         .expect("complete-cell is a committed row");
     let cell = row
@@ -706,7 +744,7 @@ fn initiating_principal(invocation: &DirectInvocation<'_>) -> String {
 /// retired `SpawnRunner` arm ran, registers the spawned pidfd under the
 /// invocation id so the broker's SIGCHLD reaper owns the child, and
 /// returns the pidfd and any extra descriptors over the fd leg.
-fn spawn_process(
+async fn spawn_process(
     config: &KernelConfig,
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
@@ -993,7 +1031,7 @@ fn kernel_resolver(
 /// ran it. The daemon-side caller resolves the trusted nft intent and
 /// carries the resolved script body, ownership id, and coexistence policy
 /// in the payload.
-fn apply_nftables(
+async fn apply_nftables(
     _config: &KernelConfig,
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
@@ -1063,7 +1101,7 @@ fn apply_nftables(
 /// Provider-owned nftables projection under its ownership marker with the
 /// installed-generation and desired-hash fences, exactly as the retired
 /// `ApplyNftablesProjection` arm ran it.
-fn apply_nftables_projection(
+async fn apply_nftables_projection(
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
     let script_body = field_str(invocation.payload, "scriptBody")?.to_owned();
@@ -1105,7 +1143,7 @@ fn apply_nftables_projection(
 /// The apply-nm-unmanaged kernel: write or remove the NetworkManager
 /// unmanaged drop-in file with the reload behavior, exactly as the retired
 /// `ApplyNmUnmanaged` arm's live backend ran it.
-fn apply_nm_unmanaged(
+async fn apply_nm_unmanaged(
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
     let destroy = optional_field_bool(invocation.payload, "destroy")?.unwrap_or(false);
@@ -1135,7 +1173,7 @@ fn apply_nm_unmanaged(
 /// The apply-route kernel: apply or remove one ownership-marked route with
 /// the durable UID-bound marker-record preflight, exactly as the retired
 /// `ApplyRoute` arm's live backend ran it.
-fn apply_route(
+async fn apply_route(
     config: &KernelConfig,
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
@@ -1173,7 +1211,7 @@ fn apply_route(
 /// The apply-sysctl kernel: write one key with readback verification, or
 /// restore the destroy default, exactly as the retired `ApplySysctl` arm's
 /// live backend ran it.
-fn apply_sysctl(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+async fn apply_sysctl(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let key = field_str(invocation.payload, "key")?.to_owned();
     let destroy = optional_field_bool(invocation.payload, "destroy")?.unwrap_or(false);
     let value = if destroy {
@@ -1200,7 +1238,7 @@ fn apply_sysctl(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, Di
 /// The create-bridge kernel: create the framework-owned bridge from the
 /// resolved intent with the ownership-marker fence, exactly as the retired
 /// `CreateBridge` arm ran it.
-fn create_bridge(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+async fn create_bridge(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let intent = parse_resolved_bridge_intent(invocation)?;
     let bridge_intent_digest =
         crate::ops::network::create_bridge(&crate::ops::network::SystemBridgeBackend, &intent)
@@ -1213,7 +1251,7 @@ fn create_bridge(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, D
 
 /// The delete-bridge kernel: remove the framework-owned bridge after its
 /// TAP removals, exactly as the retired `DeleteBridge` arm ran it.
-fn delete_bridge(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
+async fn delete_bridge(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
     let intent = parse_resolved_bridge_intent(invocation)?;
     let bridge_intent_digest =
         crate::ops::network::delete_bridge(&crate::ops::network::SystemBridgeBackend, &intent)
@@ -1255,7 +1293,7 @@ fn parse_resolved_bridge_intent(
 /// typed request, re-deriving the trusted tap intent from the broker's own
 /// bundle copy, and persist the realization record - exactly what the
 /// retired `CreatePersistentTap` arm ran.
-fn create_persistent_tap(
+async fn create_persistent_tap(
     config: &KernelConfig,
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
@@ -1301,7 +1339,7 @@ fn create_persistent_tap(
 /// The delete-persistent-tap kernel: remove one trusted attachment
 /// realization under the exact generation fences, exactly what the retired
 /// `DeletePersistentTap` arm ran.
-fn delete_persistent_tap(
+async fn delete_persistent_tap(
     config: &KernelConfig,
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
@@ -1338,7 +1376,7 @@ fn delete_persistent_tap(
 /// The create-tap-fd kernel: create one VMM TAP and return its descriptor
 /// over the fd leg, exactly what the retired `CreateTapFd` arm ran. This is
 /// the ONLY fd-bearing network kernel; the row declares the `any` fd kind.
-fn create_tap_fd(
+async fn create_tap_fd(
     config: &KernelConfig,
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
@@ -1365,7 +1403,7 @@ fn create_tap_fd(
 /// The set-bridge-port-flags kernel: apply the trusted per-role bridge
 /// port flag set under the installed-generation fence, exactly what the
 /// retired `SetBridgePortFlags` arm's live backend ran.
-fn set_bridge_port_flags(
+async fn set_bridge_port_flags(
     config: &KernelConfig,
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
@@ -1394,7 +1432,7 @@ fn set_bridge_port_flags(
 /// The update-hosts-file kernel: write or remove the managed /etc/hosts
 /// marker block from the resolved intent, exactly what the retired
 /// `UpdateHostsFile` arm's live backend ran.
-fn update_hosts_file(
+async fn update_hosts_file(
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
     let destroy = optional_field_bool(invocation.payload, "destroy")?.unwrap_or(false);
@@ -1428,7 +1466,7 @@ fn update_hosts_file(
 /// child VM name from the admitted Network identity and refuses a
 /// mismatch. The lease file write itself remains a committed follow-up;
 /// the arm's observable contract (admission + ack) is preserved.
-fn seed_dnsmasq_lease(
+async fn seed_dnsmasq_lease(
     invocation: &DirectInvocation<'_>,
 ) -> Result<DispatchOutcome, DispatchFailure> {
     let scope_id = field_str(invocation.payload, "scopeId")?;

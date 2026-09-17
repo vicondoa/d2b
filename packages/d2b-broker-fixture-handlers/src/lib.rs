@@ -13,7 +13,7 @@
 
 #![deny(unsafe_code)]
 
-use d2b_broker::envelope::{DirectInvocation, DispatchFailure, DispatchOutcome};
+use d2b_broker::envelope::{DirectInvocation, DispatchOutcome, HandlerFuture};
 
 /// The fixture operation serving a pure echo transform.
 ///
@@ -29,8 +29,10 @@ pub struct DeclaredOperation {
     /// The pure handler, typed over the capability object the broker hands
     /// an in-broker handler: the invocation context, the validated payload,
     /// the attested context block, and the attached descriptors. Broker
-    /// internals are unnameable from this crate.
-    pub handler: fn(&DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure>,
+    /// internals are unnameable from this crate. The handler returns the
+    /// boxed future of its outcome; the broker awaits it inside the
+    /// abortable worker task.
+    pub handler: for<'a> fn(&'a DirectInvocation<'a>) -> HandlerFuture<'a>,
 }
 
 /// Every operation this fixture handler crate declares.
@@ -45,9 +47,11 @@ pub fn declared_operations() -> &'static [DeclaredOperation] {
 }
 
 /// Echo the validated payload back as the result.
-pub fn echo(invocation: &DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> {
-    Ok(DispatchOutcome {
-        result: invocation.payload.clone(),
-        fds: Vec::new(),
+pub fn echo<'a>(invocation: &'a DirectInvocation<'a>) -> HandlerFuture<'a> {
+    Box::pin(async move {
+        Ok(DispatchOutcome {
+            result: invocation.payload.clone(),
+            fds: Vec::new(),
+        })
     })
 }

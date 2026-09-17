@@ -44,6 +44,7 @@ use d2b_contracts_broker::broker_wire::{
 use d2b_contracts_resource::v3::CanonicalJsonObject;
 use serde_json::Value;
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::pin::Pin;
 
 use crate::catalog::{
     BROKER_OPERATION_CATALOG, BrokerOperationRow, BrokerProfileId, OperationOwner,
@@ -920,8 +921,18 @@ pub struct DirectInvocation<'a> {
 /// The envelope holds its dispatcher as a trait object, so the future is
 /// boxed rather than an associated type: a handler that answers locally can
 /// hand back a ready future, and a forwarder hands back the peer leg's.
-pub type DispatchFuture<'a> = std::pin::Pin<
-    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchFailure>> + Send + 'a>,
+pub type DispatchFuture<'a> = Pin<
+    Box<dyn Future<Output = Result<DispatchOutcome, DispatchFailure>> + Send + 'a>,
+>;
+
+/// The future one registered handler completes on.
+///
+/// A handler returns its outcome's future rather than computing the outcome
+/// synchronously; the dispatcher awaits it inside the abortable worker
+/// task. The future borrows the invocation the handler ran on, so the
+/// signature keeps the borrowed-invocation ergonomics a sync handler had.
+pub type HandlerFuture<'a> = Pin<
+    Box<dyn Future<Output = Result<DispatchOutcome, DispatchFailure>> + Send + 'a>,
 >;
 
 pub trait OperationDispatcher: Send + Sync {
@@ -1584,13 +1595,17 @@ impl BrokerEnvelopeBuilder {
 }
 
 /// A registered operation handler.
+///
+/// A handler returns the future of its outcome instead of computing it
+/// synchronously; the handler worker task awaits it under the invocation's
+/// budget.
 pub type OperationHandler =
-    Box<dyn Fn(&DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> + Send + Sync>;
+    Box<dyn for<'a> Fn(&'a DirectInvocation<'a>) -> HandlerFuture<'a> + Send + Sync>;
 
 /// A registered operation handler, shared into the abortable task that runs
 /// it.
 type SharedOperationHandler =
-    Arc<dyn Fn(&DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure> + Send + Sync>;
+    Arc<dyn for<'a> Fn(&'a DirectInvocation<'a>) -> HandlerFuture<'a> + Send + Sync>;
 
 /// The broker's handler worker set: the bounded pool in-broker handlers run
 /// on.
@@ -1699,13 +1714,17 @@ impl HandlerTable {
     }
 
     /// Register one handler.
+    ///
+    /// A handler returns the boxed future of its outcome; the dispatch
+    /// awaits it inside the abortable worker task. The caller pins the
+    /// handler's future at registration (`Box::pin(async move { ... })` or
+    /// `Box::pin(async_handler(...))`) - the borrowed-invocation shape
+    /// cannot name the concrete future type of an unboxed async block, so
+    /// the box is the registration's one-line cost.
     pub fn with(
         mut self,
         operation: &'static str,
-        handler: impl Fn(&DirectInvocation<'_>) -> Result<DispatchOutcome, DispatchFailure>
-        + Send
-        + Sync
-        + 'static,
+        handler: impl for<'a> Fn(&'a DirectInvocation<'a>) -> HandlerFuture<'a> + Send + Sync + 'static,
     ) -> Self {
         self.handlers.push((operation, Arc::new(handler)));
         self
@@ -1831,7 +1850,12 @@ impl OperationDispatcher for HandlerTable {
                     fds: &owned.fds,
                     fd_kind: owned.fd_kind,
                 };
-                handler(&invocation)
+                // The dispatch awaits the handler's future inside the
+                // abortable task: the effective budget still binds by task
+                // abort at expiry, and a panic inside the handler (sync
+                // body or awaited in the task) is still caught at the join
+                // boundary as a named crash refusal.
+                handler(&invocation).await
             });
             // The task is aborted the moment its budget expires and the call
             // is refused by name; a handler that never yields keeps its own
@@ -2190,15 +2214,17 @@ mod tests {
 
     fn echo_table() -> HandlerTable {
         HandlerTable::new().with("ProbeOperation", |invocation| {
-            Ok(DispatchOutcome {
-                result: serde_json::from_value(serde_json::json!({
-                    "operation": invocation.ctx.operation,
-                    "invocation": invocation.ctx.invocation_id,
-                    "zone": invocation.ctx.zone,
-                    "fields": invocation.payload.len(),
-                }))
-                .expect("canonical result"),
-                fds: Vec::new(),
+            Box::pin(async move {
+                Ok(DispatchOutcome {
+                    result: serde_json::from_value(serde_json::json!({
+                        "operation": invocation.ctx.operation,
+                        "invocation": invocation.ctx.invocation_id,
+                        "zone": invocation.ctx.zone,
+                        "fields": invocation.payload.len(),
+                    }))
+                    .expect("canonical result"),
+                    fds: Vec::new(),
+                })
             })
         })
     }
@@ -2353,10 +2379,12 @@ mod tests {
         // cases with two codes: the caller can tell a deliberate refusal
         // from a broken handler, and neither is a missing handler.
         let refused = HandlerTable::new().with("ProbeOperation", |_invocation| {
-            Err(DispatchFailure::with_detail(
-                HANDLER_REFUSED,
-                "grant exhausted",
-            ))
+            Box::pin(async move {
+                Err(DispatchFailure::with_detail(
+                    HANDLER_REFUSED,
+                    "grant exhausted",
+                ))
+            })
         });
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(refused))
             .declare(declared_row(
@@ -2379,10 +2407,12 @@ mod tests {
         assert_eq!(refusal.audit_fields()["reason"], HANDLER_REFUSED);
 
         let errored = HandlerTable::new().with("ProbeOperation", |_invocation| {
-            Err(DispatchFailure::with_detail(
-                HANDLER_ERRORED,
-                "backend failed",
-            ))
+            Box::pin(async move {
+                Err(DispatchFailure::with_detail(
+                    HANDLER_ERRORED,
+                    "backend failed",
+                ))
+            })
         });
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(errored))
             .declare(declared_row(
@@ -2410,10 +2440,12 @@ mod tests {
         // own code: a handler refusal in the declaring process is reported
         // as a refusal, not flattened into a missing handler here.
         let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", |_invocation| {
-            Err(DispatchFailure::with_detail(
-                HANDLER_REFUSED,
-                "the declaring process refused",
-            ))
+            Box::pin(async move {
+                Err(DispatchFailure::with_detail(
+                    HANDLER_REFUSED,
+                    "the declaring process refused",
+                ))
+            })
         }));
         let envelope = BrokerEnvelope::over(
             BrokerProfileId::Host,
@@ -2445,7 +2477,7 @@ mod tests {
         // code, and the peer's spelling rides in the record's detail so an
         // operator still sees it.
         let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", |_invocation| {
-            Err(DispatchFailure::new("family-own-code"))
+            Box::pin(async move { Err(DispatchFailure::new("family-own-code")) })
         }));
         let envelope = BrokerEnvelope::over(
             BrokerProfileId::Host,
@@ -2477,7 +2509,9 @@ mod tests {
         // caller sees a typed crash refusal carrying the panic's message,
         // never a dropped caller, and the envelope keeps serving.
         let table = HandlerTable::new().with("ProbeOperation", |_invocation| {
-            panic!("probe blew up");
+            Box::pin(async move {
+                panic!("probe blew up");
+            })
         });
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(table))
             .declare(declared_row(
@@ -2535,23 +2569,29 @@ mod tests {
                             // A handler that never yields: it would starve an
                             // inline executor, so the task must be aborted
                             // for the call to end at its budget.
-                            let start = std::time::Instant::now();
-                            while start.elapsed() < Duration::from_secs(2) {
-                                std::hint::spin_loop();
-                            }
-                            Ok(DispatchOutcome {
-                                result: serde_json::from_value(serde_json::json!({
-                                    "done": true
-                                }))
-                                .expect("canonical"),
-                                fds: Vec::new(),
+                            Box::pin(async move {
+                                let start = std::time::Instant::now();
+                                while start.elapsed() < Duration::from_secs(2) {
+                                    std::hint::spin_loop();
+                                }
+                                Ok(DispatchOutcome {
+                                    result: serde_json::from_value(serde_json::json!({
+                                        "done": true
+                                    }))
+                                    .expect("canonical"),
+                                    fds: Vec::new(),
+                                })
                             })
                         })
                         .with("ProbeOperation", |_invocation| {
-                            Ok(DispatchOutcome {
-                                result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
+                            Box::pin(async move {
+                                Ok(DispatchOutcome {
+                                    result: serde_json::from_value(
+                                        serde_json::json!({ "echo": "ok" }),
+                                    )
                                     .expect("canonical"),
-                                fds: Vec::new(),
+                                    fds: Vec::new(),
+                                })
                             })
                         }),
                 ),
@@ -2890,18 +2930,25 @@ mod tests {
         let write_slot = Arc::clone(&returned_write_end);
         let peer = loopback_peer(
             HandlerTable::new().with("ProbeOperation", move |invocation| {
-                // Request leg:the descriptor the caller attached crossed the socket
-                // and reads back what the caller wrote.to
-                let mut echoed = [0_u8; 4];
-                let n = read(invocation.fds[0].as_raw_fd(), &mut echoed).expect("read request fd");
-                assert_eq!(&echoed[..n], b"ping");
-                // Response leg:answer with a fresh descriptor the peer minted.to
-                let (answer_read, answer_write) = pipe().expect("answer pipe");
-                *Arc::clone(&returned_write_end).lock().expect("slot") = Some(answer_write);
-                Ok(DispatchOutcome {
-                    result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
-                        .expect("canonical"),
-                    fds: vec![answer_read],
+                // The handler runs as an async task; the captured slot is
+                // re-cloned per invocation so the registration closure stays
+                // a re-callable `Fn`.
+                let returned_write_end = Arc::clone(&returned_write_end);
+                Box::pin(async move {
+                    // Request leg:the descriptor the caller attached crossed the socket
+                    // and reads back what the caller wrote.to
+                    let mut echoed = [0_u8; 4];
+                    let n =
+                        read(invocation.fds[0].as_raw_fd(), &mut echoed).expect("read request fd");
+                    assert_eq!(&echoed[..n], b"ping");
+                    // Response leg:answer with a fresh descriptor the peer minted.to
+                    let (answer_read, answer_write) = pipe().expect("answer pipe");
+                    *returned_write_end.lock().expect("slot") = Some(answer_write);
+                    Ok(DispatchOutcome {
+                        result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
+                            .expect("canonical"),
+                        fds: vec![answer_read],
+                    })
                 })
             }),
         );
@@ -2945,10 +2992,12 @@ mod tests {
     #[test]
     fn a_zero_fd_response_to_an_fd_declaring_operation_is_a_valid_empty_set() {
         let peer = loopback_peer(HandlerTable::new().with("ProbeOperation", |_invocation| {
-            Ok(DispatchOutcome {
-                result: serde_json::from_value(serde_json::json!({ "echo": "none" }))
-                    .expect("canonical"),
-                fds: Vec::new(),
+            Box::pin(async move {
+                Ok(DispatchOutcome {
+                    result: serde_json::from_value(serde_json::json!({ "echo": "none" }))
+                        .expect("canonical"),
+                    fds: Vec::new(),
+                })
             })
         }));
         let envelope = BrokerEnvelope::over(
@@ -3058,13 +3107,15 @@ mod tests {
         let (request_read, _request_write) = pipe().expect("request pipe");
         let peer = loopback_peer(
             HandlerTable::new().with("ProbeOperation", move |invocation| {
-                Ok(DispatchOutcome {
-                    result: serde_json::from_value(serde_json::json!({ "echo": "stolen" }))
-                        .expect("canonical"),
-                    // Return the call's own descriptor - a descriptor the peer did
-                    // not mint this call. The carrier spoils the theft at the wire
-                    // boundary rather than at the handler.se
-                    fds: vec![invocation.fds[0].try_clone().expect("dup request fd")],
+                Box::pin(async move {
+                    Ok(DispatchOutcome {
+                        result: serde_json::from_value(serde_json::json!({ "echo": "stolen" }))
+                            .expect("canonical"),
+                        // Return the call's own descriptor - a descriptor the peer did
+                        // not mint this call. The carrier spoils the theft at the wire
+                        // boundary rather than at the handler.se
+                        fds: vec![invocation.fds[0].try_clone().expect("dup request fd")],
+                    })
                 })
             }),
         );
@@ -3177,11 +3228,16 @@ mod tests {
         let slot = Arc::clone(&observed);
         let peer = loopback_peer(
             HandlerTable::new().with("ProbeOperation", move |invocation| {
-                *Arc::clone(&slot).lock().expect("slot") = invocation.context.cloned();
-                Ok(DispatchOutcome {
-                    result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
-                        .expect("canonical"),
-                    fds: Vec::new(),
+                // Re-cloned per invocation so the registration closure stays
+                // a re-callable `Fn` (the async task moves the clone in).
+                let slot = Arc::clone(&slot);
+                Box::pin(async move {
+                    *slot.lock().expect("slot") = invocation.context.cloned();
+                    Ok(DispatchOutcome {
+                        result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
+                            .expect("canonical"),
+                        fds: Vec::new(),
+                    })
                 })
             }),
         );
@@ -3244,11 +3300,17 @@ mod tests {
             let peer = loopback_peer(HandlerTable::new().with(
                 "ProbeOperation",
                 move |invocation| {
-                    *Arc::clone(&slot).lock().expect("slot") = invocation.context.cloned();
-                    Ok(DispatchOutcome {
-                        result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
-                            .expect("canonical"),
-                        fds: Vec::new(),
+                    // Re-cloned per invocation so the registration closure
+                    // stays a re-callable `Fn` (the async task moves the
+                    // clone in).
+                    let slot = Arc::clone(&slot);
+                    Box::pin(async move {
+                        *slot.lock().expect("slot") = invocation.context.cloned();
+                        Ok(DispatchOutcome {
+                            result: serde_json::from_value(serde_json::json!({ "echo": "ok" }))
+                                .expect("canonical"),
+                            fds: Vec::new(),
+                        })
                     })
                 },
             ));
@@ -3501,23 +3563,30 @@ mod tests {
         let captured_handle = Arc::clone(&captured);
         let table = HandlerTable::new()
             .with("AlphaService", move |invocation| {
-                captured_handle
-                    .lock()
-                    .expect("captured")
-                    .push(invocation.ctx.chain.clone());
-                Ok(DispatchOutcome {
-                    result: serde_json::from_value(serde_json::json!({ "label": "x" }))
-                        .expect("canonical result"),
-                    fds: Vec::new(),
+                // Re-cloned per invocation so the registration closure stays
+                // a re-callable `Fn` (the async task moves the clone in).
+                let captured_handle = Arc::clone(&captured_handle);
+                Box::pin(async move {
+                    captured_handle
+                        .lock()
+                        .expect("captured")
+                        .push(invocation.ctx.chain.clone());
+                    Ok(DispatchOutcome {
+                        result: serde_json::from_value(serde_json::json!({ "label": "x" }))
+                            .expect("canonical result"),
+                        fds: Vec::new(),
+                    })
                 })
             })
             .with("BetaService", |invocation| {
-                Ok(DispatchOutcome {
-                    result: serde_json::from_value(
-                        serde_json::json!({ "label": invocation.ctx.zone }),
-                    )
-                    .expect("canonical result"),
-                    fds: Vec::new(),
+                Box::pin(async move {
+                    Ok(DispatchOutcome {
+                        result: serde_json::from_value(
+                            serde_json::json!({ "label": invocation.ctx.zone }),
+                        )
+                        .expect("canonical result"),
+                        fds: Vec::new(),
+                    })
                 })
             });
         let envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(table))
@@ -3734,10 +3803,12 @@ mod tests {
         let sink: Arc<dyn ChainAuditSink> = Arc::clone(&recorder) as Arc<dyn ChainAuditSink>;
         let chains: Arc<Mutex<Vec<EvidenceChain>>> = Arc::default();
         let table = HandlerTable::new().with("RootService", |_invocation| {
-            Ok(DispatchOutcome {
-                result: serde_json::from_value(serde_json::json!({ "root": true }))
-                    .expect("canonical result"),
-                fds: Vec::new(),
+            Box::pin(async move {
+                Ok(DispatchOutcome {
+                    result: serde_json::from_value(serde_json::json!({ "root": true }))
+                        .expect("canonical result"),
+                    fds: Vec::new(),
+                })
             })
         });
         let root_envelope = BrokerEnvelope::over(BrokerProfileId::Host, Box::new(table))
